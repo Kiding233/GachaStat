@@ -1071,6 +1071,10 @@ class PlanSearchPanel(QWidget):
                 self.status_update.emit("请先在配置中添加目标卡")
                 return
 
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.terminate()
+                self._worker.wait(3000)
+
             self._worker = PlanSearchWorker(
                 config_store=self._store,
                 search_mode=search_mode,

@@ -3,10 +3,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Dict, Set, TYPE_CHECKING
+import logging
 
 from .action import Action
 from .schedule import PoolSchedule
 from .target_card import TargetCardSet
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .state import GachaState
@@ -329,6 +332,10 @@ class NoDrawStrategy(Strategy):
 
 class CompositeStrategy(Strategy):
     def __init__(self, strategies: List[Strategy], mode: str = 'first_valid'):
+        if mode not in ('first_valid',):
+            raise ValueError(
+                f"CompositeStrategy mode must be 'first_valid', got '{mode}'"
+            )
         self.strategies = strategies
         self.mode = mode
 
@@ -472,6 +479,7 @@ def create_strategy(strategy_name: str, params: Optional[Dict[str, Any]] = None)
     elif strategy_name == 'fixed_count':
         return cls(count=p.get('count', 100))
     elif strategy_name == 'draw_target':
+        assert cls is not None, "draw_target class not registered (cls=None)"
         return cls(
             target_card_ids=set(p.get('target_card_ids', [])),
             pool_id=p.get('pool_id', ''),
@@ -483,6 +491,10 @@ def strategy_type_to_key(display_name: str) -> str:
     for key, entry in STRATEGY_REGISTRY.items():
         if entry['display_name'] == display_name:
             return key
+    logger.warning(
+        "Unknown strategy_type '%s', falling back to 'smart'",
+        display_name,
+    )
     return 'smart'
 
 

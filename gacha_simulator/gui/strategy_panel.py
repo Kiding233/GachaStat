@@ -66,7 +66,7 @@ class StrategyWorker(QThread):
         self._should_stop = True
 
     def _build_simulation_env(self):
-        from .batch_simulator import SimulationEnvBuilder
+        from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
         self._sim_env = SimulationEnvBuilder.from_config_store(self.config_store)
 
     def _forward_method(self):
@@ -89,7 +89,7 @@ class StrategyWorker(QThread):
             current_set.add(card_id)
             current_specs[card_id] = self.target_qty
 
-            from .batch_simulator import run_batch_parallel
+            from gacha_simulator.service.batch_simulator import run_batch_parallel
             _skey = self.config_store.strategy_name
             _sparams = self.config_store.strategy_params
             histories = run_batch_parallel(
@@ -145,7 +145,7 @@ class StrategyWorker(QThread):
 
         self.progress.emit("后退法: 初始完整集合模拟", 5)
 
-        from .batch_simulator import run_batch_parallel
+        from gacha_simulator.service.batch_simulator import run_batch_parallel
         _skey = self.config_store.strategy_name
         _sparams = self.config_store.strategy_params
         initial_histories = run_batch_parallel(
@@ -194,7 +194,7 @@ class StrategyWorker(QThread):
             temp_set.discard(card_id)
             del temp_specs[card_id]
 
-            from .batch_simulator import run_batch_parallel
+            from gacha_simulator.service.batch_simulator import run_batch_parallel
             _skey = self.config_store.strategy_name
             _sparams = self.config_store.strategy_params
             histories = run_batch_parallel(
@@ -551,6 +551,10 @@ class StrategyPanel(QWidget):
         card_value_weights = self._store.card_value_weights if self._store else None
 
         gdr_key = self.gdr_combo.currentData() or 'target_achievement'
+
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(3000)
 
         self._worker = StrategyWorker(
             method=method,

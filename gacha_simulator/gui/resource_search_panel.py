@@ -56,7 +56,7 @@ class ResourceSearchWorker(QThread):
         self._should_stop = True
 
     def _build_simulation_env(self):
-        from .batch_simulator import SimulationEnvBuilder
+        from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
         self._sim_env = SimulationEnvBuilder.from_config_store(self.config_store)
         self._actual_cost_per_draw = self._extract_cost_per_draw(self._sim_env.pools)
         self._display_cost_per_draw = self.cost_per_draw_override if self.cost_per_draw_override else self._actual_cost_per_draw
@@ -94,7 +94,7 @@ class ResourceSearchWorker(QThread):
         return 160
 
     def _simulate_with_resource(self, resource_value):
-        from .batch_simulator import run_batch_parallel
+        from gacha_simulator.service.batch_simulator import run_batch_parallel
         ir = dict(self._initial_resources_backup)
         ir['draw_resource'] = resource_value
         histories = run_batch_parallel(

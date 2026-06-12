@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
+import copy
 from .pool import Pool, CostOption
 
 
@@ -60,5 +61,5 @@ class GachaState:
             pity_counters=self.pity_counters.copy(),
             real_time=self.real_time,
             total_actions=self.total_actions,
-            extra_state=self.extra_state.copy(),
+            extra_state=copy.deepcopy(self.extra_state) if self.extra_state else {},
         )

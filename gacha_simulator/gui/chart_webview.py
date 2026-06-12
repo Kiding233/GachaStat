@@ -326,12 +326,13 @@ class ChartWebView(QWebEngineView):
 
         self._chart_keys.add(key)
         fig_json = self._renderer.to_figure(spec).to_json()
-        safe_json = fig_json.replace("\\", "\\\\").replace("'", "\\'")
+        fig_dict = json.loads(fig_json)   # Plotly JSON 字符串 → Python dict
+        safe_json = json.dumps(fig_dict)   # Python dict → 安全 JS 对象字面量
         js_code = (
             "(function() {"
             "  var scrollY = window.scrollY;"
             "  try {"
-            f"    var plotData = JSON.parse('{safe_json}');"
+            f"    var plotData = {safe_json};"
             f"    var el = document.getElementById('chart-{key}');"
             "    if (el) { Plotly.react(el, plotData.data, plotData.layout); }"
             "    else { console.warn('Chart div not found: chart-" + key + "'); }"

@@ -429,6 +429,10 @@ class WorstImpactPanel(QWidget):
                 custom_pool_config=custom_pool,
             )
 
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.terminate()
+                self._worker.wait(3000)
+
             self._worker = WorstImpactWorker(
                 analyzer, condition,
                 self.alpha_spin.value(),

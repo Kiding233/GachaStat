@@ -1,0 +1,363 @@
+{
+  "timestamp": "2026-06-10 01:27:30",
+  "completed": 50,
+  "total": 50,
+  "elapsed_s": 1932.9267766475677,
+  "estimates_sofar": [
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875,
+    72294.921875
+  ],
+  "mean_sofar": 72294.921875,
+  "std_sofar": 0.0,
+  "n_success_sofar": 50,
+  "runs_summary": [
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72294.921875,
+      "final_prob": 0.9633333333333334,
+      "success": true,
+      "n_iterations": 14
+    }
+  ]
+}

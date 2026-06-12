@@ -1,10 +1,8 @@
 """转变分析统一测试：compute_transition_matrices_from_flags + compute_transition_flags_from_gdr + 完整管线。"""
 import pytest
-import warnings
 from gacha_simulator.core.per_pool_analysis import (
     compute_transition_matrices_from_flags,
     compute_transition_flags_from_gdr,
-    TransitionMatrix,
 )
 from gacha_simulator.core.streaming import DrawSequenceExtractor
 from gacha_simulator.core.result_types import CompactResult

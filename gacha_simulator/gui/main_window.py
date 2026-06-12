@@ -6,9 +6,10 @@ import os
 import traceback
 from datetime import datetime
 from PyQt6.QtWidgets import (
-    QMainWindow, QTabWidget, QWidget, QVBoxLayout, QMessageBox, QFileDialog, QStatusBar, QLabel
+    QMainWindow, QTabWidget, QWidget, QVBoxLayout, QMessageBox, QFileDialog, QStatusBar, QLabel,
+    QApplication,
 )
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, QThread, Qt
 from PyQt6.QtGui import QAction, QIcon
 
 from .config_panel import ConfigPanel
@@ -95,7 +96,10 @@ class MainWindow(QMainWindow):
 
         self.sensitivity_panel = QWidget()
         self.sensitivity_layout = QVBoxLayout(self.sensitivity_panel)
-        self.sensitivity_layout.addWidget(QLabel("敏感度分析（功能开发中）"))
+        hint = QLabel("敏感度分析（功能开发中）\n\n计划支持：单参数变化 + GDR 折线图")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("color: #888; font-size: 14px;")
+        self.sensitivity_layout.addWidget(hint)
         self.sensitivity_layout.addStretch()
 
         self.config_panel.set_store(self._store)
@@ -176,7 +180,7 @@ class MainWindow(QMainWindow):
         self.data_manager_panel.load_requested.connect(self._load_dataset_for_analysis)
         self.data_manager_panel.compare_requested.connect(self._on_compare_datasets)
         self.data_manager_panel.status_update.connect(self.status_bar.showMessage)
-        self.result_store.current_changed.connect(self._on_current_dataset_changed)
+        self.result_store.connect_current_changed(self._on_current_dataset_changed)
         self.config_panel.config_changed.connect(self._on_config_changed)
         self.retreat_panel.vulnerability_finished.connect(self.plan_search_panel.set_vulnerability_result)
 
@@ -501,6 +505,8 @@ class MainWindow(QMainWindow):
 
     def _on_current_dataset_changed(self, name: str):
         """ResultStore.current_changed → 更新状态栏永久标签"""
+        assert QThread.currentThread() == QApplication.instance().thread(), \
+            "_on_current_dataset_changed must run on main thread"
         if name:
             ds = self.result_store.get(name)
             if ds:

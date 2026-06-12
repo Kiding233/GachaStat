@@ -2003,6 +2003,9 @@ class AnalysisPanel(QWidget):
             self._pending_statistics = need_statistics
 
             pool_names = self._get_pool_names()
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.terminate()
+                self._worker.wait(3000)
             self._worker = AnalysisWorker(
                 self.results, self._gdr_context, self._pool_end_times,
                 chart_keys, self.alpha_spin.value(), self.output_dir,
@@ -2192,6 +2195,9 @@ class AnalysisPanel(QWidget):
                     mean_ci = "样本不足"
                     median_ci = "样本不足"
                     var_ci = "样本不足"
+
+                from PyQt6.QtWidgets import QApplication
+                QApplication.processEvents()
 
                 rows.append([
                     _display_name,

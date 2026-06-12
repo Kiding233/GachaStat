@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QDialog, QDialogButtonBox, QMessageBox, QAbstractItemView,
     QDateEdit, QCalendarWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QDate
+from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QColor
 
 from ..core.config_store import (
@@ -378,6 +378,10 @@ class ConfigPanel(QWidget):
         super().__init__()
         self._store = None
         self._refreshing = False
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(500)
+        self._preview_timer.timeout.connect(self._do_update_preview)
         self._setup_ui()
         self._set_defaults()
 
@@ -1590,7 +1594,7 @@ class ConfigPanel(QWidget):
         # Phase 3: 日历预览（可折叠）
         self.calendar_group = QGroupBox("📅 日历预览")
         self.calendar_group.setCheckable(True)
-        self.calendar_group.setChecked(False)
+        self.calendar_group.setChecked(True)
         calendar_layout = QVBoxLayout(self.calendar_group)
         self.calendar_widget = QCalendarWidget()
         self.calendar_widget.setMinimumHeight(200)
@@ -1614,6 +1618,7 @@ class ConfigPanel(QWidget):
         # Phase 3: 日历预览缓存
         self._cached_schedule = None
         self._cached_schedule_key = None
+        self._cached_start_date = None  # 用于清除旧高亮
 
         self.resource_defs_table.cellChanged.connect(self._on_resource_def_changed)
         self.gain_rules_table.cellChanged.connect(self._update_preview)
@@ -1931,14 +1936,26 @@ class ConfigPanel(QWidget):
                 pools_item.setBackground(QColor(240, 240, 240))
                 self.target_table.setItem(i, 2, pools_item)
 
-    def _update_calendar_highlights(self, start_date, total_days):
-        """根据缓存的 schedule 设置日历高亮。线程安全：必须在 GUI 主线程调用。"""
+    def _update_calendar_highlights(self, start_date, total_days,
+                                     old_schedule=None, old_start_date=None):
+        """根据缓存的 schedule 设置日历高亮。线程安全：必须在 GUI 主线程调用。
+
+        Args:
+            start_date: 当前模拟起始日期。
+            total_days: 模拟总天数。
+            old_schedule: 上一次展开的 schedule（用于精准清除旧高亮）。
+            old_start_date: 上一次使用的起始日期（与 old_schedule 配对）。
+        """
         from PyQt6.QtGui import QTextCharFormat, QColor
         import datetime as _dt
 
-        # 重置所有日期格式
         default_fmt = QTextCharFormat()
-        self.calendar_widget.setDateTextFormat(_dt.date(2000, 1, 1), default_fmt)
+
+        # 精准清除上一次设置的高亮日期（解决删除规则后旧日期仍标绿的问题）
+        if old_schedule and old_start_date:
+            for day_offset in old_schedule:
+                d = old_start_date + _dt.timedelta(days=day_offset)
+                self.calendar_widget.setDateTextFormat(d, default_fmt)
 
         if not self._cached_schedule:
             return
@@ -2019,6 +2036,15 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _update_preview(self):
+        """请求更新预览（500ms 去抖）"""
+        if self._refreshing or self._store is None:
+            return
+        self._preview_timer.start()
+
+    def _do_update_preview(self):
+        """实际执行预览更新"""
+        if self._refreshing:
+            return
         if self._store is None:
             self.preview_text.setText("配置预览:\n\n（等待配置加载...）")
             return
@@ -2126,6 +2152,9 @@ class ConfigPanel(QWidget):
             cache_key = (start_date_str, total_days, tuple(key_parts))
 
             if self._cached_schedule_key != cache_key:
+                # 保存旧缓存以便精准清除上一次的高亮日期
+                old_schedule = self._cached_schedule
+                old_start_date = self._cached_start_date
                 self._cached_schedule = expand_gain_rules_to_schedule(
                     gain_rules=gain_rules,
                     day_overrides=day_overrides,
@@ -2133,7 +2162,9 @@ class ConfigPanel(QWidget):
                     start_date=start_date,
                 )
                 self._cached_schedule_key = cache_key
-                self._update_calendar_highlights(start_date, total_days)
+                self._cached_start_date = start_date
+                self._update_calendar_highlights(
+                    start_date, total_days, old_schedule, old_start_date)
 
         self.config_changed.emit(config)
 
@@ -2914,6 +2945,7 @@ class ConfigPanel(QWidget):
             self._refresh_from_store_impl()
         finally:
             self._refreshing = False
+        self._update_preview()  # 刷新完成后启动去抖预览（_refreshing=True 期间被跳过）
 
     def _refresh_from_store_impl(self):
         store = self._store
@@ -2994,8 +3026,8 @@ class ConfigPanel(QWidget):
         for rule in store.gain_rules:
             for rid, amt in rule.gains.items():
                 gain_data.append({
-                    'type': _gain_rule_type_to_gui(rule.rule_type),
-                    'param': _gain_rule_param_to_gui(rule.rule_type),
+                    'type': _gain_rule_type_to_gui(rule.rule_type, rule.param),
+                    'param': _gain_rule_param_to_gui(rule.rule_type, rule.param),
                     'resource_id': rid,
                     'amount': amt,
                 })

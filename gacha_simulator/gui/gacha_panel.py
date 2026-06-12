@@ -34,7 +34,7 @@ class SimulationThread(QThread):
 
     def run(self):
         try:
-            from .batch_simulator import SimulationEnvBuilder
+            from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
 
             config_store = self.config_store
             N = self.simulation_count
@@ -55,7 +55,7 @@ class SimulationThread(QThread):
             self._gdr_context = env.gdr_context
 
             import numpy as np
-            from .batch_simulator import run_batch_parallel
+            from gacha_simulator.service.batch_simulator import run_batch_parallel
 
             target_specs = {tc.card_id: tc.quantity for tc in config_store.target_cards}
             n_heatmap_bins = max(20, min(100, int(N ** 0.5)))
@@ -293,6 +293,10 @@ class GachaPanel(QWidget):
 
         self._log(f"开始模拟: {sim_count} 次")
         self._log(f"并行进程: {max_workers}")
+
+        if self.simulation_thread is not None and self.simulation_thread.isRunning():
+            self.simulation_thread.terminate()
+            self.simulation_thread.wait(3000)
 
         self.simulation_thread = SimulationThread(
             config_store,

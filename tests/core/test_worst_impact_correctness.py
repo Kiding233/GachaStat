@@ -2,10 +2,8 @@
 
 不依赖概率的确定性测试：逐个验证策略行为、停止条件、完整流程。
 """
-import pytest
-from unittest.mock import MagicMock, patch
 from gacha_simulator.core.worst_impact import DrawTargetStrategy
-from gacha_simulator.core.strategy import StrategyContext, create_strategy, STRATEGY_REGISTRY
+from gacha_simulator.core.strategy import StrategyContext, create_strategy
 from gacha_simulator.core.action import DrawAction, WaitAction
 from gacha_simulator.core.stop_condition import ConsecutivePoolTargetCondition
 

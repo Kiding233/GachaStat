@@ -228,7 +228,9 @@ def expand_gain_rules_to_schedule(
                         for rid, amount in gains.items():
                             schedule[day][rid] = schedule[day].get(rid, 0) + float(amount)
                 except Exception:
-                    pass
+                    logger.warning(
+                        "fromordinal overflow at day=%d", day, exc_info=True,
+                    )
 
         elif rule_type == 'monthly_day':
             # ── 空 param 防御 ──
@@ -245,7 +247,9 @@ def expand_gain_rules_to_schedule(
                             for rid, amount in gains.items():
                                 schedule[day][rid] = schedule[day].get(rid, 0) + float(amount)
                     except Exception:
-                        pass
+                        logger.warning(
+                            "fromordinal overflow at day=%d", day, exc_info=True,
+                        )
                 continue
 
             # ── 分支判断：先检查是否含逗号（月,日格式）──
@@ -278,7 +282,9 @@ def expand_gain_rules_to_schedule(
                             for rid, amount in gains.items():
                                 schedule[day][rid] = schedule[day].get(rid, 0) + float(amount)
                     except Exception:
-                        pass
+                        logger.warning(
+                            "fromordinal overflow at day=%d", day, exc_info=True,
+                        )
             else:
                 # 单数字：每月第 N 天
                 try:
@@ -301,7 +307,9 @@ def expand_gain_rules_to_schedule(
                             for rid, amount in gains.items():
                                 schedule[day][rid] = schedule[day].get(rid, 0) + float(amount)
                     except Exception:
-                        pass
+                        logger.warning(
+                            "fromordinal overflow at day=%d", day, exc_info=True,
+                        )
 
         elif rule_type == 'monthly_week':
             # ── 空 param 防御 ──
@@ -342,7 +350,9 @@ def expand_gain_rules_to_schedule(
                         for rid, amount in gains.items():
                             schedule[day][rid] = schedule[day].get(rid, 0) + float(amount)
                 except Exception:
-                    pass
+                    logger.warning(
+                        "fromordinal overflow at day=%d", day, exc_info=True,
+                    )
 
     # ── day: 覆盖（累加语义，与 _build_resource_gain 行为一致）──
     for override in day_overrides:

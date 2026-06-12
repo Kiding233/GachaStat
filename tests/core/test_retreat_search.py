@@ -1,6 +1,5 @@
-import pytest
 from gacha_simulator.core.retreat_search import (
-    PlanSearchEngine, RetreatSearchEngine,
+    RetreatSearchEngine,
     RetreatSearchResult, RetreatSearchPoint,
 )
 
@@ -86,7 +85,7 @@ class TestForwardMethod:
         engine = self._make_engine(store, add_order={'card_a': 2.0})
         engine._filter_obtainable_targets = lambda specs: specs
         mock_env = self._mock_env()
-        monkeypatch.setattr(engine, '_build_truncated_env', lambda specs, base: mock_env)
+        monkeypatch.setattr(engine, '_build_truncated_env', lambda base: mock_env)
         monkeypatch.setattr(engine, '_simulate_with_resource', lambda env, specs, res: 0.98)
 
         result = engine.search_max_targets_forward({'card_a': 1})
@@ -103,7 +102,7 @@ class TestForwardMethod:
         engine = self._make_engine(store, add_order=desire)
         engine._filter_obtainable_targets = lambda specs: specs
         mock_env = self._mock_env()
-        monkeypatch.setattr(engine, '_build_truncated_env', lambda specs, base: mock_env)
+        monkeypatch.setattr(engine, '_build_truncated_env', lambda base: mock_env)
         monkeypatch.setattr(engine, '_simulate_with_resource', lambda env, specs, res: 0.99)
 
         result = engine.search_max_targets_forward({'card_a': 1, 'card_b': 1, 'card_c': 1})
@@ -121,7 +120,7 @@ class TestForwardMethod:
         engine = self._make_engine(store, add_order=desire, success_threshold=0.95)
         engine._filter_obtainable_targets = lambda specs: specs
         mock_env = self._mock_env()
-        monkeypatch.setattr(engine, '_build_truncated_env', lambda specs, base: mock_env)
+        monkeypatch.setattr(engine, '_build_truncated_env', lambda base: mock_env)
 
         call_count = [0]
 
@@ -147,7 +146,7 @@ class TestForwardMethod:
         engine = self._make_engine(store, add_order={'card_a': 1.0}, success_threshold=0.95)
         engine._filter_obtainable_targets = lambda specs: specs
         mock_env = self._mock_env()
-        monkeypatch.setattr(engine, '_build_truncated_env', lambda specs, base: mock_env)
+        monkeypatch.setattr(engine, '_build_truncated_env', lambda base: mock_env)
         monkeypatch.setattr(engine, '_simulate_with_resource', lambda env, specs, res: 0.50)
 
         result = engine.search_max_targets_forward({'card_a': 1})
@@ -163,7 +162,7 @@ class TestForwardMethod:
         engine = self._make_engine(store, add_order=desire)
         engine._filter_obtainable_targets = lambda specs: specs
         mock_env = self._mock_env()
-        monkeypatch.setattr(engine, '_build_truncated_env', lambda specs, base: mock_env)
+        monkeypatch.setattr(engine, '_build_truncated_env', lambda base: mock_env)
 
         call_count = [0]
 

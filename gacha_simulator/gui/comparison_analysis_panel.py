@@ -362,6 +362,10 @@ class ComparisonAnalysisPanel(QWidget):
         self._run_btn.setText("计算中...")
         self._loading_label.setText("⏳ 正在后台计算...")
 
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(3000)
+
         self._worker = ComparisonWorker(
             datasets, self._current_gdr_key, self._current_threshold,
             self._current_test_method, self._current_correction,

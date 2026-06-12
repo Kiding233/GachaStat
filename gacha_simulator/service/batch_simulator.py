@@ -7,6 +7,7 @@
 动态参数（target_specs, initial_resources）通过任务参数传入。
 """
 
+import logging
 import random
 import traceback
 from typing import List, Dict, Any, Optional, Callable
@@ -17,6 +18,8 @@ from gacha_simulator.core.stop_condition import AllPoolsEndCondition
 from gacha_simulator.core.strategy import (
     create_strategy,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BatchResult:
@@ -512,7 +515,11 @@ class SimulationEnvBuilder:
         for pe in pool_entries:
             pid = pe.pool_id
             start_day = pe.start_day or 0
-            end_day = pe.end_day if pe.end_day > start_day else (start_day + 21)
+            end_day = (pe.end_day if pe.end_day is not None and pe.end_day > start_day
+                       else (start_day + 21))
+            if pe.end_day is None:
+                logger.warning("Pool '%s' end_day is None, defaulting to start_day+21=%d",
+                               pid, start_day + 21)
 
             rewards = []
             featured_ids = set()
@@ -532,11 +539,14 @@ class SimulationEnvBuilder:
                     ssr_ids.add(de.card_id)
 
             if not ssr_ids:
-                _fallback_ssr_id = f"{pid}_ssr"
-                ssr_ids = {_fallback_ssr_id}
-                if not rewards:
-                    rewards.append((Reward(id=_fallback_ssr_id, name='', resources_gained={}), 0.006))
-            if not featured_ids:
+                logger.warning(
+                    "Pool '%s' has no SSR rewards — "
+                    "SSR pity reset will never trigger for this pool",
+                    pid,
+                )
+                # 不注入假 ID——让 ssr_ids 保持空集合
+                # featured_ids 也保持空，无 featured 可回退时不应假装有
+            if not featured_ids and ssr_ids:
                 featured_ids = set(ssr_ids)
 
             pool_featured_map[pid] = featured_ids

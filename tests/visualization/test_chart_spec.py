@@ -1,6 +1,5 @@
 """chart_spec.py 单元测试——验证各图表类型的 data schema 构造正确。"""
 import numpy as np
-import pytest
 
 from gacha_simulator.visualization.chart_spec import (
     HistogramData,

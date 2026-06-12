@@ -30,7 +30,7 @@ class TestFitGPD:
 
     def test_fit_heavy_tailed(self):
         """厚尾数据应拟合出正 ξ（Fréchet 域）。"""
-        rng = np.random.default_rng(42)
+        np.random.default_rng(42)
         exceedances = genpareto.rvs(c=0.3, scale=1.5, size=500, random_state=42)
         result = _fit_gpd(exceedances)
         assert result is not None
@@ -39,7 +39,7 @@ class TestFitGPD:
 
     def test_fit_bounded(self):
         """有界数据应拟合出负 ξ（Weibull 域）。"""
-        rng = np.random.default_rng(42)
+        np.random.default_rng(42)
         exceedances = genpareto.rvs(c=-0.2, scale=1.5, size=500, random_state=42)
         result = _fit_gpd(exceedances)
         assert result is not None
@@ -55,7 +55,7 @@ class TestFitGPD:
 
     def test_xi_below_minus_one_returns_none(self):
         """ξ < -1 时强制返回 None（MLE 不存在）。"""
-        rng = np.random.default_rng(42)
+        np.random.default_rng(42)
         exceedances = genpareto.rvs(c=-1.5, scale=1.0, size=500, random_state=42)
         result = _fit_gpd(exceedances)
         assert result is None

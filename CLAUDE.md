@@ -8,7 +8,8 @@ GachaStat 抽卡概率模拟与分析系统。版本号/Tab 列表由 C1 cron �
 并行模拟：`multiprocessing.Pool` + worker initializer 模式
 
 ```bash
-pip install -e ".[dev]"                              # 安装依赖
+pip install -e ".[dev]"                              # CLI/headless 安装
+pip install -e ".[gui,dev]"                          # GUI 安装（含 PyQt6）
 python -m gacha_simulator.main                       # GUI
 python -m gacha_simulator.cli -n 1000 -w 4 -s 42     # CLI
 pytest --cov=gacha_simulator                         # 测试

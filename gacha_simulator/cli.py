@@ -3,190 +3,143 @@
 
 import argparse
 import json
+import logging
 import sys
 import time
 from pathlib import Path
 
+logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(message)s')
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from gacha_simulator.core import (
-    Pool, Reward, GachaState, DrawAction, WaitAction,
-    TargetCard, TargetCardSet, PoolSchedule, PoolScheduleManager
+from gacha_simulator.core.config_store import (  # noqa: E402
+    ConfigStore, PoolEntry, PoolDistEntry,
+    PityDef, GainRule, TargetCardEntry,
 )
-from gacha_simulator.core.pool import parse_cost_string
-from gacha_simulator.core.stop_condition import StopCondition
-from gacha_simulator.core.pity import (
-    PityEngine, PoolPitySpec,
-    PityDefParsed, SoftPityBehavior, HardPityBehavior,
-)
-from gacha_simulator.service import GachaService
-from multiprocessing import Pool as MPPool
+from gacha_simulator.core.strategy import create_strategy  # noqa: E402
+from gacha_simulator.core.stop_condition import AllPoolsEndCondition  # noqa: E402
+from gacha_simulator.service import GachaService  # noqa: E402
+from gacha_simulator.service.batch_simulator import SimulationEnvBuilder  # noqa: E402
+from multiprocessing import Pool as MPPool  # noqa: E402
 
 
 DAY = 86400
 
 
-def create_pools_from_config(config):
-    pools = []
-    targets = []
-    schedules = []
-    
-    for p in config['pools']:
-        ssr = Reward(f"{p['id']}_ssr", f"{p['name']}SSR", {})
-        sr = Reward(f"{p['id']}_sr", f"{p['name']}SR", {})
-        r = Reward(f"{p['id']}_r", f"{p['name']}R", {})
-        
-        ssr_rate = p.get('ssr_rate', 0.006)
-        sr_rate = p.get('sr_rate', 0.051)
-        r_rate = max(0.0, 1 - ssr_rate - sr_rate)
-        
-        pool = Pool(
-            id=p['id'], name=p['name'],
-            cost=parse_cost_string(f"draw_resource:{p['cost']}"),
-            rewards=[(ssr, ssr_rate), (sr, sr_rate), (r, r_rate)],
-            available_from=p['start_day'] * DAY,
-            available_until=(p['start_day'] + p['duration']) * DAY,
-        )
-        pools.append(pool)
-        targets.append(TargetCard(
-            card_id=f"{p['id']}_ssr", pool_ids=[p['id']], 
-            quantity_needed=1, priority=0
-        ))
-        schedules.append(PoolSchedule(
+def json_config_to_store(config: dict, store: ConfigStore) -> None:
+    """将 CLI JSON 配置桥接到 ConfigStore 字段。
+
+    映射关系：
+    - config['pools'] → PoolEntry 列表
+    - config['pity'] → PityConfig + PityDef
+    - config['targets'] → TargetCardEntry
+    - config['gains'] → GainRule
+    - config['resources'] → resource_defs + initial_resources
+    """
+    # 1. pools → PoolEntry
+    pools_config = config.get('pools')
+    if not pools_config:
+        raise ValueError("配置文件中缺少 'pools' 字段或为空")
+
+    for p in pools_config:
+        start = p.get('start_day', 0)
+        dur = p.get('duration', 21)
+        ssr_r = p.get('ssr_rate', 0.006)
+        sr_r = p.get('sr_rate', 0.051)
+        entry = PoolEntry(
             pool_id=p['id'],
-            available_from=p['start_day'] * DAY,
-            available_until=(p['start_day'] + p['duration']) * DAY,
-        ))
-    
-    return pools, TargetCardSet(targets), PoolScheduleManager(schedules)
+            name=p.get('name', p['id']),
+            start_day=start,
+            end_day=start + dur,
+            cost=f"draw_resource:{p.get('cost', 160)}",
+            pool_type=p.get('pool_type', ''),
+            distribution=[
+                PoolDistEntry(
+                    card_id=f"{p['id']}_ssr",
+                    probability=ssr_r * 100, rarity='SSR', featured=True,
+                ),
+                PoolDistEntry(
+                    card_id=f"{p['id']}_sr",
+                    probability=sr_r * 100, rarity='SR',
+                ),
+                PoolDistEntry(
+                    card_id=f"{p['id']}_r",
+                    probability=max(0.0, 100 - ssr_r * 100 - sr_r * 100), rarity='R',
+                ),
+            ],
+        )
+        store.pools.append(entry)
 
-
-def create_pity_engine_from_config(config, pools):
+    # 2. pity → PityConfig + PityDef
     pity_config = config.get('pity', {})
-    if not pity_config.get('enabled', True):
-        return None
-
-    pities_cfg = pity_config.get('pities', [])
-
-    pity_defs = {}
-    behaviors = {}
-    for p in pities_cfg:
-        name = p.get('name', 'pity')
-        btype = p.get('type', 'soft')
-        target_dist = p.get('target_distribution', {})
-        reset = p.get('reset', 'any_ssr')
-        pools_pattern = p.get('pools', '*')
+    store.pity.enabled = pity_config.get('enabled', True)
+    pities_raw = pity_config.get('pities', [])
+    if not pities_raw and pity_config.get('type'):
+        # shorthand 格式——从顶层字段构造单个 PityDef
+        pities_raw = [pity_config]
+    for p in pities_raw:
         params = p.get('params', {})
-
-        pdef = PityDefParsed(
-            name=name,
-            btype=btype,
+        if not params and p.get('type'):
+            params = {
+                'start': str(p.get('start', '74')),
+                'end': str(p.get('end', '90')),
+                'func': p.get('func', 'linear'),
+                'threshold': str(p.get('threshold', '90')),
+            }
+        pdef = PityDef(
+            name=p.get('name', 'default_pity'),
+            btype=p.get('type', 'soft'),
             params=params,
-            target_distribution=target_dist,
-            reset_condition=reset,
-            pools=pools_pattern,
+            target_distribution=p.get('target_distribution', {}),
+            reset_condition=p.get('reset', 'any_ssr'),
+            pools=p.get('pools', '*'),
         )
-        pity_defs[name] = pdef
+        store.pity.pities.append(pdef)
 
-        if btype == 'soft':
-            behaviors[name] = SoftPityBehavior(
-                start_at=int(params.get('start', '74')),
-                end_at=int(params.get('end', '90')),
-                func_type=params.get('func', 'linear'),
-                target_distribution=target_dist,
-            )
-        elif btype == 'hard':
-            behaviors[name] = HardPityBehavior(
-                threshold=int(params.get('threshold', '90')),
-                target_distribution=target_dist,
-            )
+    # 3. targets → TargetCardEntry
+    for t in config.get('targets', []):
+        store.target_cards.append(TargetCardEntry(
+            card_id=t['card_id'],
+            quantity=t.get('quantity', 1),
+            pool_ids=t.get('pool_ids', []),
+        ))
 
-    pool_specs = {}
-    import fnmatch
-    for pool in pools:
-        pid = pool.id
-        featured = set()
-        ssr_all = set()
-        if pool.rewards:
-            featured.add(pool.rewards[0][0].id)
-            ssr_all.add(pool.rewards[0][0].id)
-            if len(pool.rewards) > 1:
-                ssr_all.add(pool.rewards[1][0].id)
+    # 4. gains → GainRule
+    for g in config.get('gains', []):
+        store.gain_rules.append(GainRule(
+            rule_type=g.get('rule_type', 'every_n_days'),
+            param=g.get('param', '1'),
+            gains=g.get('gains', {}),
+        ))
 
-        matching = []
-        for pdef in pity_defs.values():
-            if fnmatch.fnmatch(pid, pdef.pools):
-                matching.append(pdef.name)
+    # 5. resources → resource_defs + initial_resources
+    resources = config.get('resources', {})
+    for res_name, res_val in resources.items():
+        if res_name not in store.resource_defs:
+            store.resource_defs[res_name] = res_name
+        if isinstance(res_val, (int, float)) and res_val > 0:
+            store.initial_resources[res_name] = float(res_val)
 
-        pool_specs[pid] = PoolPitySpec(
-            pity_names=matching,
-            featured_ids=featured,
-            ssr_ids=ssr_all,
-        )
-
-    return PityEngine(pool_specs, pity_defs, behaviors)
-
-
-from gacha_simulator.core.strategy import Strategy, StrategyContext  # noqa: E402
-
-
-class SmartStrategy(Strategy):
-    lookahead = None
-
-    def __init__(self, target_cards):
-        self.target_cards = target_cards
-        self._pool_to_targets = {}
-        for t in target_cards.targets:
-            for pid in t.pool_ids:
-                self._pool_to_targets.setdefault(pid, []).append(t)
-
-    def _pool_needs_target(self, pool_id, acquired):
-        for t in self._pool_to_targets.get(pool_id, []):
-            if acquired.get(t.card_id, 0) < t.quantity_needed:
-                return True
-        return False
-
-    def select_action(self, ctx: StrategyContext):
-        for pool in ctx.current_pools:
-            if self._pool_needs_target(pool.id, ctx.acquired) and ctx.state.can_afford(pool.cost):
-                return DrawAction(pool_id=pool.id)
-
-        wait_time = DAY
-        for pool in ctx.current_pools:
-            if pool.available_until and pool.available_until > ctx.state.real_time:
-                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
-
-        if wait_time <= 0:
-            wait_time = 3600
-
-        return WaitAction(duration=wait_time)
-
-    @classmethod
-    def description(cls):
-        return "按需追卡"
-
-
-class AllPoolsEnd(StopCondition):
-    def __init__(self, end_time):
-        self.end_time = end_time
-    
-    def check(self, state, history, stats=None):
-        return state.real_time >= self.end_time
-    
-    def description(self):
-        return "所有池子结束"
+    # 6. initial_resources 显式覆盖
+    for res_name, amount in config.get('initial_resources', {}).items():
+        store.initial_resources[res_name] = float(amount)
 
 
 def run_single_sim(args):
     import random
-    pools, target_set, schedule_mgr, end_time, resources, seed, pity_engine = args
+    store, resources, end_day, seed = args
     random.seed(seed)
 
-    strategy = SmartStrategy(target_set)
-    stop_cond = AllPoolsEnd(end_time)
-    service = GachaService(pools, strategy, stop_cond, target_set,
-                          schedule_manager=schedule_mgr, pity_engine=pity_engine)
-    state = GachaState(resources=resources.copy())
+    env = SimulationEnvBuilder.from_config_store(store)
+    strategy = create_strategy('smart', {})
+    stop_cond = AllPoolsEndCondition(end_day * DAY)
+    service = GachaService(
+        env.pools, strategy, stop_cond, env.target_cards,
+        schedule_manager=env.schedule_manager,
+        pity_engine=env.pity_engine,
+    )
+    from gacha_simulator.core import GachaState
+    state = GachaState(resources=dict(resources) if resources else {})
     return service.run_simulation_compact(state)
 
 
@@ -198,27 +151,52 @@ def main():
     parser.add_argument('-s', '--seed', type=int, default=42, help='Random seed')
     parser.add_argument('-o', '--output', default='results.json', help='Output file')
     parser.add_argument('--no-pity', action='store_true', help='Disable pity system')
-    
+    parser.add_argument('--no-json', action='store_true',
+                        help='Use pure text-file config mode (ignore JSON)')
+    parser.add_argument('--data-dir', default=None,
+                        help='Text-file config directory (加载为基线后 JSON 覆盖)')
+
     args = parser.parse_args()
-    
+
+    if not args.no_json:
+        import warnings
+        warnings.warn(
+            "JSON 配置文件格式已弃用，将在后续版本移除。"
+            "请迁移到文本文件格式（config/ 目录）。",
+            DeprecationWarning,
+        )
+
+    store = ConfigStore()
+
+    # 1. 文本文件基线（若提供 --data-dir）
+    if args.data_dir:
+        from gacha_simulator.core.config_io import load_store_from_directory
+        load_store_from_directory(args.data_dir, store)
+
+    # 2. JSON 覆盖层（若 -c 传入）
     config_path = Path(args.config)
     if config_path.exists():
         with open(config_path) as f:
             config = json.load(f)
-    else:
+        json_config_to_store(config, store)
+    elif not args.data_dir:
+        # 既无 JSON 也无 data-dir → 使用默认配置
         config = {
             'pools': [
-                {'id': f'pool_{i}', 'name': f'池子{i}', 'start_day': i*7, 'duration': 21, 
+                {'id': f'pool_{i}', 'name': f'池子{i}', 'start_day': i*7, 'duration': 21,
                  'cost': 160, 'ssr_rate': 0.015 if i < 4 else 0.007}
                 for i in range(8)
             ],
             'pity': {'enabled': not args.no_pity, 'type': 'soft', 'start': 80, 'end': 90},
             'resources': {'draw_resource': 50000}
         }
-    
-    pools, target_set, schedule_mgr = create_pools_from_config(config)
-    end_time = max(s.available_until for s in schedule_mgr.schedules)
-    pity_engine = create_pity_engine_from_config(config, pools)
+        json_config_to_store(config, store)
+
+    if args.no_pity:
+        store.pity.enabled = False
+
+    SimulationEnvBuilder.from_config_store(store)
+    end_day = max(p.end_day for p in store.pools) if store.pools else 365
 
     print("=" * 50)
     print("GachaStat CLI")
@@ -226,18 +204,19 @@ def main():
     print(f"Simulations: {args.num_simulations}")
     print(f"Workers: {args.workers}")
     print(f"Seed: {args.seed}")
-    pity_cfg = config.get('pity', {})
-    print(f"Pity: {'Enabled' if pity_engine else 'Disabled'}")
-    if pity_engine:
-        print(f"  Type: {pity_cfg.get('type', 'soft')}")
-        print(f"  Range: {pity_cfg.get('start', 80)}-{pity_cfg.get('end', 90)}")
+    print(f"Pity: {'Enabled' if store.pity.enabled else 'Disabled'}")
+    if store.pity.enabled and store.pity.pities:
+        p0 = store.pity.pities[0]
+        start = p0.params.get('start', '74')
+        end = p0.params.get('end', '90')
+        print(f"  Type: {p0.btype}")
+        print(f"  Range: {start}-{end}")
     print("=" * 50)
-    
-    resources = config.get('resources', {'draw_resource': 50000})
-    
+
+    resources = dict(store.initial_resources)
+
     args_list = [
-        (pools, target_set, schedule_mgr, end_time, resources,
-         args.seed + i, pity_engine)
+        (store, resources, end_day, args.seed + i)
         for i in range(args.num_simulations)
     ]
     
@@ -251,7 +230,9 @@ def main():
     
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
     
-    actual_target_ids = [t.card_id for t in target_set.targets]
+    actual_target_ids = [t.card_id for t in store.target_cards]
+    if not actual_target_ids and store.pools:
+        actual_target_ids = [f"{store.pools[0].pool_id}_ssr"]
     total_targets = len(actual_target_ids)
 
     total_draws = []

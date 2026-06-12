@@ -304,6 +304,10 @@ class RetreatPanel(QWidget):
         pool_names = self._get_pool_names()
         cost_per_draw = self._extract_cost_per_draw()
 
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(3000)
+
         self._worker = RetreatWorker(
             simulation_results=self._simulation_results,
             target_specs=target_specs,

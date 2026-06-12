@@ -18,7 +18,7 @@ class DataManagerPanel(QWidget):
     def __init__(self, result_store, parent=None):
         super().__init__(parent)
         self._store = result_store
-        self._store.datasets_changed.connect(self._refresh_table)
+        self._store.connect_datasets_changed(self._refresh_table)
         self._setup_ui()
         self._refresh_table()
 

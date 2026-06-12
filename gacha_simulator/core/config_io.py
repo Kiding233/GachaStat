@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Dict, List, Optional
 
@@ -11,6 +12,8 @@ from .pool_config import parse_schedule_file, parse_cards_file, parse_distributi
 from .pity import parse_pity_file
 from .resource_gain import parse_resources_file
 
+logger = logging.getLogger(__name__)
+
 
 def load_store_from_directory(dir_path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     if store is None:
@@ -18,14 +21,24 @@ def load_store_from_directory(dir_path: str, store: Optional[ConfigStore] = None
     else:
         store.clear()
 
-    _load_resources(dir_path, store)
-    _load_cards(dir_path, store)
-    _load_schedule(dir_path, store)
-    _load_pity(dir_path, store)
-    _load_gains(dir_path, store)
-    _load_initial_resources(dir_path, store)
-    _load_targets(dir_path, store)
-    _load_weights(dir_path, store)
+    for _name, _fn in [
+        ('resources', _load_resources),
+        ('cards', _load_cards),
+        ('schedule', _load_schedule),
+        ('pity', _load_pity),
+        ('gains', _load_gains),
+        ('initial_resources', _load_initial_resources),
+        ('targets', _load_targets),
+        ('weights', _load_weights),
+    ]:
+        try:
+            _fn(dir_path, store)
+        except Exception:
+            logger.error(
+                "加载配置失败: %s——文件 %s/%s.txt",
+                _name, dir_path, _name, exc_info=True,
+            )
+            raise
 
     return store
 
@@ -47,11 +60,17 @@ def save_store_to_directory(dir_path: str, store: ConfigStore):
 
 def _load_resources(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'resources.txt')
+    if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，跳过资源加载", filepath)
+        return
     store.resource_defs = parse_resources_file(filepath)
 
 
 def _load_cards(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'cards.txt')
+    if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，跳过卡片加载", filepath)
+        return
     catalog = parse_cards_file(filepath)
     store.card_defs = []
     for card_id, card_def in catalog.cards.items():
@@ -67,6 +86,7 @@ def _load_cards(dir_path: str, store: ConfigStore):
 def _load_schedule(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'schedule.txt')
     if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，跳过排期加载", filepath)
         return
 
     pool_configs, schedule_catalog = parse_schedule_file(filepath)
@@ -189,6 +209,7 @@ def _get_featured_ids_from_bindings(bindings: Dict[str, str]) -> set:
 def _load_pity(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'pity.txt')
     if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，使用默认保底配置", filepath)
         store.pity = PityConfig(enabled=True)
         return
 
@@ -228,6 +249,7 @@ def _normalize_rule_type(raw: str) -> tuple:
 def _load_gains(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'gains.txt')
     if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，跳过收入规则加载", filepath)
         return
 
     rules: List[GainRule] = []
@@ -302,36 +324,34 @@ def _load_gains(dir_path: str, store: ConfigStore):
 def _load_initial_resources(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'initial_resources.txt')
     if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，跳过初始资源加载", filepath)
         return
 
     store.initial_resources = {}
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split('|')
+            if len(parts) >= 2:
+                rid = parts[0].strip()
+                try:
+                    amt = float(parts[1].strip())
+                except ValueError:
                     continue
-                parts = line.split('|')
-                if len(parts) >= 2:
-                    rid = parts[0].strip()
-                    try:
-                        amt = float(parts[1].strip())
-                    except ValueError:
-                        continue
-                    store.initial_resources[rid] = store.initial_resources.get(rid, 0) + amt
-    except FileNotFoundError:
-        pass
+                store.initial_resources[rid] = store.initial_resources.get(rid, 0) + amt
 
 
 def _load_targets(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'targets.txt')
     if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，跳过目标卡片加载", filepath)
         return
 
     store.target_cards = []
     merged = {}
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
@@ -357,8 +377,6 @@ def _load_targets(dir_path: str, store: ConfigStore):
                     merged[card_id] = TargetCardEntry(
                         card_id=card_id, quantity=quantity, pool_ids=pool_ids,
                     )
-    except FileNotFoundError:
-        pass
     store.target_cards = list(merged.values())
 
 
@@ -558,44 +576,42 @@ def _save_distributions(dir_path: str, store: ConfigStore):
 def _load_weights(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'weights.txt')
     if not os.path.exists(filepath):
+        logger.warning("配置文件缺失: %s，跳过权重加载", filepath)
         return
 
     store.card_weights = {}
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split('|')
-                if len(parts) < 2:
-                    continue
-                card_id = parts[0].strip()
-                desire_weight = 1.0
-                miss_cost_weight = 1.0
-                card_value = 1.0
-                if len(parts) >= 2:
-                    try:
-                        desire_weight = float(parts[1].strip())
-                    except ValueError:
-                        pass
-                if len(parts) >= 3:
-                    try:
-                        miss_cost_weight = float(parts[2].strip())
-                    except ValueError:
-                        pass
-                if len(parts) >= 4:
-                    try:
-                        card_value = float(parts[3].strip())
-                    except ValueError:
-                        pass
-                store.card_weights[card_id] = CardWeightEntry(
-                    desire_weight=desire_weight,
-                    miss_cost_weight=miss_cost_weight,
-                    card_value=card_value,
-                )
-    except FileNotFoundError:
-        pass
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split('|')
+            if len(parts) < 2:
+                continue
+            card_id = parts[0].strip()
+            desire_weight = 1.0
+            miss_cost_weight = 1.0
+            card_value = 1.0
+            if len(parts) >= 2:
+                try:
+                    desire_weight = float(parts[1].strip())
+                except ValueError:
+                    pass
+            if len(parts) >= 3:
+                try:
+                    miss_cost_weight = float(parts[2].strip())
+                except ValueError:
+                    pass
+            if len(parts) >= 4:
+                try:
+                    card_value = float(parts[3].strip())
+                except ValueError:
+                    pass
+            store.card_weights[card_id] = CardWeightEntry(
+                desire_weight=desire_weight,
+                miss_cost_weight=miss_cost_weight,
+                card_value=card_value,
+            )
 
 
 def _save_weights(dir_path: str, store: ConfigStore):

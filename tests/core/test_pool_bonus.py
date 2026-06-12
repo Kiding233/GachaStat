@@ -1,5 +1,4 @@
 """额外资源（first_time_bonus / nth_time_bonus / excess_bonus）测试"""
-import pytest
 from gacha_simulator.core.pool import Reward, compute_bonus_resources
 
 

@@ -2,7 +2,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Set
 import fnmatch
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 class PityBehavior(ABC):
@@ -245,6 +248,10 @@ class PityEngine:
         for pname in spec.pity_names:
             pdef = self.pity_defs.get(pname)
             if pdef is None:
+                logger.warning(
+                    "Unknown pity name '%s' referenced in pool spec——skipping",
+                    pname,
+                )
                 continue
             if pdef.reset_condition == 'any_ssr' and is_ssr:
                 state.reset(pname)
@@ -252,6 +259,11 @@ class PityEngine:
                 state.reset(pname)
             elif pdef.reset_condition == 'never':
                 pass
+            elif pdef.reset_condition not in ('any_ssr', 'featured_ssr', 'never'):
+                logger.warning(
+                    "Unknown reset_condition: %s, treating as 'never'",
+                    pdef.reset_condition,
+                )
 
     def get_spec(self, pool_id: str) -> Optional[PoolPitySpec]:
         return self.pool_specs.get(pool_id)

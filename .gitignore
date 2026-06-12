@@ -19,3 +19,12 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# 测试与模拟产物
+.coverage
+results.json
+
+# 临时脚本
+benchmark_chart.py
+test_*.html
+profile_*.py

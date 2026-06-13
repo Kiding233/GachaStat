@@ -110,3 +110,50 @@ class TestCanAffordBatch:
         assert state2.can_afford_batch(cost, 1) is True
         state3 = GachaState(resources={})
         assert state3.can_afford_batch(cost, 1) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Task 4: 策略适配——batch_size 感知
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_strategy_can_afford_batch_uses_pool_batch_size():
+    """策略调用 can_afford_batch 时第二个参数为 pool.batch_size（非硬编码 1）。"""
+    from gacha_simulator.core.pool import Pool, Reward
+    from gacha_simulator.core.schedule import PoolSchedule
+    from gacha_simulator.core.strategy import SmartStrategy, StrategyContext
+    from gacha_simulator.core.stop_condition import StopCondition
+    from gacha_simulator.core.target_card import TargetCardSet, TargetCard
+
+    class NoopStop(StopCondition):
+        def check(self, state, history, stats=None):
+            return False
+        def description(self):
+            return "noop"
+
+    pool = Pool(
+        id='test_b10', name='十连池', cost=[{'coin': 10}],
+        rewards=[(Reward(id='card_a', name='A'), 1.0)],
+        batch_size=10
+    )
+    state = GachaState(resources={'coin': 100})
+    original_can_afford_batch = state.can_afford_batch
+    call_args = []
+    def spy(cost, batch_size):
+        call_args.append((cost, batch_size))
+        return original_can_afford_batch(cost, batch_size)
+    state.can_afford_batch = spy
+
+    # SmartStrategy 需要 target card 才会触发 pool 遍历中的 can_afford 检查
+    tc = TargetCard(card_id='card_a', quantity_needed=1, pool_ids=['test_b10'])
+    ctx = StrategyContext(
+        state=state, current_pools=[pool], all_pools=[pool],
+        future_schedules=[], stop_condition=NoopStop(),
+        target_cards=TargetCardSet([tc]), acquired={},
+        pool_draw_counts={'test_b10': 0}, total_draws=0,
+        ssr_ids=set(),
+    )
+    strategy = SmartStrategy()
+    strategy.select_action(ctx)
+    assert len(call_args) >= 1
+    assert call_args[0][1] == pool.batch_size
+    assert call_args[0][1] == 10

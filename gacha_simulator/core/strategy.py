@@ -102,7 +102,7 @@ class SmartStrategy(Strategy):
                 continue
             for pool in ctx.all_pools:
                 if pool.is_exchange and pool.exchange_card_id == t.card_id:
-                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford(pool.cost):
+                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                         return pool.id
         return None
 
@@ -114,7 +114,7 @@ class SmartStrategy(Strategy):
             return DrawAction(pool_id=exchange_pool_id)
 
         for pool in ctx.current_pools:
-            if not pool.is_exchange and self._pool_needs_target(pool.id, ctx) and ctx.state.can_afford(pool.cost):
+            if not pool.is_exchange and self._pool_needs_target(pool.id, ctx) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 return DrawAction(pool_id=pool.id)
 
         wait_time = 86400
@@ -150,11 +150,11 @@ class PoolQuotaStrategy(Strategy):
                 continue
             for pool in ctx.all_pools:
                 if pool.is_exchange and pool.exchange_card_id == t.card_id:
-                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford(pool.cost):
+                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                         return DrawAction(pool_id=pool.id)
 
         for pool in ctx.current_pools:
-            if pool.is_exchange or not ctx.state.can_afford(pool.cost):
+            if pool.is_exchange or not ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 continue
             pid = pool.id
             quota = self.pool_quotas.get(pid)
@@ -164,7 +164,7 @@ class PoolQuotaStrategy(Strategy):
                     return DrawAction(pool_id=pid)
 
         for pool in ctx.current_pools:
-            if not pool.is_exchange and ctx.state.can_afford(pool.cost):
+            if not pool.is_exchange and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 pid = pool.id
                 quota = self.pool_quotas.get(pid)
                 drawn = ctx.pool_draw_counts.get(pid, 0)
@@ -204,11 +204,11 @@ class PityReserveStrategy(Strategy):
                 continue
             for pool in ctx.all_pools:
                 if pool.is_exchange and pool.exchange_card_id == t.card_id:
-                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford(pool.cost):
+                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                         return DrawAction(pool_id=pool.id)
 
         for pool in ctx.current_pools:
-            if pool.is_exchange or not ctx.state.can_afford(pool.cost):
+            if pool.is_exchange or not ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 continue
             if not self._pool_needs_target(pool.id, ctx):
                 continue
@@ -262,11 +262,11 @@ class StopOnTargetStrategy(Strategy):
                 continue
             for pool in ctx.all_pools:
                 if pool.is_exchange and pool.exchange_card_id == t.card_id:
-                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford(pool.cost):
+                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                         return DrawAction(pool_id=pool.id)
 
         for pool in ctx.current_pools:
-            if not pool.is_exchange and self._pool_needs_target(pool.id, ctx) and ctx.state.can_afford(pool.cost):
+            if not pool.is_exchange and self._pool_needs_target(pool.id, ctx) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 return DrawAction(pool_id=pool.id)
 
         wait_time = 86400
@@ -307,7 +307,7 @@ class TargetHuntingStrategy(Strategy):
         from .action import DrawAction, WaitAction
         target_pools = [p for p in ctx.current_pools if p.id in self.target_pool_ids]
         for pool in target_pools:
-            if ctx.state.can_afford(pool.cost):
+            if ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 return DrawAction(pool_id=pool.id)
         return WaitAction(duration=3600)
 

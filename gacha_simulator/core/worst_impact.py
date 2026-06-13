@@ -82,7 +82,7 @@ class DrawTargetStrategy(Strategy):
 
     def select_action(self, ctx: StrategyContext):
         for pool in ctx.current_pools:
-            if (not self.pool_id or pool.id == self.pool_id) and ctx.state.can_afford(pool.cost):
+            if (not self.pool_id or pool.id == self.pool_id) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 return DrawAction(pool_id=pool.id)
 
         wait_time = 86400

@@ -157,3 +157,90 @@ def test_strategy_can_afford_batch_uses_pool_batch_size():
     assert len(call_args) >= 1
     assert call_args[0][1] == pool.batch_size
     assert call_args[0][1] == 10
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Task 5a: 服务层批次循环骨架
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestGachaServiceBatchDrawSkeleton:
+    """Task 5a: 批次循环骨架——预检查 + 循环 + 逐发 spend + break。"""
+
+    def test_batch_draw_executes_n_draws(self):
+        """batch_size=3 的池子一次 DrawAction 执行 3 发。"""
+        from gacha_simulator.core.pool import Pool, Reward
+        from gacha_simulator.core.action import DrawAction
+        from gacha_simulator.core.strategy import Strategy
+        from gacha_simulator.core.stop_condition import StopCondition
+        from gacha_simulator.core.target_card import TargetCardSet
+        from gacha_simulator.service.gacha_service import GachaService
+
+        pool = Pool(
+            id='test_batch', name='batch池', cost=[{'coin': 10}],
+            rewards=[(Reward(id='card_a', name='A'), 1.0)],
+            batch_size=3,
+        )
+        state = GachaState(resources={'coin': 100})
+
+        class FixedDraw(Strategy):
+            def select_action(self, ctx):
+                return DrawAction(pool_id='test_batch')
+            def description(self):
+                return "fixed batch"
+
+        class NeverStop(StopCondition):
+            def check(self, state, pools, stats):
+                return False
+            def description(self):
+                return "never stop"
+
+        service = GachaService(
+            pools=[pool], strategy=FixedDraw(),
+            stop_condition=NeverStop(),
+            target_cards=TargetCardSet([]),
+            pity_engine=None, resource_gain=None,
+            schedule_manager=None, card_defs=[], ssr_ids=set(),
+        )
+        # max_iterations=1：限制 1 次迭代，验证批次循环在一次动作中执行 N 发
+        result = service.run_simulation_compact(state, max_iterations=1)
+        # 关键断言：1 次 DrawAction + batch_size=3 → 3 发，非旧代码的 1 发
+        assert result.total_draws == 3
+        assert result.total_consumed.get('coin', 0) == 30
+
+    def test_batch_draw_insufficient_skips(self):
+        """资源不足 batch_size 发时静默跳过。"""
+        from gacha_simulator.core.pool import Pool, Reward
+        from gacha_simulator.core.action import DrawAction
+        from gacha_simulator.core.strategy import Strategy
+        from gacha_simulator.core.stop_condition import StopCondition
+        from gacha_simulator.core.target_card import TargetCardSet
+        from gacha_simulator.service.gacha_service import GachaService
+
+        pool = Pool(
+            id='test_batch', name='batch池', cost=[{'coin': 10}],
+            rewards=[(Reward(id='card_a', name='A'), 1.0)],
+            batch_size=10,
+        )
+        state = GachaState(resources={'coin': 50})
+
+        class FixedDraw(Strategy):
+            def select_action(self, ctx):
+                return DrawAction(pool_id='test_batch')
+            def description(self):
+                return "fixed batch"
+
+        class NeverStop(StopCondition):
+            def check(self, state, pools, stats):
+                return stats.total_draws > 0
+            def description(self):
+                return "never stop"
+
+        service = GachaService(
+            pools=[pool], strategy=FixedDraw(),
+            stop_condition=NeverStop(),
+            target_cards=TargetCardSet([]),
+            pity_engine=None, resource_gain=None,
+            schedule_manager=None, card_defs=[], ssr_ids=set(),
+        )
+        result = service.run_simulation_compact(state, max_iterations=100)
+        assert result.total_draws == 0

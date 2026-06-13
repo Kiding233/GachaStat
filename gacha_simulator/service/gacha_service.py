@@ -163,95 +163,105 @@ class GachaService:
                 if not pool:
                     raise ValueError(f"Pool not found: {action.pool_id}")
 
-                cost = pool.cost
-                spent = state.spend(cost)
-                if spent is None:
+                batch_size = max(getattr(pool, 'batch_size', 1), 1)
+
+                # ── 原子预检查：batch_size 发可负担性 ──
+                if not state.can_afford_batch(pool.cost, batch_size):
                     continue
 
-                probabilities = {r.id: p for r, p in pool.rewards}
-                original_probs = probabilities.copy() if _pity_engine else None
-                if _pity_engine:
-                    cached_probs = ctx._pity_cache.get(pool.id)
-                    if cached_probs is not None:
-                        probabilities = cached_probs
-                    else:
-                        probabilities = _pity_engine.before_draw(
-                            pool.id, pity_state, probabilities
-                        )
-                    pool._apply_probabilities(probabilities)
+                # ── 批次逐发执行 ──
+                for _ in range(batch_size):
+                    cost = pool.cost
+                    spent = state.spend(cost)
+                    if spent is None:
+                        # 防御性：can_afford_batch 已预检查，不应发生
+                        # 极端情况（奖励扣减导致中途枯竭）→ 停止本批次
+                        break
 
-                reward = pool.draw()
+                    probabilities = {r.id: p for r, p in pool.rewards}
+                    original_probs = probabilities.copy() if _pity_engine else None
+                    if _pity_engine:
+                        cached_probs = ctx._pity_cache.get(pool.id)
+                        if cached_probs is not None:
+                            probabilities = cached_probs
+                        else:
+                            probabilities = _pity_engine.before_draw(
+                                pool.id, pity_state, probabilities
+                            )
+                        pool._apply_probabilities(probabilities)
 
-                pity_triggered = False
-                triggered_pity_name = None
-                if original_probs is not None:
-                    for card_id, orig_prob in original_probs.items():
-                        new_prob = probabilities.get(card_id, 0)
-                        if new_prob > orig_prob * 1.01:
-                            pity_triggered = True
-                            break
+                    reward = pool.draw()
 
-                if _pity_engine and pity_triggered:
-                    spec = _pity_engine.get_spec(pool.id)
-                    if spec:
-                        triggered_names = []
-                        for pname in spec.pity_names:
-                            behavior = _pity_engine.behaviors.get(pname)
-                            if behavior is None:
-                                continue
+                    pity_triggered = False
+                    triggered_pity_name = None
+                    if original_probs is not None:
+                        for card_id, orig_prob in original_probs.items():
+                            new_prob = probabilities.get(card_id, 0)
+                            if new_prob > orig_prob * 1.01:
+                                pity_triggered = True
+                                break
+
+                    if _pity_engine and pity_triggered:
+                        spec = _pity_engine.get_spec(pool.id)
+                        if spec:
+                            triggered_names = []
+                            for pname in spec.pity_names:
+                                behavior = _pity_engine.behaviors.get(pname)
+                                if behavior is None:
+                                    continue
+                                cv = pity_state.get(pname)
+                                if behavior.is_active(cv):
+                                    triggered_names.append(pname)
+                            triggered_pity_name = ','.join(triggered_names) if triggered_names else None
+
+                    pool_spec = _pity_engine.get_spec(pool.id) if _pity_engine else None
+                    pool_counter_max = 0
+                    if pool_spec:
+                        for pname in pool_spec.pity_names:
                             cv = pity_state.get(pname)
-                            if behavior.is_active(cv):
-                                triggered_names.append(pname)
-                        triggered_pity_name = ','.join(triggered_names) if triggered_names else None
+                            pool_counter_max = max(pool_counter_max, cv)
 
-                pool_spec = _pity_engine.get_spec(pool.id) if _pity_engine else None
-                pool_counter_max = 0
-                if pool_spec:
-                    for pname in pool_spec.pity_names:
-                        cv = pity_state.get(pname)
-                        pool_counter_max = max(pool_counter_max, cv)
+                    if _pity_engine:
+                        _pity_engine.after_draw(pool.id, pity_state, reward.id)
 
-                if _pity_engine:
-                    _pity_engine.after_draw(pool.id, pity_state, reward.id)
+                    stats.on_draw(reward.id, pool.id, pity_triggered)
+                    if pity_triggered:
+                        stats.pity_triggers += 1
 
-                stats.on_draw(reward.id, pool.id, pity_triggered)
-                if pity_triggered:
-                    stats.pity_triggers += 1
-
-                rg = dict(reward.resources_gained or {})
-                if reward.first_time_bonus or reward.nth_time_bonus or reward.excess_bonus:
-                    ac_new = stats.acquired_counts.get(reward.id, 0)
-                    init = _initial_counts.get(reward.id, 0)
-                    total_before = init + ac_new - 1
-                    total_after = init + ac_new
-                    bonus = compute_bonus_resources(reward, total_before, total_after)
-                    for k, v in bonus.items():
-                        rg[k] = rg.get(k, 0) + v
-                if rg:
-                    for k, v in rg.items():
-                        resources[k] = resources.get(k, 0) + v
-
-                if _is_compact:
-                    for k, v in spent.items():
-                        total_consumed[k] = total_consumed.get(k, 0) + v
+                    rg = dict(reward.resources_gained or {})
+                    if reward.first_time_bonus or reward.nth_time_bonus or reward.excess_bonus:
+                        ac_new = stats.acquired_counts.get(reward.id, 0)
+                        init = _initial_counts.get(reward.id, 0)
+                        total_before = init + ac_new - 1
+                        total_after = init + ac_new
+                        bonus = compute_bonus_resources(reward, total_before, total_after)
+                        for k, v in bonus.items():
+                            rg[k] = rg.get(k, 0) + v
                     if rg:
                         for k, v in rg.items():
-                            total_gained[k] = total_gained.get(k, 0) + v
-                    combined_gained = dict(rg)
-                    for k, v in _pending_wait_gains.items():
-                        combined_gained[k] = combined_gained.get(k, 0) + v
-                    _pending_wait_gains.clear()
-                else:
-                    combined_gained = rg.copy() if rg else _EMPTY_DICT
+                            resources[k] = resources.get(k, 0) + v
 
-                collector.on_draw(
-                    card_id=reward.id, pool=pool, spent=spent,
-                    resources_gained=rg, pity_triggered=pity_triggered,
-                    triggered_pity_name=triggered_pity_name,
-                    pity_counter_max=pool_counter_max,
-                    real_time=real_time, pity_state=pity_state,
-                    combined_gained=combined_gained,
-                )
+                    if _is_compact:
+                        for k, v in spent.items():
+                            total_consumed[k] = total_consumed.get(k, 0) + v
+                        if rg:
+                            for k, v in rg.items():
+                                total_gained[k] = total_gained.get(k, 0) + v
+                        combined_gained = dict(rg)
+                        for k, v in _pending_wait_gains.items():
+                            combined_gained[k] = combined_gained.get(k, 0) + v
+                        _pending_wait_gains.clear()
+                    else:
+                        combined_gained = rg.copy() if rg else _EMPTY_DICT
+
+                    collector.on_draw(
+                        card_id=reward.id, pool=pool, spent=spent,
+                        resources_gained=rg, pity_triggered=pity_triggered,
+                        triggered_pity_name=triggered_pity_name,
+                        pity_counter_max=pool_counter_max,
+                        real_time=real_time, pity_state=pity_state,
+                        combined_gained=combined_gained,
+                    )
 
             elif _isinstance(action, _WaitAction):
                 rt_before = real_time

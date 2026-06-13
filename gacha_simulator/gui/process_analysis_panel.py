@@ -22,16 +22,6 @@ from ..core.gdr import UNIFIED_GDR_REGISTRY, make_gdr_calculator, populate_gdr_c
 # （已移除静态 _gdr_key_to_display 映射，因 :qualified key 在模块加载时不可知）
 
 
-class _NoWheelComboBox(QComboBox):
-    def wheelEvent(self, event):
-        event.ignore()
-
-
-class _NoWheelDoubleSpinBox(QDoubleSpinBox):
-    def wheelEvent(self, event):
-        event.ignore()
-
-
 class ProcessAnalysisPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,12 +82,12 @@ class ProcessAnalysisPanel(QWidget):
         gdr_layout = QVBoxLayout(gdr_group)
 
         gdr_layout.addWidget(QLabel("GDR 指标"))
-        self.gdr_combo = _NoWheelComboBox()
+        self.gdr_combo = QComboBox()
         populate_gdr_combo(self.gdr_combo)
         gdr_layout.addWidget(self.gdr_combo)
 
         gdr_layout.addWidget(QLabel("成功阈值"))
-        self.threshold_spin = _NoWheelDoubleSpinBox()
+        self.threshold_spin = QDoubleSpinBox()
         self.threshold_spin.setRange(-9999999.0, 9999999.0)
         self.threshold_spin.setSingleStep(0.05)
         self.threshold_spin.setValue(1.0)
@@ -106,7 +96,7 @@ class ProcessAnalysisPanel(QWidget):
         self.gdr_combo.currentIndexChanged.connect(self._on_gdr_changed)
 
         gdr_layout.addWidget(QLabel("池子GDR方式"))
-        self.pool_gdr_mode = _NoWheelComboBox()
+        self.pool_gdr_mode = QComboBox()
         self.pool_gdr_mode.addItem("截止到该池（累积）", "cumulative")
         self.pool_gdr_mode.addItem("仅该池（单池）", "single_pool")
         gdr_layout.addWidget(self.pool_gdr_mode)
@@ -116,7 +106,7 @@ class ProcessAnalysisPanel(QWidget):
         ci_group = QGroupBox("置信区间")
         ci_layout = QGridLayout(ci_group)
         ci_layout.addWidget(QLabel("置信水平:"), 0, 0)
-        self.conf_level_spin = _NoWheelDoubleSpinBox()
+        self.conf_level_spin = QDoubleSpinBox()
         self.conf_level_spin.setRange(0.80, 0.99)
         self.conf_level_spin.setValue(0.95)
         self.conf_level_spin.setSingleStep(0.01)
@@ -129,7 +119,7 @@ class ProcessAnalysisPanel(QWidget):
         mode_layout = QVBoxLayout(mode_group)
 
         mode_layout.addWidget(QLabel("事件组合模式"))
-        self.event_mode_combo = _NoWheelComboBox()
+        self.event_mode_combo = QComboBox()
         self.event_mode_combo.addItem("事件类型序列", "sequence")
         self.event_mode_combo.addItem("事件类型集合", "set")
         self.event_mode_combo.addItem("事件计数组合", "count_set")
@@ -155,7 +145,7 @@ class ProcessAnalysisPanel(QWidget):
         self.event_mode_combo.currentIndexChanged.connect(self._on_event_mode_changed)
 
         mode_layout.addWidget(QLabel("成败组合模式"))
-        self.success_mode_combo = _NoWheelComboBox()
+        self.success_mode_combo = QComboBox()
         self.success_mode_combo.addItem("成败计数", "count")
         self.success_mode_combo.addItem("成败序列", "sequence")
         self.success_mode_combo.addItem("成败集合", "set")
@@ -165,7 +155,7 @@ class ProcessAnalysisPanel(QWidget):
         self.success_custom_widget = QWidget()
         success_custom_layout = QHBoxLayout(self.success_custom_widget)
         success_custom_layout.setContentsMargins(0, 4, 0, 0)
-        self.success_op_combo = _NoWheelComboBox()
+        self.success_op_combo = QComboBox()
         success_op_labels = [('=', '='), ('≥', '>='), ('≤', '<='), ('>', '>'), ('<', '<')]
         for display, data in success_op_labels:
             self.success_op_combo.addItem(display, data)
@@ -226,13 +216,13 @@ class ProcessAnalysisPanel(QWidget):
 
         ctrl_row = QHBoxLayout()
         ctrl_row.addWidget(QLabel("GDR指标"))
-        self.cond_gdr_combo = _NoWheelComboBox()
+        self.cond_gdr_combo = QComboBox()
         populate_gdr_combo(self.cond_gdr_combo)
         self.cond_gdr_combo.currentIndexChanged.connect(self._on_cond_gdr_changed)
         ctrl_row.addWidget(self.cond_gdr_combo)
 
         ctrl_row.addWidget(QLabel("条件"))
-        self.cond_filter_combo = _NoWheelComboBox()
+        self.cond_filter_combo = QComboBox()
         self.cond_filter_combo.addItem("全部", "all")
         self.cond_filter_combo.addItem("仅成功", "success")
         self.cond_filter_combo.addItem("仅失败", "failure")
@@ -273,7 +263,7 @@ class ProcessAnalysisPanel(QWidget):
         self.trace_total_label = QLabel("0")
         nav_layout.addWidget(self.trace_total_label)
 
-        self.trace_filter_combo = _NoWheelComboBox()
+        self.trace_filter_combo = QComboBox()
         self.trace_filter_combo.addItem("全部", "all")
         self.trace_filter_combo.addItem("仅成功", "success")
         self.trace_filter_combo.addItem("仅失败", "failure")
@@ -334,7 +324,7 @@ class ProcessAnalysisPanel(QWidget):
         for i, (key, label_text) in enumerate(event_type_labels):
             label = QLabel(label_text)
             self._custom_threshold_layout.addWidget(label, i, 0)
-            op_combo = _NoWheelComboBox()
+            op_combo = QComboBox()
             for display, data in self._op_labels:
                 op_combo.addItem(display, data)
             op_combo.setCurrentIndex(0)

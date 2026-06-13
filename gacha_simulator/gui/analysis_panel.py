@@ -14,25 +14,14 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from ..paths import get_user_data_dir
 
 
-
-class _NoWheelSpinBox(QSpinBox):
-    def wheelEvent(self, event):
-        event.ignore()
-
-class _NoWheelDoubleSpinBox(QDoubleSpinBox):
-    def wheelEvent(self, event):
-        event.ignore()
-
-class _NoWheelComboBox(QComboBox):
-    def wheelEvent(self, event):
-        event.ignore()
-
-
 ANALYSIS_CATEGORIES = {
     '总体广义出率分析': [
         ('gdr_dist', 'GDR分布'),
         ('gdr_statistics', 'GDR指标统计'),
         ('correlation', 'GDR指标相关性'),
+    ],
+    '成功率分析': [
+        ('success_rate', '成功率分析'),
     ],
     '风险分析': [
         ('risk_var_cvar', 'VaR/CVaR分析'),
@@ -57,7 +46,7 @@ ANALYSIS_CATEGORIES = {
 }
 
 
-_EXPANDABLE_KEYS = {'gdr_dist', 'risk_worst_case', 'risk_best_case', 'conditional_dist', 'transition_analysis', 'cumulative_by_pool'}
+_EXPANDABLE_KEYS = {'gdr_dist', 'risk_worst_case', 'risk_best_case', 'conditional_dist', 'transition_analysis', 'cumulative_by_pool', 'success_rate'}
 
 # 渲染顺序：按 ANALYSIS_CATEGORIES 中定义的出现顺序排列图表
 _CHART_DISPLAY_ORDER: dict[str, int] = {}
@@ -158,7 +147,7 @@ class AnalysisWorker(QThread):
     progress = pyqtSignal(str, int)
     error = pyqtSignal(str)
 
-    def __init__(self, results, ctx, pool_end_times, selected, alpha, output_dir, store=None, success_criteria='all_targets', cond_gdr='抽出全部目标卡', target_gdr='资源剩余', cond_threshold=0.5, primary_gdr='简单目标达成率', best_primary_gdr='简单目标达成率', gdr_dist_selections=None, cumulative_by_pool_selections=None, worst_case_cond_selections=None, best_case_cond_selections=None, draw_sequences=None, heatmap_data=None, cumulative_snapshots=None, transition_flags=None, use_draw_units=False, cost_per_draw=160, no_draw_resource=None, no_draw_resources=None, no_draw_pool_resources=None, pool_names=None):
+    def __init__(self, results, ctx, pool_end_times, selected, alpha, output_dir, store=None, success_criteria='all_targets', cond_gdr='抽出全部目标卡', target_gdr='资源剩余', cond_threshold=0.5, primary_gdr='简单目标达成率', best_primary_gdr='简单目标达成率', gdr_dist_selections=None, cumulative_by_pool_selections=None, worst_case_cond_selections=None, best_case_cond_selections=None, draw_sequences=None, heatmap_data=None, cumulative_snapshots=None, transition_flags=None, use_draw_units=False, cost_per_draw=160, no_draw_resource=None, no_draw_resources=None, no_draw_pool_resources=None, pool_names=None, success_rate_gdr=None, success_rate_scope='overall', success_rate_threshold=1.0, success_rate_conf=0.95, success_rate_pool_idx=0):
         super().__init__()
         self._store = store
         self.results = results
@@ -192,6 +181,12 @@ class AnalysisWorker(QThread):
         self.no_draw_resources = no_draw_resources or {}
         self.no_draw_pool_resources = no_draw_pool_resources or {}
         self.pool_names = pool_names or {}
+        # P43: 成功率分析参数
+        self.success_rate_gdr = success_rate_gdr
+        self.success_rate_scope = success_rate_scope
+        self.success_rate_threshold = success_rate_threshold
+        self.success_rate_conf = success_rate_conf
+        self.success_rate_pool_idx = success_rate_pool_idx
 
     def _emit(self, msg, pct):
         self.progress.emit(msg, pct)
@@ -242,6 +237,7 @@ class AnalysisWorker(QThread):
             ('cumulative_by_pool', '截止每池的GDR分布'),
             ('transition_analysis', '转变分析'),
             ('correlation', '相关性分析'),
+            ('success_rate', '成功率分析'),
         ]
 
         active_steps = []
@@ -1263,6 +1259,113 @@ class AnalysisWorker(QThread):
                 )
             step_done('相关性分析')
 
+        # P43: 成功率分析
+        if 'success_rate' in self.selected and self.success_rate_gdr:
+            self._emit('计算成功率...', int(completed / total_steps * 100))
+            gdr_key = self.success_rate_gdr
+            threshold = self.success_rate_threshold
+            scope = self.success_rate_scope
+            pool_idx = self.success_rate_pool_idx
+            conf_level = self.success_rate_conf
+
+            calc = make_gdr_calculator(self._store, target_specs, gdr_key,
+                                       gdr_threshold=threshold)
+            ok = False
+
+            if scope == 'single_pool' and is_resource_gdr(gdr_key):
+                defn = resolve_gdr_definition(gdr_key)
+                display_name = defn.display_name if defn else gdr_key
+                from gacha_simulator.visualization.chart_spec import TableData
+                charts['success_rate'] = ChartSpec(
+                    chart_type="table",
+                    data=TableData(
+                        headers=["指标", "值"],
+                        rows=[
+                            ["状态", "范围不支持"],
+                            ["说明", f"资源类 GDR（{display_name}）仅支持「总体」和「第k池累积」范围"],
+                        ],
+                    ),
+                    title='成功率分析',
+                )
+            elif scope == "overall":
+                success_flags = [calc.is_success(r) for r in self.results]
+                ok = True
+            else:
+                cumulative_snapshots = self.cumulative_snapshots
+                if self.pool_end_times:
+                    sorted_pools = sorted(self.pool_end_times.items(), key=lambda x: x[1])
+                    pool_ids_ordered = [pid for pid, _ in sorted_pools]
+                elif cumulative_snapshots:
+                    pool_ids_ordered = sorted(cumulative_snapshots.keys())
+                else:
+                    pool_ids_ordered = []
+
+                if cumulative_snapshots:
+                    pool_ids_ordered = [pid for pid in pool_ids_ordered if pid in cumulative_snapshots]
+
+                if not cumulative_snapshots or not pool_ids_ordered or pool_idx >= len(pool_ids_ordered):
+                    from gacha_simulator.visualization.chart_spec import TableData
+                    charts['success_rate'] = ChartSpec(
+                        chart_type="table",
+                        data=TableData(
+                            headers=["指标", "值"],
+                            rows=[
+                                ["状态", "数据不足"],
+                                ["说明", "逐池分析需要 cumulative_snapshots，当前批次未提供或池索引越界"],
+                            ],
+                        ),
+                        title='成功率分析',
+                    )
+                else:
+                    from gacha_simulator.core.per_pool_analysis import (
+                        compute_transition_flags_from_gdr)
+                    all_flags = compute_transition_flags_from_gdr(
+                        cumulative_snapshots, pool_ids_ordered,
+                        target_specs, gdr_key=gdr_key, threshold=threshold,
+                        scope=scope, aggregates=self.results,
+                        ssr_ids=ssr_ids,
+                        desire_weights=self._store.desire_weights if self._store else None,
+                        miss_cost_weights=self._store.miss_cost_weights if self._store else None,
+                        card_value_weights=self._store.card_value_weights if self._store else None,
+                    )
+                    success_flags = [flags[pool_idx] for flags in all_flags]
+                    ok = True
+
+            if ok:
+                success = sum(success_flags)
+                total = len(success_flags)
+                rate = success / total if total else 0.0
+
+                from gacha_simulator.core.process_analysis import wilson_ci
+                ci_lower, ci_upper = wilson_ci(success, total, conf_level)
+
+                defn = resolve_gdr_definition(gdr_key)
+                display_name = defn.display_name if defn else gdr_key
+                lower_is_better = defn.lower_is_better if defn else False
+                direction = "≤ 阈值" if lower_is_better else "≥ 阈值"
+                ci_pct = conf_level * 100
+
+                subtitle = f"成功判定：GDR {display_name} {direction} {threshold} 算成功"
+                if total > 0 and total < 1.0 / (1.0 - conf_level):
+                    subtitle += f"  Warning: 样本量({total})不足以支持{ci_pct:.1f}%置信水平，区间可能过宽"
+
+                from gacha_simulator.visualization.chart_spec import TableData
+                charts['success_rate'] = ChartSpec(
+                    chart_type="table",
+                    data=TableData(
+                        headers=["成功数 / 总数", "成功率",
+                                 f"{ci_pct:.1f}% Wilson CI"],
+                        rows=[[
+                            f"{success} / {total}",
+                            f"{rate * 100:.2f}%",
+                            f"[{ci_lower * 100:.2f}%, {ci_upper * 100:.2f}%]",
+                        ]],
+                    ),
+                    title='成功率分析',
+                    layout_hints={'footnote': subtitle},
+                )
+            step_done('成功率分析')
+
         if 'transition_analysis' in self.selected:
             trans = []
             if not self.pool_end_times:
@@ -1409,6 +1512,11 @@ class AnalysisPanel(QWidget):
             ('(-)' + display) if lower_is_better else display
             for _key, display, lower_is_better, _thr in self._gdr_entries
         ]
+        # P43: display_name -> gdr_key O(1) 反查映射
+        self._gdr_key_by_name = {
+            ('(-)' + d) if lib else d: k
+            for k, d, lib, _thr in self._gdr_entries
+        }
 
     @staticmethod
     def _clear_container_layout(container_widget):
@@ -1456,6 +1564,21 @@ class AnalysisPanel(QWidget):
         self.target_gdr_combo.blockSignals(True)
         self.target_gdr_combo.setCurrentIndex(_i_rr)
         self.target_gdr_combo.blockSignals(False)
+
+        # P43: success_rate_gdr_combo 专用重填（保留 itemData）
+        if hasattr(self, 'success_rate_gdr_combo'):
+            combo = self.success_rate_gdr_combo
+            old_key = combo.currentData()
+            combo.blockSignals(True)
+            combo.clear()
+            for key, display, lower_is_better, thr in self._gdr_entries:
+                display_text = ('(-)' + display) if lower_is_better else display
+                combo.addItem(display_text, key)
+            if old_key is not None:
+                idx = combo.findData(old_key)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
 
     def _rebuild_checkbox_group(self, container_widget, checks_dict, checkbox_label):
         """清空容器并重建 GDR 复选框组。
@@ -1578,14 +1701,14 @@ class AnalysisPanel(QWidget):
         param_group = QGroupBox("全局参数")
         param_layout = QGridLayout(param_group)
         param_layout.addWidget(QLabel("风险α:"), 0, 0)
-        self.alpha_spin = _NoWheelDoubleSpinBox()
+        self.alpha_spin = QDoubleSpinBox()
         self.alpha_spin.setRange(0.01, 0.5)
         self.alpha_spin.setValue(0.05)
         self.alpha_spin.setSingleStep(0.01)
         self.alpha_spin.setDecimals(2)
         param_layout.addWidget(self.alpha_spin, 0, 1)
         param_layout.addWidget(QLabel("Bootstrap 置信水平:"), 1, 0)
-        self.ci_level_spin = _NoWheelDoubleSpinBox()
+        self.ci_level_spin = QDoubleSpinBox()
         self.ci_level_spin.setRange(0.80, 0.99)
         self.ci_level_spin.setValue(0.95)
         self.ci_level_spin.setSingleStep(0.01)
@@ -1653,7 +1776,7 @@ class AnalysisPanel(QWidget):
                         self._gdr_dist_widget = gdr_config_widget
 
                     if key == 'risk_worst_case':
-                        self.primary_gdr_combo = _NoWheelComboBox()
+                        self.primary_gdr_combo = QComboBox()
                         self.primary_gdr_combo.setMaxVisibleItems(30)
                         self.primary_gdr_combo.addItems(_gdr_names)
                         _i_star = _gdr_names.index('简单目标达成率') if '简单目标达成率' in _gdr_names else 0
@@ -1682,7 +1805,7 @@ class AnalysisPanel(QWidget):
                         self._wc_cond_widget = wc_cond_widget
 
                     if key == 'risk_best_case':
-                        self.best_primary_gdr_combo = _NoWheelComboBox()
+                        self.best_primary_gdr_combo = QComboBox()
                         self.best_primary_gdr_combo.setMaxVisibleItems(30)
                         self.best_primary_gdr_combo.addItems(_gdr_names)
                         _i_star2 = _gdr_names.index('简单目标达成率') if '简单目标达成率' in _gdr_names else 0
@@ -1711,14 +1834,14 @@ class AnalysisPanel(QWidget):
                         self._bc_cond_widget = bc_cond_widget
 
                     if key == 'conditional_dist':
-                        self.cond_gdr_combo = _NoWheelComboBox()
+                        self.cond_gdr_combo = QComboBox()
                         self.cond_gdr_combo.setMaxVisibleItems(30)
                         self.cond_gdr_combo.addItems(_gdr_names)
                         _i_ato = _gdr_names.index('抽出全部目标卡') if '抽出全部目标卡' in _gdr_names else 0
                         self.cond_gdr_combo.setCurrentIndex(_i_ato)
                         item_w.add_config_row("条件指标:", self.cond_gdr_combo)
 
-                        self.target_gdr_combo = _NoWheelComboBox()
+                        self.target_gdr_combo = QComboBox()
                         self.target_gdr_combo.setMaxVisibleItems(30)
                         self.target_gdr_combo.addItems(_gdr_names)
                         # 展开后显示名含资源类型（如「资源剩余 (抽卡资源)」），遍历匹配 base_key
@@ -1730,7 +1853,7 @@ class AnalysisPanel(QWidget):
                         self.target_gdr_combo.setCurrentIndex(_i_rr)
                         item_w.add_config_row("目标指标:", self.target_gdr_combo)
 
-                        self.threshold_spin = _NoWheelDoubleSpinBox()
+                        self.threshold_spin = QDoubleSpinBox()
                         self.threshold_spin.setRange(-1e7, 1e7)
                         self.threshold_spin.setValue(0.5)
                         self.threshold_spin.setDecimals(4)
@@ -1760,11 +1883,61 @@ class AnalysisPanel(QWidget):
                         item_w.config_layout().addLayout(preset_row)
 
                     if key == 'transition_analysis':
-                        self.success_criteria_combo = _NoWheelComboBox()
+                        self.success_criteria_combo = QComboBox()
                         self.success_criteria_combo.addItem("全部目标卡达成", "all_targets")
                         self.success_criteria_combo.addItem("至少一张SSR", "any_ssr")
                         self.success_criteria_combo.addItem("每池至少一张目标卡", "per_pool_target")
                         item_w.add_config_row("成功判据:", self.success_criteria_combo)
+
+                    if key == 'success_rate':
+                        self.success_rate_gdr_combo = QComboBox()
+                        self.success_rate_gdr_combo.setMaxVisibleItems(30)
+                        for gdr_k, display, lower_is_better, thr in self._gdr_entries:
+                            display_text = ('(-)' + display) if lower_is_better else display
+                            self.success_rate_gdr_combo.addItem(display_text, gdr_k)
+                        item_w.add_config_row("GDR指标:", self.success_rate_gdr_combo)
+                        self.success_rate_gdr_combo.currentIndexChanged.connect(
+                            self._on_success_rate_gdr_changed)
+
+                        self.success_rate_threshold_spin = QDoubleSpinBox()
+                        self.success_rate_threshold_spin.setRange(-1e9, 1e9)
+                        self.success_rate_threshold_spin.setDecimals(4)
+                        self.success_rate_threshold_spin.setMaximumWidth(120)
+                        item_w.add_config_row("成功阈值:", self.success_rate_threshold_spin)
+
+                        self.success_rate_scope_combo = QComboBox()
+                        self.success_rate_scope_combo.addItem("总体（最终结果）", "overall")
+                        self.success_rate_scope_combo.addItem("第k池累积", "cumulative")
+                        self.success_rate_scope_combo.addItem("第k池单池", "single_pool")
+                        self.success_rate_scope_combo.currentIndexChanged.connect(
+                            self._on_success_rate_scope_changed)
+                        item_w.add_config_row("范围:", self.success_rate_scope_combo)
+
+                        self.success_rate_pool_spin = QSpinBox()
+                        self.success_rate_pool_spin.setMinimum(1)
+                        self.success_rate_pool_spin.setEnabled(False)
+                        self.success_rate_scope_status_label = QLabel("")
+                        self.success_rate_scope_status_label.setStyleSheet(
+                            "color: #c09853; font-size: 11px;")
+                        self.success_rate_scope_status_label.setVisible(False)
+                        pool_row = QWidget()
+                        pool_row_layout = QHBoxLayout(pool_row)
+                        pool_row_layout.setContentsMargins(0, 0, 0, 0)
+                        pool_row_layout.addStretch()
+                        pool_row_layout.addWidget(self.success_rate_pool_spin)
+                        pool_row_layout.addWidget(self.success_rate_scope_status_label)
+                        item_w.add_config_row("第k个池:", pool_row)
+
+                        self.success_rate_conf_spin = QDoubleSpinBox()
+                        self.success_rate_conf_spin.setRange(0.50, 0.9999)
+                        self.success_rate_conf_spin.setValue(0.95)
+                        self.success_rate_conf_spin.setSingleStep(0.01)
+                        self.success_rate_conf_spin.setDecimals(4)
+                        self.success_rate_conf_spin.setToolTip(
+                            "Wilson 得分区间的置信水平（50%~99.99%）")
+                        item_w.add_config_row("置信水平:", self.success_rate_conf_spin)
+
+                        self._on_success_rate_gdr_changed(0)
 
                     if key == 'cumulative_by_pool':
                         cum_widget = QWidget()
@@ -1954,6 +2127,12 @@ class AnalysisPanel(QWidget):
             cond['ci_level'] = self.ci_level_spin.value()
         if key == 'transition_analysis':
             cond['success_criteria'] = self.success_criteria_combo.currentData()
+        if key == 'success_rate':
+            if hasattr(self, 'success_rate_gdr_combo'):
+                cond['success_rate_gdr'] = self.success_rate_gdr_combo.currentData()
+                cond['success_rate_scope'] = self.success_rate_scope_combo.currentData()
+                cond['success_rate_threshold'] = self.success_rate_threshold_spin.value()
+                cond['success_rate_conf'] = self.success_rate_conf_spin.value()
         if key in ('conditional_dist', 'conditional_dist_chart'):
             cond['cond_gdr'] = self.cond_gdr_combo.currentText()
             cond['target_gdr'] = self.target_gdr_combo.currentText()
@@ -2003,6 +2182,13 @@ class AnalysisPanel(QWidget):
             self._pending_statistics = need_statistics
 
             pool_names = self._get_pool_names()
+            # P43: 防御纵深
+            _sr_gdr = None
+            if hasattr(self, 'success_rate_gdr_combo'):
+                _sr_gdr = self.success_rate_gdr_combo.currentData()
+                if not _sr_gdr and hasattr(self, '_gdr_key_by_name'):
+                    _sr_gdr = self._gdr_key_by_name.get(
+                        self.success_rate_gdr_combo.currentText(), '')
             if self._worker is not None and self._worker.isRunning():
                 self._worker.terminate()
                 self._worker.wait(3000)
@@ -2030,6 +2216,11 @@ class AnalysisPanel(QWidget):
                 no_draw_resources=getattr(self, '_no_draw_resources', {}),
                 no_draw_pool_resources=self._no_draw_pool_resources,
                 pool_names=pool_names,
+                success_rate_gdr=_sr_gdr,
+                success_rate_scope=self.success_rate_scope_combo.currentData() if hasattr(self, 'success_rate_scope_combo') else 'overall',
+                success_rate_threshold=self.success_rate_threshold_spin.value() if hasattr(self, 'success_rate_threshold_spin') else 1.0,
+                success_rate_conf=self.success_rate_conf_spin.value() if hasattr(self, 'success_rate_conf_spin') else 0.95,
+                success_rate_pool_idx=self.success_rate_pool_spin.value() - 1 if hasattr(self, 'success_rate_pool_spin') else 0,
             )
             self._worker.progress.connect(self._on_progress)
             self._worker.finished.connect(self._on_analysis_done)
@@ -2254,7 +2445,43 @@ class AnalysisPanel(QWidget):
                 ordered[k] = cache[k]
         return ordered
 
+
+    # -- P43: 成功率分析槽函数 --
+
+    def _on_success_rate_gdr_changed(self, idx):
+        """GDR 切换时更新默认阈值"""
+        gdr_key = self.success_rate_gdr_combo.currentData()
+        if not gdr_key:
+            display_name = self.success_rate_gdr_combo.currentText()
+            gdr_key = self._gdr_key_by_name.get(display_name, '')
+        if gdr_key:
+            from gacha_simulator.core.gdr import resolve_gdr_definition
+            defn = resolve_gdr_definition(gdr_key)
+            if defn:
+                self.success_rate_threshold_spin.setValue(defn.default_threshold)
+        else:
+            self.success_rate_threshold_spin.setValue(0)
+
+    def _on_success_rate_scope_changed(self, idx):
+        """范围切换时启用/禁用第k个池输入"""
+        scope = self.success_rate_scope_combo.currentData()
+        self.success_rate_pool_spin.setEnabled(scope != "overall")
+        if scope != "overall" and not self._cumulative_snapshots:
+            self.success_rate_scope_combo.setToolTip(
+                "需要 cumulative_snapshots，当前批次未提供。请重新运行批量模拟。")
+            self.success_rate_scope_status_label.setText(
+                "Warning: 流式分析未启用，逐池范围不可用")
+            self.success_rate_scope_status_label.setVisible(True)
+            self.success_rate_pool_spin.setEnabled(False)
+        else:
+            self.success_rate_scope_combo.setToolTip("")
+            self.success_rate_scope_status_label.setVisible(False)
+            self.success_rate_scope_status_label.clear()
+            if scope != "overall":
+                self.success_rate_pool_spin.setEnabled(True)
+
     def _clear_results(self):
+
         # 清除表格型结果帧（即除 placeholder_label 和 chart_webview 外的所有 widget）
         i = 0
         while i < self._results_layout.count():
@@ -2291,6 +2518,9 @@ class AnalysisPanel(QWidget):
         self._no_draw_pool_resources = no_draw_pool_resources or {}
         self._clear_results()
         self.status_label.setText(f"已加载 {len(results)} 条模拟结果，请选择分析项并运行")
+        # P43: 新数据到达后刷新 scope 状态
+        if hasattr(self, 'success_rate_scope_combo'):
+            self._on_success_rate_scope_changed(self.success_rate_scope_combo.currentIndex())
 
     def get_summary(self):
         return dict(self._summary_data)

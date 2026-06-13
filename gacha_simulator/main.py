@@ -29,6 +29,8 @@ if __name__ == '__main__':
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
+    from gacha_simulator.gui.wheel_blocker import GlobalWheelBlocker
+    app.installEventFilter(GlobalWheelBlocker(app))
     app.setApplicationName("GachaStat")
     app.setOrganizationName("GachaStat")
     app.setApplicationVersion(__version__)

@@ -550,6 +550,8 @@ def main():
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtGui import QIcon
     app = QApplication(sys.argv)
+    from .wheel_blocker import GlobalWheelBlocker
+    app.installEventFilter(GlobalWheelBlocker(app))
     app.setStyle('Fusion')
     app.setApplicationName("GachaStat")
     app.setOrganizationName("GachaStat")

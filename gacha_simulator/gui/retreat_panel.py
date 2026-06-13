@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QProgressBar, QGroupBox, QFormLayout, QDoubleSpinBox,
     QSpinBox, QComboBox, QSplitter,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from .chart_webview import ChartWebView
 
@@ -23,14 +23,6 @@ if _parent not in sys.path:
 
 from gacha_simulator.core.config_store import ConfigStore  # noqa: E402
 from gacha_simulator.core.gdr import populate_gdr_combo, get_default_threshold  # noqa: E402
-
-
-class WheelEventFilter(QObject):
-    """阻止 QComboBox/QSpinBox/QDoubleSpinBox 在未聚焦时响应鼠标滚轮。"""
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
-            return True
-        return super().eventFilter(obj, event)
 
 
 class RetreatWorker(QThread):
@@ -215,11 +207,6 @@ class RetreatPanel(QWidget):
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setSizes([300, 700])
-
-        # 安装滚轮过滤器——阻止下拉框/数字框在未聚焦时响应滚轮
-        self._wheel_filter = WheelEventFilter(self)
-        for w in self.findChildren((QComboBox, QSpinBox, QDoubleSpinBox)):
-            w.installEventFilter(self._wheel_filter)
 
     def set_store(self, store):
         self._store = store

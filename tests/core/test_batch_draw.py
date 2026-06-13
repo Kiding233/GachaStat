@@ -244,3 +244,106 @@ class TestGachaServiceBatchDrawSkeleton:
         )
         result = service.run_simulation_compact(state, max_iterations=100)
         assert result.total_draws == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Task 5b: 保底逐发调用
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_batch_draw_pity_called_per_draw():
+    """保底引擎逐发调用 before_draw / after_draw——不使用过期缓存。"""
+    from unittest.mock import MagicMock
+    from gacha_simulator.core.pool import Pool, Reward
+    from gacha_simulator.core.action import DrawAction
+    from gacha_simulator.core.strategy import Strategy
+    from gacha_simulator.core.stop_condition import StopCondition
+    from gacha_simulator.core.target_card import TargetCardSet
+    from gacha_simulator.service.gacha_service import GachaService
+
+    pool = Pool(
+        id='test_batch', name='batch池', cost=[{'coin': 10}],
+        rewards=[(Reward(id='card_a', name='A'), 1.0)],
+        batch_size=3,
+    )
+    state = GachaState(resources={'coin': 100})
+
+    class FixedDraw(Strategy):
+        def select_action(self, ctx):
+            return DrawAction(pool_id='test_batch')
+        def description(self):
+            return "fixed batch"
+
+    class ThreeDrawStop(StopCondition):
+        def check(self, state, pools, stats):
+            return stats.total_draws >= 3
+        def description(self):
+            return "three draw stop"
+
+    mock_pity = MagicMock()
+    mock_pity.get_spec.return_value = None
+    mock_pity.before_draw.return_value = {'card_a': 1.0}
+
+    service = GachaService(
+        pools=[pool], strategy=FixedDraw(),
+        stop_condition=ThreeDrawStop(),
+        target_cards=TargetCardSet([]),
+        pity_engine=mock_pity, resource_gain=None,
+        schedule_manager=None, card_defs=[], ssr_ids=set(),
+    )
+    result = service.run_simulation_compact(state, max_iterations=100)
+    assert result.total_draws == 3
+    # 关键断言：batch_size=3 → before_draw 调用 3 次（非 1 次缓存复用）
+    assert mock_pity.before_draw.call_count == 3
+    assert mock_pity.after_draw.call_count == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Task 5c: _pending_wait_gains 批次归因
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_batch_on_draw_called_per_draw_not_per_action():
+    """批次中 collector.on_draw 逐发调用 batch_size 次（非 1 次），确保归因粒度正确。"""
+    from gacha_simulator.core.pool import Pool, Reward
+    from gacha_simulator.core.action import DrawAction
+    from gacha_simulator.core.strategy import Strategy
+    from gacha_simulator.core.stop_condition import StopCondition
+    from gacha_simulator.core.target_card import TargetCardSet
+    from gacha_simulator.service.gacha_service import GachaService
+
+    pool = Pool(
+        id='test_batch', name='batch池', cost=[{'coin': 10}],
+        rewards=[(Reward(id='card_a', name='A'), 1.0)],
+        batch_size=3,
+    )
+    state = GachaState(resources={'coin': 100})
+
+    class FixedDraw(Strategy):
+        def select_action(self, ctx):
+            return DrawAction(pool_id='test_batch')
+        def description(self):
+            return "fixed batch"
+
+    class ThreeDrawStop(StopCondition):
+        def check(self, state, pools, stats):
+            return stats.total_draws >= 3
+        def description(self):
+            return "three draw stop"
+
+    on_draw_calls = []
+    from gacha_simulator.core import CompactCollector
+
+    class SpyCollector(CompactCollector):
+        def on_draw(self, **kwargs):
+            on_draw_calls.append(kwargs)
+            super().on_draw(**kwargs)
+
+    service = GachaService(
+        pools=[pool], strategy=FixedDraw(),
+        stop_condition=ThreeDrawStop(),
+        target_cards=TargetCardSet([]),
+        pity_engine=None, resource_gain=None,
+        schedule_manager=None, card_defs=[], ssr_ids=set(),
+    )
+    result = service.run_simulation(state, max_iterations=100, collector=SpyCollector())
+    assert result.total_draws == 3
+    assert len(on_draw_calls) == 3  # ← 核心断言：每发一次 on_draw，非每动作一次

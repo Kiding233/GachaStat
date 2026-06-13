@@ -181,13 +181,10 @@ class GachaService:
                     probabilities = {r.id: p for r, p in pool.rewards}
                     original_probs = probabilities.copy() if _pity_engine else None
                     if _pity_engine:
-                        cached_probs = ctx._pity_cache.get(pool.id)
-                        if cached_probs is not None:
-                            probabilities = cached_probs
-                        else:
-                            probabilities = _pity_engine.before_draw(
-                                pool.id, pity_state, probabilities
-                            )
+                        # 不使用 ctx._pity_cache——批次中保底状态逐发变化，第 2 发起缓存已过期
+                        probabilities = _pity_engine.before_draw(
+                            pool.id, pity_state, probabilities
+                        )
                         pool._apply_probabilities(probabilities)
 
                     reward = pool.draw()

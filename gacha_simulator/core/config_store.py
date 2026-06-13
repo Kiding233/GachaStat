@@ -32,6 +32,7 @@ class PoolEntry:
     rerun_of: Optional[str] = None
     exchange_card_id: Optional[str] = None
     distribution: List[PoolDistEntry] = field(default_factory=list)
+    batch_size: int = 1
 
 
 @dataclass

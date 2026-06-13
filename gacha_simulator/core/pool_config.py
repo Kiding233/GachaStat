@@ -103,6 +103,7 @@ class PoolConfig:
     target_specs: List[Tuple[str, int]] = field(default_factory=list)
     rerun_of: Optional[str] = None
     exchange_card_id: Optional[str] = None
+    batch_size: int = 1
 
     @property
     def cost(self) -> PoolCost:
@@ -352,6 +353,7 @@ def load_config_from_directory(config_dir: str, schedule_file: str = 'schedule.t
             original_pool_id=pc.rerun_of,
             is_exchange=pc.exchange_card_id is not None,
             exchange_card_id=pc.exchange_card_id,
+            batch_size=getattr(pc, 'batch_size', 1),
         )
         pools.append(pool)
 

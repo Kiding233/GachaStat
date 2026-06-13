@@ -566,6 +566,7 @@ class SimulationEnvBuilder:
                 is_exchange=bool(exchange_cid),
                 exchange_card_id=exchange_cid,
                 pool_type=ptype,
+                batch_size=getattr(pe, 'batch_size', 1),
             )
             pools.append(pool)
             schedules.append(PoolSchedule(

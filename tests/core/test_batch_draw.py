@@ -12,6 +12,7 @@
 
 import pytest
 from gacha_simulator.core.pool_config import PoolConfig
+from gacha_simulator.core.state import GachaState
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -57,3 +58,55 @@ def test_parse_schedule_with_batch_size():
         assert configs[2].batch_size == 1   # 缺省
     finally:
         os.unlink(tmp.name)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Task 3: 资源检查——can_afford_batch + _choose_option_from
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestCanAffordBatch:
+    def test_single_resource_sufficient(self):
+        """单一资源足够 batch_size 发。"""
+        state = GachaState(resources={'draw_resource': 2000})
+        cost = {'draw_resource': 160}
+        assert state.can_afford_batch(cost, 10) is True
+
+    def test_single_resource_insufficient(self):
+        """单一资源不够 batch_size 发。"""
+        state = GachaState(resources={'draw_resource': 1500})
+        cost = {'draw_resource': 160}
+        assert state.can_afford_batch(cost, 10) is False
+
+    def test_batch_size_1_delegates_to_can_afford(self):
+        """batch_size=1 退化为 can_afford。"""
+        state = GachaState(resources={'draw_resource': 200})
+        cost = {'draw_resource': 160}
+        assert state.can_afford_batch(cost, 1) == state.can_afford(cost)
+
+    def test_multi_resource_priority_switching(self):
+        """免费抽耗尽后自动切换到付费资源。"""
+        state = GachaState(resources={
+            'free_draw': 5,
+            'draw_resource': 2000,
+        })
+        cost = [{'free_draw': 1}, {'draw_resource': 160}]
+        assert state.can_afford_batch(cost, 10) is True
+
+    def test_multi_resource_insufficient_after_priority_exhaustion(self):
+        """免费抽耗尽后付费资源不足 → False。"""
+        state = GachaState(resources={
+            'free_draw': 5,
+            'draw_resource': 400,
+        })
+        cost = [{'free_draw': 1}, {'draw_resource': 160}]
+        assert state.can_afford_batch(cost, 10) is False
+
+    def test_batch_size_1_multi_resource(self):
+        """batch_size=1 多资源退化测试。"""
+        state = GachaState(resources={'free_draw': 1})
+        cost = [{'free_draw': 1}, {'draw_resource': 160}]
+        assert state.can_afford_batch(cost, 1) is True
+        state2 = GachaState(resources={'draw_resource': 200})
+        assert state2.can_afford_batch(cost, 1) is True
+        state3 = GachaState(resources={})
+        assert state3.can_afford_batch(cost, 1) is False

@@ -48,6 +48,38 @@ class GachaState:
                     self.resources[resource] = 0
         return chosen
 
+    def _choose_option_from(self, cost, resources: dict) -> Optional[CostOption]:
+        """从给定资源快照中选择最优 cost option（不修改真实资源）。"""
+        if isinstance(cost, dict):
+            if all(resources.get(r, 0) >= a for r, a in cost.items()):
+                return cost
+            return None
+        if isinstance(cost, list):
+            for option in cost:
+                if all(resources.get(r, 0) >= a for r, a in option.items()):
+                    return option
+            return None
+        return None
+
+    def can_afford_batch(self, cost, batch_size: int = 1) -> bool:
+        """模拟 batch_size 次独立抽卡的费用选择。
+
+        每次独立选择最优 cost option，资源快照逐次递减。
+        支持 free_draw:1 > draw_resource:160 等 OR 优先级资源自动切换。
+
+        batch_size=1 退化到 can_afford()。
+        """
+        if batch_size <= 1:
+            return self.can_afford(cost)
+        remaining = dict(self.resources)
+        for _ in range(batch_size):
+            option = self._choose_option_from(cost, remaining)
+            if option is None:
+                return False
+            for res, amt in option.items():
+                remaining[res] -= amt
+        return True
+
     def gain(self, gains: Dict[str, float]) -> None:
         for resource, amount in gains.items():
             self.resources[resource] = self.resources.get(resource, 0) + amount

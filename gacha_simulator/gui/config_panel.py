@@ -546,9 +546,9 @@ class ConfigPanel(QWidget):
         layout.addLayout(filter_layout)
 
         self.pool_table = QTableWidget()
-        self.pool_table.setColumnCount(9)
+        self.pool_table.setColumnCount(10)
         self.pool_table.setHorizontalHeaderLabels([
-            "启用", "ID", "名称", "类型", "开始(天)", "持续(天)", "单抽消耗", "备注", "分布编辑"
+            "启用", "ID", "名称", "类型", "开始(天)", "持续(天)", "单抽消耗", "备注", "分布编辑", "批次大小"
         ])
         header = self.pool_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -560,12 +560,14 @@ class ConfigPanel(QWidget):
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
         self.pool_table.setColumnWidth(0, 40)
         self.pool_table.setColumnWidth(3, 70)
         self.pool_table.setColumnWidth(4, 70)
         self.pool_table.setColumnWidth(5, 70)
         self.pool_table.setColumnWidth(6, 160)
         self.pool_table.setColumnWidth(8, 80)
+        self.pool_table.setColumnWidth(9, 60)
         self.pool_table.verticalHeader().setVisible(False)
         self.pool_table.setAlternatingRowColors(True)
         self.pool_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -742,6 +744,7 @@ class ConfigPanel(QWidget):
                 'cost': tmpl.get('cost', 'draw_resource:160'),
                 'note': '复刻池' if i > 0 and interval > 0 else '',
                 'distribution': dist,
+                'batch_size': 1,
             }
             pools.append(pool)
 
@@ -763,12 +766,13 @@ class ConfigPanel(QWidget):
             edit_item = QTableWidgetItem("...双击编辑")
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.pool_table.setItem(r, 8, edit_item)
+            self.pool_table.setItem(r, 9, QTableWidgetItem(str(p.get('batch_size', 1))))
             self._pool_distributions[p['id']] = p['distribution']
 
             inferred = self._infer_pool_type(p['id'], p['type'], p.get('note', ''))
             row_bg = self._pool_row_bg(inferred, p.get('note', ''))
             if row_bg:
-                for col in range(8):
+                for col in range(10):
                     item = self.pool_table.item(r, col)
                     if item:
                         item.setBackground(row_bg)
@@ -814,10 +818,13 @@ class ConfigPanel(QWidget):
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.pool_table.setItem(i, 8, edit_item)
 
+            batch_size = p.get('batch_size', 1)
+            self.pool_table.setItem(i, 9, QTableWidgetItem(str(batch_size)))
+
             inferred = self._infer_pool_type(pool_id, p.get('type', ''), note)
             row_bg = self._pool_row_bg(inferred, note)
             if row_bg:
-                for col in range(8):
+                for col in range(10):
                     item = self.pool_table.item(i, col)
                     if item:
                         item.setBackground(row_bg)
@@ -865,6 +872,7 @@ class ConfigPanel(QWidget):
         edit_item = QTableWidgetItem("...双击编辑")
         edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.pool_table.setItem(row, 8, edit_item)
+        self.pool_table.setItem(row, 9, QTableWidgetItem("1"))
         self._all_pool_rows.append(row)
         self._ensure_resource_registered('draw_resource', '抽卡资源')
         self._sync_card_defs_from_pools()
@@ -882,7 +890,7 @@ class ConfigPanel(QWidget):
         for row in rows:
             new_row = self.pool_table.rowCount()
             self.pool_table.insertRow(new_row)
-            for col in range(8):
+            for col in range(10):
                 if col == 0:
                     enabled_cb = QCheckBox()
                     enabled_cb.setChecked(True)
@@ -2227,6 +2235,7 @@ class ConfigPanel(QWidget):
                 'duration': p.end_day - p.start_day,
                 'cost': p.cost,
                 'note': '',
+                'batch_size': getattr(p, 'batch_size', 1),
                 'distribution': [{'card_id': d.card_id, 'probability': d.probability,
                                   'rarity': d.rarity, 'featured': d.featured,
                                   'resources_gained': d.resources_gained,
@@ -2363,6 +2372,7 @@ class ConfigPanel(QWidget):
                 distribution_file=f"pools/{pid}.txt",
                 bindings=bindings,
                 distribution=distribution,
+                batch_size=p.get('batch_size', 1),
             ))
 
         pity = config.get('pity', {})
@@ -2834,6 +2844,18 @@ class ConfigPanel(QWidget):
             start_day = int(_item(4, '0') or 0)
             duration = int(_item(5, '21') or 21)
 
+            batch_size = 1
+            batch_text = _item(9, '1').strip()
+            if batch_text:
+                try:
+                    batch_size = int(batch_text)
+                    if batch_size < 1:
+                        batch_size = 1
+                    elif batch_size > 1000:
+                        batch_size = 1000
+                except ValueError:
+                    batch_size = 1
+
             dist_data = self._pool_distributions.get(pid)
             distribution = []
             if dist_data:
@@ -2863,6 +2885,7 @@ class ConfigPanel(QWidget):
                 distribution_file=f"pools/{pid}.txt",
                 bindings=bindings,
                 distribution=distribution,
+                batch_size=batch_size,
             ))
 
         store.pity.enabled = self.pity_enabled.isChecked()
@@ -2975,6 +2998,7 @@ class ConfigPanel(QWidget):
                 'cost': p.cost,
                 'note': '',
                 'distribution': dist_list,
+                'batch_size': getattr(p, 'batch_size', 1),
             })
         self._set_pool_table(pools_data)
 

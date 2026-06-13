@@ -7,6 +7,7 @@ import pytest
 # 需要 QApplication 才能构造 QWidget 的模块——只验证导入，不构造实例
 GUI_MODULES = [
     'gacha_simulator.gui.main_window',
+    'gacha_simulator.gui.wheel_blocker',
     'gacha_simulator.gui.analysis_panel',
     'gacha_simulator.gui.gacha_panel',
     'gacha_simulator.gui.retreat_panel',

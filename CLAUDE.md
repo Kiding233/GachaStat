@@ -21,6 +21,8 @@ gacha_simulator/
 ├── core/       # 引擎：池子、状态、策略、保底、GDR、分析算法（无 GUI 依赖）
 ├── service/    # GachaService + batch_simulator
 ├── gui/        # PyQt6 面板（Tab 列表见 main.py，C1 cron 自动同步）
+│               # wheel_blocker.py — QApplication 全局事件过滤器，统一拦截
+│               #   QComboBox/QAbstractSpinBox 滚轮并转发至外层 ScrollArea
 ├── config/     # 配置文件（| 分隔文本格式）
 └── visualization/  # matplotlib 中文字体
 ```
@@ -120,3 +122,11 @@ commit 被 H7 阻止 → `ruff check` 修复 · push 被 H9 阻止 → `pytest -
 ### 文档体系
 
 三文件制：`模块.md` + `理论.md` + `05-笔记.md`（H4 自动维护）。计划文件含 META 头，全局约定见 `docs/00-meta/全局约定.md`，活跃计划见 `模块状态矩阵.md`。
+
+### 文件删除规则
+
+**禁止擅自删除文件。** 需删除时：
+- **文档**（`.md`、`.txt` 等）→ 移入 `docs/03-归档/` 归档文件夹
+- **代码及其他文件** → 移入项目根目录 `.recycle_bin/` 垃圾桶文件夹
+
+不得直接 `rm` / `rm -rf` 删除任何文件，除非用户明确要求。

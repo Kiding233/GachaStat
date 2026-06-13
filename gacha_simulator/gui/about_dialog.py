@@ -45,6 +45,7 @@ class AboutDialog(QDialog):
         tabs.addTab(self._create_version_tab(), "版本历史")
         tabs.addTab(self._create_config_guide_tab(), "配置文件指南")
         tabs.addTab(self._create_algorithms_tab(), "算法说明")
+        tabs.addTab(self._create_strategy_tab(), "策略行为说明")
         layout.addWidget(tabs)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
@@ -296,6 +297,95 @@ day: 天数 | resource_id: 数量, resource_id: 数量</pre>
 
         <h4>转移矩阵</h4>
         <p>计算相邻池子之间成功/失败状态的 2×2 转移概率矩阵，用于分析池间成败依赖关系。</p>
+        """)
+        layout.addWidget(browser)
+        return widget
+
+    def _create_strategy_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml("""
+        <h3>策略行为说明</h3>
+        <p>以下逐一说明每种策略的决策逻辑。所有策略均为<b>一阶启发式</b>（仅检查当前状态，不递归评估未来价值），这在抽卡最优策略 NP-hard 的背景下是有意的设计选择。</p>
+        <p><b>通用规则</b>：所有策略优先检查兑换池——若目标卡可通过兑换获得且兑换池可用，优先执行兑换（兑换不消耗保底、不触发保底重置）。兑换检查失败后才进入各自的抽卡逻辑。</p>
+
+        <h4>1. 按需追卡 (smart)</h4>
+        <p><b>一句话</b>：当前池里有我还缺少的目标卡 → 抽；没有 → 等到池子过期。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，找到第一个「含缺量目标卡 + 资源够抽」的池子 → 抽</li>
+            <li>都不满足 → 等待（最短等到下一个池子过期）</li>
+        </ol>
+        <p><b>适用场景</b>：用户有明确的目标卡列表，只想为缺少的卡投入资源，不浪费在已完成的目标上。</p>
+        <p><b>局限</b>：不比较池间优劣——两个池子同时开且都含目标卡时，按遍历顺序选第一个，不考虑「抽 A 池更划算」。</p>
+
+        <h4>2. 指定池配额 (pool_quota)</h4>
+        <p><b>一句话</b>：每个池子抽够指定数量就停手。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，找到「含缺量目标卡 + 未达配额上限 + 资源够」的池子 → 抽</li>
+            <li>若上一步无匹配，找任意「未达配额上限 + 资源够」的池子（即使不含目标卡）→ 抽</li>
+            <li>都不满足 → 等待</li>
+        </ol>
+        <p><b>参数</b>：<code>pool_quotas</code>——字典，key=池ID，value=该池最多抽多少次。</p>
+        <p><b>适用场景</b>：用户想限制每个池子的投入上限（如「角色池最多 50 抽，武器池最多 30 抽」），在配额内优先追目标卡，配额用完后切到下一个池。</p>
+
+        <h4>3. 保底预留 (pity_reserve)</h4>
+        <p><b>一句话</b>：保底快到了才抽，否则憋着。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，仅考虑含缺量目标卡的池子 → 检查该池当前保底概率（SSR 总概率）</li>
+            <li>若 SSR 概率 ≥ 阈值（默认 80%，对应于软保底区间中后段）→ 抽</li>
+            <li>否则 → 等待（不消耗资源在低概率抽卡上）</li>
+        </ol>
+        <p><b>参数</b>：<code>pity_threshold_pct</code>——保底概率阈值（百分比，默认 80%）。设得越高越保守（只在接近硬保底时才出手）。</p>
+        <p><b>适用场景</b>：资源极度紧缺时最大化 SSR 期望产出——只在概率最高的时机抽卡。</p>
+        <p><b>局限</b>：可能错过「提前出货」的机会（在低概率时不出手），且如果保底一直不到阈值就长期不抽、可能池子过期。</p>
+
+        <h4>4. 目标即停 (stop_on_target)</h4>
+        <p><b>一句话</b>：抽到目标就立即停手，见好就收。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>若启用了 <code>stop_on_featured</code> 且上一发触发了保底（抽到了 up SSR）→ 立即停止</li>
+            <li>若启用了 <code>stop_on_any_target</code> 且任意目标卡已满足需求量 → 立即停止</li>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，找「含缺量目标卡 + 资源够」的池子 → 抽</li>
+            <li>都不满足 → 等待</li>
+        </ol>
+        <p><b>参数</b>：<code>stop_on_featured</code>（默认开）——保底出 up 即停；<code>stop_on_any_target</code>（默认关）——任意目标卡满需求即停。</p>
+        <p><b>适用场景</b>：模拟「抽到一个就跑」的玩家行为——不追求满破，只求拥有。</p>
+
+        <h4>5. 指定池追卡 (target_hunting)</h4>
+        <p><b>一句话</b>：只在用户指定的那几个池子里抽。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>过滤当前开放池 → 仅保留 ID 在 <code>target_pool_ids</code> 中的池子</li>
+            <li>遍历过滤后的池子，第一个资源够的 → 抽</li>
+            <li>都不够 → 等待</li>
+        </ol>
+        <p><b>参数</b>：<code>target_pool_ids</code>——目标池 ID 列表。</p>
+        <p><b>适用场景</b>：用户只想抽特定限定池（如「只抽周年庆限定，其他一概不理」），完全无视非目标池。</p>
+        <p><b>局限</b>：不检查目标卡需求——即使目标卡已满也会继续抽（除非受停止条件约束）。</p>
+
+        <h4>6. 固定次数 (fixed_count)</h4>
+        <p><b>一句话</b>：抽满 N 次就停，不管结果。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>总抽数已达 <code>count</code> → 立即停止</li>
+            <li>否则 → 抽第一个当前开放的池子（不检查目标卡、不检查兑换池）</li>
+        </ol>
+        <p><b>参数</b>：<code>count</code>——抽卡总次数。</p>
+        <p><b>适用场景</b>：模拟固定预算下的期望结果（如「100 抽能出多少金」），或作为其他策略的对照基线。</p>
+
+        <h4>7. 不抽卡基线 (no_draw)</h4>
+        <p><b>一句话</b>：一次都不抽，只积累每日资源。</p>
+        <p><b>行为</b>：始终等待，跳过所有池子和兑换。</p>
+        <p><b>适用场景</b>：计算资源累积的基线水平——「完全不抽卡的话到 T 时刻我有多少资源」，作为其他策略资源效率的比较基准。此策略为内部使用，不开放用户选择。</p>
         """)
         layout.addWidget(browser)
         return widget

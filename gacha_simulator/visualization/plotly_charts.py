@@ -608,14 +608,23 @@ class PlotlyRenderer:
                 height=cell_height,
             ),
         ))
+        footnote = s.layout_hints.get('footnote', '')
         fig.update_layout(
             title=s.title,
             template="plotly_white",
             font_family="Microsoft YaHei, PingFang SC, sans-serif",
-            margin=dict(l=20, r=20, t=50, b=20),
+            margin=dict(l=20, r=20, t=50, b=40 if footnote else 20),
             height=figure_height,
             width=figure_width,
         )
+        if footnote:
+            fig.add_annotation(
+                text=footnote,
+                xref="paper", yref="paper",
+                x=0.5, y=-0.05,
+                showarrow=False,
+                font=dict(size=10, color="#666"),
+            )
         return fig
 
     # ── 辅助方法 ──────────────────────────────────────────────────

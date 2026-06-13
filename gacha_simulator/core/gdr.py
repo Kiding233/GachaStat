@@ -415,7 +415,7 @@ def _gdr_total_card_value(compact, target_specs, card_value_weights=None, **kwar
         card_value_weights = {cid: 1.0 for cid in target_specs}
     total_value = 0.0
     for card_id, cnt in card_counts.items():
-        total_value += cnt * card_value_weights.get(card_id, 1.0)
+        total_value += cnt * card_value_weights.get(card_id, 0.0)
     return total_value
 
 

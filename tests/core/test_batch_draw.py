@@ -32,3 +32,28 @@ def test_pool_batch_size_default():
     from gacha_simulator.core.pool import Pool
     pool = Pool(id='test', name='test', cost=[], rewards=[])
     assert pool.batch_size == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Task 2: 配置读写——schedule.txt 第 9 列
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_parse_schedule_with_batch_size():
+    """schedule.txt 第 9 列 batch_size 被正确解析。"""
+    from gacha_simulator.core.pool_config import parse_schedule_file
+    import tempfile, os
+    content = (
+        "pool_b10 | 十连池 | 0 | 21 | draw_resource:160 | pools/test.txt | ssr=c1 | | 10\n"
+        "pool_s1  | 单抽池 | 0 | 21 | draw_resource:160 | pools/test.txt | ssr=c1 | | 1\n"
+        "pool_def | 默认池 | 0 | 21 | draw_resource:160 | pools/test.txt | ssr=c1\n"
+    )
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
+    try:
+        tmp.write(content)
+        tmp.close()
+        configs, _ = parse_schedule_file(tmp.name)
+        assert configs[0].batch_size == 10
+        assert configs[1].batch_size == 1
+        assert configs[2].batch_size == 1   # 缺省
+    finally:
+        os.unlink(tmp.name)

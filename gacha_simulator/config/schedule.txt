@@ -1,5 +1,5 @@
 # Pool Schedule Configuration
-# Format: pool_id | name | start_day | end_day | cost | template | bindings(key=val) | target_card_ids
+# Format: pool_id | name | start_day | end_day | cost | template | bindings(key=val) | target_card_ids | [batch_size]
 #
 # cost 语法：资源ID:数量
 #   多资源用 > 或 , 分隔 → 按书写顺序强制优先（靠左的资源先消耗，不够才回退）

@@ -156,6 +156,17 @@ def parse_schedule_file(filepath: str) -> Tuple[List[PoolConfig], CardCatalog]:
                     else:
                         target_specs.append((t, 1))
 
+            batch_size = 1
+            if len(parts) > 8 and parts[8].strip():
+                try:
+                    batch_size = int(parts[8].strip())
+                    if batch_size < 1:
+                        batch_size = 1
+                    elif batch_size > 1000:
+                        batch_size = 1000
+                except (ValueError, TypeError):
+                    batch_size = 1
+
             pc = PoolConfig(
                 pool_id=pool_id, name=name,
                 start_day=start_day, end_day=end_day,
@@ -164,6 +175,7 @@ def parse_schedule_file(filepath: str) -> Tuple[List[PoolConfig], CardCatalog]:
                 target_specs=target_specs,
                 rerun_of=rerun_of,
                 exchange_card_id=exchange_card_id,
+                batch_size=batch_size,
             )
             configs.append(pc)
 

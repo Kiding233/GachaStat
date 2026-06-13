@@ -164,6 +164,7 @@ def _load_schedule(dir_path: str, store: ConfigStore):
             rerun_of=pc.rerun_of,
             exchange_card_id=pc.exchange_card_id,
             distribution=distribution,
+            batch_size=getattr(pc, 'batch_size', 1),
         )
         store.pools.append(pool_entry)
 
@@ -415,7 +416,7 @@ def _save_schedule(dir_path: str, store: ConfigStore):
     filepath = os.path.join(dir_path, 'schedule.txt')
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write("# Pool Schedule Configuration\n")
-        f.write("# Format: pool_id | name | start_day | end_day | cost | template | bindings(key=val) | target_card_ids\n")
+        f.write("# Format: pool_id | name | start_day | end_day | cost | template | bindings(key=val) | target_card_ids | [batch_size]\n")
         f.write("#   cost: resource_id:amount, multi-resource separated by > or , (left-to-right priority)\n\n")
         for pool in store.pools:
             if not pool.enabled:
@@ -438,7 +439,8 @@ def _save_schedule(dir_path: str, store: ConfigStore):
                     target_parts.append(cid)
             target_str = ','.join(target_parts)
 
-            f.write(f"{pool.pool_id} | {pool.name} | {pool.start_day} | {pool.end_day} | {pool.cost} | {dist_file} | {bindings_str} | {target_str}\n")
+            batch_str = f" | {pool.batch_size}" if getattr(pool, 'batch_size', 1) > 1 else ""
+            f.write(f"{pool.pool_id} | {pool.name} | {pool.start_day} | {pool.end_day} | {pool.cost} | {dist_file} | {bindings_str} | {target_str}{batch_str}\n")
 
 
 def _save_pity(dir_path: str, store: ConfigStore):

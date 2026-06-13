@@ -1,8 +1,9 @@
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
-VERSION_DISPLAY = "v2.1.0"
+VERSION_DISPLAY = "v2.2.0"
 
 VERSION_HISTORY = [
+    ("2.2.0", "2026-06-14", "DEFAULT — P44 池子批次抽卡（十连强制）：Pool/PoolConfig/PoolEntry 三级 batch_size + can_afford_batch 资源预检查 + 服务层批次循环 + 策略层 11 处适配 + 保底逐发直调"),
     ("2.1.0", "2026-06-12", "DEFAULT — P37 资源管理日历增强（事件分组 + 交互联动 + 默认视图）+ 默认模拟起始日期改为当天 + Harness 基础设施完善（H7 Windows 中文路径匹配修复——反斜杠归一化 + GBK 回退）+ 前进法卡牌排序修复——补回缺失 reverse=True（高 desire 优先）+ 全仓库 lint 清理"),
     ("2.0.0", "2026-06-09", "PROUD — 预发布版里程碑：面板合并（3→1 方案搜索）+ 数据管理层（ResultStore + 数据管理Tab）+ 比较分析面板（L1-L4 递进分析）+ 应用打包（PyInstaller onedir，608MB）+ 统一分箱模块（GDR直方图自动检测）+ 脆弱性分析独立Tab + 文档体系重构（六文件+主题计划模式）"),
     ("1.10.0", "2026-05-26", "DEFAULT — 文档体系重构：计划汇总整合（24 项已完成登记）、优先级路线图、Bootstrap 计划合并、小样本概率估计改进计划独立、Laplace 平滑→Wilson 得分区间方案、4 项计划归档；版本号里程碑——1.9.x 系列 6 个补丁版本合并发布"),

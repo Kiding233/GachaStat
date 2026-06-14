@@ -593,7 +593,7 @@ class ConfigPanel(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        hint_label = QLabel("提示：类型列只有「角色」「武器」「兑换」「资源」四种类型会被后续分析识别。单抽消耗用 > 或 , 分隔表示强制优先级（靠左优先）。批次大小设 10 即一次抽卡行动只能十连。")
+        hint_label = QLabel("提示：类型列只有「角色」「武器」「兑换」「资源」四种类型会被后续分析识别。批次大小设 10 即一次抽卡行动只能十连。")
         hint_label.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
         layout.addWidget(hint_label)
 

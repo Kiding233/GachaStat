@@ -387,7 +387,13 @@ class ChartWebView(QWebEngineView):
 
     def _on_load_finished(self, ok: bool) -> None:
         if not ok:
-            logger.error("ChartWebView 加载失败，请检查临时文件或 plotly.js 路径")
+            html_exists = os.path.isfile(self._html_path) if self._html_path else False
+            logger.error(
+                "ChartWebView 加载失败——HTML: %s（%s仍存在）、plotly.js: %s",
+                self._html_path,
+                "" if html_exists else "不",
+                self._get_plotly_js_url(),
+            )
         self._loaded = ok
         self.loaded.emit(ok)
 

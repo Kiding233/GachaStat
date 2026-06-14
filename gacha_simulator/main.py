@@ -72,10 +72,11 @@ if __name__ == '__main__':
 
     if os.path.exists(_ICON_PATH):
         app.setWindowIcon(QIcon(_ICON_PATH))
-    window = MainWindow()
-    window.show()
 
     # ── 启动时清理上一次运行的残留（孤儿子进程 + 临时文件）──
+    # 必须在 MainWindow() 创建之前执行——ChartWebView._preload() 会在构造期
+    # 写入临时 HTML 文件，若清理在此之后执行会误删当次会话的文件，导致
+    # 所有图表 WebEngine 加载失败（loadFinished ok=False）。
     import subprocess as _subprocess
     _my_pid = os.getpid()
 
@@ -119,6 +120,9 @@ if __name__ == '__main__':
                         pass
     except Exception:
         pass
+
+    window = MainWindow()
+    window.show()
 
     _exit_code = app.exec()
 

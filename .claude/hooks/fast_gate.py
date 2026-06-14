@@ -37,7 +37,7 @@ def _get_staged_files(project_root: Path) -> list[str]:
     先用 utf-8 解码，失败则回退 GBK。同时统一反斜杠为正斜杠。"""
     try:
         r = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
+            ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"],
             capture_output=True, text=True, encoding="utf-8",
             cwd=str(project_root), timeout=10,
         )
@@ -48,7 +48,7 @@ def _get_staged_files(project_root: Path) -> list[str]:
         # utf-8 解码失败，回退 GBK（Windows 中文系统默认编码）
         try:
             r = subprocess.run(
-                ["git", "diff", "--cached", "--name-only"],
+                ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"],
                 capture_output=True, text=True, encoding="gbk",
                 cwd=str(project_root), timeout=10,
             )

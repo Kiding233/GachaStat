@@ -38,7 +38,6 @@ class RetreatWorker(QThread):
         gdr_threshold,
         alpha,
         num_bins,
-        num_curve_points,
         pool_names,
         store=None,
         no_draw_resource=None,
@@ -54,7 +53,6 @@ class RetreatWorker(QThread):
         self.gdr_threshold = gdr_threshold
         self.alpha = alpha
         self.num_bins = num_bins
-        self.num_curve_points = num_curve_points
         self.pool_names = pool_names
         self._store = store
         self.no_draw_resource = no_draw_resource
@@ -80,7 +78,6 @@ class RetreatWorker(QThread):
                 gdr_threshold=self.gdr_threshold,
                 alpha=self.alpha,
                 num_bins=self.num_bins,
-                num_curve_points=self.num_curve_points,
                 desire_weights=desire_weights,
                 miss_cost_weights=miss_cost_weights,
                 card_value_weights=card_value_weights,
@@ -171,13 +168,7 @@ class RetreatPanel(QWidget):
         self.num_bins_spin = QSpinBox()
         self.num_bins_spin.setRange(5, 100)
         self.num_bins_spin.setValue(20)
-        config_form.addRow("直方图分箱数:", self.num_bins_spin)
-
-        self.num_curve_spin = QSpinBox()
-        self.num_curve_spin.setRange(50, 500)
-        self.num_curve_spin.setValue(200)
-        self.num_curve_spin.setSingleStep(50)
-        config_form.addRow("回归曲线点数:", self.num_curve_spin)
+        config_form.addRow("等距直方图分箱数:", self.num_bins_spin)
 
         config_group.setLayout(config_form)
         left_layout.addWidget(config_group)
@@ -297,7 +288,6 @@ class RetreatPanel(QWidget):
         gdr_threshold = self.gdr_threshold_spin.value()
         alpha = self.alpha_spin.value()
         num_bins = self.num_bins_spin.value()
-        num_curve = self.num_curve_spin.value()
         pool_names = self._get_pool_names()
         cost_per_draw = self._extract_cost_per_draw()
 
@@ -312,7 +302,6 @@ class RetreatPanel(QWidget):
             gdr_threshold=gdr_threshold,
             alpha=alpha,
             num_bins=num_bins,
-            num_curve_points=num_curve,
             pool_names=pool_names,
             store=self._store,
             no_draw_resource=getattr(self, '_no_draw_resource', None),
@@ -349,6 +338,25 @@ class RetreatPanel(QWidget):
                 f"模拟次数: {analysis.n_simulations}  |  "
                 f"α = {analysis.alpha}"
             )
+            # P51: 单调性/回退状态栏警告
+            warnings_parts = []
+            for pr in analysis.pool_results:
+                fit = pr.pava_fit
+                if fit is None:
+                    continue  # AUDIT-BREAK-3: 数据不足条目无 pava_fit，跳过
+                if not fit.get('monotonicity_holds', True):
+                    warnings_parts.append(
+                        f"⚠ [{pr.pool_id}] 检测到策略断点——"
+                        f"部分区域单调性可能不成立，已局部回退独立检验"
+                    )
+                if fit.get('used_fallback', False):
+                    warnings_parts.append(
+                        f"⚠ [{pr.pool_id}] binsglm/PAVA 管线失败，"
+                        f"已回退到局部逻辑回归——结果不确定性较高"
+                    )
+            if warnings_parts:
+                summary += "  |  " + "  ".join(warnings_parts)
+
             self.status_label.setText(summary)
 
             charts: dict[str, object] = {}

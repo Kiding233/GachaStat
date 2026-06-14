@@ -548,7 +548,7 @@ class ConfigPanel(QWidget):
         self.pool_table = QTableWidget()
         self.pool_table.setColumnCount(10)
         self.pool_table.setHorizontalHeaderLabels([
-            "启用", "ID", "名称", "类型", "开始(天)", "持续(天)", "单抽消耗", "备注", "分布编辑", "批次大小"
+            "启用", "ID", "名称", "类型", "开始(天)", "持续(天)", "单抽消耗", "批次大小", "备注", "分布编辑"
         ])
         header = self.pool_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -558,16 +558,16 @@ class ConfigPanel(QWidget):
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
         self.pool_table.setColumnWidth(0, 40)
         self.pool_table.setColumnWidth(3, 70)
         self.pool_table.setColumnWidth(4, 70)
         self.pool_table.setColumnWidth(5, 70)
         self.pool_table.setColumnWidth(6, 160)
-        self.pool_table.setColumnWidth(8, 80)
-        self.pool_table.setColumnWidth(9, 60)
+        self.pool_table.setColumnWidth(7, 60)
+        self.pool_table.setColumnWidth(9, 80)
         self.pool_table.verticalHeader().setVisible(False)
         self.pool_table.setAlternatingRowColors(True)
         self.pool_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -593,7 +593,7 @@ class ConfigPanel(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        hint_label = QLabel("提示：类型列只有「角色」「武器」「兑换」「资源」四种类型会被后续分析识别。单抽消耗用 > 或 , 分隔表示强制优先级（靠左优先）。")
+        hint_label = QLabel("提示：类型列只有「角色」「武器」「兑换」「资源」四种类型会被后续分析识别。单抽消耗用 > 或 , 分隔表示强制优先级（靠左优先）。批次大小设 10 即一次动作十连。")
         hint_label.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
         layout.addWidget(hint_label)
 
@@ -762,11 +762,11 @@ class ConfigPanel(QWidget):
             self.pool_table.setItem(r, 4, QTableWidgetItem(str(p['start_day'])))
             self.pool_table.setItem(r, 5, QTableWidgetItem(str(p['duration'])))
             self.pool_table.setItem(r, 6, QTableWidgetItem(p['cost']))
-            self.pool_table.setItem(r, 7, QTableWidgetItem(p.get('note', '')))
+            self.pool_table.setItem(r, 7, QTableWidgetItem(str(p.get('batch_size', 1))))
+            self.pool_table.setItem(r, 8, QTableWidgetItem(p.get('note', '')))
             edit_item = QTableWidgetItem("...双击编辑")
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(r, 8, edit_item)
-            self.pool_table.setItem(r, 9, QTableWidgetItem(str(p.get('batch_size', 1))))
+            self.pool_table.setItem(r, 9, edit_item)
             self._pool_distributions[p['id']] = p['distribution']
 
             inferred = self._infer_pool_type(p['id'], p['type'], p.get('note', ''))
@@ -813,13 +813,12 @@ class ConfigPanel(QWidget):
                 note = f"{len(dist)}卡"
             else:
                 note = p.get('note', '')
-            self.pool_table.setItem(i, 7, QTableWidgetItem(note))
+            batch_size = p.get('batch_size', 1)
+            self.pool_table.setItem(i, 7, QTableWidgetItem(str(batch_size)))
+            self.pool_table.setItem(i, 8, QTableWidgetItem(note))
             edit_item = QTableWidgetItem("...双击编辑")
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(i, 8, edit_item)
-
-            batch_size = p.get('batch_size', 1)
-            self.pool_table.setItem(i, 9, QTableWidgetItem(str(batch_size)))
+            self.pool_table.setItem(i, 9, edit_item)
 
             inferred = self._infer_pool_type(pool_id, p.get('type', ''), note)
             row_bg = self._pool_row_bg(inferred, note)
@@ -868,11 +867,11 @@ class ConfigPanel(QWidget):
         self.pool_table.setItem(row, 4, QTableWidgetItem("0"))
         self.pool_table.setItem(row, 5, QTableWidgetItem("21"))
         self.pool_table.setItem(row, 6, QTableWidgetItem("draw_resource:160"))
-        self.pool_table.setItem(row, 7, QTableWidgetItem(""))
+        self.pool_table.setItem(row, 7, QTableWidgetItem("1"))
+        self.pool_table.setItem(row, 8, QTableWidgetItem(""))
         edit_item = QTableWidgetItem("...双击编辑")
         edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.pool_table.setItem(row, 8, edit_item)
-        self.pool_table.setItem(row, 9, QTableWidgetItem("1"))
+        self.pool_table.setItem(row, 9, edit_item)
         self._all_pool_rows.append(row)
         self._ensure_resource_registered('draw_resource', '抽卡资源')
         self._sync_card_defs_from_pools()
@@ -903,7 +902,7 @@ class ConfigPanel(QWidget):
                         self.pool_table.setItem(new_row, col, new_item)
             edit_item = QTableWidgetItem("...双击编辑")
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(new_row, 8, edit_item)
+            self.pool_table.setItem(new_row, 9, edit_item)
             id_item = self.pool_table.item(new_row, 1)
             if id_item:
                 id_item.setText(f"{id_item.text()}_copy")
@@ -941,7 +940,7 @@ class ConfigPanel(QWidget):
                 if isinstance(rg, dict):
                     for rid in rg.keys():
                         self._ensure_resource_registered(rid)
-            note_item = self.pool_table.item(row, 7)
+            note_item = self.pool_table.item(row, 8)
             if note_item:
                 note_item.setText(f"{len(result)}卡")
             self._sync_card_defs_from_pools()
@@ -2845,7 +2844,7 @@ class ConfigPanel(QWidget):
             duration = int(_item(5, '21') or 21)
 
             batch_size = 1
-            batch_text = _item(9, '1').strip()
+            batch_text = _item(7, '1').strip()
             if batch_text:
                 try:
                     batch_size = int(batch_text)

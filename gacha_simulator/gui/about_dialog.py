@@ -70,7 +70,7 @@ class AboutDialog(QDialog):
             <li><b>广义出率（GDR）</b>：17 种可配置的广义出率指标</li>
             <li><b>过程分析</b>：逐池事件推断（7种事件类型）+ AA/BB/AB/BA 四种交叉统计</li>
             <li><b>Bootstrap 稳定性分析</b>：置信区间计算（BCa/GPD/Hill），零额外模拟成本</li>
-            <li><b>脆弱性分析</b>：局部逻辑回归估计条件失败概率，识别资源脆弱区间</li>
+            <li><b>脆弱性分析</b>：离散分箱 + PAVA 保序估计 + Bootstrap 变更点推断，识别资源脆弱区间</li>
             <li><b>方案搜索</b>：三合一搜索面板——最少资源（二分搜索）、最多目标卡（前进法/后退法）、资源-目标权衡曲线</li>
             <li><b>比较分析</b>：L1 描述统计 → L2 随机占优 → L3 假设检验（KS/MWU/ttest + Holm/BH校正）→ L4 帕累托前沿，四层递进策略比较</li>
             <li><b>数据管理</b>：模拟结果持久化存储（JSON）、可比性指纹检查、多数据集管理</li>
@@ -84,6 +84,7 @@ class AboutDialog(QDialog):
             <li>Python 3.10+</li>
             <li>PyQt6（GUI）</li>
             <li>NumPy / SciPy（数值计算）</li>
+            <li>binsreg (CCFF 2024) —— 分位数分箱</li>
             <li>Plotly（交互式可视化）</li>
             <li>PyInstaller（应用打包，onedir 分发）</li>
         </ul>
@@ -277,7 +278,14 @@ rarity = "r"</pre>
         </ul>
 
         <h4>脆弱性分析</h4>
-        <p>对每个池子，使用<b>局部逻辑回归</b>（纯 numpy 向量化闭式解，Silverman 自适应带宽）估计条件失败概率 P(失败 | 资源剩余)。当数据不足时，回退到<b>Nadaraya-Watson 高斯核平滑</b>。识别条件失败概率超过阈值的连续区间为"脆弱性区间"。支持 r_grid 边界自适应扩展和 LLR 边界偏差缓解。</p>
+        <p>对每个池子，使用三阶段管线估计条件失败概率 P(失败 | 资源剩余)：</p>
+        <ol>
+            <li><b>binsglm 分位数分箱</b>（CCFF 2024）——IMSE 准则自动选择箱数，每箱约等样本量，自适应数据密度</li>
+            <li><b>PAVA 保序估计</b>（Pool Adjacent Violators Algorithm）——在单调递减约束下合并采样逆向波动，输出分段常数保序估计 θ̃_j</li>
+            <li><b>Bootstrap 变更点推断</b>——ĵ* = max{j: θ̃_j > α}，在固定箱边界上非参数 Bootstrap 构造 95% 变更点置信区间</li>
+        </ol>
+        <p>脆弱区间右界取变更点 CI 上界（保守端），左界固定为 0。单调递减作为可检验、可回退的结构假设——检测到策略断点时自动回退独立检验 + Sidak 校正。</p>
+        <p><b>注：</b>脆弱性分析估计的是「给定池结束时资源剩余为 X 时，最终失败的条件概率」，反映的是关联关系而非因果关系——低资源和高失败率可能源于共同的运气因素。</p>
 
         <h4>过程分析</h4>
         <p>对每次模拟的每个池子推断事件类型（7种）：保底命中（pity_hit）、提前出货（early_hit）、未出（miss）、跳过（skip）、忽略（ignore）、兑换（exchange）、未兑换（no_exchange）。四种交叉统计：</p>

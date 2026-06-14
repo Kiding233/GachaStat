@@ -4,7 +4,7 @@ GachaStat 抽卡概率模拟与分析系统。版本号/Tab 列表由 C1 cron �
 
 ## 一、项目事实
 
-**技术栈：** Python 3.10+ · PyQt6 · numpy · Plotly (WebEngine) · pytest+cov
+**技术栈：** Python 3.10+ · PyQt6 · numpy · Plotly (WebEngine) · pytest+cov · binsreg (CCFF 2024)
 并行模拟：`multiprocessing.Pool` + worker initializer 模式
 
 ```bash
@@ -70,6 +70,7 @@ gacha_simulator/
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
+| 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |
 
 ---
 

@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=1.20",
     "matplotlib>=3.5",
     "scipy>=1.10",
+    "binsreg>=3.1.0",
     "tomli>=2.0; python_version < '3.11'",
     "tomli-w>=1.0",
 ]

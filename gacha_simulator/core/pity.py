@@ -1,9 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Set
-import fnmatch
 import logging
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -286,89 +284,3 @@ def _parse_target_distribution(text: str) -> Dict[str, float]:
     return result
 
 
-def parse_pity_file(filepath: str) -> List[PityDefParsed]:
-    pity_defs = []
-
-    with open(filepath, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-
-            if line.startswith('pity:'):
-                rest = line[len('pity:'):].strip()
-                parts = [p.strip() for p in rest.split('|')]
-                name = parts[0]
-                params = {}
-                for p in parts[1:]:
-                    if '=' in p:
-                        k, v = p.split('=', 1)
-                        params[k.strip()] = v.strip()
-
-                btype = params.get('type', 'soft')
-                target_dist = _parse_target_distribution(params.get('target', ''))
-                reset = params.get('reset', 'any_ssr')
-                pools = params.get('pools', '*')
-
-                clean_params = {k: v for k, v in params.items()
-                                if k not in ('type', 'target', 'reset', 'pools')}
-
-                pity_defs.append(PityDefParsed(
-                    name=name,
-                    btype=btype,
-                    params=clean_params,
-                    target_distribution=target_dist,
-                    reset_condition=reset,
-                    pools=pools,
-                ))
-
-    return pity_defs
-
-
-def _build_behavior(pdef: PityDefParsed) -> PityBehavior:
-    if pdef.btype == 'soft':
-        return SoftPityBehavior(
-            start_at=int(pdef.params.get('start', '74')),
-            end_at=int(pdef.params.get('end', '90')),
-            func_type=pdef.params.get('func', 'linear'),
-            target_distribution=dict(pdef.target_distribution),
-        )
-    elif pdef.btype == 'hard':
-        return HardPityBehavior(
-            threshold=int(pdef.params.get('threshold', '90')),
-            target_distribution=dict(pdef.target_distribution),
-        )
-    return SoftPityBehavior(start_at=74, end_at=90)
-
-
-def build_pity_engine(config_dir: str, pool_ids: List[str],
-                      featured_ids_map: Dict[str, Set[str]],
-                      ssr_ids_map: Dict[str, Set[str]]) -> Optional['PityEngine']:
-    pity_path = os.path.join(config_dir, 'pity.txt')
-    if not os.path.exists(pity_path):
-        return None
-
-    parsed_defs = parse_pity_file(pity_path)
-    if not parsed_defs:
-        return None
-
-    pity_defs: Dict[str, PityDefParsed] = {}
-    behaviors: Dict[str, PityBehavior] = {}
-    for pdef in parsed_defs:
-        pity_defs[pdef.name] = pdef
-        behaviors[pdef.name] = _build_behavior(pdef)
-
-    pool_specs: Dict[str, PoolPitySpec] = {}
-    for pool_id in pool_ids:
-        matching = []
-        for pdef in parsed_defs:
-            if fnmatch.fnmatch(pool_id, pdef.pools):
-                matching.append(pdef.name)
-
-        pool_specs[pool_id] = PoolPitySpec(
-            pity_names=matching,
-            featured_ids=featured_ids_map.get(pool_id, set()),
-            ssr_ids=ssr_ids_map.get(pool_id, set()),
-        )
-
-    return PityEngine(pool_specs, pity_defs, behaviors)

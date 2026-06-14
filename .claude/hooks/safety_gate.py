@@ -21,6 +21,10 @@ from common import read_hook_input, get_main_repo_root
 
 # 危险命令模式列表 (正则，不区分大小写)
 DANGEROUS_PATTERNS = [
+    # ── 删除命令：全部拦截（文件删除规则见 CLAUDE.md § 文件删除规则）──
+    (r"\brm\s+", "禁止 rm 删除——请移动到 .recycle_bin/ 或 docs/03-归档/"),
+    (r"\brmdir\s+", "禁止 rmdir 删除——请移动到 .recycle_bin/ 或 docs/03-归档/"),
+    # ── 极端危险操作 ──
     (r"rm\s+-rf\s+/", "禁止递归删除根目录"),
     (r"rm\s+-rf\s+/\*", "禁止递归删除根目录文件"),
     (r"git\s+push\s+--force\s+.*main", "禁止强制推送到 main 分支"),

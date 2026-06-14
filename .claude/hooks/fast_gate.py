@@ -25,7 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import read_hook_input, get_main_repo_root
 
 # 允许变更的目录
-ALLOWED_DIRS = ["gacha_simulator/", "docs/", "config/", ".claude/"]
+ALLOWED_DIRS = [
+    "gacha_simulator/", "docs/", "config/", ".claude/",
+    "tests/", "scripts/", ".recycle_bin/",
+    "pyproject.toml", "CLAUDE.md", "CONTRIBUTING.md",
+]
 
 
 def _is_bypass_active(project_root: Path) -> bool:

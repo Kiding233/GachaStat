@@ -132,62 +132,97 @@ class AboutDialog(QDialog):
         browser.setOpenExternalLinks(True)
         browser.setHtml("""
         <h3>配置文件指南</h3>
-        <p>所有配置文件使用 <code>|</code> 分隔，<code>#</code> 开头为注释，空行忽略。</p>
+        <p>所有配置集中在单一 <code>config.toml</code> 文件中，使用标准 TOML 格式。</p>
 
-        <h4>resources.txt — 资源定义</h4>
-        <pre>resource_id | 显示名称</pre>
-        <p>示例：<code>draw_resource | 抽卡资源</code></p>
+        <h4>[[cards]] — 卡牌定义</h4>
+        <pre>[[cards]]
+id = "刻晴"
+name = "刻晴"
+rarity = "ssr"</pre>
 
-        <h4>cards.txt — 卡牌定义</h4>
-        <pre>card_id | 名称 | 稀有度</pre>
-        <p>示例：<code>ssr_char1 | 角色A | ssr</code></p>
+        <h4>[resources.defs] + [resources.initial] — 资源定义与初始资源</h4>
+        <pre>[resources.defs]
+draw_resource = "抽卡资源"
+exchange_currency = "兑换货币"
 
-        <h4>schedule.txt — 池子排期</h4>
-        <pre>pool_id | 名称 | 开始天 | 结束天 | 费用 | 分布文件 | 绑定(k=v;k=v) | 目标卡(逗号分隔,可选:数量) | [批次大小]</pre>
-        <p>示例：<code>pool_c1 | 角色池1 | 0 | 21 | draw_resource:160 | pools/character_pool.txt | ssr=ssr_char1;sr=sr1;r=r1 | ssr_char1:1</code></p>
-        <p><b>批次大小</b>：单次动作的抽卡发数（十连=10），默认 1。可选列，省略时默认单抽。</p>
+[resources.initial]
+draw_resource = 1000
+exchange_currency = 0</pre>
+
+        <h4>[[resources.gain_rules]] + [[resources.day_overrides]] — 资源增益</h4>
+        <pre>[[resources.gain_rules]]
+type = "every_n_days"
+param = "7"
+gains = { draw_resource = 100 }
+
+[[resources.day_overrides]]
+day = 1
+gains = { draw_resource = 500 }</pre>
+        <p>规则类型：<code>every_n_days</code>, <code>weekly</code>, <code>monthly_day</code>, <code>monthly_week</code>。</p>
+
+        <h4>[[pools]] — 池子定义</h4>
+        <pre>[[pools]]
+id = "pool_0"
+name = "常驻池"
+pool_type = "角色"
+start_day = 0
+end_day = 21
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "standard_character"
+bindings = { ssr = "刻晴,莫娜", sr = "班尼特,行秋", r = "r1,r2" }
+target_cards = ["刻晴"]</pre>
         <p><b>费用语法</b>：<code>资源ID:数量</code>。多资源可用 <code>&gt;</code>（大于号）或 <code>,</code>（逗号）分隔，表示按书写顺序的<b>强制优先级</b>——先尝试排在前面的资源，不够再回退到后续资源。</p>
         <p>示例：<code>exchange_currency:5 &gt; draw_resource:160</code> 表示优先消耗兑换货币，不足时再用抽卡资源。</p>
         <p><code>&amp;</code> 表示同时需要多种资源（AND），<code>()</code> 用于分组。完整示例：<code>(draw_resource:160 &gt; exchange_currency:5) &amp; stardust:10</code></p>
         <p><b>绑定键</b>：ssr, ssr_alt, ssr_alt1, ssr_alt2, featured, offrate, sr, r, rerun_of, exchange_card</p>
+        <p>可选字段：<code>rerun_of</code>（复刻，引用另一池子的分布）、<code>exchange_card_id</code>（兑换池，100% 出指定卡）。</p>
 
-        <h4>pity.txt — 保底机制</h4>
-        <pre>pity: 名称 | type=soft|hard | 参数... | target=id:权重,... | reset=any_ssr|featured_ssr|never | pools=匹配模式</pre>
-        <p>软保底参数：<code>start=N end=N func=linear|exp|step</code></p>
-        <p>硬保底参数：<code>threshold=N</code></p>
-        <p>示例：<code>pity: ssr_soft | type=soft | start=74 end=90 func=linear | target=ssr:1 | reset=any_ssr | pools=*</code></p>
+        <h4>[[pity]] — 保底规则</h4>
+        <pre>[[pity]]
+name = "ssr_soft"
+type = "soft"
+start = 74
+end = 90
+func = "linear"
+threshold = 180
+reset = "any_ssr"
+pools = ["*"]
+target = { ssr = 1.0 }
+counter_init = 0</pre>
+        <p>软保底参数：<code>start</code>（起始抽数）/ <code>end</code>（终止抽数）/ <code>func</code>（linear|exp|step）。硬保底参数：<code>threshold</code>（100% 触发抽数）。<code>reset</code> 值：any_ssr|featured_ssr|never。</p>
 
-        <h4>gains.txt — 资源增益</h4>
-        <pre>[规则类型: 参数]
-resource_id: 数量
-day: 天数 | resource_id: 数量, resource_id: 数量</pre>
-        <p>规则类型：<code>every_n_days:N</code>, <code>weekly:day</code>, <code>monthly_day:day</code>, <code>monthly_week:week,day</code></p>
+        <h4>[[targets]] — 目标卡</h4>
+        <pre>[[targets]]
+card_id = "刻晴"
+quantity = 2
+pool_ids = ["pool_0", "pool_1"]</pre>
 
-        <h4>initial_resources.txt — 初始资源</h4>
-        <pre>resource_id | 数量</pre>
+        <h4>[[weights]] — 权重配置（可选）</h4>
+        <pre>[[weights]]
+card_id = "刻晴"
+desire = 2.0
+miss_cost = 1.2
+card_value = 1.5</pre>
+        <p>所有卡默认权重 1.0。desire_weight 影响前进法排序，miss_cost_weight 影响后退法排序，card_value 影响出卡价值计算。</p>
 
-        <h4>targets.txt — 目标卡</h4>
-        <pre>card_id | 数量 | 池子ID(逗号分隔)</pre>
-
-        <h4>weights.txt — 权重配置（可选）</h4>
-        <pre>card_id | desire_weight | miss_cost_weight | card_value</pre>
-        <p>默认值均为 1.0。desire_weight 影响前进法排序，miss_cost_weight 影响后退法排序，card_value 影响出卡价值计算。</p>
-
-        <h4>池子分布文件（pools/*.txt）</h4>
-        <pre>[层级键]: 概率        # 定义层级概率
-[层级键]=[子键1,子键2]  # 定义子层级
-[叶键]=绑定键          # 映射到 schedule.txt 中的绑定</pre>
-        <p>示例：</p>
-        <pre>[1]:0.006
-[1]=[featured,offrate]
-[featured]:0.5
-[offrate]:0.5
-[featured]=ssr
-[offrate]=ssr_alt
-[2]:0.051
-[2]=sr
-[3]:0.943
-[3]=r</pre>
+        <h4>[[distribution_templates]] — 池子分布模板</h4>
+        <pre>[[distribution_templates]]
+name = "standard_character"
+[[distribution_templates.cards]]
+card_id = "ssr"
+probability = 0.6
+rarity = "ssr"
+featured = true
+[[distribution_templates.cards]]
+card_id = "sr"
+probability = 5.1
+rarity = "sr"
+[[distribution_templates.cards]]
+card_id = "r"
+probability = 94.3
+rarity = "r"</pre>
+        <p>模板中的 <code>card_id</code> 为绑定键时（ssr/sr/r/ssr_alt 等），加载时按池子的 <code>bindings</code> 展开为具体卡牌并均分概率。</p>
         """)
         layout.addWidget(browser)
         return widget

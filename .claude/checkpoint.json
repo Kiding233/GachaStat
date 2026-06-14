@@ -1,15 +1,15 @@
 {
-  "saved_at": "2026-06-13 16:26 UTC",
-  "session_id": "3ee2cd3f-c9f8-4e17-a4b6-0eefdc7f914e",
+  "saved_at": "2026-06-14 13:52 UTC",
+  "session_id": "9ba4e4e8-e692-444e-9dab-55975dc875eb",
   "branch": "trae/solo-agent-1q6AM0",
   "recent_commits": [
-    "9b7e457 feat: P47 全局禁用滚轮——QApplication 统一拦截 QComboBox/QAbstractSpinBox 滚轮",
-    "80562db [auto] 版本号同步：2.0.0→2.1.0 + Tab列表更新（10个Tab）",
-    "48b3599 [auto] 版本号同步：2.0.0→2.1.0 + Tab列表更新（10个Tab）",
-    "bb2b17f chore: 安全检查点——保存当前工作区全部已跟踪文件改动",
-    "a885770 fix: 前进法卡牌排序——补回缺失 reverse=True（高 desire 优先）"
+    "bfea428 chore: 简化配置面板提示——移除冗余的单抽消耗语法说明",
+    "3949193 docs: 模块状态矩阵 P44 状态同步——📋就绪→✅已完成，路径指向归档",
+    "a82db40 fix: H7 钩子 core.quotePath=false——中文路径八进制转义致目录边界误判",
+    "b7725ff chore: schedule.txt 全部池子显式补上 batch_size=1",
+    "9ef28e6 chore: 提示文案修正 + schedule.txt batch_size 恢复默认 1"
   ],
-  "transcript_path": "C:\\Users\\DELL\\.claude\\projects\\d--Users-DELL-Desktop-gacha-simulator----------\\3ee2cd3f-c9f8-4e17-a4b6-0eefdc7f914e.jsonl",
+  "transcript_path": "C:\\Users\\DELL\\.claude\\projects\\d--Users-DELL-Desktop-gacha-simulator----------\\9ba4e4e8-e692-444e-9dab-55975dc875eb.jsonl",
   "task": "",
   "completed_step": "",
   "decision_summary": "",

@@ -90,6 +90,24 @@ class SimulationThread(QThread):
                 strategy_params=config_store.strategy_params,
             )
 
+            # ── 诊断：检查 batch_result 内容 ──
+            ext = getattr(batch_result, 'extraction', None)
+            raw_results = getattr(batch_result, 'results', [])
+            self.status_update.emit(
+                f"诊断: results={len(raw_results)} extraction={'有' if ext else '无'}"
+            )
+            if ext:
+                agg_list = ext.get('aggregates', [])
+                if agg_list:
+                    first = agg_list[0]
+                    self.status_update.emit(
+                        f"  首条: draws={first.get('total_draws',0)} "
+                        f"consumed={first.get('total_consumed',{})} "
+                        f"cards={len(first.get('card_counts',{}))}"
+                    )
+                else:
+                    self.status_update.emit("  ⚠️ aggregates 为空列表！")
+
             self.status_update.emit("正在计算基线…")
 
             no_draw_resource = None
@@ -277,6 +295,21 @@ class GachaPanel(QWidget):
         if config_store is None:
             self._log("错误: 配置存储为空")
             return
+
+        # ── 模拟前健全性检查 ──
+        self._log(f"诊断: 池子={len(config_store.pools)} "
+                  f"初始资源={dict(config_store.initial_resources)} "
+                  f"收入规则={len(config_store.gain_rules)}")
+        for p in config_store.pools[:3]:
+            self._log(f"  池[{p.pool_id}] 分布={len(p.distribution)}条 "
+                      f"cost={p.cost} "
+                      f"天数={p.start_day}-{p.end_day} "
+                      f"模板={p.distribution_template or '(内联)'}")
+        if not config_store.initial_resources:
+            self._log("⚠️ 警告: initial_resources 为空——模拟将无法抽卡！")
+        for p in config_store.pools:
+            if not p.distribution:
+                self._log(f"⚠️ 警告: 池子 {p.pool_id} 分布为空——无法出卡！")
 
         sim_count = self.sim_count.value()
         max_workers = self.max_workers.value()

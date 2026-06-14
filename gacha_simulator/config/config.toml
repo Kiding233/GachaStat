@@ -1,0 +1,627 @@
+# ============================================================
+# GachaStat 统一配置文件 —— config.toml
+# ============================================================
+# 此文件等价于原有 10 个 txt 配置文件 + pools/ 子目录的集合。
+# 语法速查：
+#   key = value          标量（整数/浮点/布尔/字符串）
+#   [section]            表（字典）—— . 号嵌套子表
+#   [[array]]            数组表——每个 [[array]] 是数组中的一个元素
+#   { k = v, k = v }     内联表——写在一行的小字典
+# ============================================================
+
+# ── 资源定义（原 resources.txt） ────────────────────────────
+[resources.defs]
+draw_resource = "抽卡资源"
+exchange_currency = "兑换货币"
+
+# ── 初始资源（原 initial_resources.txt） ────────────────────
+[resources.initial]
+draw_resource = 55000
+
+# ── 资源获取规则（原 gains.txt） ────────────────────────────
+# type 取值：every_n_days | weekly | monthly_day | monthly_week
+
+[[resources.gain_rules]]
+type = "every_n_days"
+param = "1"
+gains = { draw_resource = 60 }
+
+[[resources.gain_rules]]
+type = "monthly_day"
+param = "1"
+gains = { exchange_currency = 50 }
+
+# ── 指定日期覆盖（原 gains.txt day: 行） ────────────────────
+[[resources.day_overrides]]
+day = 0
+gains = { draw_resource = 200 }
+
+[[resources.day_overrides]]
+day = 21
+gains = { draw_resource = 200 }
+
+[[resources.day_overrides]]
+day = 42
+gains = { draw_resource = 200 }
+
+[[resources.day_overrides]]
+day = 63
+gains = { draw_resource = 200 }
+
+[[resources.day_overrides]]
+day = 84
+gains = { draw_resource = 200 }
+
+[[resources.day_overrides]]
+day = 105
+gains = { draw_resource = 200 }
+
+[[resources.day_overrides]]
+day = 126
+gains = { draw_resource = 200 }
+
+[[resources.day_overrides]]
+day = 147
+gains = { draw_resource = 200 }
+
+# ── 卡牌定义（原 cards.txt） ────────────────────────────────
+# === 限定 SSR ===
+[[cards]]
+id = "limited_ssr_1"
+name = "限定角色1"
+rarity = "ssr"
+
+[[cards]]
+id = "limited_ssr_2"
+name = "限定角色2"
+rarity = "ssr"
+
+[[cards]]
+id = "limited_ssr_3"
+name = "限定角色3"
+rarity = "ssr"
+
+[[cards]]
+id = "limited_ssr_4"
+name = "限定角色4"
+rarity = "ssr"
+
+[[cards]]
+id = "limited_ssr_5"
+name = "限定角色5"
+rarity = "ssr"
+
+[[cards]]
+id = "limited_ssr_6"
+name = "限定角色6"
+rarity = "ssr"
+
+# === 常驻 SSR ===
+[[cards]]
+id = "standard_ssr_1"
+name = "常驻角色1"
+rarity = "ssr"
+
+[[cards]]
+id = "standard_ssr_2"
+name = "常驻角色2"
+rarity = "ssr"
+
+[[cards]]
+id = "standard_ssr_3"
+name = "常驻角色3"
+rarity = "ssr"
+
+[[cards]]
+id = "standard_ssr_4"
+name = "常驻角色4"
+rarity = "ssr"
+
+[[cards]]
+id = "standard_ssr_5"
+name = "常驻角色5"
+rarity = "ssr"
+
+[[cards]]
+id = "standard_ssr_6"
+name = "常驻角色6"
+rarity = "ssr"
+
+# === SR ===
+[[cards]]
+id = "sr_1"
+name = "SR角色1"
+rarity = "sr"
+
+[[cards]]
+id = "sr_2"
+name = "SR角色2"
+rarity = "sr"
+
+[[cards]]
+id = "sr_3"
+name = "SR角色3"
+rarity = "sr"
+
+[[cards]]
+id = "sr_4"
+name = "SR角色4"
+rarity = "sr"
+
+[[cards]]
+id = "sr_5"
+name = "SR角色5"
+rarity = "sr"
+
+[[cards]]
+id = "sr_6"
+name = "SR角色6"
+rarity = "sr"
+
+# === R ===
+[[cards]]
+id = "r_1"
+name = "R角色1"
+rarity = "r"
+
+[[cards]]
+id = "r_2"
+name = "R角色2"
+rarity = "r"
+
+[[cards]]
+id = "r_3"
+name = "R角色3"
+rarity = "r"
+
+[[cards]]
+id = "r_4"
+name = "R角色4"
+rarity = "r"
+
+[[cards]]
+id = "r_5"
+name = "R角色5"
+rarity = "r"
+
+[[cards]]
+id = "r_6"
+name = "R角色6"
+rarity = "r"
+
+# ── 分布模板（原 pools/character_pool.txt + standard_pool.txt + weapon_pool.txt） ──
+
+# 模板1：角色限定池（SSR 0.4%，featured/offrate 各 50%）
+[[distribution_templates]]
+name = "character_pool_with_offrate"
+
+[[distribution_templates.cards]]
+card_id = "ssr"
+probability = 0.2          # 0.4% × 50% = 0.2%
+rarity = "ssr"
+featured = true
+
+[[distribution_templates.cards]]
+card_id = "ssr_alt"
+probability = 0.2          # 0.4% × 50% = 0.2%
+rarity = "ssr"
+
+[[distribution_templates.cards]]
+card_id = "sr"
+probability = 5.1
+rarity = "sr"
+
+[[distribution_templates.cards]]
+card_id = "r"
+probability = 94.5
+rarity = "r"
+
+# 模板2：常驻池（SSR 0.6%，三路均分 a/b/c）
+# 原 standard_pool.txt: [1]=[a,b,c] → a:ssr, b:ssr_alt1, c:ssr_alt2
+[[distribution_templates]]
+name = "standard_pool"
+
+[[distribution_templates.cards]]
+card_id = "ssr"
+probability = 0.3          # 0.6% × 50% = 0.3%
+rarity = "ssr"
+featured = true
+
+[[distribution_templates.cards]]
+card_id = "ssr_alt1"
+probability = 0.15         # 0.6% × 25% = 0.15%
+rarity = "ssr"
+
+[[distribution_templates.cards]]
+card_id = "ssr_alt2"
+probability = 0.15         # 0.6% × 25% = 0.15%
+rarity = "ssr"
+
+[[distribution_templates.cards]]
+card_id = "sr"
+probability = 5.1
+rarity = "sr"
+
+[[distribution_templates.cards]]
+card_id = "r"
+probability = 94.3
+rarity = "r"
+
+# 模板3：武器池（SSR 0.7%，featured/offrate 75/25）
+# 原 weapon_pool.txt: [1]:0.007 → [featured]:0.75 / [offrate]:0.25
+[[distribution_templates]]
+name = "weapon_pool"
+
+[[distribution_templates.cards]]
+card_id = "ssr"
+probability = 0.525        # 0.7% × 75% = 0.525%
+rarity = "ssr"
+featured = true
+
+[[distribution_templates.cards]]
+card_id = "ssr_alt"
+probability = 0.175        # 0.7% × 25% = 0.175%
+rarity = "ssr"
+
+[[distribution_templates.cards]]
+card_id = "sr"
+probability = 5.1
+rarity = "sr"
+
+[[distribution_templates.cards]]
+card_id = "r"
+probability = 94.2
+rarity = "r"
+
+# ── 池子定义（原 schedule.txt） ─────────────────────────────
+
+[[pools]]
+id = "pool_c1"
+name = "角色池1"
+pool_type = "角色"
+start_day = 0
+end_day = 21
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_1"]
+
+[pools.bindings]
+ssr = "limited_ssr_1"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+[[pools]]
+id = "pool_c2"
+name = "角色池2"
+pool_type = "角色"
+start_day = 21
+end_day = 42
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_2"]
+
+[pools.bindings]
+ssr = "limited_ssr_2"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+[[pools]]
+id = "pool_c3"
+name = "角色池3"
+pool_type = "角色"
+start_day = 42
+end_day = 63
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_3"]
+
+[pools.bindings]
+ssr = "limited_ssr_3"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+[[pools]]
+id = "pool_c4"
+name = "角色池4"
+pool_type = "角色"
+start_day = 63
+end_day = 84
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_4"]
+
+[pools.bindings]
+ssr = "limited_ssr_4"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+[[pools]]
+id = "pool_c5"
+name = "角色池5"
+pool_type = "角色"
+start_day = 84
+end_day = 105
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_5"]
+
+[pools.bindings]
+ssr = "limited_ssr_5"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+[[pools]]
+id = "pool_c6"
+name = "角色池6"
+pool_type = "角色"
+start_day = 105
+end_day = 126
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_6"]
+
+[pools.bindings]
+ssr = "limited_ssr_6"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+[[pools]]
+id = "pool_c7"
+name = "角色池7"
+pool_type = "角色"
+start_day = 126
+end_day = 147
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_1"]
+
+[pools.bindings]
+ssr = "limited_ssr_1"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+[[pools]]
+id = "pool_c8"
+name = "角色池8"
+pool_type = "角色"
+start_day = 147
+end_day = 168
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "character_pool_with_offrate"
+
+target_cards = ["limited_ssr_2"]
+
+[pools.bindings]
+ssr = "limited_ssr_2"
+ssr_alt = "standard_ssr_1, standard_ssr_2, standard_ssr_3, standard_ssr_4, standard_ssr_5, standard_ssr_6"
+sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
+r = "r_1, r_2, r_3, r_4, r_5, r_6"
+
+
+# ── 保底配置（原 pity.txt） ──────────────────────────────────
+
+[[pity]]
+name = "ssr_soft"
+type = "soft"
+start = 80
+end = 90
+func = "linear"
+threshold = 0
+reset = "featured_ssr"
+pools = "pool_c*"
+target = { limited_ssr = 100 }
+counter_init = 0
+
+# ── 目标卡（原 targets.txt） ─────────────────────────────────
+
+[[targets]]
+card_id = "limited_ssr_1"
+quantity = 1
+pool_ids = ["pool_c1", "pool_c7"]
+
+[[targets]]
+card_id = "limited_ssr_2"
+quantity = 1
+pool_ids = ["pool_c2", "pool_c8"]
+
+[[targets]]
+card_id = "limited_ssr_3"
+quantity = 1
+pool_ids = ["pool_c3"]
+
+[[targets]]
+card_id = "limited_ssr_4"
+quantity = 1
+pool_ids = ["pool_c4"]
+
+[[targets]]
+card_id = "limited_ssr_5"
+quantity = 1
+pool_ids = ["pool_c5"]
+
+[[targets]]
+card_id = "limited_ssr_6"
+quantity = 1
+pool_ids = ["pool_c6"]
+
+# ── 卡牌权重（原 weights.txt） ──────────────────────────────
+# 格式：[[weights]] 数组表，每张卡一个条目。
+# desire / miss_cost / card_value 可以是数值或字符串表达式（动态权重），
+# 未来可扩展字段：expr_engine / condition / priority 等。
+
+# === 限定 SSR ===
+[[weights]]
+card_id = "limited_ssr_1"
+desire = 1.0
+miss_cost = 1.0
+card_value = 1.0
+
+[[weights]]
+card_id = "limited_ssr_2"
+desire = 1.0
+miss_cost = 1.0
+card_value = 1.0
+
+[[weights]]
+card_id = "limited_ssr_3"
+desire = 1.0
+miss_cost = 1.0
+card_value = 1.0
+
+[[weights]]
+card_id = "limited_ssr_4"
+desire = 1.0
+miss_cost = 1.0
+card_value = 1.0
+
+[[weights]]
+card_id = "limited_ssr_5"
+desire = 1.0
+miss_cost = 1.0
+card_value = 1.0
+
+[[weights]]
+card_id = "limited_ssr_6"
+desire = 1.0
+miss_cost = 1.0
+card_value = 1.0
+
+# === 常驻 SSR ===
+[[weights]]
+card_id = "standard_ssr_1"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.3
+
+[[weights]]
+card_id = "standard_ssr_2"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.3
+
+[[weights]]
+card_id = "standard_ssr_3"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.3
+
+[[weights]]
+card_id = "standard_ssr_4"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.3
+
+[[weights]]
+card_id = "standard_ssr_5"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.3
+
+[[weights]]
+card_id = "standard_ssr_6"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.3
+
+# === SR ===
+[[weights]]
+card_id = "sr_1"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.1
+
+[[weights]]
+card_id = "sr_2"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.1
+
+[[weights]]
+card_id = "sr_3"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.1
+
+[[weights]]
+card_id = "sr_4"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.1
+
+[[weights]]
+card_id = "sr_5"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.1
+
+[[weights]]
+card_id = "sr_6"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.1
+
+# === R ===
+[[weights]]
+card_id = "r_1"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.0
+
+[[weights]]
+card_id = "r_2"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.0
+
+[[weights]]
+card_id = "r_3"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.0
+
+[[weights]]
+card_id = "r_4"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.0
+
+[[weights]]
+card_id = "r_5"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.0
+
+[[weights]]
+card_id = "r_6"
+desire = 1.0
+miss_cost = 1.0
+card_value = 0.0

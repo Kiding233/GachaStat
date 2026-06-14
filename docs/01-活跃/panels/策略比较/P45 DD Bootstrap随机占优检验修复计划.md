@@ -1,8 +1,10 @@
-<!-- META: P45 | module:panels/策略比较 | status:in_progress | last:2026-06-13 -->
+<!-- META: P45 | module:panels/策略比较 | status:in_progress | last:2026-06-14 -->
 # P45 DD Bootstrap 随机占优检验修复计划
 
-> 日期：2026-06-13 | 触发：实际使用中 FSD/SSD/TSD 三阶双向（A→B 和 B→A）p 值均 <0.05，失去区分能力
+> 日期：2026-06-13 | 更新：2026-06-14（方法选型调研完成）
+> 触发：实际使用中 FSD/SSD/TSD 三阶双向（A→B 和 B→A）p 值均 <0.05，失去区分能力
 > 关联：P19 §效应量专项设计 · P18（BootstrapEngine 改进，不重叠——DD 实现独立于 BootstrapEngine）
+> 调研报告：[stochastic-dominance-methods-survey-2026-06-14.md](../04-收件箱/stochastic-dominance-methods-survey-2026-06-14.md)
 
 ---
 
@@ -65,9 +67,54 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 
 三个阶数作为三个独立 HTML 表格并排展示，制造了「三次独立验证」的错觉。实际上 FSD ⟹ SSD ⟹ TSD 是数学定理（Davidson & Duclos, 2000, Theorem 1），FSD 显著时 SSD/TSD 的信息增量为零。
 
+### 1.5 方法论背景更新 (2026-06-14)
+
+**Fang & Santos (2019) 奠基性结论：**
+
+SD 检验统计量（如 `max(F_a − F_b)`）是分布函数的泛函，该泛函在 H₀ 边界处仅是 **Hadamard 方向可微**（非全可微）。Fang & Santos (2019, *Review of Economic Studies*) 证明：**当 φ 仅是方向可微时，标准 Bootstrap 不一致。** 这是本计划 §1.2 根因分析的理论根基——等式中心化的本质是 Bootstrap 隐含假定了全可微性。
+
+**学界现状：LFC 已淘汰，三足鼎立：**
+
+| 校正技术 | 出处 | 机制 | 实现 |
+|----------|------|------|------|
+| 接触集估计 | Linton-Song-Whang (2010) | 仅在分布重合的网格点施加 H₀ | PySDTest `test_sd_contact` |
+| 选择性重中心化 | Donald-Hsu (2016) | 仅在约束接近 binding 的点重中心化 | **PySDTest `test_sd_SR`** ← 与 FIXME-1 方法论一致 |
+| 数值 Delta 法 | Hong-Li (2018) | 有限差分近似方向导数，免 Bootstrap | PySDTest `test_sd_NDM` |
+
+**关键发现：PySDTest `test_sd_SR` 是 Donald-Hsu 2016 的参考实现。**
+
+经源码审查（[评估报告](stochastic-dominance-methods-survey-2026-06-14.md) §六），PySDTest v0.0.21（9.4 KB，仅 numpy+matplotlib 依赖）的 `test_sd_SR` 类正确实现了 Donald & Hsu (2016) 的选择性重中心化逻辑——包括 `selective_recentering()` 方法（`selected_set = (√n₂ · D_s) < -a · √[log(log(N))]`）。其 `test_sd` 类（BD 2003）与当前代码同病（等式中心化），但 `test_sd_SR` 正确。
+
+**H₀ 方向差异：**
+
+| | 当前实现 + P45 计划 | PySDTest `test_sd_SR` |
+|---|---|---|
+| 方法论传统 | Davidson & Duclos (2000/2006) | Barrett & Donald (2003) → Donald & Hsu (2016) |
+| H₀ | **不**占优 | **占优** |
+| p < 0.05 含义 | 拒绝不占优 → **正面断言占优** | 拒绝占优 → **排除占优** |
+| 学界立场 | DD 传统（Whang 2019 §2.3） | 计量经济学主流（Whang 2019 §2.2） |
+
+这不影响 FIXME-1 的校准实验设计——接触集重中心化的数学在两种 H₀ 方向下均适用。但若直接使用 PySDTest，FIXME-2（分类裁决矩阵）需要根据 H₀ 方向调整判定规则。
+
 ---
 
 ## 二、FIXME 清单
+
+### FIXME-0 (新增 2026-06-14)：方法论选型前置决策
+
+在实施 FIXME-1 前，先确认实现路径：
+
+| 路径 | 方案 | H₀ | 工作量 | 风险 |
+|------|------|-----|--------|------|
+| **A（推荐）** | `pip install PySDTest` → 用 `test_sd_SR` 替换 | 占优 | 1-2h + 适配器 | H₀ 方向需在 FIXME-2 中调整 |
+| **B** | 从 PySDTest 移植 `selective_recentering()` 到 DD 框架 | 不占优 | 3-4h + S1-S4 | 手写易引入新 bug |
+| **C** | 按原计划从零实现接触集重中心化 | 不占优 | 3-4h + S1-S4 | 需独立编码 + 调试 |
+
+**推荐路径 A**，理由：
+- PySDTest `test_sd_SR` 的 `selective_recentering()` 由论文作者团队实现，正确性有保障
+- 9.4 KB 纯 Python，零编译依赖，集成成本极低
+- 先用 S1-S4 校准实验验证效果（1h），若不满意再切换到路径 B
+- H₀ 方向差异在策略比较场景中影响有限——用户关心的是「哪个策略更好」的相对排序，而非绝对占优断言
 
 ### FIXME-1：替换中心化 Bootstrap 为约束 Bootstrap
 
@@ -75,26 +122,60 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 
 **目标：** Bootstrap DGP 正确施加 H₀: A 不 j 阶占优 B（即积分 CDF 在至少一处接触）
 
-**方案：Donald-Hsu 2016 风格重中心化**（推荐——无需 Empirical Likelihood 数值优化）
+**首选方案（2026-06-14 更新）：集成 PySDTest `test_sd_SR`**
+
+PySDTest v0.0.21 的 `test_sd_SR` 类已正确实现 Donald & Hsu (2016) 选择性重中心化：
+
+```python
+# gacha_simulator/core/comparison_analyzer.py 集成方案
+
+from pysdtest import test_sd_SR
+import numpy as np
+
+def dd_bootstrap_test_v2(samples_a, samples_b, n_bootstrap=2000,
+                          ngrid=100, seed=None):
+    """使用 PySDTest Donald-Hsu 2016 选择性重中心化替换原始实现。
+    
+    注意：PySDTest 的 H₀ = A 占优 B（BD 传统），
+    p < 0.05 → 拒绝占优 → A 不占优 B。
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    results = {}
+    for s in [1, 2, 3]:
+        test = test_sd_SR(
+            samples_a, samples_b, ngrid=ngrid, s=s,
+            resampling='bootstrap', nboot=n_bootstrap,
+            a=0.1, quiet=True
+        )
+        test.testing()
+        results[s] = {
+            'p_value': float(test.result['p_val']),
+            'test_stat': float(test.result['test_stat']),
+            'critical_val': float(test.result['critical_val'])
+        }
+    return results
+```
+
+**备选方案（若 PySDTest 校准实验不通过）：Donald-Hsu 2016 风格手写重中心化**
 
 | 子任务 | 描述 |
 |--------|------|
 | 1a | 估计**接触集** Ĉ = {网格点 x : \|F_a(x) − F_b(x)\| ≤ 1.96 × SÊ(x)}。其中 `SÊ(x) = sqrt(F_a·(1−F_a)/n_a + F_b·(1−F_b)/n_b)`——经验 CDF 在 x 处的二项标准误（两独立样本合并）。1.96 为渐近正态 95% 临界值 |
 | 1b | 仅在接触集上计算重中心化偏移量：`offset_a = mean_{x∈Ĉ}[F_a(x)]`, `offset_b = mean_{x∈Ĉ}[F_b(x)]`。Bootstrap 复制时使用 `boot_a = bootstrap_integrated_cdf_a − F_a + offset_a`（即仅在接触集层面保留原始均值差异，消除非接触区域的虚假偏移） |
 | 1c | Bootstrap 仍独立重抽样 A 和 B，但构建统计量的差值使用接触集重中心化版本 |
-| 1d | 统计量**保持** `max(F_a − F_b)`。方向推导：H₀ 为真（A 不占优 B）→ ∃x 使 F_a(x) > F_b(x) → max > 0 → p 大 → 不拒绝 ✓；H₀ 为假（A 占优 B）→ ∀x: F_a(x) ≤ F_b(x) → max ≤ 0 → p 小 → 拒绝 ✓。**统计量方向正确，问题仅在校准——接触集重中心化使 Bootstrap 零分布反映「非占优前沿面」而非「相等」** |
+| 1d | 统计量**保持** `max(F_a − F_b)`。方向推导：H₀ 为真（A 不占优 B）→ ∃x 使 F_a(x) > F_b(x) → max > 0 → p 大 → 不拒绝 ✓；H₀ 为假（A 占优 B）→ ∀x: F_a(x) ≤ F_b(x) → max ≤ 0 → p 小 → 拒绝 ✓ |
 | 1e | p 值 = `P(bootstrap_max ≥ observed_max)` |
 | 1f | **回退策略**：若 Ĉ 为空（两分布差异极大，所有网格点 \|F_a−F_b\| 远超 1.96×SÊ），取 argmin \|F_a−F_b\| 的 k 个网格点作为伪接触集，其中 k = max(3, n_grid/20) |
 
-**备选方案（若接触集估计效果不佳）：** Davidson & Duclos (2006) 完整 Empirical Likelihood 约束
-
-- FSD 有解析解（加权使 min 接触点处等概率）
-- SSD/TSD 需要 Newton 法数值优化（实现复杂度高 3-5 倍）
-- 备选触发条件：接触集重中心化后，若校准实验（模拟已知 ground truth）仍有 >20% 的双向过度显著率，则升级为完整 EL
+**备选方案（若接触集估计效果不佳）：** Davidson & Duclos (2006) 完整 Empirical Likelihood 约束。Lok & Tabri (2021, *Journal of Econometrics*) 在此基础上加入了 EL tilting 改进——在接触集上对经验分布进行 tilting，最大化检验功效。FSD 有解析解（加权使 min 接触点处等概率），SSD/TSD 需要 Newton 法数值优化（实现复杂度高 3-5 倍）。备选触发条件：接触集重中心化后，若校准实验仍有 >20% 的双向过度显著率，则升级为完整 EL。
 
 ### FIXME-2：UI 展示分类矩阵而非原始 p 值
 
 **文件：** `gui/comparison_analysis_panel.py` → `_update_l2()`
+
+**前置依赖：** FIXME-0（若选路径 A，PySDTest 的 H₀ 方向为「占优」，分类判定规则需对应调整）
 
 **目标：** 将三个独立 HTML p 值矩阵合并为一个分类矩阵
 
@@ -186,7 +267,14 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 
 ## 四、文献依据
 
-### 核心文献
+### 理论基础
+
+**Fang, Z., & Santos, A. (2019).** Inference on directionally differentiable functions. *Review of Economic Studies*, *86*(1), 377–412. https://doi.org/10.1093/restud/rdy049
+- **奠基性结论：当 φ 仅是 Hadamard 方向可微（非全可微）时，标准 Bootstrap 不一致。** SD 检验统计量是方向可微泛函——这从根源上解释了 §1.2 的等式中心化 bug。
+- 两个修复路径：(a) 修改 Bootstrap DGP（→ DH 2016, LSW 2010），(b) 修改 Bootstrap 统计量（→ NDM 2018）
+- 是理解 LSW/DH/NDM 三者关系的理论框架
+
+### 核心方法论
 
 **Davidson, R., & Duclos, J.-Y. (2000).** Statistical inference for stochastic dominance and for the measurement of poverty and inequality. *Econometrica*, *68*(6), 1435–1464. https://doi.org/10.1111/1468-0262.00167
 - 奠定 DD 渐近检验框架——网格点 T 统计量 + SMM 临界值
@@ -201,7 +289,26 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 **Donald, S. G., & Hsu, Y.-C. (2016).** Improving the power of tests of stochastic dominance. *Econometric Reviews*, *35*(4), 553–585. https://doi.org/10.1080/07474938.2013.833813
 - Hansen (2005) 重中心化方法应用于连续不等式约束
 - 在接触集上重中心化 → 比 Barrett-Donald (2003) LFC 方法更不保守、更 powerful
-- FIXME-1 的主要方法论参考
+- FIXME-1 的方法论参考。**PySDTest `test_sd_SR` 为此方法的参考实现**
+
+**Linton, O., Song, K., & Whang, Y.-J. (2010).** An improved bootstrap test of stochastic dominance. *Journal of Econometrics*, *154*(2), 186–202.
+- 接触集估计方法——Bootstrap 重抽样仅在估计的接触集上施加 H₀
+- 证明了渐近 size 一致有效（uniform asymptotic validity）
+- 与 DH 2016 选择性重中心化并列为两大 LFC 替代方案
+
+### 软件与实现
+
+**Lee, K., & Whang, Y.-J. (2024).** PySDTest: A Python/Stata package for stochastic dominance tests. arXiv:2307.10694. https://arxiv.org/abs/2307.10694
+- 实现了 BD (2003)、LMW (2005)、LSW (2010)、DH (2016)、NDM (2018) 五种方法
+- `test_sd_SR` 类 = DH 2016 选择性重中心化（FIXME-1 首选方案）
+- `test_sd` 类 = BD 2003 LFC（⚠️ 与当前代码同病——等式中心化）
+- 9.4 KB 纯 Python，仅 numpy+matplotlib 依赖
+
+### 综述
+
+**Whang, Y.-J. (2019).** *Econometric analysis of stochastic dominance: Concepts, methods, tools, and applications*. Cambridge University Press.
+- **领域标准参考书。** 将 H₀ 系统分为三类（§2.2 占优式 / §2.3 非占优式 / §2.4 等式式）
+- 附录 B 提供完整 MATLAB 代码（McFadden / Barrett-Donald / LMW / Donald-Hsu / Hall-Yatchew）
 
 ### 辅助文献
 
@@ -209,11 +316,19 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 - KS 型统计量 + 四分类矩阵（≻/≺/=/×）——FIXME-2 的 UI 设计参考
 
 **Bennett, C. J. (2024).** On a bidirectional test for stochastic dominance. Vanderbilt University Working Paper.
-- 两阶段序贯检验（Equality → Dominance/Crossing），显式控制条件错误率
-- 工作论文（未经同行评审），框架有价值但实现不及 Donald-Hsu 成熟
+- 两阶段序贯检验（Equality → Dominance/Crossing），Bootstrap 不施加 H₀ 约束（激进新方向）
+- 工作论文（未经同行评审），P45 引用为备选思路，不推荐作为主方案
 
 **Linton, O., Maasoumi, E., & Whang, Y.-J. (2005).** Consistent testing for stochastic dominance under general sampling schemes. *Review of Economic Studies*, *72*(3), 735–765.
 - 子抽样方法，验证了简单 Bootstrap 在 SD 边界上的尺寸失真
+
+**Hong, H., & Li, J. (2018).** The numerical delta method. *Journal of Econometrics*, *206*(2), 379–394.
+- 数值 Delta 法——有限差分近似 Hadamard 方向导数，免 Bootstrap
+- PySDTest `test_sd_NDM` 实现，可作为备选交叉验证手段
+
+**Lok, T. M., & Tabri, R. V. (2021).** An improved bootstrap test for restricted stochastic dominance. *Journal of Econometrics*, *224*(2), 371–393.
+- 在 DH 2016 基础上加入经验似然 tilting——最大化检验功效
+- 非占优-H₀ 框架（DD 传统），与本计划方向一致，但实现复杂度高（EL 优化）
 
 ---
 
@@ -221,15 +336,15 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 
 | # | 内容 | 预估 | 依赖 |
 |---|------|------|------|
-| 1 | 校准实验脚本 | 1h | — |
-| 2 | FIXME-1: 接触集重中心化实现 | 2-3h | 1 |
-| 3 | 校准实验执行 + 调参 | 1h | 2 |
-| 4 | FIXME-2: UI 分类矩阵 | 2h | 2 |
-| 5 | FIXME-3: 集成 CDF 可视化 | 1.5h | 2 |
-| 6 | FIXME-4: 文档更新 | 1h | 2-5 |
-| 7 | 回归测试（analysis_panel 不受影响） | 0.5h | 2-5 |
+| 0 | **FIXME-0 (新增)**：`pip install PySDTest` + S1-S4 校准实验 | 1.5h | — |
+| 1 | FIXME-1：PySDTest `test_sd_SR` 适配器集成 | 1h | 0 (校准通过) |
+| 2 | FIXME-2：UI 分类矩阵（含 H₀ 方向适配） | 2h | 1 |
+| 3 | FIXME-3：集成 CDF 可视化 | 1.5h | 1 |
+| 4 | FIXME-4：文档更新 | 1h | 1-3 |
+| 5 | 回归测试（analysis_panel 不受影响） | 0.5h | 1-3 |
+| ↳ | **若 FIXME-0 校准不通过 → 路径 B 手写实现** | +3-4h | 0 |
 
-**总计：** 9-10h
+**总计（路径 A）：** 7-8h | **总计（路径 B，若校准失败）：** 10-12h
 
 ---
 
@@ -239,7 +354,8 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 |------|------|------|
 | **P19** | 互补 | P19 是策略比较面板的总重构计划；P45 是其中一个具体统计缺陷的修复。P19 §效应量（2026-06-12 新增）为 L2 补充效应量，P45 修复 L2 的核心检验方法——两者可并行 |
 | **P18** | 无重叠 | P18 改进 `BootstrapEngine`（BCa/GPD/Hill），P45 改进 `dd_bootstrap_test()`（SD 专属 Bootstrap），两者零代码交集 |
-| **效应量专项** | 协同 | P19 §效应量（CLES/Hedges' g/RD）与 P45 的分类矩阵共享 n×n 显示框架——效应量可直接嵌入分类矩阵单元格 |
+| **效应量专项** | 协同 | P19 §效应量（CLES/Hedges' g/RD）与 P45 的分类矩阵共享 n×n 显示框架——效应量可直接嵌入分类矩阵单元格。Song & Sun (2025) 几乎占优系数可作为远期效应量参考 |
+| **调研报告** | 前置输入 | [stochastic-dominance-methods-survey-2026-06-14.md](../../04-收件箱/stochastic-dominance-methods-survey-2026-06-14.md) — 21 组已验证主张，覆盖 7 种方法论 + 5 个软件包 |
 
 ---
 
@@ -248,3 +364,4 @@ UI 展示的是 `dom['matrix']`（原始 p 值），而非 `dom['dominates']`（
 - 实现代码：`gacha_simulator/core/comparison_analyzer.py` (413行) · `gacha_simulator/gui/comparison_analysis_panel.py` (~380行)
 - 文档：`docs/01-活跃/panels/策略比较/01-理论.md` §3.2 · `docs/01-活跃/panels/策略比较/P19 未完成清单.md`
 - 模块状态矩阵：`docs/00-meta/模块状态矩阵.md`
+- 调研报告：`docs/01-活跃/04-收件箱/stochastic-dominance-methods-survey-2026-06-14.md`

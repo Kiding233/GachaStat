@@ -11,7 +11,7 @@ import traceback
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QLabel,
     QProgressBar, QGroupBox, QFormLayout, QDoubleSpinBox,
-    QSpinBox, QComboBox, QSplitter,
+    QSpinBox, QComboBox, QSplitter, QScrollArea, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -197,15 +197,25 @@ class RetreatPanel(QWidget):
         left_layout.addWidget(self.status_label)
         left_layout.addStretch()
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        # QScrollArea 包裹 ChartWebView：Qt 原生滚动不受 Plotly wheel 拦截
+        # 山脊线图高度随池子数量线性增长（n*140+80px），池子多时需滚动查看
+        right_scroll = QScrollArea()
+        right_scroll.verticalScrollBar().setSingleStep(15)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setStyleSheet("QScrollArea { background: #f5f5f5; border: none; }")
+
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(4, 4, 4, 4)
 
         self.chart_webview = ChartWebView()
+        self.chart_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         right_layout.addWidget(self.chart_webview)
 
+        right_scroll.setWidget(right_container)
+
         splitter.addWidget(left)
-        splitter.addWidget(right)
+        splitter.addWidget(right_scroll)
         splitter.setSizes([300, 700])
 
     def set_store(self, store):

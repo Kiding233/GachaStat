@@ -25,11 +25,11 @@ from ..core.result_store import (
 )
 from .data_manager_panel import DataManagerPanel
 from ..core.config_store import ConfigStore
-from ..core.config_io import load_store_from_directory, save_store_to_directory
+from ..core.config_toml import load_toml, save_toml
 from ..paths import get_config_dir, get_resource
 
 
-_DEFAULT_CONFIG_DIR = get_config_dir()
+_DEFAULT_CONFIG_FILE = os.path.join(get_config_dir(), 'config.toml')
 _ICON_PATH = get_resource('app_icon.png')
 
 
@@ -206,22 +206,24 @@ class MainWindow(QMainWindow):
 
     def _load_default_config(self):
         try:
-            load_store_from_directory(_DEFAULT_CONFIG_DIR, self._store)
+            load_toml(_DEFAULT_CONFIG_FILE, self._store)
             self.config_panel.refresh_from_store()
             self.analysis_panel.set_store(self._store)
             self.plan_search_panel.set_store(self._store)
             self.process_analysis_panel.set_store(self._store)
-            self.status_bar.showMessage(f"已加载默认配置: {_DEFAULT_CONFIG_DIR}")
+            self.status_bar.showMessage(f"已加载默认配置: {_DEFAULT_CONFIG_FILE}")
         except Exception as e:
             traceback.print_exc()
             self.status_bar.showMessage(f"加载默认配置失败: {e}")
 
     def import_config(self):
-        path = QFileDialog.getExistingDirectory(self, "选择配置目录")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入配置文件", "",
+            "TOML 配置文件 (*.toml);;所有文件 (*)"
+        )
         if path:
             try:
-                self.config_panel.apply_to_store()
-                load_store_from_directory(path, self._store)
+                load_toml(path, self._store)
                 self.config_panel.refresh_from_store()
                 self.analysis_panel.set_store(self._store)
                 self.plan_search_panel.set_store(self._store)
@@ -232,12 +234,22 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "导入失败", str(e))
 
     def export_config(self):
-        path = QFileDialog.getExistingDirectory(self, "选择导出目录")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出配置文件", "config.toml",
+            "TOML 配置文件 (*.toml);;所有文件 (*)"
+        )
         if path:
             try:
                 self.config_panel.apply_to_store()
-                save_store_to_directory(path, self._store)
-                self.status_bar.showMessage(f"配置已导出: {path}")
+                save_toml(self._store, path)
+                # 模板匹配失败提示
+                inline_count = sum(1 for p in self._store.pools
+                                   if not p.distribution_template)
+                if inline_count > 0:
+                    self.status_bar.showMessage(
+                        f"配置已保存。{inline_count} 个池子使用内联分布（模板不匹配）。", 8000)
+                else:
+                    self.status_bar.showMessage(f"配置已导出: {path}")
             except Exception as e:
                 traceback.print_exc()
                 QMessageBox.warning(self, "导出失败", str(e))
@@ -343,7 +355,7 @@ class MainWindow(QMainWindow):
 
         pool_types = {}
         for pe in self._store.pools:
-            pool_type = pe.bindings.get('type', '角色') if pe.bindings else '角色'
+            pool_type = pe.pool_type or (pe.bindings.get('type', '角色') if pe.bindings else '角色')
             pool_types[pe.pool_id] = pool_type
 
         self.process_analysis_panel.update_results(

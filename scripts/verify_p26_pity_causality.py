@@ -58,10 +58,10 @@ def create_temp_config(modifications: Dict[str, Optional[str]]) -> str:
 
 def load_config_from_dir(config_dir: str):
     """从指定目录加载配置。"""
-    from gacha_simulator.core.config_io import load_store_from_directory
+    from gacha_simulator.core.config_toml import load_toml
     from gacha_simulator.core.config_store import ConfigStore
     store = ConfigStore()
-    return load_store_from_directory(config_dir, store)
+    return load_toml(os.path.join(config_dir, 'config.toml'), store)
 
 
 def run_p_scan(store, target_specs: Dict[str, int],

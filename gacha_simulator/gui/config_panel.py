@@ -880,6 +880,9 @@ class ConfigPanel(QWidget):
     def _remove_pool(self):
         rows = sorted([r.row() for r in self.pool_table.selectionModel().selectedRows()], reverse=True)
         for row in rows:
+            id_item = self.pool_table.item(row, 1)
+            if id_item:
+                self._pool_distributions.pop(id_item.text().strip(), None)
             self.pool_table.removeRow(row)
         self._sync_card_defs_from_pools()
         self._update_preview()
@@ -1755,31 +1758,40 @@ class ConfigPanel(QWidget):
         self.set_card_defs(list(defs_map.values()))
         self._update_preview()
 
+    def _compute_pools_map(self):
+        """从池子分布实时推导每张卡的池子归属。"""
+        result = {}
+        for pid, dist_list in self._pool_distributions.items():
+            for d in dist_list:
+                cid = d.get('card_id', '')
+                if cid and cid != '_no_card':
+                    result.setdefault(cid, []).append(pid)
+        return result
+
     def get_card_defs(self):
+        pools_map = self._compute_pools_map()
         defs = []
         for i in range(self.card_def_table.rowCount()):
             card_id_item = self.card_def_table.item(i, 0)
             name_item = self.card_def_table.item(i, 1)
             rarity_widget = self.card_def_table.cellWidget(i, 2)
-            pools_item = self.card_def_table.item(i, 3)
             init_widget = self.card_def_table.cellWidget(i, 4)
             card_id = card_id_item.text().strip() if card_id_item else ''
             name = name_item.text().strip() if name_item else ''
             rarity = rarity_widget.currentText() if rarity_widget else 'R'
-            pools_text = pools_item.text().strip() if pools_item else ''
-            pools = [p.strip() for p in pools_text.split(',') if p.strip()] if pools_text else []
             initial_count = init_widget.value() if init_widget else 0
             defs.append({
                 'card_id': card_id,
                 'name': name,
                 'rarity': rarity,
-                'pools': pools,
+                'pools': pools_map.get(card_id, []),
                 'initial_count': initial_count,
             })
         return defs
 
     def set_card_defs(self, defs):
         self.card_defs = list(defs)
+        pools_map = self._compute_pools_map()
         self.card_def_table.blockSignals(True)
         self.card_def_table.setRowCount(len(defs))
         rarity_options = ["SSR", "SR", "R", "无"]
@@ -1793,7 +1805,8 @@ class ConfigPanel(QWidget):
             idx = rarity_map.get(rarity, 2)
             rarity_combo.setCurrentIndex(idx)
             self.card_def_table.setCellWidget(i, 2, rarity_combo)
-            pools_text = ','.join(d.get('pools', []))
+            cid = d.get('card_id', '')
+            pools_text = ','.join(pools_map.get(cid, []))
             pools_item = QTableWidgetItem(pools_text)
             pools_item.setFlags(pools_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.card_def_table.setItem(i, 3, pools_item)
@@ -2229,7 +2242,7 @@ class ConfigPanel(QWidget):
                 'enabled': p.enabled,
                 'id': p.pool_id,
                 'name': p.name,
-                'type': p.bindings.get('type', '角色') if p.bindings else '角色',
+                'type': p.pool_type or (p.bindings.get('type', '角色') if p.bindings else '角色'),
                 'start_day': p.start_day,
                 'duration': p.end_day - p.start_day,
                 'cost': p.cost,
@@ -2365,10 +2378,11 @@ class ConfigPanel(QWidget):
                 enabled=p.get('enabled', True),
                 pool_id=pid,
                 name=p.get('name', ''),
+                pool_type=pool_type,
                 start_day=p.get('start_day', 0),
                 end_day=p.get('start_day', 0) + p.get('duration', 21),
                 cost=p.get('cost', 'draw_resource:160'),
-                distribution_file=f"pools/{pid}.txt",
+                distribution_template="",
                 bindings=bindings,
                 distribution=distribution,
                 batch_size=p.get('batch_size', 1),
@@ -2878,10 +2892,11 @@ class ConfigPanel(QWidget):
                 enabled=cb.isChecked() if cb else True,
                 pool_id=pid,
                 name=_item(2),
+                pool_type=pool_type,
                 start_day=start_day,
                 end_day=start_day + duration,
                 cost=cost_text,
-                distribution_file=f"pools/{pid}.txt",
+                distribution_template="",
                 bindings=bindings,
                 distribution=distribution,
                 batch_size=batch_size,
@@ -2986,7 +3001,7 @@ class ConfigPanel(QWidget):
                              for d in p.distribution]
                 self._pool_distributions[p.pool_id] = dist_list
 
-            pool_type = p.bindings.get('type', '角色') if p.bindings else '角色'
+            pool_type = p.pool_type or (p.bindings.get('type', '角色') if p.bindings else '角色')
             pools_data.append({
                 'enabled': p.enabled,
                 'id': p.pool_id,

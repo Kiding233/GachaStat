@@ -46,14 +46,14 @@ def load_config(config_dir: str = None):
     """加载默认配置。"""
     if config_dir is None:
         config_dir = os.path.join(PROJECT_ROOT, 'gacha_simulator', 'config')
-    from gacha_simulator.core.config_io import load_store_from_directory
+    from gacha_simulator.core.config_toml import load_toml
     from gacha_simulator.core.config_store import ConfigStore
     store = ConfigStore()
-    return load_store_from_directory(config_dir, store)
+    return load_toml(os.path.join(config_dir, 'config.toml'), store)
 
 
 def load_default_targets(store) -> Dict[str, int]:
-    """从配置中读取默认目标卡（store 已通过 load_store_from_directory 加载）。"""
+    """从配置中读取默认目标卡（store 已通过 load_toml 加载）。"""
     # 主路径：store.target_cards 已由 load_store_from_directory 填充
     if hasattr(store, 'target_cards') and store.target_cards:
         targets = {}

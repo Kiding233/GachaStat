@@ -1088,52 +1088,12 @@ class AnalysisWorker(QThread):
 
         if 'cumulative_by_pool' in self.selected and self.cumulative_by_pool_selections and self.pool_end_times:
             self._emit('生成截止每池的GDR分布...', int(completed / total_steps * 100))
-            cum_data = {}
-            for pid, snaps in self.cumulative_snapshots.items():
-                if not snaps:
-                    continue
-                target_achievement_rates = []
-                ssr_collection_rates = []
-                resource_remainings = []
-                cumulative_draws_list = []
-                cumulative_pity_list = []
-                for snap in snaps:
-                    cum_card_counts = snap.get('cumulative_card_counts', {})
-                    total_target_qty = sum(target_specs.values()) if target_specs else 0
-                    achieved = sum(min(cum_card_counts.get(cid, 0), qty) for cid, qty in target_specs.items())
-                    target_achievement_rates.append(achieved / total_target_qty if total_target_qty > 0 else 0.0)
-                    collected_ssr = sum(1 for cid in ssr_ids if cum_card_counts.get(cid, 0) > 0)
-                    ssr_collection_rates.append(collected_ssr / len(ssr_ids) if ssr_ids else 0.0)
-                    # P22：兼容新旧累计快照格式（pool_end_resources 为多资源 dict）
-                    snap_res = snap.get('pool_end_resources')
-                    if snap_res is not None:
-                        res_rem = snap_res.get('draw_resource', 0.0)
-                    else:
-                        res_rem = snap.get('pool_end_resource', 0.0)
-                    resource_remainings.append(res_rem)
-                    cumulative_draws_list.append(float(snap.get('cumulative_draws', 0)))
-                    cumulative_pity_list.append(float(snap.get('cumulative_pity_draws', 0)))
-                cum_data[pid] = {
-                    'target_achievement_rate': target_achievement_rates,
-                    'ssr_collection_rate': ssr_collection_rates,
-                    'resource_remaining': resource_remainings,
-                    'cumulative_draws': cumulative_draws_list,
-                    'cumulative_pity_draws': cumulative_pity_list,
-                }
-            if not cum_data:
+            if not self.cumulative_snapshots:
                 step_done('截止每池的GDR分布')
             else:
-                pool_ids = sorted(cum_data.keys())
+                pool_ids = sorted(self.cumulative_snapshots.keys())
                 short_ids = [_strip_pid(pid) for pid in pool_ids]
                 _gdr_key_by_name = _display_to_key
-                _cum_data_keys = {
-                    '简单目标达成率': 'target_achievement_rate',
-                    'SSR收集率': 'ssr_collection_rate',
-                    '资源剩余': 'resource_remaining',
-                    '累积抽卡数': 'cumulative_draws',
-                    '累积保底抽卡': 'cumulative_pity_draws',
-                }
-                sorted_pools = sorted(self.pool_end_times.items(), key=lambda x: x[1])
                 for metric_name in self.cumulative_by_pool_selections:
                     metric_key = _gdr_key_by_name.get(metric_name)
                     if metric_key is None:
@@ -1141,23 +1101,25 @@ class AnalysisWorker(QThread):
 
                     pool_dists = []
                     for pid in pool_ids:
-                        if metric_name in _cum_data_keys:
-                            data_key = _cum_data_keys[metric_name]
-                            raw = cum_data[pid].get(data_key, [])
-                        else:
-                            raw = []
-                            for snap in self.cumulative_snapshots.get(pid, []):
-                                try:
-                                    v = compute_gdr_from_cumulative(
-                                        snap, target_specs, metric_key, ssr_ids=ssr_ids,
-                                        desire_weights=self._store.desire_weights,
-                                        miss_cost_weights=self._store.miss_cost_weights,
-                                        card_value_weights=self._store.card_value_weights,
-                                    )
-                                    raw.append(float(v))
-                                except Exception:
-                                    pass
+                        raw = []
+                        for snap in self.cumulative_snapshots.get(pid, []):
+                            try:
+                                v = compute_gdr_from_cumulative(
+                                    snap, target_specs, metric_key, ssr_ids=ssr_ids,
+                                    desire_weights=self._store.desire_weights if self._store else None,
+                                    miss_cost_weights=self._store.miss_cost_weights if self._store else None,
+                                    card_value_weights=self._store.card_value_weights if self._store else None,
+                                )
+                                raw.append(float(v))
+                            except Exception:
+                                pass
                         pool_dists.append(raw)
+
+                    # 防御全空快照（所有池 snaps 均为 []）
+                    # 旧代码通过 if not cum_data: 安全退出；新代码 if not self.cumulative_snapshots
+                    # 不捕获 {'poolA':[],'poolB':[]}，需在此处退守。
+                    if not any(d for d in pool_dists):
+                        continue
 
                     if is_resource_gdr(metric_key) and self.use_draw_units and self.cost_per_draw > 0:
                         pool_dists = [[v / self.cost_per_draw for v in d] for d in pool_dists]
@@ -1173,7 +1135,6 @@ class AnalysisWorker(QThread):
                                     baseline = baseline / self.cost_per_draw
                                 per_pool_baselines[pid] = baseline
 
-                    len(pool_ids)
                     ridge_series = {}
                     for sid, dist in zip(short_ids, pool_dists):
                         if dist:
@@ -1398,9 +1359,9 @@ class AnalysisWorker(QThread):
                         target_specs, gdr_key=gdr_key, threshold=threshold,
                         scope=scope, aggregates=self.results,
                         ssr_ids=ssr_ids,
-                        desire_weights=self._store.desire_weights,
-                        miss_cost_weights=self._store.miss_cost_weights,
-                        card_value_weights=self._store.card_value_weights,
+                        desire_weights=self._store.desire_weights if self._store else None,
+                        miss_cost_weights=self._store.miss_cost_weights if self._store else None,
+                        card_value_weights=self._store.card_value_weights if self._store else None,
                     )
                 else:
                     self._emit('警告: 转变分析缺少数据——transition_flags 和 cumulative_snapshots 均为空',

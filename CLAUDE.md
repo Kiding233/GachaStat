@@ -23,7 +23,7 @@ gacha_simulator/
 ├── gui/        # PyQt6 面板（Tab 列表见 main.py，C1 cron 自动同步）
 │               # wheel_blocker.py — QApplication 全局事件过滤器，统一拦截
 │               #   QComboBox/QAbstractSpinBox 滚轮并转发至外层 ScrollArea
-├── config/     # 配置文件（| 分隔文本格式）
+├── config/     # 配置文件（TOML 格式，单文件 config.toml）
 └── visualization/  # matplotlib 中文字体
 ```
 
@@ -59,7 +59,7 @@ gacha_simulator/
 
 ### 停止条件 · 并行模拟 · GUI · 配置
 
-`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 `|` 分隔文本 → `config_io.py` 读写（`schedule.txt`/`pools/*.txt`/`pity.txt`/`targets.txt`/`gains.txt`/`cards.txt`/`resources.txt`/`initial_resources.txt`）。
+`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。
 
 ### 扩展指南
 
@@ -69,7 +69,7 @@ gacha_simulator/
 | 新策略 | `core/strategy.py` + `STRATEGY_REGISTRY` 注册 |
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
-| 新配置项 | `ConfigStore` → `config_io.py` → `config_panel.py` → `SimulationEnvBuilder` |
+| 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
 
 ---
 

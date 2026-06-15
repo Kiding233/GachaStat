@@ -1,0 +1,308 @@
+<!-- META: P54 | module:subsystems/模拟服务层 | status:designing | last:2026-06-15 -->
+
+# P54 CLI/GUI 统一化重构计划
+
+> 日期：2026-06-15 | 状态：设计中
+> 触发：CLI 与 GUI 模拟入口分歧严重——CLI 自写 55 行 `run_single_sim()` 独立于统一引擎 `run_batch_parallel()`
+> 前置报告：[CLI-GUI统一化调查报告](../../01-活跃/04-收件箱/CLI-GUI统一化调查报告-2026-06-15.md)
+
+## 一、问题
+
+当前 CLI (`cli.py`) 和 GUI (`gacha_panel.py` → `batch_simulator.py`) 存在两套独立的并行模拟入口：
+
+- **CLI** 使用 `multiprocessing.Pool.map()` + 自写 `run_single_sim()`，每个 worker 内重建 `SimulationEnv`，无流式提取管线
+- **GUI** 使用 `run_batch_parallel()` + `Pool.imap_unordered()` + `_wk_init` initializer + `WorkerLocalExtractor` + `merge_extraction_packets()`
+
+这导致：
+1. CLI **每个 worker 重复构建环境**（N=1000 时 1000 次冗余计算）
+2. CLI **完全缺失流式提取数据**（heatmap / cumulative_snapshots / transition_flags / draw_sequences）
+3. CLI **策略硬编码** `'smart'`，无法切换
+4. CLI **无失败重试/单进程兜底**
+5. 未来对模拟引擎的任何改动需要**同步两套代码路径**
+6. CLI **主进程冗余构造 SimulationEnv 后丢弃**（cli.py L92: `SimulationEnvBuilder.from_config_store(store)` 调用约 200 行构造逻辑——池子解析、保底引擎构建、GDR上下文、资源收益计算——结果被完全丢弃，仅用于提取 `end_day`，而 `end_day` 可直接从 `store.pools` 计算得到）<!-- REVIEW-R1-FIX: ISSUE-018 —— 技术债务事实记录。阶段一操作 2 已计划删除此调用，此处补充量化说明以增强重构必要性。保守估计节省 50-200ms 启动时间（取决于池子数量）。 -->
+
+## 二、目标
+
+1. CLI 通过 `run_batch_parallel()` 执行所有模拟——与 GUI 共享单一代码路径
+2. CLI 获得 GUI 的全部 extraction 数据（可选输出）
+3. CLI 支持 `--strategy` 参数切换策略
+4. 现有 CLI 调用行为**100% 向后兼容**
+5. 在 CLAUDE.md 中加入"并行模拟必须通过 `run_batch_parallel()`"的架构约束
+
+## 三、方案
+
+### 阶段一：CLI 接入统一引擎（核心重构）
+
+<!-- REVIEW-R1-FIX: ISSUE-GATE-4-风险缓解 —— batch_simulator.py L374 None bug 修复从风险表提升为阶段一显式前置步骤 Step 0。若未修复即接入 CLI，单进程路径（--workers 1）下遍历到 None 将导致 AttributeError。 -->
+
+**前置 Step 0: 修复 batch_simulator.py L374（约 5 分钟，不改变估时）**
+
+`gacha_simulator/service/batch_simulator.py` 第 374 行：
+```python
+# 修改前：
+results.append(result)
+# 修改后：
+if result is not None:
+    results.append(result)
+else:
+    n_failed += 1
+```
+运行 `pytest tests/test_batch_draw.py -q` 确认无回归后提交。此修复与多进程路径 L484-491 的 None 过滤逻辑对齐。
+
+---
+
+**文件**: `gacha_simulator/cli.py`
+
+**操作**:
+
+1. **删除** `run_single_sim()` 函数（第 28-55 行）——该函数是 `batch_simulator._run_single()` 的独立复刻
+   <!-- REVIEW-R1-FIX: ISSUE-038 步骤5（删除第38-43行 TargetCardSet 构造）位于 run_single_sim() 函数体内，随步骤1自动删除，无需独立列出。——>
+   （含内部第 38-43 行手动 `TargetCardSet` 构造——`run_batch_parallel()` 内部完成）
+
+2. **删除** 第 92 行冗余的 `SimulationEnvBuilder.from_config_store(store)` 调用——仅用于提取 `end_day`，但 `SimulationEnv` 构造后自带 `end_time`
+
+3. **替换** 第 112-122 行的 `Pool.map(run_single_sim, ...)` 为 `run_batch_parallel()` 调用：
+
+```python
+from gacha_simulator.service.batch_simulator import run_batch_parallel
+
+env = SimulationEnvBuilder.from_config_store(store)  # 仅一次
+
+target_specs = {tc.card_id: getattr(tc, 'quantity', 1)
+                for tc in store.target_cards}
+
+# 进度回调：每 N/10 次打印进度
+def _cli_progress(done, total):
+    if done % max(1, total // 10) == 0 or done >= total:
+        print(f"\r  进度: {done}/{total} ({100*done//total}%)", end='', flush=True)
+
+batch_result = run_batch_parallel(
+    env=env,
+    target_specs=target_specs,
+    initial_resources=env.initial_resources,
+    num_simulations=args.num_simulations,
+    max_workers=args.workers,
+    seed=args.seed,
+    progress_callback=_cli_progress,
+    strategy_name=store.strategy_name,       # 从 ConfigStore 读取（非硬编码）
+    strategy_params=store.strategy_params,
+)
+print()  # progress line 换行
+```
+
+<!-- REVIEW-R1-FIX: ISSUE-005 —— 实现注意事项：现有 CLI 第 89-90 行 `--no-pity` 通过 `store.pity.enabled = False` 生效，上述 `env = from_config_store(store)`（第 48 行）必须在 `--no-pity` 处理之后调用——否则 env 内 pity_engine 不受 `--no-pity` 影响。计划保持现有代码顺序不变，但实现者勿将 env 构造提前到 `--no-pity` 检查之前；若重构时调整顺序需显式确保此依赖。 -->
+
+4. **适配结果提取**——`BatchResult` 实现了 `__iter__`/`__len__`/`__getitem__`，现有 `for r in results` 遍历逻辑无需修改：
+
+```python
+# 现有统计代码（第 133-143 行）保持不变
+for r in batch_result:  # BatchResult 可迭代
+    draws = r.get('total_draws', 0)
+    ...
+```
+
+<!-- REVIEW-R1-FIX: ISSUE-036 run_single_sim() 删除后以下导入/常量/变量变为孤立死代码，需一并清理。——>
+5. **清理死代码——删除 `run_single_sim()` 后的无用导入/常量/变量：**
+   - `from multiprocessing import Pool as MPPool`（第 21 行）——仅 `Pool.map` 调用使用
+   - `from gacha_simulator.core.strategy import create_strategy`（第 17 行）——仅 `run_single_sim` 使用
+   - `from gacha_simulator.core.stop_condition import AllPoolsEndCondition`（第 18 行）——仅 `run_single_sim` 使用
+   - `from gacha_simulator.service import GachaService`（第 19 行）——仅 `run_single_sim` 使用
+   - `DAY = 86400` 常量（第 25 行）——仅 `run_single_sim` 和 `end_day` 计算使用
+   - `end_day = max(p.end_day for p in store.pools) if store.pools else 365`（第 93 行）——唯一用途为构造 `args_list`（已随步骤 3 删除）
+
+**净变更**: 约 -47 行删除，+35 行新增（含 6 行死代码清理）
+
+### 阶段二：扩展 CLI 参数
+
+**新增参数**:
+
+```python
+parser.add_argument('--strategy', default=None,
+    choices=['smart', 'pool_quota', 'pity_reserve', 'target_hunting',
+             'stop_on_target', 'fixed_count', 'draw_target'],
+    help='抽卡策略（默认：使用 config.toml 中指定的策略，回退 smart）')
+parser.add_argument('--strategy-params', default=None,
+    help='策略参数，JSON 字符串。例：\'{"desire_weights": {"A": 1.5}, "miss_cost": 0.8}\' '
+         '（仅当 --strategy 显式指定时生效；若未指定，使用 config.toml 中的策略参数）')
+parser.add_argument('--output-format', default='simple',
+    choices=['simple', 'full'],
+    help='输出格式：simple=基础统计JSON, full=含extraction完整数据')
+parser.add_argument('--no-progress', action='store_true',
+    help='禁用进度条输出')
+```
+<!-- REVIEW-R1-FIX: ISSUE-017 —— `--no-progress` 仅控制 `progress_callback` 是否传入，无法抑制 `run_batch_parallel()` 内部的 stderr 输出（workers 降级重试 L437-439、单进程兜底 L445-447 的 `print(..., file=sys.stderr)`）。在 headless 管道场景（`2>errors.log`），这些消息会与预期错误输出混合。建议实施时将 batch_simulator.py 中的 stderr print 改为 `logging.warning()`，由 CLI 通过 `logging.basicConfig(level=...)` 统一控制——与项目现有 logging 体系一致。此修复可纳入阶段四或 batch_simulator.py L374 None 过滤修复时一并处理。 -->
+
+**策略覆盖逻辑**:
+
+```python
+import json
+
+if args.strategy:
+    strategy_name = args.strategy  # CLI 参数优先
+    if args.strategy_params:
+        try:
+            strategy_params = json.loads(args.strategy_params)
+        except json.JSONDecodeError as e:
+            print(f"错误：--strategy-params JSON 解析失败: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        strategy_params = store.strategy_params  # 回退 TOML 配置
+else:
+    strategy_name = getattr(store, 'strategy_name', 'smart') or 'smart'
+    strategy_params = store.strategy_params
+```
+<!-- REVIEW-R1-FIX: ISSUE-015 —— 新增 `--strategy-params` 接受 JSON 字符串，通过 `json.loads()` 解析后传入 `run_batch_parallel(strategy_params=...)`。该参数仅在 `--strategy` 显式指定时生效；若未指定则使用 config.toml 中的策略参数。`run_batch_parallel()` 已接受 `strategy_params: Optional[dict]` 参数，扩展成本低。 -->
+
+<!-- REVIEW-R1-FIX: ISSUE-002 —— 合并后调用点展示：阶段一 `run_batch_parallel()` 调用中的 `strategy_name=store.strategy_name` 必须替换为此处的局部变量 `strategy_name`。下方为阶段一+阶段二合并后的完整调用片段，实现者以此为唯一参考。 -->
+
+```python
+# 阶段一+阶段二合并后的 run_batch_parallel 调用（以此为准）：
+batch_result = run_batch_parallel(
+    env=env,
+    target_specs=target_specs,
+    initial_resources=env.initial_resources,
+    num_simulations=args.num_simulations,
+    max_workers=args.workers,
+    seed=args.seed,
+    progress_callback=_cli_progress if not args.no_progress else None,
+    strategy_name=strategy_name,          # ← 阶段二局部变量，非 store.strategy_name
+    strategy_params=strategy_params,       # ← 阶段二局部变量（CLI --strategy-params 优先，回退 TOML）
+)
+```
+
+### 阶段三：full 输出模式
+
+当 `--output-format full` 时，JSON 输出扩展为：
+
+```python
+if args.output_format == 'full' and batch_result.extraction:
+    output_data['extraction'] = {
+        'n_results': batch_result.extraction.get('n_results', 0),
+        'aggregates_count': len(batch_result.extraction.get('aggregates', [])),
+        'kept_sequences_count': len(
+            batch_result.extraction.get('kept_sequences', [])),
+        'cumulative_snapshots_pools': list(
+            batch_result.extraction.get('cumulative_snapshots', {}).keys()),
+        'transition_flags_count': len(
+            batch_result.extraction.get('transition_flags', [])),
+        # 不直接嵌入完整 extraction（体积过大），提供摘要
+    }
+```
+<!-- REVIEW-R1-FIX: ISSUE-016 —— `batch_result.extraction` 在运行时正确（`BatchResult` 有此属性），但 `run_batch_parallel()` 的返回类型标注为 `List[Optional[Dict[str, Any]]]`（batch_simulator.py:302-313），静态类型检查器（mypy/pyright）会在此处报错。实施时一并修复返回类型标注为 `BatchResult`（`BatchResult` 实现了 `__iter__`/`__len__`/`__getitem__`，现有 list 接口调用方不受影响）。已在波及范围表登记此修复。 -->
+
+> **设计决策**: `full` 模式不直接 dump 全部 extraction（1000 次模拟 × 200 条 draw_sequence 可产生数十 MB JSON）。提供摘要 + 结构化计数。如需完整数据，建议后续支持 `--output-format pickle`。
+
+### 阶段四：架构约束加固
+
+在 `CLAUDE.md` 的「架构约束」节新增：
+
+```markdown
+### 并行模拟入口（强制）
+
+所有批量/并行模拟必须通过 `service/batch_simulator.py` 的 `run_batch_parallel()` 执行。
+禁止直接使用 `multiprocessing.Pool` + `GachaService` 的组合。
+CLI / GUI / 脚本 / 测试均通过此统一入口。
+
+例外：`worst_impact.py` 的内部模拟（使用 `DrawTargetStrategy`）当前已通过 `run_batch_parallel()` 调用——worst_impact.py 第 170 行直接调用 `run_batch_parallel()`，未在任何位置引用 `_run_single`。它是统一入口的合规调用方，无需额外例外条款。
+<!-- REVIEW-R1-FIX: ISSUE-003 —— 修正 CLAUDE.md 例外条款：原文本称 worst_impact.py 「可继续使用 _run_single()」，但代码事实是它已通过 run_batch_parallel() 调用。例外条款现已对齐代码事实。 -->
+```
+
+## 四、波及范围
+
+### 直接修改
+
+| 文件 | 变更类型 | 行数 |
+|------|---------|------|
+<!-- REVIEW-R1-FIX: ISSUE-036 追加 6 行死代码清理（导入/常量/变量）→ 净删 -47 -->
+| `gacha_simulator/cli.py` | 重构 | -47 / +50 |
+| `gacha_simulator/service/batch_simulator.py` | 修复 | L374 +1（None 过滤），L302-313 返回类型 `List[...]` → `BatchResult`，L437-447 stderr print → `logging.warning()` |
+| `tests/test_cli_unified.py` | 新增 | +30（smoke test） |
+| `CLAUDE.md` | 新增约束 | +8 |
+
+### 间接影响（无需修改）
+
+| 文件 | 原因 |
+|------|------|
+| `gacha_simulator/core/streaming.py` | extraction 管线，无需改动 |
+| `gacha_simulator/gui/gacha_panel.py` | GUI 路径，无影响 |
+| `gacha_simulator/gui/main_window.py` | GUI 结果消费，无影响 |
+
+### 文档更新
+
+| 文件 | 变更 |
+|------|------|
+| `CLAUDE.md` | 新增并行模拟入口约束 |
+| `模块状态矩阵.md` | P54 状态更新 |
+
+## 五、风险
+
+| 风险 | 概率 | 影响 | 缓解 |
+|------|:---:|:---:|------|
+| `run_batch_parallel()` 在纯 headless（无 Qt）环境下触发意外依赖 | 低 | 中 | `run_batch_parallel()` 不依赖 Qt；CLI 测试验证 |
+| Windows spawn 模式下 behavior 差异（`freeze_support` 等） | 低 | 低 | `batch_simulator` 已内置 3 次重试 + 单进程兜底；CLI 已通过 `mp.set_start_method("spawn")` 兼容 |
+| `BatchResult.__iter__` 行为与 `list` 不完全一致（如 `len()` 在 `on_result` 回调模式下可能不同） | 极低 | 极低 | 当前 CLI 不传 `on_result` 回调，`BatchResult.results` 即为完整 `list` |
+| 性能回退——`imap_unordered` + extraction 开销可能使 CLI 比当前慢 | 极低 | 低 | 当前 CLI 无 extraction → `return_compact=False` + extraction 路径可选；可 benchmark 对比 |
+| 现有用户脚本依赖 CLI JSON 输出格式 | 极低 | 极低 | `simple` 模式保持现有格式不变 |
+| `batch_simulator.py` 单进程路径将 None 追加至 results 列表——`--workers 1` 时 CLI 遍历到 None 导致 AttributeError（L374 `results.append(result)` 无条件追加，但 `_run_single` 异常时 result 为 None） | 中 | 中 | **实施前修复** `batch_simulator.py` L374：`results.append(result)` 改为 `if result is not None: results.append(result) else: n_failed += 1`——与 mp_failed 兜底路径（L484-491）的 None 过滤逻辑对齐。多进程路径（`--workers 4`，默认）不受影响 |
+| CLI 新增约 50 行非平凡业务逻辑（策略覆盖、进度回调闭包、extraction 摘要构造、`--no-progress`）无测试覆盖——`tests/` 零处引用 `cli.py` | 中 | 中 | 至少添加一个端到端 smoke test（如 `tests/test_cli_unified.py::test_simple_mode_output_format`）验证 `-n 10 -w 2 -s 42` 的输出结构与重构前一致；可选扩展为验证 `--strategy target_hunting` 的 strategy_name 传递正确性 |
+<!-- REVIEW-R1-FIX: ISSUE-004 —— 新增 CLI 测试覆盖缺失风险条目。重构后 cli.py 业务逻辑密度已超出纯入口范畴（策略覆盖、进度回调、extraction 摘要），当前 tests/ 零覆盖。新增最低验收标准 C9。 -->
+<!-- REVIEW-R1-FIX: ISSUE-001 —— 新增 batch_simulator 单进程 None 追加缺陷风险。此项为 P54 实施前置条件：必须先修复 batch_simulator.py 再接入 CLI。 -->
+
+## 六、验收标准
+
+- [ ] **C1** CLI `python -m gacha_simulator.cli -n 100 -w 4` 正常运行，输出格式满足：(a) JSON 顶层键为 `{config, num_simulations, elapsed_time, summary}`；(b) `summary.total_draws` 含 `mean`/`median`/`std` 三个数值；(c) `summary.gdr_percent` 含 `mean`/`median`/`p25`/`p75` 四个数值。以上检查项可纳入 C9 smoke test 中自动化执行。
+  <!-- REVIEW-R1-FIX: ISSUE-GATE-6-C1-可自动化 —— 将定性描述「输出格式与当前一致」替换为可自动化验证的具体 JSON schema 检查项。 -->
+- [ ] **C2** CLI `python -m gacha_simulator.cli --strategy target_hunting -n 100` 使用指定策略
+- [ ] **C3** CLI `python -m gacha_simulator.cli --output-format full -n 100` 输出含 extraction 摘要
+- [ ] **C4** `run_single_sim()` 函数已从 `cli.py` 中删除
+- [ ] **C5** `cli.py` 不再直接调用 `multiprocessing.Pool`
+- [ ] **C6** CLAUDE.md 包含"并行模拟必须通过 `run_batch_parallel()`"约束
+- [ ] **C7** `pytest -q` 全部通过，无新增失败
+- [ ] **C8** CLI 1000 次模拟的 `total_draws` mean/median 与重构前偏差 < 1%（相同 seed）
+  <!-- REVIEW-R1-FIX: ISSUE-GATE-6-C8-基线流程 —— 补充基线获取流程：1) 重构前运行 `python -m gacha_simulator.cli -n 1000 -w 4 -s 42 --output baseline.json` 并记录 total_draws.mean/total_draws.median 作为预期值；2) 重构后同命令运行；3) 断言偏差 < 1%。注意：即使种子固定，multiprocessing 的 imap_unordered（重构后）与 map（重构前）调度顺序不同，均值/中位数偏移 < 1% 即视为无回归。若用户 TOML 含 `pity.counter_init > 0`，新旧结果预期有差异（旧 CLI 忽略该配置，新 CLI 通过 `_wk_init` 注入），此为非倒退性差异，记录即可。 -->
+  <!-- REVIEW-R1-FIX: ISSUE-019 —— C8 使用默认 config.toml（无初始保底计数器）验证。若用户配置包含 `pity.counter_init`，新旧 CLI 结果将因初始计数器注入而产生差异——这是旧 CLI 忽略该配置的缺陷修复，非回归。`_run_single()` 通过 `env.pity_state_init` 注入保底计数器，而旧 `run_single_sim()` 完全忽略此配置；差异仅在 TOML 显式配置 `pity.counter_init > 0` 时出现。 -->
+- [ ] **C9** 至少一个 CLI 端到端 smoke test：`test_cli_unified.py::test_simple_mode_output_format`（`-n 10 -w 2 -s 42`，验证输出 JSON 结构与重构前一致）
+
+## 七、回滚路径
+
+<!-- REVIEW-R1-FIX: ISSUE-GATE-5-回滚路径 —— 新增独立回滚策略节。阶段一与阶段二存在耦合：一旦阶段一删除 run_single_sim() 并提交，回滚需 git revert 整个阶段一提交。阶段二的 strategy_name 局部变量依赖阶段一的调用点。 -->
+
+### 各阶段回滚方式
+
+| 阶段 | 回滚操作 | 风险等级 |
+|------|---------|:---:|
+| 阶段一 | `git revert <阶段一commit>` —— 完整恢复 `run_single_sim()` 函数体 + 5 个关联导入（`create_strategy`/`AllPoolsEndCondition`/`GachaService`/`MPPool`/`DAY`常量）+ 恢复 `args_list` 构造逻辑。回滚后旧 CLI 路径完全恢复。 | **不可逆提交**：一旦提交，恢复只能通过 git revert，无法手动撤销 |
+| 阶段二 | (a) 删除 4 个 argparse 参数定义（`--strategy`/`--strategy-params`/`--output-format`/`--no-progress`）；(b) 删除策略覆盖逻辑代码块；(c) 将 `run_batch_parallel()` 调用中的 `strategy_name=strategy_name` 改回 `strategy_name=store.strategy_name`。若阶段一+阶段二为同一提交，则回滚阶段二需一并回滚阶段一。 | 低 |
+| 阶段三 | 移除 `--output-format` 分支（`if args.output_format == 'full'` 代码块），删除 `--output-format` argparse 参数定义。 | 低 |
+| 阶段四 | 编辑 CLAUDE.md 删除新增的「并行模拟入口」约束段落。 | 极低 |
+
+### 阶段一与阶段二的耦合
+
+阶段一 `run_batch_parallel()` 调用中使用 `strategy_name=store.strategy_name`，阶段二引入局部变量 `strategy_name` 后将其替换。若仅回滚阶段二而保留阶段一：
+- `strategy_name` 局部变量被移除后，`run_batch_parallel()` 调用点需将 `strategy_name=strategy_name` 改回 `strategy_name=store.strategy_name`
+- `strategy_params` 同理：`strategy_params=strategy_params` 改回 `strategy_params=store.strategy_params`
+- `progress_callback` 参数需移除 `if not args.no_progress` 条件：`progress_callback=_cli_progress if not args.no_progress else None` 改回 `progress_callback=_cli_progress`
+
+### 不可回滚点
+
+- **`run_single_sim()` 函数删除是破坏性操作**——该函数（28 行）及其 5 个关联导入被删除并提交后，恢复需 `git revert` 整个阶段一提交。无法通过手动编辑恢复（函数体逻辑复杂，包含 `TargetCardSet` 构造、`GachaService` 实例化、`GachaState` 初始化等 7 步操作）。
+- **建议**：阶段一+阶段二合并为一个 commit，减少回滚需要 revert 的 commit 数量。
+
+## 八、估时
+
+<!-- REVIEW-R1-FIX: ISSUE-GATE-1-变更粒度 —— 将「测试：C1-C9验收」(1.5h)拆分为三个子阶段：功能验收(0.5h)、数值回归(0.5h)、新增测试(0.5h)。每项≤1h阈值。 -->
+| 阶段 | 内容 | 估时 |
+|------|------|------|
+| 阶段一 | CLI 接入统一引擎 | 1h |
+| 阶段二 | 扩展 CLI 参数（含 `--strategy-params`） | 0.75h |
+| 阶段三 | full 输出模式 | 0.5h |
+| 阶段四 | 架构约束加固 | 0.25h |
+| 测试 (a) | C1-C6 功能验收——运行命令、grep检查代码删除、检查CLAUDE.md文本 | 0.5h |
+| 测试 (b) | C7-C8 数值回归——pytest全量 + C8 before/after对比流程 | 0.5h |
+| 测试 (c) | C9 新增测试——编写并验证 test_cli_unified.py smoke test | 0.5h |
+| 文档 | CLAUDE.md + 矩阵更新 | 0.25h |
+| **合计** | | **4.25h** |
+
+---
+
+*计划基于 [CLI-GUI统一化调查报告](../../01-活跃/04-收件箱/CLI-GUI统一化调查报告-2026-06-15.md) 的发现与建议制定。*

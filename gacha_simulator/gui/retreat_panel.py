@@ -333,29 +333,22 @@ class RetreatPanel(QWidget):
             ridge_fig = result.get("ridge_fig")
             pool_names = result["pool_names"]
 
-            summary = (
-                f"总体失败率: {analysis.overall_failure_rate:.1%}  |  "
-                f"模拟次数: {analysis.n_simulations}  |  "
-                f"α = {analysis.alpha}"
-            )
-            # P51: 单调性/回退状态栏警告
-            warnings_parts = []
+            summary = f"总体失败率: {analysis.overall_failure_rate:.1%}"
+            # P51: 单调性/回退状态栏警告（合并计数，避免多池撑大状态栏）
+            breakpoint_count = 0
+            fallback_count = 0
             for pr in analysis.pool_results:
                 fit = pr.pava_fit
                 if fit is None:
                     continue  # AUDIT-BREAK-3: 数据不足条目无 pava_fit，跳过
                 if not fit.get('monotonicity_holds', True):
-                    warnings_parts.append(
-                        f"⚠ [{pr.pool_id}] 检测到策略断点——"
-                        f"部分区域单调性可能不成立，已局部回退独立检验"
-                    )
+                    breakpoint_count += 1
                 if fit.get('used_fallback', False):
-                    warnings_parts.append(
-                        f"⚠ [{pr.pool_id}] binsglm/PAVA 管线失败，"
-                        f"已回退到局部逻辑回归——结果不确定性较高"
-                    )
-            if warnings_parts:
-                summary += "  |  " + "  ".join(warnings_parts)
+                    fallback_count += 1
+            if breakpoint_count:
+                summary += f"  |  ⚠ {breakpoint_count} 池成功率不严格递增，建议人工复核"
+            if fallback_count:
+                summary += f"  |  ⚠ {fallback_count} 池回退到局部逻辑回归"
 
             self.status_label.setText(summary)
 

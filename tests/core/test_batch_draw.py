@@ -10,7 +10,6 @@
 - Task 5c: _pending_wait_gains 批次归因
 """
 
-import pytest
 from gacha_simulator.core.config_store import PoolEntry
 from gacha_simulator.core.state import GachaState
 
@@ -95,7 +94,6 @@ class TestCanAffordBatch:
 def test_strategy_can_afford_batch_uses_pool_batch_size():
     """策略调用 can_afford_batch 时第二个参数为 pool.batch_size（非硬编码 1）。"""
     from gacha_simulator.core.pool import Pool, Reward
-    from gacha_simulator.core.schedule import PoolSchedule
     from gacha_simulator.core.strategy import SmartStrategy, StrategyContext
     from gacha_simulator.core.stop_condition import StopCondition
     from gacha_simulator.core.target_card import TargetCardSet, TargetCard

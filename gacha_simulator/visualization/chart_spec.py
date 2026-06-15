@@ -37,8 +37,9 @@ class CDFData:
 @dataclass
 class RidgeData:
     """山脊线图数据——多组样本按标签叠加。"""
-    series: dict[str, np.ndarray]  # {标签: 样本数组}
-    baselines: dict[str, float] = field(default_factory=dict)  # {标签: 基线值}，不抽卡基线
+    series: dict[str, np.ndarray]  # {内部键: 样本数组}
+    baselines: dict[str, float] = field(default_factory=dict)  # {内部键: 基线值}，不抽卡基线
+    labels: dict[str, str] = field(default_factory=dict)  # {内部键: 显示名}，为空时用内部键作为显示名
 
 
 @dataclass

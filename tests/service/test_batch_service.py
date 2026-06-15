@@ -1,3 +1,4 @@
+# ruff: noqa: F821 (batch_service 模块尚未实现，整个文件被 pytest.skip 跳过)
 import pytest
 
 pytest.skip("batch_service 模块尚未实现", allow_module_level=True)

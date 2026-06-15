@@ -1135,16 +1135,18 @@ class AnalysisWorker(QThread):
                                     baseline = baseline / self.cost_per_draw
                                 per_pool_baselines[pid] = baseline
 
+                    # P51: 使用 pool_id 作为内部键（保证唯一），避免重名显示名静默覆盖
                     ridge_series = {}
-                    for sid, dist in zip(short_ids, pool_dists):
+                    ridge_labels = {}  # {pool_id: 显示名}
+                    for pid, dist in zip(pool_ids, pool_dists):
                         if dist:
-                            ridge_series[sid] = np.array(dist)
-                    # 将基线 key 从完整 pool_id 映射为 short_id
+                            ridge_series[pid] = np.array(dist)
+                            ridge_labels[pid] = _strip_pid(pid)
+                    # 基线 key 保持完整 pool_id（与 ridge_series 键一致）
                     ridge_baselines = {}
                     for pid, baseline in per_pool_baselines.items():
-                        short_pid = _strip_pid(pid)
-                        if short_pid in ridge_series:
-                            ridge_baselines[short_pid] = baseline
+                        if pid in ridge_series:
+                            ridge_baselines[pid] = baseline
 
                     # 合并全部池子样本后统一判定分箱——山脊线图各组共享 bin_edges
                     _all_ridge_vals = np.concatenate(list(ridge_series.values()))
@@ -1170,7 +1172,8 @@ class AnalysisWorker(QThread):
                             _ridge_hints["nbins"] = _ridge_bins._extra["nbins"]
                         charts[f'cumulative_by_pool_{metric_name}'] = ChartSpec(
                             chart_type="ridge",
-                            data=RidgeData(series=ridge_series, baselines=ridge_baselines),
+                            data=RidgeData(series=ridge_series, baselines=ridge_baselines,
+                                           labels=ridge_labels),
                             title=_cum_title,
                             xlabel=_xlabel,
                             ylabel='池子',

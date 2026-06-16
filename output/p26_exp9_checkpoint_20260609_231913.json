@@ -1,0 +1,153 @@
+{
+  "timestamp": "2026-06-09 23:30:31",
+  "completed": 20,
+  "total": 20,
+  "elapsed_s": 678.3185842037201,
+  "estimates_sofar": [
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5,
+    72187.5
+  ],
+  "mean_sofar": 72187.5,
+  "std_sofar": 0.0,
+  "n_success_sofar": 20,
+  "runs_summary": [
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    },
+    {
+      "estimate": 72187.5,
+      "final_prob": 0.96,
+      "success": true,
+      "n_iterations": 14
+    }
+  ]
+}

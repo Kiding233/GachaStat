@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from gacha_simulator.core.comparison_analyzer import (
     DescriptiveStats, compute_gdr_values_for_datasets,
     compute_dominance_matrix, compute_pvalue_matrix,
-    ParetoFrontier,
+    ParetoFrontier, classify_dominance,
 )
 from gacha_simulator.core.gdr import get_expanded_gdr_entries
 from gacha_simulator.gui.chart_webview import ChartWebView
@@ -27,7 +27,7 @@ class ComparisonWorker(QThread):
     def __init__(self, datasets, gdr_key, threshold, test_method, correction,
                  target_specs_list,
                  desire_weights=None, miss_cost_weights=None,
-                 card_value_weights=None, parent=None):
+                 card_value_weights=None, rng_seed=42, parent=None):
         super().__init__(parent)
         self._datasets = datasets
         self._gdr_key = gdr_key
@@ -38,6 +38,7 @@ class ComparisonWorker(QThread):
         self._desire_weights = desire_weights
         self._miss_cost_weights = miss_cost_weights
         self._card_value_weights = card_value_weights
+        self._rng_seed = rng_seed
 
     def run(self):
         try:
@@ -64,8 +65,12 @@ class ComparisonWorker(QThread):
             ordinal_label = {1: '一阶', 2: '二阶', 3: '三阶'}
             for order, label in [(1, 'FSD'), (2, 'SSD'), (3, 'TSD')]:
                 self.progress.emit(f"L2 {label} ({ordinal_label[order]}) 计算中...")
-                dom = compute_dominance_matrix(values_list, names, order=order,
-                                               n_bootstrap=1000)
+                dom = compute_dominance_matrix(
+                    values_list, names, order=order,
+                    n_bootstrap=500,
+                    lower_is_better=lower_is_better,
+                    rng_seed=self._rng_seed + order,
+                )
                 dom_results[order] = dom
 
             self.progress.emit("L3 假设检验...")
@@ -190,7 +195,39 @@ class ComparisonAnalysisPanel(QWidget):
 
         # L2 随机占优
         l2_group = QGroupBox("L2 随机占优 (DD Bootstrap)")
-        l2_layout = QHBoxLayout(l2_group)
+        l2_layout = QVBoxLayout(l2_group)
+
+        # (-)GDR 方向提示行（条件显示，任务 2b2 完善）
+        self._l2_direction_hint = QLabel("")
+        self._l2_direction_hint.setVisible(False)
+        self._l2_direction_hint.setStyleSheet(
+            "background:#fff3cd;border:1px solid #ffc107;padding:4px 8px;"
+            "font-size:12px;color:#856404;border-radius:3px;margin-bottom:4px;"
+        )
+        self._l2_direction_hint.setWordWrap(True)
+        l2_layout.addWidget(self._l2_direction_hint)
+
+        # v1 回退警示横幅（条件显示，任务 2b1 完善）
+        self._l2_v1_warning = QLabel("")
+        self._l2_v1_warning.setVisible(False)
+        self._l2_v1_warning.setWordWrap(True)
+        l2_layout.addWidget(self._l2_v1_warning)
+
+        # 分类裁决矩阵 QTableWidget
+        self._classification_table = QTableWidget()
+        self._classification_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._classification_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectItems)
+        self._classification_table.verticalHeader().setVisible(False)
+        self._classification_table.setMinimumHeight(100)
+        self._classification_table.verticalHeader().setDefaultSectionSize(36)
+        self._classification_table.cellClicked.connect(
+            self._on_classification_cell_clicked)
+        l2_layout.addWidget(self._classification_table)
+
+        # p 值矩阵行（水平——FSD/SSD/TSD）
+        pvalue_row = QHBoxLayout()
         self._fsd_label = QLabel("FSD (一阶)\n待运行")
         self._fsd_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._fsd_label.setMinimumHeight(100)
@@ -203,9 +240,17 @@ class ComparisonAnalysisPanel(QWidget):
         self._tsd_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._tsd_label.setMinimumHeight(100)
         self._tsd_label.setTextFormat(Qt.TextFormat.RichText)
-        l2_layout.addWidget(self._fsd_label)
-        l2_layout.addWidget(self._ssd_label)
-        l2_layout.addWidget(self._tsd_label)
+        pvalue_row.addWidget(self._fsd_label)
+        pvalue_row.addWidget(self._ssd_label)
+        pvalue_row.addWidget(self._tsd_label)
+        l2_layout.addLayout(pvalue_row)
+
+        # CDF 可视化图表（FIXME-3: Click-to-expand）
+        self._l2_chart_view = ChartWebView()
+        self._l2_chart_view.setMinimumHeight(250)
+        self._l2_chart_view.show_message("点击分类矩阵单元格查看积分 CDF 对比")
+        l2_layout.addWidget(self._l2_chart_view)
+
         scroll_layout.addWidget(l2_group)
 
         # L3 假设检验
@@ -362,6 +407,10 @@ class ComparisonAnalysisPanel(QWidget):
         self._run_btn.setText("计算中...")
         self._loading_label.setText("⏳ 正在后台计算...")
 
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(3000)
+
         self._worker = ComparisonWorker(
             datasets, self._current_gdr_key, self._current_threshold,
             self._current_test_method, self._current_correction,
@@ -389,7 +438,7 @@ class ComparisonAnalysisPanel(QWidget):
             lower_is_better = results['lower_is_better']
 
             self._update_l1(results['stats_list'], values_list, names, lower_is_better)
-            self._update_l2(results['dom_results'], names)
+            self._update_l2(results['dom_results'], names, lower_is_better)
             self._update_l3(results['pmat'], names, results['correction'])
 
             self._loading_label.setText("✓ 完成")
@@ -397,7 +446,7 @@ class ComparisonAnalysisPanel(QWidget):
         except Exception:
             import traceback
             traceback.print_exc()
-            self.status_label.setText("结果展示失败，请查看控制台")
+            self._loading_label.setText("✗ 结果展示失败，请查看控制台")
 
     def _on_worker_error(self, msg: str):
         self._run_btn.setEnabled(True)
@@ -507,22 +556,91 @@ class ComparisonAnalysisPanel(QWidget):
         self._l1_chart_view.set_charts({"分布对比": fig}, use_tabs=False)
 
     # —— L2 更新 ——
-    def _update_l2(self, dom_results, names):
+    def _update_l2(self, dom_results, names, lower_is_better=False):
+        """两阶段控制流：阶段 0 分类矩阵（消费三阶 p 值）→ 阶段 1 逐阶 p 值矩阵."""
+        n = len(names)
+
+        # == 阶段 0：分类矩阵构建（必须最先——消费三阶双向 p 值）==
+        classification = [['—'] * n for _ in range(n)]
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                p_ij = {
+                    1: dom_results[1]['matrix'][i][j],
+                    2: dom_results[2]['matrix'][i][j],
+                    3: dom_results[3]['matrix'][i][j],
+                }
+                p_ji = {
+                    1: dom_results[1]['matrix'][j][i],
+                    2: dom_results[2]['matrix'][j][i],
+                    3: dom_results[3]['matrix'][j][i],
+                }
+                # 清理 None 值——若某阶的 p_ij 或 p_ji 为 None，
+                # classify_dominance 内部将其视为「不显著」跳过
+                p_ij_clean = {k: v for k, v in p_ij.items() if v is not None}
+                p_ji_clean = {k: v for k, v in p_ji.items() if v is not None}
+                if not p_ij_clean and not p_ji_clean:
+                    classification[i][j] = 'err'
+                else:
+                    result = classify_dominance(p_ij_clean, p_ji_clean)
+                    classification[i][j] = result.label
+
+        self._render_classification_matrix(classification, names)
+        # 存储分类矩阵供 _render_l2_chart 检查 err 格
+        if self._last_results is not None:
+            self._last_results['_classification'] = classification
+
+        # == 阶段 1：逐阶 p 值矩阵（现有循环，保持 HTML 渲染）==
         ordinal = {1: '一', 2: '二', 3: '三'}
-        labels_map = {1: (self._fsd_label, 'FSD'), 2: (self._ssd_label, 'SSD'), 3: (self._tsd_label, 'TSD')}
+        # 检测引擎路径——v2 独有 matrix_raw 键
+        is_v2 = 1 in dom_results and 'matrix_raw' in dom_results[1]
+        legend_text = 'FDR q&lt;0.05' if is_v2 else 'p&lt;0.05'
+        legend_tooltip = ('title="使用 Benjamini-Hochberg 阶内 FDR 校正"'
+                          if is_v2 else '')
+
+        # v1 回退警示横幅 (ISSUE-002, ISSUE-005)
+        if not is_v2:
+            self._l2_v1_warning.setText(
+                '<div style="background:#fff3cd;border:1px solid #ffc107;'
+                'padding:6px 10px;font-size:12px;color:#856404;'
+                'border-radius:3px;margin-bottom:6px;">'
+                '⚠️ PySDTest 不可用，当前使用等式中心化 Bootstrap（v1 回退）。'
+                '检验 p 值未经多重比较校正（无阶内 BH FDR），分类结论可能过度乐观。'
+                '建议执行 <code>pip install pysdtest</code> '
+                '以获得正确的 Donald-Hsu 2016 选择性重中心化检验。'
+                '</div>'
+            )
+            self._l2_v1_warning.setVisible(True)
+        else:
+            self._l2_v1_warning.setVisible(False)
+
+        # (-)GDR 方向提示行 (任务 2b2)
+        if lower_is_better:
+            self._l2_direction_hint.setText(
+                '⚠️ 当前 GDR 为 (-) 成本型指标，"≻" = 更低更好'
+            )
+            self._l2_direction_hint.setVisible(True)
+        else:
+            self._l2_direction_hint.setVisible(False)
+
+        labels_map = {1: (self._fsd_label, 'FSD'), 2: (self._ssd_label, 'SSD'),
+                      3: (self._tsd_label, 'TSD')}
         for order, (label_widget, title) in labels_map.items():
             dom = dom_results[order]
-            n = len(names)
+            n2 = len(names)
             lines = [f"<b>{title} ({ordinal[order]}阶)</b>",
                      '<table style="border-collapse:collapse;width:100%;text-align:center;'
                      'font-size:12px;">']
             lines.append('<tr style="background:#e9ecef;">'
                         '<th style="border:1px solid #ccc;padding:4px 8px;"></th>'
-                        + ''.join(f'<th style="border:1px solid #ccc;padding:4px 8px;">{name}</th>'
+                        + ''.join(f'<th style="border:1px solid #ccc;padding:4px 8px;">'
+                                  f'{name}</th>'
                                   for name in names) + '</tr>')
-            for i in range(n):
-                line = f'<tr><th style="border:1px solid #ccc;padding:4px 8px;background:#f8f9fa;">{names[i]}</th>'
-                for j in range(n):
+            for i in range(n2):
+                line = '<tr><th style="border:1px solid #ccc;padding:4px 8px;'
+                line += f'background:#f8f9fa;">{names[i]}</th>'
+                for j in range(n2):
                     if i == j:
                         line += ('<td style="border:1px solid #ccc;padding:4px 8px;'
                                 'color:#ccc;">—</td>')
@@ -534,17 +652,239 @@ class ComparisonAnalysisPanel(QWidget):
                             line += (f'<td style="border:1px solid #ccc;padding:4px 8px;'
                                     f'color:{color};background:{bg}">{p:.3f}</td>')
                         else:
-                            line += '<td style="border:1px solid #ccc;padding:4px 8px;"></td>'
+                            line += ('<td style="border:1px solid #ccc;'
+                                    'padding:4px 8px;"></td>')
                 line += '</tr>'
                 lines.append(line)
             lines.append('</table>')
             lines.append(
-                '<p style="font-size:11px;color:#888;margin-top:6px;">'
+                f'<p style="font-size:11px;color:#888;margin-top:6px;" '
+                f'{legend_tooltip}>'
                 '<span style="background:#e8f5e9;color:#2e7d32;padding:1px 6px;'
-                'border-radius:2px;">p&lt;0.05</span> = 行 ' + ordinal[order] + '阶随机占优列 '
+                f'border-radius:2px;">{legend_text}</span>'
+                f' = 行 {ordinal[order]}阶随机占优列 '
                 '| 灰色 = 不显著</p>'
             )
             label_widget.setText(''.join(lines))
+
+    def _render_classification_matrix(self, classification, names):
+        """渲染分类裁决矩阵到 QTableWidget (ISSUE-038 复合标签颜色判定).
+
+        label[0] 首字符方案——取标签第一个字符作为颜色判定键。
+        COLOR_MAP: '≻'→绿, '≺'→红, '×'→橙, '='→灰, '—'→禁用灰, 'e'→暗红(err)
+        """
+        n = len(names)
+        COLOR_MAP = {
+            '≻': '#2e7d32',   # 行占优列 —— 绿色
+            '≺': '#c62828',   # 行被列占优 —— 红色
+            '×': '#ef6c00',   # 交叉 —— 橙色
+            '=': '#757575',   # 无差异 —— 灰色
+            '—': '#e0e0e0',   # 对角线 —— 浅灰
+            'e': '#8b0000',   # err —— 暗红色
+        }
+
+        self._classification_table.setRowCount(n)
+        self._classification_table.setColumnCount(n + 1)
+        headers = [''] + list(names)
+        self._classification_table.setHorizontalHeaderLabels(headers)
+        self._classification_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+
+        for i in range(n):
+            # 行标签
+            row_label = QTableWidgetItem(names[i])
+            row_label.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._classification_table.setItem(i, 0, row_label)
+
+            for j in range(n):
+                label = classification[i][j]
+                item = QTableWidgetItem(label)
+
+                # 首字符颜色判定 (ISSUE-038)
+                first_char = label[0] if label else '—'
+                bg_color = COLOR_MAP.get(first_char, '#ffffff')
+                item.setBackground(QColor(bg_color))
+
+                # 对角线 / err 禁用交互
+                if first_char in ('—', 'e'):
+                    item.setFlags(Qt.ItemFlag.NoItemFlags)
+                else:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    # 深色背景用白字
+                    if first_char in ('≻', '≺', 'e'):
+                        item.setForeground(QColor('#ffffff'))
+
+                self._classification_table.setItem(i, j + 1, item)
+
+    def _on_classification_cell_clicked(self, row, col):
+        """分类矩阵单元格点击 → 触发 CDF 可视化."""
+        if col < 1:
+            return
+        j = col - 1
+        i = row
+        self._render_l2_chart(i, j)
+
+    def _render_l2_chart(self, i, j):
+        """渲染策略对 (i, j) 的 1/2/3 阶积分 CDF 对比图。
+
+        AUDIT-BREAK-6: 首行 None 守卫——set_datasets() → _on_analysis_finished
+        时间窗口内 _last_results 为 None。
+        """
+        # 参数校验 (AUDIT-BREAK-6)
+        if self._last_results is None:
+            return
+        if i == j:
+            return
+
+        # 检查分类标记——检验失败的格不渲染
+        classification = self._last_results.get('_classification')
+        if classification is not None and classification[i][j] == 'err':
+            self._l2_chart_view.show_message("该对检验失败，无可视化数据")
+            return
+
+        values_list = self._last_results['values_list']
+        names = self._last_results['names']
+        if i >= len(values_list) or j >= len(values_list):
+            return
+
+        samples_a = values_list[i]
+        samples_b = values_list[j]
+        name_a = names[i]
+        name_b = names[j]
+
+        # 导入公共函数
+        from gacha_simulator.core.comparison_analyzer import compute_integrated_cdf
+        from plotly.subplots import make_subplots
+
+        # 网格——与 PySDTest ngrid=100 等距网格一致。
+        # PySDTest test_sd_SR 内部使用 np.linspace(min, max, ngrid)，
+        # 此处独立生成同分辨率网格以确保可视化域与检验域一致。
+        # （PySDTest test.result 字典仅含 p_val/test_stat/critical_val，
+        #   不含 grid/F_a/F_b，但 test 对象暴露 test.grid/test.selected_set
+        #   可供远期直接提取以实现与检验完全一致的网格对齐。）
+        combined = np.concatenate([samples_a, samples_b])
+        grid = np.linspace(np.min(combined), np.max(combined), 100)
+
+        # 构建三阶子图
+        fig = make_subplots(
+            rows=1, cols=3,
+            subplot_titles=("FSD (一阶)", "SSD (二阶)", "TSD (三阶)"),
+            horizontal_spacing=0.08,
+        )
+
+        for col_idx, order in enumerate([1, 2, 3], start=1):
+            F_a = compute_integrated_cdf(samples_a, grid, order)
+            F_b = compute_integrated_cdf(samples_b, grid, order)
+
+            # CDF 曲线
+            fig.add_trace(go.Scatter(
+                x=grid, y=F_a, mode='lines', name=f'{name_a}',
+                line=dict(color='#1f77b4', width=2),
+                legendgroup=name_a,
+                showlegend=(col_idx == 1),
+                hovertemplate=f'{name_a}<br>x: %{{x:.4f}}<br>F: %{{y:.4f}}<extra></extra>',
+            ), row=1, col=col_idx)
+
+            fig.add_trace(go.Scatter(
+                x=grid, y=F_b, mode='lines', name=f'{name_b}',
+                line=dict(color='#ff7f0e', width=2),
+                legendgroup=name_b,
+                showlegend=(col_idx == 1),
+                hovertemplate=f'{name_b}<br>x: %{{x:.4f}}<br>F: %{{y:.4f}}<extra></extra>',
+            ), row=1, col=col_idx)
+
+            # 差异区域着色：max(F_a - F_b) 和 max(F_b - F_a)
+            diff_ab = F_a - F_b
+            idx_max_ab = int(np.argmax(diff_ab))
+            if diff_ab[idx_max_ab] > 1e-10:
+                # F_a ≥ F_b 的区域 (红色半透明——A 超出 B)
+                mask_ab = F_a >= F_b
+                fig.add_trace(go.Scatter(
+                    x=np.concatenate([grid[mask_ab],
+                                      grid[mask_ab][::-1]]),
+                    y=np.concatenate([F_a[mask_ab],
+                                      F_b[mask_ab][::-1]]),
+                    fill='toself', fillcolor='rgba(255,0,0,0.15)',
+                    line=dict(width=0), name='F_a ≥ F_b',
+                    showlegend=False, hoverinfo='skip',
+                ), row=1, col=col_idx)
+
+                # 标注 max(F_a - F_b) 点
+                fig.add_trace(go.Scatter(
+                    x=[grid[idx_max_ab]], y=[F_a[idx_max_ab]],
+                    mode='markers+text',
+                    marker=dict(color='#c62828', size=8, symbol='triangle-up'),
+                    text=[f'max Δ={diff_ab[idx_max_ab]:.3f}'],
+                    textposition='top center',
+                    textfont=dict(size=9, color='#c62828'),
+                    name='max(F_a−F_b)', showlegend=False,
+                    hoverinfo='skip',
+                ), row=1, col=col_idx)
+
+            diff_ba = F_b - F_a
+            idx_max_ba = int(np.argmax(diff_ba))
+            if diff_ba[idx_max_ba] > 1e-10:
+                # F_b ≥ F_a 的区域 (蓝色半透明——B 超出 A)
+                mask_ba = F_b >= F_a
+                fig.add_trace(go.Scatter(
+                    x=np.concatenate([grid[mask_ba],
+                                      grid[mask_ba][::-1]]),
+                    y=np.concatenate([F_b[mask_ba],
+                                      F_a[mask_ba][::-1]]),
+                    fill='toself', fillcolor='rgba(0,0,255,0.15)',
+                    line=dict(width=0), name='F_b ≥ F_a',
+                    showlegend=False, hoverinfo='skip',
+                ), row=1, col=col_idx)
+
+                # 标注 max(F_b - F_a) 点
+                fig.add_trace(go.Scatter(
+                    x=[grid[idx_max_ba]], y=[F_b[idx_max_ba]],
+                    mode='markers+text',
+                    marker=dict(color='#1565c0', size=8, symbol='triangle-down'),
+                    text=[f'max Δ={diff_ba[idx_max_ba]:.3f}'],
+                    textposition='bottom center',
+                    textfont=dict(size=9, color='#1565c0'),
+                    name='max(F_b−F_a)', showlegend=False,
+                    hoverinfo='skip',
+                ), row=1, col=col_idx)
+
+            # 接触集标注——|F_a−F_b| < 阈值 的网格区间 (FIXME-3 子任务 3c)
+            contact_threshold = max(np.max(diff_ab), np.max(diff_ba)) * 0.02
+            if contact_threshold > 1e-12:
+                mask_contact = np.abs(diff_ab) < contact_threshold
+                if np.any(mask_contact):
+                    # 接触集区域 (灰色半透明——CDF几乎重合)
+                    y_max = max(np.max(F_a), np.max(F_b))
+                    fig.add_trace(go.Scatter(
+                        x=grid[mask_contact],
+                        y=np.full(np.sum(mask_contact), y_max),
+                        mode='markers',
+                        marker=dict(color='#9e9e9e', size=3, symbol='line-ns',
+                                   line=dict(width=2, color='rgba(128,128,128,0.5)')),
+                        name='接触集 (≈重合)',
+                        showlegend=(col_idx == 1),
+                        hoverinfo='skip',
+                    ), row=1, col=col_idx)
+
+        # 分类标签附在标题中 (FIXME-3 子任务 3c——占优/交叉判定依据)
+        class_label = ''
+        if classification is not None:
+            class_label = f' [{classification[i][j]}]'
+        fig.update_layout(
+            title=f"积分 CDF 对比: {name_a} vs {name_b}{class_label}",
+            template="plotly_white",
+            font_family="Microsoft YaHei, PingFang SC, sans-serif",
+            margin=dict(l=50, r=20, t=60, b=40),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.05,
+                       xanchor="center", x=0.5),
+        )
+        for col_idx in [1, 2, 3]:
+            fig.update_xaxes(title_text="GDR 值", row=1, col=col_idx)
+            fig.update_yaxes(title_text="积分 CDF", row=1, col=col_idx)
+
+        self._l2_chart_view.set_charts(
+            {f"{name_a} vs {name_b}": fig}, use_tabs=False)
 
     # —— L3 更新 ——
     def _update_l3(self, pmat, names, correction):

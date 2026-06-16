@@ -7,9 +7,10 @@
 动态参数（target_specs, initial_resources）通过任务参数传入。
 """
 
+import logging
 import random
 import traceback
-from typing import List, Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable
 from multiprocessing import Pool as MPPool
 from dataclasses import dataclass, field as dc_field
 
@@ -17,6 +18,8 @@ from gacha_simulator.core.stop_condition import AllPoolsEndCondition
 from gacha_simulator.core.strategy import (
     create_strategy,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BatchResult:
@@ -307,7 +310,7 @@ def run_batch_parallel(
     strategy_name: str = '',
     strategy_params: Optional[dict] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-) -> List[Optional[Dict[str, Any]]]:
+) -> 'BatchResult':
     """批量并行模拟。
 
     env: 模拟环境（池、保底、资源等静态配置）。
@@ -333,8 +336,19 @@ def run_batch_parallel(
         target_set = TargetCardSet([])
 
     if max_workers <= 1:
-        # 单进程路径：直接调用 _run_single，不污染全局变量
+        # 单进程路径：直接调用 _run_single，同时本地提取
+        from gacha_simulator.core.streaming import WorkerLocalExtractor, merge_extraction_packets
+        _local_ext = WorkerLocalExtractor(
+            pool_end_times=env.pool_end_times,
+            target_ids=env.target_ids,
+            ssr_ids=env.ssr_ids,
+            target_specs=target_specs or {},
+            initial_resources=env.initial_resources,
+            n_heatmap_bins=getattr(env, 'n_heatmap_bins', 50),
+            max_keep=min(200, max(10, len(target_specs or {}) * 2 + 10)),
+        )
         results = [] if on_result is None else None
+        extraction_packets = []
         n_failed = 0
         for i in range(num_simulations):
             s = seed + i if seed >= 0 else random.randint(0, 999999)
@@ -343,18 +357,33 @@ def run_batch_parallel(
             except Exception:
                 traceback.print_exc()
                 result = None
+            if result is not None:
+                ext_pkt = None
+                try:
+                    ext_pkt = _local_ext.process(result)
+                except Exception:
+                    pass
+                if ext_pkt is not None:
+                    extraction_packets.append(ext_pkt)
             if on_result is not None:
                 if result is not None:
                     on_result(result)
                 else:
                     n_failed += 1
             else:
-                results.append(result)
+                if result is not None:
+                    results.append(result)
+                else:
+                    n_failed += 1
             if progress_callback:
                 progress_callback(i + 1, num_simulations)
         if n_failed > 0:
-            print(f"[WARNING] {n_failed}/{num_simulations} simulations failed")
-        return BatchResult(results if on_result is None else [], None)
+            logging.warning("%s/%s simulations failed", n_failed, num_simulations)
+        merged_ext = merge_extraction_packets(
+            extraction_packets,
+            heatmap_config={'n_heatmap_bins': getattr(env, 'n_heatmap_bins', 50), 'max_keep': 200},
+        ) if extraction_packets else None
+        return BatchResult(results if on_result is None else [], merged_ext)
 
     seeds = [seed + i if seed >= 0 else random.randint(0, 999999) for i in range(num_simulations)]
     tasks = [(s, initial_resources) for s in seeds]
@@ -402,22 +431,18 @@ def run_batch_parallel(
                     if progress_callback:
                         progress_callback(i + 1, num_simulations)
                 if n_failed > 0:
-                    print(f"[WARNING] {n_failed}/{num_simulations} simulations failed")
+                    logging.warning("%s/%s simulations failed", n_failed, num_simulations)
             break
         except Exception as e:
             ename = type(e).__name__
             if workers > 1:
-                import sys
                 import time
-                print(f"[run_batch_parallel] {ename}，以 workers={max(1, workers // 2)} 重试…",
-                      file=sys.stderr)
+                logging.warning("%s，以 workers=%s 重试…", ename, max(1, workers // 2))
                 time.sleep(0.5)
                 continue
             # workers=1 也失败 → 记录并走单进程兜底
-            import sys
             import traceback as _tb
-            print(f"[run_batch_parallel] {ename} (workers=1)，回退到单进程内联执行",
-                  file=sys.stderr)
+            logging.warning("%s (workers=1)，回退到单进程内联执行", ename)
             _tb.print_exc()
             mp_failed = True
             break
@@ -466,7 +491,7 @@ def run_batch_parallel(
             if progress_callback:
                 progress_callback(idx + 1, num_simulations)
         if n_failed > 0:
-            print(f"[WARNING] {n_failed}/{num_simulations} simulations failed (single-process fallback)")
+            logging.warning("%s/%s simulations failed (single-process fallback)", n_failed, num_simulations)
 
     # 合并 worker / 单进程提取结果
     merged_extraction = None
@@ -512,7 +537,11 @@ class SimulationEnvBuilder:
         for pe in pool_entries:
             pid = pe.pool_id
             start_day = pe.start_day or 0
-            end_day = pe.end_day if pe.end_day > start_day else (start_day + 21)
+            end_day = (pe.end_day if pe.end_day is not None and pe.end_day > start_day
+                       else (start_day + 21))
+            if pe.end_day is None:
+                logger.warning("Pool '%s' end_day is None, defaulting to start_day+21=%d",
+                               pid, start_day + 21)
 
             rewards = []
             featured_ids = set()
@@ -532,11 +561,14 @@ class SimulationEnvBuilder:
                     ssr_ids.add(de.card_id)
 
             if not ssr_ids:
-                _fallback_ssr_id = f"{pid}_ssr"
-                ssr_ids = {_fallback_ssr_id}
-                if not rewards:
-                    rewards.append((Reward(id=_fallback_ssr_id, name='', resources_gained={}), 0.006))
-            if not featured_ids:
+                logger.warning(
+                    "Pool '%s' has no SSR rewards — "
+                    "SSR pity reset will never trigger for this pool",
+                    pid,
+                )
+                # 不注入假 ID——让 ssr_ids 保持空集合
+                # featured_ids 也保持空，无 featured 可回退时不应假装有
+            if not featured_ids and ssr_ids:
                 featured_ids = set(ssr_ids)
 
             pool_featured_map[pid] = featured_ids
@@ -556,6 +588,7 @@ class SimulationEnvBuilder:
                 is_exchange=bool(exchange_cid),
                 exchange_card_id=exchange_cid,
                 pool_type=ptype,
+                batch_size=getattr(pe, 'batch_size', 1),
             )
             pools.append(pool)
             schedules.append(PoolSchedule(
@@ -614,15 +647,25 @@ class SimulationEnvBuilder:
         if init_counters:
             pity_state_init = {'counters': init_counters}
 
+        # 构建卡牌列表，pools 从池子分布实时推导（非从 store.card_defs 复制）
+        # —— 这样用户在 GUI 中修改池子绑定后，pools 自动反映最新状态
         card_defs = []
         for cd in config_store.card_defs:
             card_defs.append({
                 'card_id': cd.card_id,
                 'name': getattr(cd, 'name', ''),
                 'rarity': getattr(cd, 'rarity', 'r'),
-                'pools': list(getattr(cd, 'pools', [])),
+                'pools': [],
                 'initial_count': getattr(cd, 'initial_count', 0),
             })
+        card_index = {cd['card_id']: i for i, cd in enumerate(card_defs)}
+        for pe in pool_entries:
+            for de in getattr(pe, 'distribution', []):
+                cid = de.card_id
+                if cid in card_index and cid != '_no_card':
+                    idx = card_index[cid]
+                    if pe.pool_id not in card_defs[idx]['pools']:
+                        card_defs[idx]['pools'].append(pe.pool_id)
 
         target_ids = set()
         for tc in getattr(config_store, 'target_cards', []):
@@ -641,12 +684,30 @@ class SimulationEnvBuilder:
 
         from gacha_simulator.core.gdr import GDRContext
         target_specs = {tc.card_id: getattr(tc, 'quantity', 1) for tc in getattr(config_store, 'target_cards', [])}
+
+        # 从 gain_rules 计算日均资源收入（供需要该字段的 GDR 使用）
+        gain_per_day: Dict[str, float] = {}
+        for gr in getattr(config_store, 'gain_rules', []):
+            divisor = 1.0
+            if gr.rule_type == 'every_n_days':
+                try:
+                    n = int(gr.param) if gr.param else 1
+                    divisor = max(1, n)
+                except (ValueError, TypeError):
+                    divisor = 1
+            elif gr.rule_type == 'weekly':
+                divisor = 7
+            elif gr.rule_type in ('monthly_day', 'monthly_week'):
+                divisor = 30.4375
+            for rid, amt in (gr.gains or {}).items():
+                gain_per_day[rid] = gain_per_day.get(rid, 0.0) + float(amt) / divisor
+
         gdr_context = GDRContext(
             target_specs=target_specs,
             ssr_ids=ssr_ids,
             all_drawable_ids=all_drawable_ids,
             initial_resources=dict(initial_resources),
-            resource_gain_per_day={'draw_resource': 0},
+            resource_gain_per_day=gain_per_day,
         )
 
         strategy_name = getattr(config_store, 'strategy_name', 'smart') or 'smart'

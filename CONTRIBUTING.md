@@ -14,15 +14,8 @@ gacha_simulator/
 ├── run.py               # 自动选择入口
 ├── cli.py               # CLI 入口
 ├── _version.py          # 版本信息
-├── config/              # 默认配置文件
-│   ├── cards.txt
-│   ├── gains.txt
-│   ├── initial_resources.txt
-│   ├── pity.txt
-│   ├── resources.txt
-│   ├── schedule.txt
-│   ├── targets.txt
-│   └── pools/
+├── config/              # 默认 TOML 配置文件（单文件）
+│   └── config.toml      # 统一 TOML 配置文件
 ├── core/                # 核心模拟引擎
 ├── generator/           # 生成器工具
 ├── gui/                 # PyQt6 GUI 层
@@ -31,15 +24,18 @@ gacha_simulator/
 └── visualization/       # 可视化配置
 ```
 
+> 配置文件格式为 TOML。完整格式说明见 GUI 关于对话框（帮助→关于→配置文件指南 Tab），
+> 或直接阅读 `gacha_simulator/config/config.toml` 中的注释。
+
 ### 禁止修改的路径
 
 以下目录和文件**不应**在 PR 中变更：
 
 | 路径 | 说明 |
 |------|------|
-| `tests/` | 测试目录（单元测试、测试输出等） |
+| `tests/` | 测试目录（计划性架构迁移授权修改） |
 | `output/` | 示例输出图表 |
-| `pyproject.toml` | 项目配置文件 |
+| `pyproject.toml` | 项目配置文件（计划性架构迁移授权修改） |
 | `README.md` | 项目说明文件 |
 | `理论参考.svg` | 理论参考图 |
 

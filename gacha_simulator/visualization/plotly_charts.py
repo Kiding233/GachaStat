@@ -367,10 +367,11 @@ class PlotlyRenderer:
 
     def _build_ridge(self, s: ChartSpec) -> go.Figure:
         d: RidgeData = s.data
-        labels = list(d.series.keys())
-        n = len(labels)
+        keys = list(d.series.keys())
+        n = len(keys)
         nbins = s.layout_hints.get("nbins", 50)
         baselines = getattr(d, "baselines", {}) or {}
+        labels_map = getattr(d, "labels", {}) or {}  # {内部键: 显示名}
 
         # 渐变色：Viridis 色阶，从深紫到亮黄，池子间平滑过渡
         from plotly.colors import sample_colorscale
@@ -395,8 +396,8 @@ class PlotlyRenderer:
 
         # 计算全局 y 轴上限，所有行统一缩放
         global_ymax = 0
-        for label in labels:
-            counts, _ = np.histogram(d.series[label], bins=bin_edges)
+        for key in keys:
+            counts, _ = np.histogram(d.series[key], bins=bin_edges)
             global_ymax = max(global_ymax, counts.max())
         global_ymax = global_ymax * 1.18 if global_ymax > 0 else 1
 
@@ -406,14 +407,15 @@ class PlotlyRenderer:
             vertical_spacing=0.04,
         )
 
-        for i, label in enumerate(labels):
+        for i, key in enumerate(keys):
             row = i + 1
             color = colors[i % len(colors)]
-            mean_val = np.mean(d.series[label])
+            label = labels_map.get(key, key)  # 显示名优先，回退到内部键
+            mean_val = np.mean(d.series[key])
 
             fig.add_trace(
                 go.Histogram(
-                    x=d.series[label],
+                    x=d.series[key],
                     xbins=dict(start=bin_edges[0], end=bin_edges[-1] + bin_size + bin_size * 1e-6, size=bin_size),
                     marker_color=color,
                     name=label,
@@ -427,9 +429,9 @@ class PlotlyRenderer:
                 row=row, col=1,
             )
             # 不抽卡基线
-            if label in baselines:
+            if key in baselines:
                 fig.add_vline(
-                    x=baselines[label], line_dash="dot",
+                    x=baselines[key], line_dash="dot",
                     line_color="rgba(0,128,0,0.7)", line_width=1.4,
                     row=row, col=1,
                 )
@@ -608,14 +610,23 @@ class PlotlyRenderer:
                 height=cell_height,
             ),
         ))
+        footnote = s.layout_hints.get('footnote', '')
         fig.update_layout(
             title=s.title,
             template="plotly_white",
             font_family="Microsoft YaHei, PingFang SC, sans-serif",
-            margin=dict(l=20, r=20, t=50, b=20),
+            margin=dict(l=20, r=20, t=50, b=40 if footnote else 20),
             height=figure_height,
             width=figure_width,
         )
+        if footnote:
+            fig.add_annotation(
+                text=footnote,
+                xref="paper", yref="paper",
+                x=0.5, y=-0.05,
+                showarrow=False,
+                font=dict(size=10, color="#666"),
+            )
         return fig
 
     # ── 辅助方法 ──────────────────────────────────────────────────

@@ -3,10 +3,25 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
+import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QObject, pyqtSignal
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        return super().default(obj)
 
 
 @dataclass
@@ -170,15 +185,61 @@ class ComparabilityDiff:
         return '部分维度不同，请检查差异矩阵'
 
 
-class ResultStore(QObject):
-    """集中式结果数据管理层"""
-    datasets_changed = pyqtSignal()
-    current_changed = pyqtSignal(str)  # 发射新的当前数据集名称
+class ResultStore:
+    """集中式结果数据管理层（core/ 层——无 GUI 依赖）
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    所有修改方法（add/remove/rename/set_current/clear）必须在主线程调用。
+    回调通过同步 for 循环发射——若在非主线程调用 emit，
+    回调函数操作 QWidget 将导致 Qt 线程亲和性崩溃。
+
+    已知限制（Known Limitation）：_emit_datasets_changed/_emit_current_changed
+    中的 threading.current_thread() 检查是**被动检测**机制——当回调在非主线程被触发时，
+    错误会记录到日志但**不会阻止回调执行**。在当前调用模式下（所有 add()/remove()/rename()
+    均从主线程 gui/ 面板发起）安全可控。若未来引入以下场景之一，需将回调发射升级为
+    消息队列模式（类比 Qt 的 AutoConnection）：
+    - 从后台 worker 线程直接调用 ResultStore.add() 存储模拟结果
+    - 从 multiprocessing.Pool 回调中修改 ResultStore
+    - 在任何非主线程路径中触发 _emit_datasets_changed() / _emit_current_changed()
+
+    升级路径：当需要跨线程安全时，(a) 在 core/ 层引入 queue.Queue 消息队列——
+    修改方法将操作入队，主线程轮询执行；(b) 或在 gui/ 层使用
+    QMetaObject.invokeMethod() 将回调调度到主线程事件循环。
+    两种方案均保持 core/ 层零 PyQt6 依赖。
+    """
+
+    def __init__(self):
         self._datasets: Dict[str, StoredDataset] = {}
         self._current_name: Optional[str] = None
+        self._on_datasets_changed: List[Callable[[], None]] = []
+        self._on_current_changed: List[Callable[[str], None]] = []
+
+    def connect_datasets_changed(self, callback: Callable[[], None]):
+        """注册数据集变更回调（替代 pyqtSignal）"""
+        self._on_datasets_changed.append(callback)
+
+    def connect_current_changed(self, callback: Callable[[str], None]):
+        """注册当前数据集变更回调（替代 pyqtSignal）"""
+        self._on_current_changed.append(callback)
+
+    def _emit_datasets_changed(self):
+        if threading.current_thread() is not threading.main_thread():
+            logger.error(
+                "ResultStore._emit_datasets_changed() called from non-main thread %s. "
+                "All ResultStore modifications must be called from the main thread. "
+                "Callbacks that operate on QWidget will cause Qt thread-affinity crashes.",
+                threading.current_thread().name,
+            )
+        for cb in self._on_datasets_changed:
+            cb()
+
+    def _emit_current_changed(self, name: str):
+        if threading.current_thread() is not threading.main_thread():
+            logger.error(
+                "ResultStore._emit_current_changed('%s') called from non-main thread %s.",
+                name, threading.current_thread().name,
+            )
+        for cb in self._on_current_changed:
+            cb(name)
 
     # —— CRUD ——
 
@@ -191,7 +252,7 @@ class ResultStore(QObject):
             counter += 1
         dataset.name = actual_name
         self._datasets[actual_name] = dataset
-        self.datasets_changed.emit()
+        self._emit_datasets_changed()
         return actual_name
 
     def remove(self, name: str) -> bool:
@@ -199,9 +260,9 @@ class ResultStore(QObject):
             return False
         if self._current_name == name:
             self._current_name = None
-            self.current_changed.emit('')
+            self._emit_current_changed('')
         del self._datasets[name]
-        self.datasets_changed.emit()
+        self._emit_datasets_changed()
         return True
 
     def rename(self, old: str, new: str) -> bool:
@@ -212,8 +273,8 @@ class ResultStore(QObject):
         self._datasets[new] = ds
         if self._current_name == old:
             self._current_name = new
-            self.current_changed.emit(new)
-        self.datasets_changed.emit()
+            self._emit_current_changed(new)
+        self._emit_datasets_changed()
         return True
 
     def get(self, name: str) -> Optional[StoredDataset]:
@@ -242,7 +303,7 @@ class ResultStore(QObject):
         if name and name not in self._datasets:
             return
         self._current_name = name
-        self.current_changed.emit(name or '')
+        self._emit_current_changed(name or '')
 
     @property
     def current(self) -> Optional[StoredDataset]:
@@ -310,7 +371,7 @@ class ResultStore(QObject):
             'current': self._current_name,
         }
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+            json.dump(data, f, indent=2, ensure_ascii=False, cls=_NumpyEncoder)
 
     def load_all(self, path: str):
         with open(path, 'r', encoding='utf-8') as f:
@@ -320,9 +381,9 @@ class ResultStore(QObject):
         current = data.get('current')
         if current and current in self._datasets:
             self._current_name = current
-        self.datasets_changed.emit()
+        self._emit_datasets_changed()
         if self._current_name:
-            self.current_changed.emit(self._current_name)
+            self._emit_current_changed(self._current_name)
 
     def __len__(self) -> int:
         return len(self._datasets)

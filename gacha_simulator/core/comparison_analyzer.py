@@ -2,11 +2,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 # scipy 仅在需要时惰性导入——避免 Windows multiprocessing spawn 时
 # 每个子进程都加载 scipy DLL，触发"页面文件太小"错误
+
+# PySDTest 可选依赖——Donald-Hsu 2016 选择性重中心化 SD 检验
+try:
+    from pysdtest import test_sd_SR
+    _PYSDTEST_AVAILABLE = True
+except ImportError:
+    _PYSDTEST_AVAILABLE = False
 
 
 @dataclass
@@ -194,6 +201,144 @@ class ParetoFrontier:
         )
 
 
+@dataclass
+class ClassificationResult:
+    """随机占优分类裁决结果。
+
+    label: 综合分类标签字符串:
+        '≻ (FSD)' / '≻ (SSD)' / '≻ (TSD)' — 行占优列
+        '≺ (FSD)' / '≺ (SSD)' / '≺ (TSD)' — 行被列占优
+        '×(FSD)' / '×(SSD)' / '×(TSD)' — 交叉
+        '×?(FSD)' / '×?(SSD)' / '×?(TSD)' — 交叉（更高阶一致单向，已降级）
+        '=' — 无显著差异
+        'err' — 检验失败（所有阶均无有效 p 值）
+    effect_size_slot: Optional[str] — 预留效应量标注槽位（P19 §效应量），
+        初始 None，供远期填入（如 "CLES=0.62"），调用方无需修改解包逻辑。
+    """
+    label: str
+    effect_size_slot: Optional[str] = None
+
+
+def classify_dominance(
+    p_ij: Dict[int, Optional[float]],
+    p_ji: Dict[int, Optional[float]],
+) -> ClassificationResult:
+    """合并三阶双向 BH 校正 p 值输出综合分类标签。
+
+    Args:
+        p_ij: {1: FSD(i→j) p, 2: SSD(i→j) p, 3: TSD(i→j) p}
+              可能为稀疏 dict（某些阶因 PySDTest 异常缺失键，或值为 None）
+        p_ji: {1: FSD(j→i) p, 2: SSD(j→i) p, 3: TSD(j→i) p}
+
+    Returns:
+        ClassificationResult with label and effect_size_slot=None
+
+    PySDTest H₀ 方向提醒：H₀ = 行占优列（BD 传统），p<0.05 → 拒绝 H₀ → 行不占优列。
+    因此 FSD(i→j) 显著 = 拒绝「i 占优 j」= i 不占优 j。
+    分类裁决反转解读——FSD(i→j) 显著且 FSD(j→i) 不显著 → j ≻ i（列占优行）。
+    """
+    # 清理 None 值（PySDTest 异常返回）
+    p_ij_clean = {k: v for k, v in p_ij.items() if v is not None}
+    p_ji_clean = {k: v for k, v in p_ji.items() if v is not None}
+
+    # 所有阶均无有效 p 值 → 检验失败
+    if not p_ij_clean and not p_ji_clean:
+        return ClassificationResult(label='err')
+
+    # 显著性判定辅助：p 不存在视为不显著
+    def is_sig(p_dict: Dict[int, float], order: int) -> bool:
+        v = p_dict.get(order)
+        return v is not None and v < 0.05
+
+    # 规则 1-2: FSD 单向显著
+    sig_ij_1 = is_sig(p_ij_clean, 1)
+    sig_ji_1 = is_sig(p_ji_clean, 1)
+    if sig_ij_1 and not sig_ji_1:
+        return ClassificationResult(label='≺ (FSD)')  # i→j 显著 = 拒绝i占优j → j占优i
+    if sig_ji_1 and not sig_ij_1:
+        return ClassificationResult(label='≻ (FSD)')  # j→i 显著 = 拒绝j占优i → i占优j
+
+    # FSD 双向显著 → 交叉 (规则 5)
+    if sig_ij_1 and sig_ji_1:
+        if _check_higher_order_consensus(p_ij_clean, p_ji_clean, 1):
+            return ClassificationResult(label='×?(FSD)')
+        return ClassificationResult(label='×(FSD)')
+
+    # 规则 3: FSD 双向不显著，检查 SSD
+    sig_ij_2 = is_sig(p_ij_clean, 2)
+    sig_ji_2 = is_sig(p_ji_clean, 2)
+    if sig_ij_2 and not sig_ji_2:
+        return ClassificationResult(label='≺ (SSD)')
+    if sig_ji_2 and not sig_ij_2:
+        return ClassificationResult(label='≻ (SSD)')
+    if sig_ij_2 and sig_ji_2:
+        if _check_higher_order_consensus(p_ij_clean, p_ji_clean, 2):
+            return ClassificationResult(label='×?(SSD)')
+        return ClassificationResult(label='×(SSD)')
+
+    # 规则 4: FSD+SSD 双向不显著，检查 TSD
+    sig_ij_3 = is_sig(p_ij_clean, 3)
+    sig_ji_3 = is_sig(p_ji_clean, 3)
+    if sig_ij_3 and not sig_ji_3:
+        return ClassificationResult(label='≺ (TSD)')
+    if sig_ji_3 and not sig_ij_3:
+        return ClassificationResult(label='≻ (TSD)')
+    if sig_ij_3 and sig_ji_3:
+        # TSD 为最高阶，无更高阶可做降级检测
+        return ClassificationResult(label='×(TSD)')
+
+    # 规则 6: 所有阶双向不显著
+    return ClassificationResult(label='=')
+
+
+def _check_higher_order_consensus(
+    p_ij: Dict[int, float],
+    p_ji: Dict[int, float],
+    cross_order: int,
+) -> bool:
+    """检查更高阶是否一致单向显著 → True 表示应降级为 ×?。
+
+    cross_order 为出现双向显著的阶数 (1=FSD, 2=SSD, 3=TSD)。
+    返回 True 表示至少一个更高阶有单向显著信号且所有信号方向一致。
+    """
+    higher = [o for o in [1, 2, 3] if o > cross_order]
+    sig_ij = [o for o in higher if p_ij.get(o) is not None and p_ij[o] < 0.05]
+    sig_ji = [o for o in higher if p_ji.get(o) is not None and p_ji[o] < 0.05]
+
+    any_sig = bool(sig_ij or sig_ji)
+    consistent = not (sig_ij and sig_ji)
+
+    if not any_sig:
+        return False    # 更高阶无信号 → 保留 ×
+    if consistent:
+        return True     # 所有信号一致单向 → 降级 ×?
+    else:
+        return False    # 信号矛盾 → 保留 ×
+
+
+def compute_integrated_cdf(
+    samples: np.ndarray,
+    grid: np.ndarray,
+    order: int,
+) -> np.ndarray:
+    """计算样本在指定网格点上的 j 阶积分 CDF。
+
+    order=1 → 经验 CDF, order=2 → 一阶积分 CDF (SSD 的 F), order=3 → 二阶积分 CDF (TSD 的 F)
+    从 dd_bootstrap_test 内部闭包提取为公共函数，供 FIXME-3 CDF 可视化消费。
+
+    NumPy 2.0+ 兼容：np.trapz 已弃用，优先使用 np.trapezoid。
+    """
+    _trapz = np.trapezoid if hasattr(np, 'trapezoid') else np.trapz
+
+    def ecdf(s, x):
+        return np.mean(s <= x)
+
+    F = np.array([ecdf(samples, xi) for xi in grid])
+    for _ in range(order - 1):
+        F = np.array([_trapz(F[:k+1], grid[:k+1]) for k in range(len(grid))])
+    return F
+
+
 def dd_bootstrap_test(
     samples_a: np.ndarray,
     samples_b: np.ndarray,
@@ -230,11 +375,12 @@ def dd_bootstrap_test(
         return np.mean(samples <= x, axis=-1) if samples.ndim > 1 else np.mean(samples <= x)
 
     # 构建 j 阶积分 CDF
+    _trapz = np.trapezoid if hasattr(np, 'trapezoid') else np.trapz
     def integrated_cdf(samples, x, order):
         F = np.array([ecdf(samples, xi) for xi in x])
         for _ in range(order - 1):
             # 累积梯形积分
-            F = np.array([np.trapz(F[:k+1], x[:k+1]) for k in range(len(x))])
+            F = np.array([_trapz(F[:k+1], x[:k+1]) for k in range(len(x))])
         return F
 
     F_a = integrated_cdf(samples_a, grid, order)
@@ -270,24 +416,193 @@ def dd_bootstrap_test(
     }
 
 
-def compute_dominance_matrix(
+def dd_bootstrap_test_v2(
+    samples_a: np.ndarray,
+    samples_b: np.ndarray,
+    n_bootstrap: int = 500,
+    ngrid: int = 100,
+    seed: Optional[int] = None,
+    orders: Optional[List[int]] = None,
+) -> Dict[int, Dict[str, Any]]:
+    """使用 PySDTest Donald-Hsu 2016 选择性重中心化替换原始实现。
+
+    PySDTest 的 H₀ = A 占优 B（BD 传统），p < 0.05 → 拒绝占优 → A 不占优 B。
+    FIXME-2 分类判定规则已据此方向调整。
+
+    方向约定：统一「更高值 = 占优」。调用方（compute_dominance_matrix_v2）
+    负责在传入前对 (-)GDR 样本取负号（samples = -samples）。
+
+    Args:
+        samples_a: 策略 A 的样本
+        samples_b: 策略 B 的样本
+        n_bootstrap: Bootstrap 重抽样次数（默认 500，首屏平衡值）
+        ngrid: 积分 CDF 网格分辨率（默认 100，DH 2016 推荐 50-200；
+               PySDTest 内部默认 100，校准实验 S1-S4 证实足够）
+        seed: 随机种子。None 时跳过 np.random.seed() 调用，
+              由上层 compute_dominance_matrix_v2 统一管理 PRNG 流。
+        orders: 需计算的阶数列表，默认 None 表示全三阶 [1,2,3]。
+                ComparisonWorker 逐阶循环时应传入 orders=[order] 以消除 3x 冗余。
+
+    Returns:
+        dict keyed by order (1/2/3), each value:
+            {'p_value': float|None, 'test_stat': float|None,
+             'critical_val': float|None, 'error': str|None}
+        p_value 为 None 表示 PySDTest 内部异常（数值不稳定/网格退化）。
+    """
+    if not _PYSDTEST_AVAILABLE:
+        raise ImportError(
+            "PySDTest 未安装。请执行: pip install pysdtest\n"
+            "或回退使用 dd_bootstrap_test (等式中心化，精度较低)"
+        )
+
+    if seed is not None:
+        np.random.seed(seed)
+
+    if orders is None:
+        orders = [1, 2, 3]
+
+    # a=0.1: DH 2016 选择性重中心化参数——控制选中重中心化网格点的阈值。
+    # a ∈ [0.05, 0.2] (DH 2016 推荐)，0.1 为 PySDTest 默认。
+    # 经校准实验 S1-S4 验证 (30 reps × 3 样本量)，确认此值在尺寸控制与功效间平衡。
+    # ngrid=100: 积分 CDF 网格分辨率——DH 2016 源码默认 100，DD (2000) 附录建议 50-200。
+    # 经校准实验 S1-S4 验证 (n∈[100,2000])，100 点分辨率足够。
+    # 远期可微调 (50/100/200)，当前硬编码降低 UI 复杂度。
+    results: Dict[int, Dict[str, Any]] = {}
+    for s in orders:
+        try:
+            test = test_sd_SR(
+                samples_a, samples_b, ngrid=ngrid, s=s,
+                resampling='bootstrap', nboot=n_bootstrap,
+                a=0.1, quiet=True,
+            )
+            test.testing()
+            results[s] = {
+                'p_value': float(test.result['p_val']),
+                'test_stat': float(test.result['test_stat']),
+                'critical_val': float(test.result['critical_val']),
+                'error': None,
+            }
+        except Exception as e:
+            # PySDTest 内部异常（数值不稳定、网格退化等）→
+            # 返回 p_value=None，由上游 compute_dominance_matrix_v2
+            # 阶段 1 收集时排除该对（不参与 BH FDR），
+            # classification 标记为 'err'。
+            results[s] = {
+                'p_value': None,
+                'test_stat': None,
+                'critical_val': None,
+                'error': str(e),
+            }
+    return results
+
+
+def compute_dominance_matrix_v2(
+    values_list: List[np.ndarray],
+    names: List[str],
+    order: int = 1,
+    n_bootstrap: int = 500,
+    ngrid: int = 100,
+    rng_seed: int = 42,
+    lower_is_better: bool = False,
+) -> Dict[str, Any]:
+    """计算 n×n j 阶占优矩阵（PySDTest Donald-Hsu 2016 选择性重中心化）。
+
+    四阶段管线：
+      阶段 1: n×n 双重循环——收集原始 p 值（PySDTest 直接输出）
+      阶段 2: 阶内 BH FDR 校正（benjamini_hochberg）
+      阶段 3: 回填校正后 p 值矩阵 + 构建 per-order 显著性标记矩阵
+      阶段 4: dominates 矩阵构建已移除——当前无消费者（ISSUE-004）
+
+    PySDTest H₀ = A 占优 B（BD 传统），p<0.05 → 拒绝占优。
+    方向约定：统一「更高值 = 占优」。对 (-)GDR（lower_is_better=True），
+    在送入 PySDTest 前对样本取负号。
+
+    Returns:
+        dict: {
+            'matrix': List[List[Optional[float]]]  — BH 校正后 p 值矩阵 (与 v1 兼容)
+            'matrix_raw': List[List[Optional[float]]] — 原始 p 值矩阵 (PySDTest 输出)
+            'dominates': None  — 已移除 (ISSUE-004)
+            'classification': List[List[str]] — per-order 显著性标记 ('sig'/'ns'/'err'/'—')
+            'names': List[str]
+            'order': int
+            'lower_is_better': bool
+        }
+    """
+    n = len(values_list)
+    # 入口处一次性设置 PRNG 种子，各配对从同一 PRNG 流中顺序消费
+    # (ISSUE-012)，避免每对调用均重置 np.random.seed()
+    np.random.seed(rng_seed)
+
+    # ===== 阶段 1: n×n 双重循环——收集原始 p 值 =====
+    matrix_raw: List[List[Optional[float]]] = [[None] * n for _ in range(n)]
+    all_pairs: List[Tuple[int, int, float]] = []  # [(i, j, p_raw)]
+
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue  # 对角线跳过
+            # 对 (-)GDR 取负号：统一「更高值 = 占优」
+            a = -values_list[i] if lower_is_better else values_list[i]
+            b = -values_list[j] if lower_is_better else values_list[j]
+            result = dd_bootstrap_test_v2(
+                a, b, orders=[order],
+                n_bootstrap=n_bootstrap,
+                ngrid=ngrid, seed=None,
+            )
+            p_raw = result[order]['p_value']
+            # p_raw 可能为 None（PySDTest 内部异常）
+            # → 不参与 BH FDR，matrix_raw[i][j] 保留 None
+            matrix_raw[i][j] = p_raw
+            if p_raw is not None:
+                all_pairs.append((i, j, p_raw))
+
+    # ===== 阶段 2: 阶内 BH FDR 校正 =====
+    p_values = [p for _, _, p in all_pairs]
+    corrected = benjamini_hochberg(p_values) if p_values else []
+    p_map = {(i, j): corr for (i, j, _), corr in zip(all_pairs, corrected)}
+
+    # ===== 阶段 3: 回填校正后 p 值 + 构建 classification 矩阵 =====
+    matrix: List[List[Optional[float]]] = [[None] * n for _ in range(n)]
+    classification: List[List[str]] = [['—'] * n for _ in range(n)]
+
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            p_corr = p_map.get((i, j))
+            matrix[i][j] = p_corr
+            if p_corr is None:
+                classification[i][j] = 'err'  # PySDTest 检验失败
+            else:
+                classification[i][j] = 'sig' if p_corr < 0.05 else 'ns'
+
+    # ===== 阶段 4: dominates 矩阵构建已移除 (ISSUE-004) =====
+    # 当前无消费者。远期需求时基于 _classify_dominance() 产出重建，
+    # 以确保与综合分类标签一致。
+    dominates = None
+
+    return {
+        'matrix': matrix,
+        'matrix_raw': matrix_raw,
+        'dominates': dominates,
+        'classification': classification,
+        'names': names,
+        'order': order,
+        'lower_is_better': lower_is_better,
+    }
+
+
+def _compute_dominance_matrix_v1(
     values_list: List[np.ndarray],
     names: List[str],
     order: int = 1,
     n_bootstrap: int = 2000,
     rng_seed: int = 42,
 ) -> Dict[str, Any]:
-    """计算 n×n j 阶占优矩阵（双向，含下三角）。
+    """v1 路径——等式中心化 Bootstrap (DD 2000) 原始实现。
 
-    matrix[i][j] = p 值，检验行 i 是否 j 阶随机占优列 j。
-    上下三角分别独立 bootstrap——行 i 占优列 j 不等价于列 j 被行 i 占优。
-
-    Returns:
-        dict with keys:
-            matrix: List[List[Optional[float]]] — p 值矩阵（非对角满）
-            dominates: List[List[bool]] — 行是否占优列
-            names: List[str]
-            order: int
+    已知局限：双向过度显著，无多重比较校正。
+    仅在 PySDTest 不可用时作为回退，或用户显式指定 engine='bootstrap'。
     """
     n = len(names)
     matrix = [[None] * n for _ in range(n)]
@@ -317,6 +632,47 @@ def compute_dominance_matrix(
         'names': names,
         'order': order,
     }
+
+
+def compute_dominance_matrix(
+    values_list: List[np.ndarray],
+    names: List[str],
+    order: int = 1,
+    n_bootstrap: int = 500,
+    rng_seed: int = 42,
+    engine: str = 'auto',
+    lower_is_better: bool = False,
+    **kwargs,
+) -> Dict[str, Any]:
+    """计算 n×n j 阶占优矩阵（自动派发 v1/v2 引擎）。
+
+    Args:
+        engine: 'auto' (PySDTest 可用 → v2, 否则 v1 回退)
+                | 'pysdtest' (强制 v2)
+                | 'bootstrap' (强制 v1)
+        lower_is_better: (-)GDR 标志，仅 v2 路径使用（控制样本取反）
+        **kwargs: 透传至 compute_dominance_matrix_v2（如 ngrid）
+
+    Returns:
+        v1 路径: {'matrix', 'dominates', 'names', 'order'}
+        v2 路径: {'matrix', 'matrix_raw', 'dominates'=None,
+                  'classification', 'names', 'order', 'lower_is_better'}
+    """
+    if engine == 'auto':
+        engine = 'pysdtest' if _PYSDTEST_AVAILABLE else 'bootstrap'
+
+    if engine == 'pysdtest':
+        return compute_dominance_matrix_v2(
+            values_list, names, order=order, n_bootstrap=n_bootstrap,
+            rng_seed=rng_seed, lower_is_better=lower_is_better, **kwargs,
+        )
+    else:
+        # v1 回退——仅传入其签名中的五个参数（AUDIT-BREAK-1：
+        # lower_is_better 和 **kwargs 不可透传至 v1，避免 TypeError）
+        return _compute_dominance_matrix_v1(
+            values_list, names, order=order,
+            n_bootstrap=n_bootstrap, rng_seed=rng_seed,
+        )
 
 
 @dataclass

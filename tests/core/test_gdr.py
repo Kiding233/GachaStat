@@ -11,7 +11,7 @@ from gacha_simulator.core.gdr import (
 
 def test_target_card_draws_counts_all_targets():
     """不去重计数所有目标卡的出现次数"""
-    gdr_def = UNIFIED_GDR_REGISTRY['target_card_draws']
+    UNIFIED_GDR_REGISTRY['target_card_draws']
     compact = {'card_counts': {'card_A': 3, 'card_B': 0, 'other': 5}}
     result = compute_gdr_from_compact(compact, {'card_A': 2, 'card_B': 1}, 'target_card_draws')
     assert result == pytest.approx(3.0)
@@ -19,7 +19,7 @@ def test_target_card_draws_counts_all_targets():
 
 def test_target_card_draws_zero_when_none():
     """没抽到任何目标卡 → 返回 0"""
-    gdr_def = UNIFIED_GDR_REGISTRY['target_card_draws']
+    UNIFIED_GDR_REGISTRY['target_card_draws']
     compact = {'card_counts': {}}
     result = compute_gdr_from_compact(compact, {'card_A': 1}, 'target_card_draws')
     assert result == pytest.approx(0.0)
@@ -106,7 +106,7 @@ def make_compact(total_consumed, card_counts):
 
 def test_gdr_resource_per_card_normal():
     """消耗200资源，获得2张目标卡 → 每张100"""
-    gdr_def = UNIFIED_GDR_REGISTRY['resource_per_card']
+    UNIFIED_GDR_REGISTRY['resource_per_card']
     compact = make_compact(
         total_consumed={'draw_resource': 200},
         card_counts={'card_A': 2},
@@ -116,14 +116,14 @@ def test_gdr_resource_per_card_normal():
 
 
 def test_gdr_resource_per_card_zero_obtained():
-    """未获得任何目标卡 → 返回 nan"""
-    gdr_def = UNIFIED_GDR_REGISTRY['resource_per_card']
+    """未获得任何目标卡 → 返回 inf（零获得=无穷消耗）"""
+    UNIFIED_GDR_REGISTRY['resource_per_card']
     compact = make_compact(
         total_consumed={'draw_resource': 200},
         card_counts={'card_A': 0},
     )
     result = compute_gdr_from_compact(compact, {'card_A': 1}, 'resource_per_card')
-    assert math.isnan(result)
+    assert math.isinf(result)
 
 
 def test_gdr_resource_per_card_excess_capped():
@@ -469,7 +469,7 @@ class TestMultiResourceCompute:
         val_ex = compute_gdr_from_compact(compact, target_specs, 'resource_per_card:exchange_currency')
         assert val_ex == 8.0
 
-    def test_resource_per_card_nan_when_zero_obtained(self):
+    def test_resource_per_card_inf_when_zero_obtained(self):
         from gacha_simulator.core.gdr import compute_gdr_from_compact
         import math
         compact = {
@@ -478,7 +478,7 @@ class TestMultiResourceCompute:
             'card_counts': {},
         }
         val = compute_gdr_from_compact(compact, {'card_a': 1}, 'resource_per_card:exchange_currency')
-        assert math.isnan(val)
+        assert math.isinf(val)
 
     def test_gdr_kwargs_resource_id_priority(self):
         """通过 **gdr_kwargs 传入 resource_id 会被解析值覆盖，不抛 TypeError"""
@@ -554,3 +554,42 @@ class TestMultiResourceCompute:
         assert 'resource_remaining' not in keys
         assert 'resource_remaining:draw_resource' in keys
         assert 'resource_remaining:exchange_currency' in keys
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Task 13(b): GDR 工厂测试
+# ═══════════════════════════════════════════════════════════════════
+
+def test_make_gdr_calculator_basic():
+    """make_gdr_calculator 返回可调用的 GDRCalculator"""
+    from gacha_simulator.core.gdr import make_gdr_calculator
+    from gacha_simulator.core.config_store import ConfigStore
+
+    store = ConfigStore()
+    calc = make_gdr_calculator(store, {'card_a': 1}, 'target_card_draws')
+    assert calc is not None
+    compact = {'card_counts': {'card_a': 3}}
+    result = calc.compute_gdr(compact)
+    assert result == pytest.approx(3.0)
+
+def test_make_gdr_calculator_with_weight():
+    """权重通过 ConfigStore 传入"""
+    from gacha_simulator.core.gdr import make_gdr_calculator
+    from gacha_simulator.core.config_store import ConfigStore
+
+    store = ConfigStore()
+    store.weights = {
+        'target_card_draws': {'card_a': 2.0, 'card_b': 0.5},
+    }
+    calc = make_gdr_calculator(store, {'card_a': 1, 'card_b': 1}, 'target_card_draws')
+    assert calc is not None
+
+def test_make_gdr_calculator_resource_gdr():
+    """资源型 GDR——lower_is_better=True"""
+    from gacha_simulator.core.gdr import make_gdr_calculator, is_resource_gdr
+    from gacha_simulator.core.config_store import ConfigStore
+
+    assert is_resource_gdr('resource_per_card') is True
+    store = ConfigStore()
+    calc = make_gdr_calculator(store, {'card_a': 1}, 'resource_per_card')
+    assert calc is not None

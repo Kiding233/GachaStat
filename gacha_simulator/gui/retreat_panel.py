@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 退路分析面板 — 资源脆弱性分析
-使用局部多项式回归（p=1）+ 等宽直方图叠加
+使用离散分箱（binsglm）+ PAVA 保序估计 + Bootstrap 变更点推断
 直接基于批量模拟结果进行分析
 """
 
@@ -11,9 +11,9 @@ import traceback
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QLabel,
     QProgressBar, QGroupBox, QFormLayout, QDoubleSpinBox,
-    QSpinBox, QComboBox, QSplitter,
+    QSpinBox, QComboBox, QSplitter, QScrollArea, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from .chart_webview import ChartWebView
 
@@ -23,14 +23,6 @@ if _parent not in sys.path:
 
 from gacha_simulator.core.config_store import ConfigStore  # noqa: E402
 from gacha_simulator.core.gdr import populate_gdr_combo, get_default_threshold  # noqa: E402
-
-
-class WheelEventFilter(QObject):
-    """阻止 QComboBox/QSpinBox/QDoubleSpinBox 在未聚焦时响应鼠标滚轮。"""
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
-            return True
-        return super().eventFilter(obj, event)
 
 
 class RetreatWorker(QThread):
@@ -46,7 +38,6 @@ class RetreatWorker(QThread):
         gdr_threshold,
         alpha,
         num_bins,
-        num_curve_points,
         pool_names,
         store=None,
         no_draw_resource=None,
@@ -62,7 +53,6 @@ class RetreatWorker(QThread):
         self.gdr_threshold = gdr_threshold
         self.alpha = alpha
         self.num_bins = num_bins
-        self.num_curve_points = num_curve_points
         self.pool_names = pool_names
         self._store = store
         self.no_draw_resource = no_draw_resource
@@ -88,7 +78,6 @@ class RetreatWorker(QThread):
                 gdr_threshold=self.gdr_threshold,
                 alpha=self.alpha,
                 num_bins=self.num_bins,
-                num_curve_points=self.num_curve_points,
                 desire_weights=desire_weights,
                 miss_cost_weights=miss_cost_weights,
                 card_value_weights=card_value_weights,
@@ -179,13 +168,7 @@ class RetreatPanel(QWidget):
         self.num_bins_spin = QSpinBox()
         self.num_bins_spin.setRange(5, 100)
         self.num_bins_spin.setValue(20)
-        config_form.addRow("直方图分箱数:", self.num_bins_spin)
-
-        self.num_curve_spin = QSpinBox()
-        self.num_curve_spin.setRange(50, 500)
-        self.num_curve_spin.setValue(200)
-        self.num_curve_spin.setSingleStep(50)
-        config_form.addRow("回归曲线点数:", self.num_curve_spin)
+        config_form.addRow("等距直方图分箱数:", self.num_bins_spin)
 
         config_group.setLayout(config_form)
         left_layout.addWidget(config_group)
@@ -205,21 +188,26 @@ class RetreatPanel(QWidget):
         left_layout.addWidget(self.status_label)
         left_layout.addStretch()
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        # QScrollArea 包裹 ChartWebView：Qt 原生滚动不受 Plotly wheel 拦截
+        # 山脊线图高度随池子数量线性增长（n*140+80px），池子多时需滚动查看
+        right_scroll = QScrollArea()
+        right_scroll.verticalScrollBar().setSingleStep(15)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setStyleSheet("QScrollArea { background: #f5f5f5; border: none; }")
+
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(4, 4, 4, 4)
 
         self.chart_webview = ChartWebView()
+        self.chart_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         right_layout.addWidget(self.chart_webview)
 
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setSizes([300, 700])
+        right_scroll.setWidget(right_container)
 
-        # 安装滚轮过滤器——阻止下拉框/数字框在未聚焦时响应滚轮
-        self._wheel_filter = WheelEventFilter(self)
-        for w in self.findChildren((QComboBox, QSpinBox, QDoubleSpinBox)):
-            w.installEventFilter(self._wheel_filter)
+        splitter.addWidget(left)
+        splitter.addWidget(right_scroll)
+        splitter.setSizes([300, 700])
 
     def set_store(self, store):
         self._store = store
@@ -300,9 +288,12 @@ class RetreatPanel(QWidget):
         gdr_threshold = self.gdr_threshold_spin.value()
         alpha = self.alpha_spin.value()
         num_bins = self.num_bins_spin.value()
-        num_curve = self.num_curve_spin.value()
         pool_names = self._get_pool_names()
         cost_per_draw = self._extract_cost_per_draw()
+
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(3000)
 
         self._worker = RetreatWorker(
             simulation_results=self._simulation_results,
@@ -311,7 +302,6 @@ class RetreatPanel(QWidget):
             gdr_threshold=gdr_threshold,
             alpha=alpha,
             num_bins=num_bins,
-            num_curve_points=num_curve,
             pool_names=pool_names,
             store=self._store,
             no_draw_resource=getattr(self, '_no_draw_resource', None),
@@ -343,11 +333,23 @@ class RetreatPanel(QWidget):
             ridge_fig = result.get("ridge_fig")
             pool_names = result["pool_names"]
 
-            summary = (
-                f"总体失败率: {analysis.overall_failure_rate:.1%}  |  "
-                f"模拟次数: {analysis.n_simulations}  |  "
-                f"α = {analysis.alpha}"
-            )
+            summary = f"总体失败率: {analysis.overall_failure_rate:.1%}"
+            # P51: 单调性/回退状态栏警告（合并计数，避免多池撑大状态栏）
+            breakpoint_count = 0
+            fallback_count = 0
+            for pr in analysis.pool_results:
+                fit = pr.pava_fit
+                if fit is None:
+                    continue  # AUDIT-BREAK-3: 数据不足条目无 pava_fit，跳过
+                if not fit.get('monotonicity_holds', True):
+                    breakpoint_count += 1
+                if fit.get('used_fallback', False):
+                    fallback_count += 1
+            if breakpoint_count:
+                summary += f"  |  ⚠ {breakpoint_count} 池成功率不严格递增，建议人工复核"
+            if fallback_count:
+                summary += f"  |  ⚠ {fallback_count} 池回退到局部逻辑回归"
+
             self.status_label.setText(summary)
 
             charts: dict[str, object] = {}

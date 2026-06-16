@@ -1,7 +1,10 @@
 from typing import List, Dict, Set, Optional, Callable, Any, NamedTuple, Union
 from dataclasses import dataclass, field
+import logging
 
 from .result_types import CompactResult
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -412,7 +415,7 @@ def _gdr_total_card_value(compact, target_specs, card_value_weights=None, **kwar
         card_value_weights = {cid: 1.0 for cid in target_specs}
     total_value = 0.0
     for card_id, cnt in card_counts.items():
-        total_value += cnt * card_value_weights.get(card_id, 1.0)
+        total_value += cnt * card_value_weights.get(card_id, 0.0)
     return total_value
 
 
@@ -433,7 +436,12 @@ def _gdr_resource_per_card(compact, target_specs, **kw):
         for cid, qty in target_specs.items()
     )
     if obtained <= 0:
-        return float('nan')
+        logger.warning(
+            "resource_per_card: obtained=%d <= 0, returning inf "
+            "(零获得——目标卡片在模拟中完全未出现或GDR指标定义与数据不匹配)",
+            obtained,
+        )
+        return float('inf')
     return consumed / obtained
 
 

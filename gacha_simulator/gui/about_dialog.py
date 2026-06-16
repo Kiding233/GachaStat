@@ -45,6 +45,7 @@ class AboutDialog(QDialog):
         tabs.addTab(self._create_version_tab(), "版本历史")
         tabs.addTab(self._create_config_guide_tab(), "配置文件指南")
         tabs.addTab(self._create_algorithms_tab(), "算法说明")
+        tabs.addTab(self._create_strategy_tab(), "策略行为说明")
         layout.addWidget(tabs)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
@@ -69,7 +70,7 @@ class AboutDialog(QDialog):
             <li><b>广义出率（GDR）</b>：17 种可配置的广义出率指标</li>
             <li><b>过程分析</b>：逐池事件推断（7种事件类型）+ AA/BB/AB/BA 四种交叉统计</li>
             <li><b>Bootstrap 稳定性分析</b>：置信区间计算（BCa/GPD/Hill），零额外模拟成本</li>
-            <li><b>脆弱性分析</b>：局部逻辑回归估计条件失败概率，识别资源脆弱区间</li>
+            <li><b>脆弱性分析</b>：离散分箱 + PAVA 保序估计 + Bootstrap 变更点推断，识别资源脆弱区间</li>
             <li><b>方案搜索</b>：三合一搜索面板——最少资源（二分搜索）、最多目标卡（前进法/后退法）、资源-目标权衡曲线</li>
             <li><b>比较分析</b>：L1 描述统计 → L2 随机占优 → L3 假设检验（KS/MWU/ttest + Holm/BH校正）→ L4 帕累托前沿，四层递进策略比较</li>
             <li><b>数据管理</b>：模拟结果持久化存储（JSON）、可比性指纹检查、多数据集管理</li>
@@ -83,6 +84,7 @@ class AboutDialog(QDialog):
             <li>Python 3.10+</li>
             <li>PyQt6（GUI）</li>
             <li>NumPy / SciPy（数值计算）</li>
+            <li>binsreg (CCFF 2024) —— 分位数分箱</li>
             <li>Plotly（交互式可视化）</li>
             <li>PyInstaller（应用打包，onedir 分发）</li>
         </ul>
@@ -131,61 +133,97 @@ class AboutDialog(QDialog):
         browser.setOpenExternalLinks(True)
         browser.setHtml("""
         <h3>配置文件指南</h3>
-        <p>所有配置文件使用 <code>|</code> 分隔，<code>#</code> 开头为注释，空行忽略。</p>
+        <p>所有配置集中在单一 <code>config.toml</code> 文件中，使用标准 TOML 格式。</p>
 
-        <h4>resources.txt — 资源定义</h4>
-        <pre>resource_id | 显示名称</pre>
-        <p>示例：<code>draw_resource | 抽卡资源</code></p>
+        <h4>[[cards]] — 卡牌定义</h4>
+        <pre>[[cards]]
+id = "刻晴"
+name = "刻晴"
+rarity = "ssr"</pre>
 
-        <h4>cards.txt — 卡牌定义</h4>
-        <pre>card_id | 名称 | 稀有度</pre>
-        <p>示例：<code>ssr_char1 | 角色A | ssr</code></p>
+        <h4>[resources.defs] + [resources.initial] — 资源定义与初始资源</h4>
+        <pre>[resources.defs]
+draw_resource = "抽卡资源"
+exchange_currency = "兑换货币"
 
-        <h4>schedule.txt — 池子排期</h4>
-        <pre>pool_id | 名称 | 开始天 | 结束天 | 费用 | 分布文件 | 绑定(k=v;k=v) | 目标卡(逗号分隔,可选:数量)</pre>
-        <p>示例：<code>pool_c1 | 角色池1 | 0 | 21 | draw_resource:160 | pools/character_pool.txt | ssr=ssr_char1;sr=sr1;r=r1 | ssr_char1:1</code></p>
+[resources.initial]
+draw_resource = 1000
+exchange_currency = 0</pre>
+
+        <h4>[[resources.gain_rules]] + [[resources.day_overrides]] — 资源增益</h4>
+        <pre>[[resources.gain_rules]]
+type = "every_n_days"
+param = "7"
+gains = { draw_resource = 100 }
+
+[[resources.day_overrides]]
+day = 1
+gains = { draw_resource = 500 }</pre>
+        <p>规则类型：<code>every_n_days</code>, <code>weekly</code>, <code>monthly_day</code>, <code>monthly_week</code>。</p>
+
+        <h4>[[pools]] — 池子定义</h4>
+        <pre>[[pools]]
+id = "pool_0"
+name = "常驻池"
+pool_type = "角色"
+start_day = 0
+end_day = 21
+cost = "draw_resource:160"
+batch_size = 1
+distribution_template = "standard_character"
+bindings = { ssr = "刻晴,莫娜", sr = "班尼特,行秋", r = "r1,r2" }
+target_cards = ["刻晴"]</pre>
         <p><b>费用语法</b>：<code>资源ID:数量</code>。多资源可用 <code>&gt;</code>（大于号）或 <code>,</code>（逗号）分隔，表示按书写顺序的<b>强制优先级</b>——先尝试排在前面的资源，不够再回退到后续资源。</p>
         <p>示例：<code>exchange_currency:5 &gt; draw_resource:160</code> 表示优先消耗兑换货币，不足时再用抽卡资源。</p>
         <p><code>&amp;</code> 表示同时需要多种资源（AND），<code>()</code> 用于分组。完整示例：<code>(draw_resource:160 &gt; exchange_currency:5) &amp; stardust:10</code></p>
         <p><b>绑定键</b>：ssr, ssr_alt, ssr_alt1, ssr_alt2, featured, offrate, sr, r, rerun_of, exchange_card</p>
+        <p>可选字段：<code>rerun_of</code>（复刻，引用另一池子的分布）、<code>exchange_card_id</code>（兑换池，100% 出指定卡）。</p>
 
-        <h4>pity.txt — 保底机制</h4>
-        <pre>pity: 名称 | type=soft|hard | 参数... | target=id:权重,... | reset=any_ssr|featured_ssr|never | pools=匹配模式</pre>
-        <p>软保底参数：<code>start=N end=N func=linear|exp|step</code></p>
-        <p>硬保底参数：<code>threshold=N</code></p>
-        <p>示例：<code>pity: ssr_soft | type=soft | start=74 end=90 func=linear | target=ssr:1 | reset=any_ssr | pools=*</code></p>
+        <h4>[[pity]] — 保底规则</h4>
+        <pre>[[pity]]
+name = "ssr_soft"
+type = "soft"
+start = 74
+end = 90
+func = "linear"
+threshold = 180
+reset = "any_ssr"
+pools = ["*"]
+target = { ssr = 1.0 }
+counter_init = 0</pre>
+        <p>软保底参数：<code>start</code>（起始抽数）/ <code>end</code>（终止抽数）/ <code>func</code>（linear|exp|step）。硬保底参数：<code>threshold</code>（100% 触发抽数）。<code>reset</code> 值：any_ssr|featured_ssr|never。</p>
 
-        <h4>gains.txt — 资源增益</h4>
-        <pre>[规则类型: 参数]
-resource_id: 数量
-day: 天数 | resource_id: 数量, resource_id: 数量</pre>
-        <p>规则类型：<code>every_n_days:N</code>, <code>weekly:day</code>, <code>monthly_day:day</code>, <code>monthly_week:week,day</code></p>
+        <h4>[[targets]] — 目标卡</h4>
+        <pre>[[targets]]
+card_id = "刻晴"
+quantity = 2
+pool_ids = ["pool_0", "pool_1"]</pre>
 
-        <h4>initial_resources.txt — 初始资源</h4>
-        <pre>resource_id | 数量</pre>
+        <h4>[[weights]] — 权重配置（可选）</h4>
+        <pre>[[weights]]
+card_id = "刻晴"
+desire = 2.0
+miss_cost = 1.2
+card_value = 1.5</pre>
+        <p>所有卡默认权重 1.0。desire_weight 影响前进法排序，miss_cost_weight 影响后退法排序，card_value 影响出卡价值计算。</p>
 
-        <h4>targets.txt — 目标卡</h4>
-        <pre>card_id | 数量 | 池子ID(逗号分隔)</pre>
-
-        <h4>weights.txt — 权重配置（可选）</h4>
-        <pre>card_id | desire_weight | miss_cost_weight | card_value</pre>
-        <p>默认值均为 1.0。desire_weight 影响前进法排序，miss_cost_weight 影响后退法排序，card_value 影响出卡价值计算。</p>
-
-        <h4>池子分布文件（pools/*.txt）</h4>
-        <pre>[层级键]: 概率        # 定义层级概率
-[层级键]=[子键1,子键2]  # 定义子层级
-[叶键]=绑定键          # 映射到 schedule.txt 中的绑定</pre>
-        <p>示例：</p>
-        <pre>[1]:0.006
-[1]=[featured,offrate]
-[featured]:0.5
-[offrate]:0.5
-[featured]=ssr
-[offrate]=ssr_alt
-[2]:0.051
-[2]=sr
-[3]:0.943
-[3]=r</pre>
+        <h4>[[distribution_templates]] — 池子分布模板</h4>
+        <pre>[[distribution_templates]]
+name = "standard_character"
+[[distribution_templates.cards]]
+card_id = "ssr"
+probability = 0.6
+rarity = "ssr"
+featured = true
+[[distribution_templates.cards]]
+card_id = "sr"
+probability = 5.1
+rarity = "sr"
+[[distribution_templates.cards]]
+card_id = "r"
+probability = 94.3
+rarity = "r"</pre>
+        <p>模板中的 <code>card_id</code> 为绑定键时（ssr/sr/r/ssr_alt 等），加载时按池子的 <code>bindings</code> 展开为具体卡牌并均分概率。</p>
         """)
         layout.addWidget(browser)
         return widget
@@ -240,7 +278,14 @@ day: 天数 | resource_id: 数量, resource_id: 数量</pre>
         </ul>
 
         <h4>脆弱性分析</h4>
-        <p>对每个池子，使用<b>局部逻辑回归</b>（纯 numpy 向量化闭式解，Silverman 自适应带宽）估计条件失败概率 P(失败 | 资源剩余)。当数据不足时，回退到<b>Nadaraya-Watson 高斯核平滑</b>。识别条件失败概率超过阈值的连续区间为"脆弱性区间"。支持 r_grid 边界自适应扩展和 LLR 边界偏差缓解。</p>
+        <p>对每个池子，使用三阶段管线估计条件失败概率 P(失败 | 资源剩余)：</p>
+        <ol>
+            <li><b>binsglm 分位数分箱</b>（CCFF 2024）——IMSE 准则自动选择箱数，每箱约等样本量，自适应数据密度</li>
+            <li><b>PAVA 保序估计</b>（Pool Adjacent Violators Algorithm）——在单调递减约束下合并采样逆向波动，输出分段常数保序估计 θ̃_j</li>
+            <li><b>Bootstrap 变更点推断</b>——ĵ* = max{j: θ̃_j > α}，在固定箱边界上非参数 Bootstrap 构造 95% 变更点置信区间</li>
+        </ol>
+        <p>脆弱区间右界取变更点 CI 上界（保守端），左界固定为第一个分箱左界（约等于数据最小值）。单调递减作为可检验的结构假设——检测到策略断点时通过状态栏警告提示，建议人工复核相关脆弱区间。</p>
+        <p><b>注：</b>脆弱性分析估计的是「给定池结束时资源剩余为 X 时，最终失败的条件概率」，反映的是关联关系而非因果关系——低资源和高失败率可能源于共同的运气因素。</p>
 
         <h4>过程分析</h4>
         <p>对每次模拟的每个池子推断事件类型（7种）：保底命中（pity_hit）、提前出货（early_hit）、未出（miss）、跳过（skip）、忽略（ignore）、兑换（exchange）、未兑换（no_exchange）。四种交叉统计：</p>
@@ -296,6 +341,95 @@ day: 天数 | resource_id: 数量, resource_id: 数量</pre>
 
         <h4>转移矩阵</h4>
         <p>计算相邻池子之间成功/失败状态的 2×2 转移概率矩阵，用于分析池间成败依赖关系。</p>
+        """)
+        layout.addWidget(browser)
+        return widget
+
+    def _create_strategy_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml("""
+        <h3>策略行为说明</h3>
+        <p>以下逐一说明每种策略的决策逻辑。所有策略均为<b>一阶启发式</b>（仅检查当前状态，不递归评估未来价值），这在抽卡最优策略 NP-hard 的背景下是有意的设计选择。</p>
+        <p><b>通用规则</b>：所有策略优先检查兑换池——若目标卡可通过兑换获得且兑换池可用，优先执行兑换（兑换不消耗保底、不触发保底重置）。兑换检查失败后才进入各自的抽卡逻辑。</p>
+
+        <h4>1. 按需追卡 (smart)</h4>
+        <p><b>一句话</b>：当前池里有我还缺少的目标卡 → 抽；没有 → 等到池子过期。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，找到第一个「含缺量目标卡 + 资源够抽」的池子 → 抽</li>
+            <li>都不满足 → 等待（最短等到下一个池子过期）</li>
+        </ol>
+        <p><b>适用场景</b>：用户有明确的目标卡列表，只想为缺少的卡投入资源，不浪费在已完成的目标上。</p>
+        <p><b>局限</b>：不比较池间优劣——两个池子同时开且都含目标卡时，按遍历顺序选第一个，不考虑「抽 A 池更划算」。</p>
+
+        <h4>2. 指定池配额 (pool_quota)</h4>
+        <p><b>一句话</b>：每个池子抽够指定数量就停手。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，找到「含缺量目标卡 + 未达配额上限 + 资源够」的池子 → 抽</li>
+            <li>若上一步无匹配，找任意「未达配额上限 + 资源够」的池子（即使不含目标卡）→ 抽</li>
+            <li>都不满足 → 等待</li>
+        </ol>
+        <p><b>参数</b>：<code>pool_quotas</code>——字典，key=池ID，value=该池最多抽多少次。</p>
+        <p><b>适用场景</b>：用户想限制每个池子的投入上限（如「角色池最多 50 抽，武器池最多 30 抽」），在配额内优先追目标卡，配额用完后切到下一个池。</p>
+
+        <h4>3. 保底预留 (pity_reserve)</h4>
+        <p><b>一句话</b>：保底快到了才抽，否则憋着。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，仅考虑含缺量目标卡的池子 → 检查该池当前保底概率（SSR 总概率）</li>
+            <li>若 SSR 概率 ≥ 阈值（默认 80%，对应于软保底区间中后段）→ 抽</li>
+            <li>否则 → 等待（不消耗资源在低概率抽卡上）</li>
+        </ol>
+        <p><b>参数</b>：<code>pity_threshold_pct</code>——保底概率阈值（百分比，默认 80%）。设得越高越保守（只在接近硬保底时才出手）。</p>
+        <p><b>适用场景</b>：资源极度紧缺时最大化 SSR 期望产出——只在概率最高的时机抽卡。</p>
+        <p><b>局限</b>：可能错过「提前出货」的机会（在低概率时不出手），且如果保底一直不到阈值就长期不抽、可能池子过期。</p>
+
+        <h4>4. 目标即停 (stop_on_target)</h4>
+        <p><b>一句话</b>：抽到目标就立即停手，见好就收。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>若启用了 <code>stop_on_featured</code> 且上一发触发了保底（抽到了 up SSR）→ 立即停止</li>
+            <li>若启用了 <code>stop_on_any_target</code> 且任意目标卡已满足需求量 → 立即停止</li>
+            <li>有目标卡缺量且兑换池可用 → 兑换</li>
+            <li>遍历当前开放池，找「含缺量目标卡 + 资源够」的池子 → 抽</li>
+            <li>都不满足 → 等待</li>
+        </ol>
+        <p><b>参数</b>：<code>stop_on_featured</code>（默认开）——保底出 up 即停；<code>stop_on_any_target</code>（默认关）——任意目标卡满需求即停。</p>
+        <p><b>适用场景</b>：模拟「抽到一个就跑」的玩家行为——不追求满破，只求拥有。</p>
+
+        <h4>5. 指定池追卡 (target_hunting)</h4>
+        <p><b>一句话</b>：只在用户指定的那几个池子里抽。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>过滤当前开放池 → 仅保留 ID 在 <code>target_pool_ids</code> 中的池子</li>
+            <li>遍历过滤后的池子，第一个资源够的 → 抽</li>
+            <li>都不够 → 等待</li>
+        </ol>
+        <p><b>参数</b>：<code>target_pool_ids</code>——目标池 ID 列表。</p>
+        <p><b>适用场景</b>：用户只想抽特定限定池（如「只抽周年庆限定，其他一概不理」），完全无视非目标池。</p>
+        <p><b>局限</b>：不检查目标卡需求——即使目标卡已满也会继续抽（除非受停止条件约束）。</p>
+
+        <h4>6. 固定次数 (fixed_count)</h4>
+        <p><b>一句话</b>：抽满 N 次就停，不管结果。</p>
+        <p><b>决策顺序</b>：</p>
+        <ol>
+            <li>总抽数已达 <code>count</code> → 立即停止</li>
+            <li>否则 → 抽第一个当前开放的池子（不检查目标卡、不检查兑换池）</li>
+        </ol>
+        <p><b>参数</b>：<code>count</code>——抽卡总次数。</p>
+        <p><b>适用场景</b>：模拟固定预算下的期望结果（如「100 抽能出多少金」），或作为其他策略的对照基线。</p>
+
+        <h4>7. 不抽卡基线 (no_draw)</h4>
+        <p><b>一句话</b>：一次都不抽，只积累每日资源。</p>
+        <p><b>行为</b>：始终等待，跳过所有池子和兑换。</p>
+        <p><b>适用场景</b>：计算资源累积的基线水平——「完全不抽卡的话到 T 时刻我有多少资源」，作为其他策略资源效率的比较基准。此策略为内部使用，不开放用户选择。</p>
         """)
         layout.addWidget(browser)
         return widget

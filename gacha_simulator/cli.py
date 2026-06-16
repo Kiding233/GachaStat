@@ -3,222 +3,83 @@
 
 import argparse
 import json
+import logging
+import os
 import sys
 import time
 from pathlib import Path
 
+logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(message)s')
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from gacha_simulator.core import (
-    Pool, Reward, GachaState, DrawAction, WaitAction,
-    TargetCard, TargetCardSet, PoolSchedule, PoolScheduleManager
-)
-from gacha_simulator.core.pool import parse_cost_string
-from gacha_simulator.core.stop_condition import StopCondition
-from gacha_simulator.core.pity import (
-    PityEngine, PoolPitySpec,
-    PityDefParsed, SoftPityBehavior, HardPityBehavior,
-)
-from gacha_simulator.service import GachaService
-from multiprocessing import Pool as MPPool
-
-
-DAY = 86400
-
-
-def create_pools_from_config(config):
-    pools = []
-    targets = []
-    schedules = []
-    
-    for p in config['pools']:
-        ssr = Reward(f"{p['id']}_ssr", f"{p['name']}SSR", {})
-        sr = Reward(f"{p['id']}_sr", f"{p['name']}SR", {})
-        r = Reward(f"{p['id']}_r", f"{p['name']}R", {})
-        
-        ssr_rate = p.get('ssr_rate', 0.006)
-        sr_rate = p.get('sr_rate', 0.051)
-        r_rate = max(0.0, 1 - ssr_rate - sr_rate)
-        
-        pool = Pool(
-            id=p['id'], name=p['name'],
-            cost=parse_cost_string(f"draw_resource:{p['cost']}"),
-            rewards=[(ssr, ssr_rate), (sr, sr_rate), (r, r_rate)],
-            available_from=p['start_day'] * DAY,
-            available_until=(p['start_day'] + p['duration']) * DAY,
-        )
-        pools.append(pool)
-        targets.append(TargetCard(
-            card_id=f"{p['id']}_ssr", pool_ids=[p['id']], 
-            quantity_needed=1, priority=0
-        ))
-        schedules.append(PoolSchedule(
-            pool_id=p['id'],
-            available_from=p['start_day'] * DAY,
-            available_until=(p['start_day'] + p['duration']) * DAY,
-        ))
-    
-    return pools, TargetCardSet(targets), PoolScheduleManager(schedules)
-
-
-def create_pity_engine_from_config(config, pools):
-    pity_config = config.get('pity', {})
-    if not pity_config.get('enabled', True):
-        return None
-
-    pities_cfg = pity_config.get('pities', [])
-
-    pity_defs = {}
-    behaviors = {}
-    for p in pities_cfg:
-        name = p.get('name', 'pity')
-        btype = p.get('type', 'soft')
-        target_dist = p.get('target_distribution', {})
-        reset = p.get('reset', 'any_ssr')
-        pools_pattern = p.get('pools', '*')
-        params = p.get('params', {})
-
-        pdef = PityDefParsed(
-            name=name,
-            btype=btype,
-            params=params,
-            target_distribution=target_dist,
-            reset_condition=reset,
-            pools=pools_pattern,
-        )
-        pity_defs[name] = pdef
-
-        if btype == 'soft':
-            behaviors[name] = SoftPityBehavior(
-                start_at=int(params.get('start', '74')),
-                end_at=int(params.get('end', '90')),
-                func_type=params.get('func', 'linear'),
-                target_distribution=target_dist,
-            )
-        elif btype == 'hard':
-            behaviors[name] = HardPityBehavior(
-                threshold=int(params.get('threshold', '90')),
-                target_distribution=target_dist,
-            )
-
-    pool_specs = {}
-    import fnmatch
-    for pool in pools:
-        pid = pool.id
-        featured = set()
-        ssr_all = set()
-        if pool.rewards:
-            featured.add(pool.rewards[0][0].id)
-            ssr_all.add(pool.rewards[0][0].id)
-            if len(pool.rewards) > 1:
-                ssr_all.add(pool.rewards[1][0].id)
-
-        matching = []
-        for pdef in pity_defs.values():
-            if fnmatch.fnmatch(pid, pdef.pools):
-                matching.append(pdef.name)
-
-        pool_specs[pid] = PoolPitySpec(
-            pity_names=matching,
-            featured_ids=featured,
-            ssr_ids=ssr_all,
-        )
-
-    return PityEngine(pool_specs, pity_defs, behaviors)
-
-
-from gacha_simulator.core.strategy import Strategy, StrategyContext  # noqa: E402
-
-
-class SmartStrategy(Strategy):
-    lookahead = None
-
-    def __init__(self, target_cards):
-        self.target_cards = target_cards
-        self._pool_to_targets = {}
-        for t in target_cards.targets:
-            for pid in t.pool_ids:
-                self._pool_to_targets.setdefault(pid, []).append(t)
-
-    def _pool_needs_target(self, pool_id, acquired):
-        for t in self._pool_to_targets.get(pool_id, []):
-            if acquired.get(t.card_id, 0) < t.quantity_needed:
-                return True
-        return False
-
-    def select_action(self, ctx: StrategyContext):
-        for pool in ctx.current_pools:
-            if self._pool_needs_target(pool.id, ctx.acquired) and ctx.state.can_afford(pool.cost):
-                return DrawAction(pool_id=pool.id)
-
-        wait_time = DAY
-        for pool in ctx.current_pools:
-            if pool.available_until and pool.available_until > ctx.state.real_time:
-                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
-
-        if wait_time <= 0:
-            wait_time = 3600
-
-        return WaitAction(duration=wait_time)
-
-    @classmethod
-    def description(cls):
-        return "按需追卡"
-
-
-class AllPoolsEnd(StopCondition):
-    def __init__(self, end_time):
-        self.end_time = end_time
-    
-    def check(self, state, history, stats=None):
-        return state.real_time >= self.end_time
-    
-    def description(self):
-        return "所有池子结束"
-
-
-def run_single_sim(args):
-    import random
-    pools, target_set, schedule_mgr, end_time, resources, seed, pity_engine = args
-    random.seed(seed)
-
-    strategy = SmartStrategy(target_set)
-    stop_cond = AllPoolsEnd(end_time)
-    service = GachaService(pools, strategy, stop_cond, target_set,
-                          schedule_manager=schedule_mgr, pity_engine=pity_engine)
-    state = GachaState(resources=resources.copy())
-    return service.run_simulation_compact(state)
+from gacha_simulator.core.config_toml import load_toml  # noqa: E402
+from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
+from gacha_simulator.paths import get_config_dir  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser(description='GachaStat CLI')
-    parser.add_argument('-c', '--config', default='default_config.json', help='Config file path')
-    parser.add_argument('-n', '--num-simulations', type=int, default=1000, help='Number of simulations')
-    parser.add_argument('-w', '--workers', type=int, default=4, help='Number of parallel workers')
+    parser.add_argument('-c', '--config', default=None,
+                        help='TOML 配置文件路径（默认：打包 config.toml）')
+    parser.add_argument('-n', '--num-simulations', type=int, default=1000,
+                        help='Number of simulations')
+    parser.add_argument('-w', '--workers', type=int, default=4,
+                        help='Number of parallel workers')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Random seed')
     parser.add_argument('-o', '--output', default='results.json', help='Output file')
     parser.add_argument('--no-pity', action='store_true', help='Disable pity system')
-    
+    parser.add_argument('--strategy', default=None,
+        choices=['smart', 'pool_quota', 'pity_reserve', 'target_hunting',
+                 'stop_on_target', 'fixed_count', 'draw_target'],
+        help='抽卡策略（默认：使用 config.toml 中指定的策略，回退 smart）')
+    parser.add_argument('--strategy-params', default=None,
+        help='策略参数，JSON 字符串。例：\'{"desire_weights": {"A": 1.5}, "miss_cost": 0.8}\' '
+             '（仅当 --strategy 显式指定时生效；若未指定，使用 config.toml 中的策略参数）')
+    parser.add_argument('--output-format', default='simple',
+        choices=['simple', 'full'],
+        help='输出格式：simple=基础统计JSON, full=含extraction完整数据')
+    parser.add_argument('--no-progress', action='store_true',
+        help='禁用进度条输出')
+
     args = parser.parse_args()
-    
-    config_path = Path(args.config)
-    if config_path.exists():
-        with open(config_path) as f:
-            config = json.load(f)
+
+    if args.config:
+        # 用户指定 TOML 路径
+        store = load_toml(args.config)
     else:
-        config = {
-            'pools': [
-                {'id': f'pool_{i}', 'name': f'池子{i}', 'start_day': i*7, 'duration': 21, 
-                 'cost': 160, 'ssr_rate': 0.015 if i < 4 else 0.007}
-                for i in range(8)
-            ],
-            'pity': {'enabled': not args.no_pity, 'type': 'soft', 'start': 80, 'end': 90},
-            'resources': {'draw_resource': 50000}
-        }
-    
-    pools, target_set, schedule_mgr = create_pools_from_config(config)
-    end_time = max(s.available_until for s in schedule_mgr.schedules)
-    pity_engine = create_pity_engine_from_config(config, pools)
+        # 无参数 → 加载打包默认 config.toml
+        default_toml = os.path.join(get_config_dir(), 'config.toml')
+        store = load_toml(default_toml)
+
+    if args.no_pity:
+        store.pity.enabled = False
+
+    # 为 output_data 构造 config 元数据 dict（替代旧 JSON config）
+    config_meta = {
+        'path': str(args.config) if args.config else default_toml,
+        'num_pools': len(store.pools),
+        'num_cards': len(store.card_defs),
+        'pity_enabled': store.pity.enabled,
+        'num_targets': len(store.target_cards),
+    }
+
+    # 策略覆盖逻辑
+    if args.strategy:
+        strategy_name = args.strategy  # CLI 参数优先
+        if args.strategy_params:
+            try:
+                strategy_params = json.loads(args.strategy_params)
+            except json.JSONDecodeError as e:
+                print(f"错误：--strategy-params JSON 解析失败: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            strategy_params = store.strategy_params  # 回退 TOML 配置
+    else:
+        strategy_name = getattr(store, 'strategy_name', 'smart') or 'smart'
+        strategy_params = store.strategy_params
+
+    env = SimulationEnvBuilder.from_config_store(store)
 
     print("=" * 50)
     print("GachaStat CLI")
@@ -226,74 +87,90 @@ def main():
     print(f"Simulations: {args.num_simulations}")
     print(f"Workers: {args.workers}")
     print(f"Seed: {args.seed}")
-    pity_cfg = config.get('pity', {})
-    print(f"Pity: {'Enabled' if pity_engine else 'Disabled'}")
-    if pity_engine:
-        print(f"  Type: {pity_cfg.get('type', 'soft')}")
-        print(f"  Range: {pity_cfg.get('start', 80)}-{pity_cfg.get('end', 90)}")
+    print(f"Pity: {'Enabled' if store.pity.enabled else 'Disabled'}")
+    if store.pity.enabled and store.pity.pities:
+        p0 = store.pity.pities[0]
+        start = p0.params.get('start', '74')
+        end = p0.params.get('end', '90')
+        print(f"  Type: {p0.btype}")
+        print(f"  Range: {start}-{end}")
     print("=" * 50)
-    
-    resources = config.get('resources', {'draw_resource': 50000})
-    
-    args_list = [
-        (pools, target_set, schedule_mgr, end_time, resources,
-         args.seed + i, pity_engine)
-        for i in range(args.num_simulations)
-    ]
-    
+
+    target_specs = {tc.card_id: getattr(tc, 'quantity', 1)
+                    for tc in store.target_cards}
+
+    def _cli_progress(done, total):
+        if done % max(1, total // 10) == 0 or done >= total:
+            print(f"\r  进度: {done}/{total} ({100*done//total}%)", end='', flush=True)
+
     print(f"\nRunning {args.num_simulations} simulations...")
     start_time = time.time()
-    
-    with MPPool(processes=args.workers) as mp_pool:
-        results = mp_pool.map(run_single_sim, args_list, chunksize=max(1, args.num_simulations // 100))
-    
+
+    batch_result = run_batch_parallel(
+        env=env,
+        target_specs=target_specs,
+        initial_resources=env.initial_resources,
+        num_simulations=args.num_simulations,
+        max_workers=args.workers,
+        seed=args.seed,
+        progress_callback=_cli_progress if not args.no_progress else None,
+        strategy_name=strategy_name,
+        strategy_params=strategy_params,
+    )
+    print()  # progress line 换行
+
     elapsed = time.time() - start_time
-    
+
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
-    
-    actual_target_ids = [t.card_id for t in target_set.targets]
+
+    actual_target_ids = [t.card_id for t in store.target_cards]
+    if not actual_target_ids and store.pools:
+        actual_target_ids = [f"{store.pools[0].pool_id}_ssr"]
     total_targets = len(actual_target_ids)
 
     total_draws = []
     ssr_counts = []
     gdr_percents = []
 
-    for r in results:
+    for r in batch_result:
         draws = r.get('total_draws', 0)
         total_draws.append(draws)
         cc = r.get('card_counts', {})
         ssr = sum(cc.get(tid, 0) for tid in actual_target_ids)
         ssr_counts.append(ssr)
         gdr_percents.append((ssr / max(total_targets, 1)) * 100)
-    
+
     import numpy as np
-    
+
     print("\n" + "=" * 50)
     print("Results Summary")
     print("=" * 50)
-    print(f"Total Simulations: {len(results)}")
+    print(f"Total Simulations: {len(batch_result)}")
     print("\nTotal Draws:")
     print(f"  Mean: {np.mean(total_draws):.1f}")
     print(f"  Median: {np.median(total_draws):.1f}")
     print(f"  Std: {np.std(total_draws):.1f}")
-    
+
     print("\nSSR Count:")
     print(f"  Mean: {np.mean(ssr_counts):.2f}")
     print(f"  Median: {np.median(ssr_counts):.1f}")
-    
+
     print("\nGDR (Target Card %):")
     print(f"  Mean: {np.mean(gdr_percents):.2f}%")
     print(f"  Median: {np.median(gdr_percents):.2f}%")
     print(f"  25th percentile: {np.percentile(gdr_percents, 25):.2f}%")
     print(f"  75th percentile: {np.percentile(gdr_percents, 75):.2f}%")
-    
+
     output_data = {
-        'config': config,
+        'config': config_meta,
         'num_simulations': args.num_simulations,
         'elapsed_time': elapsed,
         'summary': {
-            'total_draws': {'mean': float(np.mean(total_draws)), 'median': float(np.median(total_draws))},
-            'ssr_counts': {'mean': float(np.mean(ssr_counts)), 'median': float(np.median(ssr_counts))},
+            'total_draws': {'mean': float(np.mean(total_draws)),
+                            'median': float(np.median(total_draws)),
+                            'std': float(np.std(total_draws))},
+            'ssr_counts': {'mean': float(np.mean(ssr_counts)),
+                           'median': float(np.median(ssr_counts))},
             'gdr_percent': {
                 'mean': float(np.mean(gdr_percents)),
                 'median': float(np.median(gdr_percents)),
@@ -302,10 +179,23 @@ def main():
             }
         }
     }
-    
+
+    if args.output_format == 'full' and batch_result.extraction:
+        output_data['extraction'] = {
+            'n_results': batch_result.extraction.get('n_results', 0),
+            'aggregates_count': len(
+                batch_result.extraction.get('aggregates', [])),
+            'kept_sequences_count': len(
+                batch_result.extraction.get('kept_sequences', [])),
+            'cumulative_snapshots_pools': list(
+                batch_result.extraction.get('cumulative_snapshots', {}).keys()),
+            'transition_flags_count': len(
+                batch_result.extraction.get('transition_flags', [])),
+        }
+
     with open(args.output, 'w') as f:
         json.dump(output_data, f, indent=2)
-    
+
     print(f"\nResults saved to: {args.output}")
     print("=" * 50)
 

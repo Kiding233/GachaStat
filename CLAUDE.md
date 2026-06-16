@@ -4,11 +4,12 @@ GachaStat 抽卡概率模拟与分析系统。版本号/Tab 列表由 C1 cron �
 
 ## 一、项目事实
 
-**技术栈：** Python 3.10+ · PyQt6 · numpy · Plotly (WebEngine) · pytest+cov
+**技术栈：** Python 3.10+ · PyQt6 · numpy · Plotly (WebEngine) · pytest+cov · binsreg (CCFF 2024) · PySDTest v0.0.21 (L2 随机占优可选依赖)
 并行模拟：`multiprocessing.Pool` + worker initializer 模式
 
 ```bash
-pip install -e ".[dev]"                              # 安装依赖
+pip install -e ".[dev]"                              # CLI/headless 安装
+pip install -e ".[gui,dev]"                          # GUI 安装（含 PyQt6）
 python -m gacha_simulator.main                       # GUI
 python -m gacha_simulator.cli -n 1000 -w 4 -s 42     # CLI
 pytest --cov=gacha_simulator                         # 测试
@@ -20,7 +21,9 @@ gacha_simulator/
 ├── core/       # 引擎：池子、状态、策略、保底、GDR、分析算法（无 GUI 依赖）
 ├── service/    # GachaService + batch_simulator
 ├── gui/        # PyQt6 面板（Tab 列表见 main.py，C1 cron 自动同步）
-├── config/     # 配置文件（| 分隔文本格式）
+│               # wheel_blocker.py — QApplication 全局事件过滤器，统一拦截
+│               #   QComboBox/QAbstractSpinBox 滚轮并转发至外层 ScrollArea
+├── config/     # 配置文件（TOML 格式，单文件 config.toml）
 └── visualization/  # matplotlib 中文字体
 ```
 
@@ -56,7 +59,13 @@ gacha_simulator/
 
 ### 停止条件 · 并行模拟 · GUI · 配置
 
-`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 `|` 分隔文本 → `config_io.py` 读写（`schedule.txt`/`pools/*.txt`/`pity.txt`/`targets.txt`/`gains.txt`/`cards.txt`/`resources.txt`/`initial_resources.txt`）。
+`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。
+
+### 并行模拟入口（强制）
+
+所有批量/并行模拟必须通过 `service/batch_simulator.py` 的 `run_batch_parallel()` 执行。
+禁止直接使用 `multiprocessing.Pool` + `GachaService` 的组合。
+CLI / GUI / 脚本 / 测试均通过此统一入口。
 
 ### 扩展指南
 
@@ -66,7 +75,9 @@ gacha_simulator/
 | 新策略 | `core/strategy.py` + `STRATEGY_REGISTRY` 注册 |
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
-| 新配置项 | `ConfigStore` → `config_io.py` → `config_panel.py` → `SimulationEnvBuilder` |
+| 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
+| 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |
+| 新随机占优检验 | `core/comparison_analyzer.py` → `dd_bootstrap_test_v2()` + `compute_dominance_matrix_v2()` → `compute_dominance_matrix()` 派发器（当前：v2=PySDTest Donald-Hsu 2016 选择性重中心化 / v1=等式中心化 Bootstrap） |
 
 ---
 
@@ -119,3 +130,11 @@ commit 被 H7 阻止 → `ruff check` 修复 · push 被 H9 阻止 → `pytest -
 ### 文档体系
 
 三文件制：`模块.md` + `理论.md` + `05-笔记.md`（H4 自动维护）。计划文件含 META 头，全局约定见 `docs/00-meta/全局约定.md`，活跃计划见 `模块状态矩阵.md`。
+
+### 文件删除规则
+
+**禁止擅自删除文件。** 需删除时：
+- **文档**（`.md`、`.txt` 等）→ 移入 `docs/03-归档/` 归档文件夹
+- **代码及其他文件** → 移入项目根目录 `.recycle_bin/` 垃圾桶文件夹
+
+不得直接 `rm` / `rm -rf` 删除任何文件，除非用户明确要求。

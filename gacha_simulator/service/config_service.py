@@ -36,6 +36,7 @@ class ConfigService:
                     'available_from': p.available_from,
                     'available_until': p.available_until,
                     'is_exchange': p.is_exchange,
+                    'batch_size': getattr(p, 'batch_size', 1),
                 }
                 for p in pools
             ]
@@ -56,5 +57,6 @@ class ConfigService:
                 available_from=p_data.get('available_from'),
                 available_until=p_data.get('available_until'),
                 is_exchange=p_data.get('is_exchange', False),
+                batch_size=p_data.get('batch_size', 1),
             ))
         return pools

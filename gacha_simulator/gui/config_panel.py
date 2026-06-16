@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QDialog, QDialogButtonBox, QMessageBox, QAbstractItemView,
     QDateEdit, QCalendarWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QDate
+from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QColor
 
 from ..core.config_store import (
@@ -378,6 +378,10 @@ class ConfigPanel(QWidget):
         super().__init__()
         self._store = None
         self._refreshing = False
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(500)
+        self._preview_timer.timeout.connect(self._do_update_preview)
         self._setup_ui()
         self._set_defaults()
 
@@ -542,9 +546,9 @@ class ConfigPanel(QWidget):
         layout.addLayout(filter_layout)
 
         self.pool_table = QTableWidget()
-        self.pool_table.setColumnCount(9)
+        self.pool_table.setColumnCount(10)
         self.pool_table.setHorizontalHeaderLabels([
-            "启用", "ID", "名称", "类型", "开始(天)", "持续(天)", "单抽消耗", "备注", "分布编辑"
+            "启用", "ID", "名称", "类型", "开始(天)", "持续(天)", "单抽消耗", "批次大小", "备注", "分布编辑"
         ])
         header = self.pool_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -554,14 +558,16 @@ class ConfigPanel(QWidget):
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
         self.pool_table.setColumnWidth(0, 40)
         self.pool_table.setColumnWidth(3, 70)
         self.pool_table.setColumnWidth(4, 70)
         self.pool_table.setColumnWidth(5, 70)
         self.pool_table.setColumnWidth(6, 160)
-        self.pool_table.setColumnWidth(8, 80)
+        self.pool_table.setColumnWidth(7, 60)
+        self.pool_table.setColumnWidth(9, 80)
         self.pool_table.verticalHeader().setVisible(False)
         self.pool_table.setAlternatingRowColors(True)
         self.pool_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -587,7 +593,7 @@ class ConfigPanel(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        hint_label = QLabel("提示：类型列只有「角色」「武器」「兑换」「资源」四种类型会被后续分析识别。单抽消耗用 > 或 , 分隔表示强制优先级（靠左优先）。")
+        hint_label = QLabel("提示：类型列只有「角色」「武器」「兑换」「资源」四种类型会被后续分析识别。批次大小设 10 即一次抽卡行动只能十连。")
         hint_label.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
         layout.addWidget(hint_label)
 
@@ -738,6 +744,7 @@ class ConfigPanel(QWidget):
                 'cost': tmpl.get('cost', 'draw_resource:160'),
                 'note': '复刻池' if i > 0 and interval > 0 else '',
                 'distribution': dist,
+                'batch_size': 1,
             }
             pools.append(pool)
 
@@ -755,16 +762,17 @@ class ConfigPanel(QWidget):
             self.pool_table.setItem(r, 4, QTableWidgetItem(str(p['start_day'])))
             self.pool_table.setItem(r, 5, QTableWidgetItem(str(p['duration'])))
             self.pool_table.setItem(r, 6, QTableWidgetItem(p['cost']))
-            self.pool_table.setItem(r, 7, QTableWidgetItem(p.get('note', '')))
+            self.pool_table.setItem(r, 7, QTableWidgetItem(str(p.get('batch_size', 1))))
+            self.pool_table.setItem(r, 8, QTableWidgetItem(p.get('note', '')))
             edit_item = QTableWidgetItem("...双击编辑")
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(r, 8, edit_item)
+            self.pool_table.setItem(r, 9, edit_item)
             self._pool_distributions[p['id']] = p['distribution']
 
             inferred = self._infer_pool_type(p['id'], p['type'], p.get('note', ''))
             row_bg = self._pool_row_bg(inferred, p.get('note', ''))
             if row_bg:
-                for col in range(8):
+                for col in range(10):
                     item = self.pool_table.item(r, col)
                     if item:
                         item.setBackground(row_bg)
@@ -805,15 +813,17 @@ class ConfigPanel(QWidget):
                 note = f"{len(dist)}卡"
             else:
                 note = p.get('note', '')
-            self.pool_table.setItem(i, 7, QTableWidgetItem(note))
+            batch_size = p.get('batch_size', 1)
+            self.pool_table.setItem(i, 7, QTableWidgetItem(str(batch_size)))
+            self.pool_table.setItem(i, 8, QTableWidgetItem(note))
             edit_item = QTableWidgetItem("...双击编辑")
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(i, 8, edit_item)
+            self.pool_table.setItem(i, 9, edit_item)
 
             inferred = self._infer_pool_type(pool_id, p.get('type', ''), note)
             row_bg = self._pool_row_bg(inferred, note)
             if row_bg:
-                for col in range(8):
+                for col in range(10):
                     item = self.pool_table.item(i, col)
                     if item:
                         item.setBackground(row_bg)
@@ -857,10 +867,11 @@ class ConfigPanel(QWidget):
         self.pool_table.setItem(row, 4, QTableWidgetItem("0"))
         self.pool_table.setItem(row, 5, QTableWidgetItem("21"))
         self.pool_table.setItem(row, 6, QTableWidgetItem("draw_resource:160"))
-        self.pool_table.setItem(row, 7, QTableWidgetItem(""))
+        self.pool_table.setItem(row, 7, QTableWidgetItem("1"))
+        self.pool_table.setItem(row, 8, QTableWidgetItem(""))
         edit_item = QTableWidgetItem("...双击编辑")
         edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.pool_table.setItem(row, 8, edit_item)
+        self.pool_table.setItem(row, 9, edit_item)
         self._all_pool_rows.append(row)
         self._ensure_resource_registered('draw_resource', '抽卡资源')
         self._sync_card_defs_from_pools()
@@ -869,6 +880,9 @@ class ConfigPanel(QWidget):
     def _remove_pool(self):
         rows = sorted([r.row() for r in self.pool_table.selectionModel().selectedRows()], reverse=True)
         for row in rows:
+            id_item = self.pool_table.item(row, 1)
+            if id_item:
+                self._pool_distributions.pop(id_item.text().strip(), None)
             self.pool_table.removeRow(row)
         self._sync_card_defs_from_pools()
         self._update_preview()
@@ -878,7 +892,7 @@ class ConfigPanel(QWidget):
         for row in rows:
             new_row = self.pool_table.rowCount()
             self.pool_table.insertRow(new_row)
-            for col in range(8):
+            for col in range(10):
                 if col == 0:
                     enabled_cb = QCheckBox()
                     enabled_cb.setChecked(True)
@@ -891,7 +905,7 @@ class ConfigPanel(QWidget):
                         self.pool_table.setItem(new_row, col, new_item)
             edit_item = QTableWidgetItem("...双击编辑")
             edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(new_row, 8, edit_item)
+            self.pool_table.setItem(new_row, 9, edit_item)
             id_item = self.pool_table.item(new_row, 1)
             if id_item:
                 id_item.setText(f"{id_item.text()}_copy")
@@ -929,7 +943,7 @@ class ConfigPanel(QWidget):
                 if isinstance(rg, dict):
                     for rid in rg.keys():
                         self._ensure_resource_registered(rid)
-            note_item = self.pool_table.item(row, 7)
+            note_item = self.pool_table.item(row, 8)
             if note_item:
                 note_item.setText(f"{len(result)}卡")
             self._sync_card_defs_from_pools()
@@ -1590,7 +1604,7 @@ class ConfigPanel(QWidget):
         # Phase 3: 日历预览（可折叠）
         self.calendar_group = QGroupBox("📅 日历预览")
         self.calendar_group.setCheckable(True)
-        self.calendar_group.setChecked(False)
+        self.calendar_group.setChecked(True)
         calendar_layout = QVBoxLayout(self.calendar_group)
         self.calendar_widget = QCalendarWidget()
         self.calendar_widget.setMinimumHeight(200)
@@ -1614,6 +1628,7 @@ class ConfigPanel(QWidget):
         # Phase 3: 日历预览缓存
         self._cached_schedule = None
         self._cached_schedule_key = None
+        self._cached_start_date = None  # 用于清除旧高亮
 
         self.resource_defs_table.cellChanged.connect(self._on_resource_def_changed)
         self.gain_rules_table.cellChanged.connect(self._update_preview)
@@ -1743,31 +1758,40 @@ class ConfigPanel(QWidget):
         self.set_card_defs(list(defs_map.values()))
         self._update_preview()
 
+    def _compute_pools_map(self):
+        """从池子分布实时推导每张卡的池子归属。"""
+        result = {}
+        for pid, dist_list in self._pool_distributions.items():
+            for d in dist_list:
+                cid = d.get('card_id', '')
+                if cid and cid != '_no_card':
+                    result.setdefault(cid, []).append(pid)
+        return result
+
     def get_card_defs(self):
+        pools_map = self._compute_pools_map()
         defs = []
         for i in range(self.card_def_table.rowCount()):
             card_id_item = self.card_def_table.item(i, 0)
             name_item = self.card_def_table.item(i, 1)
             rarity_widget = self.card_def_table.cellWidget(i, 2)
-            pools_item = self.card_def_table.item(i, 3)
             init_widget = self.card_def_table.cellWidget(i, 4)
             card_id = card_id_item.text().strip() if card_id_item else ''
             name = name_item.text().strip() if name_item else ''
             rarity = rarity_widget.currentText() if rarity_widget else 'R'
-            pools_text = pools_item.text().strip() if pools_item else ''
-            pools = [p.strip() for p in pools_text.split(',') if p.strip()] if pools_text else []
             initial_count = init_widget.value() if init_widget else 0
             defs.append({
                 'card_id': card_id,
                 'name': name,
                 'rarity': rarity,
-                'pools': pools,
+                'pools': pools_map.get(card_id, []),
                 'initial_count': initial_count,
             })
         return defs
 
     def set_card_defs(self, defs):
         self.card_defs = list(defs)
+        pools_map = self._compute_pools_map()
         self.card_def_table.blockSignals(True)
         self.card_def_table.setRowCount(len(defs))
         rarity_options = ["SSR", "SR", "R", "无"]
@@ -1781,7 +1805,8 @@ class ConfigPanel(QWidget):
             idx = rarity_map.get(rarity, 2)
             rarity_combo.setCurrentIndex(idx)
             self.card_def_table.setCellWidget(i, 2, rarity_combo)
-            pools_text = ','.join(d.get('pools', []))
+            cid = d.get('card_id', '')
+            pools_text = ','.join(pools_map.get(cid, []))
             pools_item = QTableWidgetItem(pools_text)
             pools_item.setFlags(pools_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.card_def_table.setItem(i, 3, pools_item)
@@ -1931,14 +1956,26 @@ class ConfigPanel(QWidget):
                 pools_item.setBackground(QColor(240, 240, 240))
                 self.target_table.setItem(i, 2, pools_item)
 
-    def _update_calendar_highlights(self, start_date, total_days):
-        """根据缓存的 schedule 设置日历高亮。线程安全：必须在 GUI 主线程调用。"""
+    def _update_calendar_highlights(self, start_date, total_days,
+                                     old_schedule=None, old_start_date=None):
+        """根据缓存的 schedule 设置日历高亮。线程安全：必须在 GUI 主线程调用。
+
+        Args:
+            start_date: 当前模拟起始日期。
+            total_days: 模拟总天数。
+            old_schedule: 上一次展开的 schedule（用于精准清除旧高亮）。
+            old_start_date: 上一次使用的起始日期（与 old_schedule 配对）。
+        """
         from PyQt6.QtGui import QTextCharFormat, QColor
         import datetime as _dt
 
-        # 重置所有日期格式
         default_fmt = QTextCharFormat()
-        self.calendar_widget.setDateTextFormat(_dt.date(2000, 1, 1), default_fmt)
+
+        # 精准清除上一次设置的高亮日期（解决删除规则后旧日期仍标绿的问题）
+        if old_schedule and old_start_date:
+            for day_offset in old_schedule:
+                d = old_start_date + _dt.timedelta(days=day_offset)
+                self.calendar_widget.setDateTextFormat(d, default_fmt)
 
         if not self._cached_schedule:
             return
@@ -2019,6 +2056,15 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _update_preview(self):
+        """请求更新预览（500ms 去抖）"""
+        if self._refreshing or self._store is None:
+            return
+        self._preview_timer.start()
+
+    def _do_update_preview(self):
+        """实际执行预览更新"""
+        if self._refreshing:
+            return
         if self._store is None:
             self.preview_text.setText("配置预览:\n\n（等待配置加载...）")
             return
@@ -2126,6 +2172,9 @@ class ConfigPanel(QWidget):
             cache_key = (start_date_str, total_days, tuple(key_parts))
 
             if self._cached_schedule_key != cache_key:
+                # 保存旧缓存以便精准清除上一次的高亮日期
+                old_schedule = self._cached_schedule
+                old_start_date = self._cached_start_date
                 self._cached_schedule = expand_gain_rules_to_schedule(
                     gain_rules=gain_rules,
                     day_overrides=day_overrides,
@@ -2133,7 +2182,9 @@ class ConfigPanel(QWidget):
                     start_date=start_date,
                 )
                 self._cached_schedule_key = cache_key
-                self._update_calendar_highlights(start_date, total_days)
+                self._cached_start_date = start_date
+                self._update_calendar_highlights(
+                    start_date, total_days, old_schedule, old_start_date)
 
         self.config_changed.emit(config)
 
@@ -2191,11 +2242,12 @@ class ConfigPanel(QWidget):
                 'enabled': p.enabled,
                 'id': p.pool_id,
                 'name': p.name,
-                'type': p.bindings.get('type', '角色') if p.bindings else '角色',
+                'type': p.pool_type or (p.bindings.get('type', '角色') if p.bindings else '角色'),
                 'start_day': p.start_day,
                 'duration': p.end_day - p.start_day,
                 'cost': p.cost,
                 'note': '',
+                'batch_size': getattr(p, 'batch_size', 1),
                 'distribution': [{'card_id': d.card_id, 'probability': d.probability,
                                   'rarity': d.rarity, 'featured': d.featured,
                                   'resources_gained': d.resources_gained,
@@ -2326,12 +2378,14 @@ class ConfigPanel(QWidget):
                 enabled=p.get('enabled', True),
                 pool_id=pid,
                 name=p.get('name', ''),
+                pool_type=pool_type,
                 start_day=p.get('start_day', 0),
                 end_day=p.get('start_day', 0) + p.get('duration', 21),
                 cost=p.get('cost', 'draw_resource:160'),
-                distribution_file=f"pools/{pid}.txt",
+                distribution_template="",
                 bindings=bindings,
                 distribution=distribution,
+                batch_size=p.get('batch_size', 1),
             ))
 
         pity = config.get('pity', {})
@@ -2803,6 +2857,18 @@ class ConfigPanel(QWidget):
             start_day = int(_item(4, '0') or 0)
             duration = int(_item(5, '21') or 21)
 
+            batch_size = 1
+            batch_text = _item(7, '1').strip()
+            if batch_text:
+                try:
+                    batch_size = int(batch_text)
+                    if batch_size < 1:
+                        batch_size = 1
+                    elif batch_size > 1000:
+                        batch_size = 1000
+                except ValueError:
+                    batch_size = 1
+
             dist_data = self._pool_distributions.get(pid)
             distribution = []
             if dist_data:
@@ -2826,12 +2892,14 @@ class ConfigPanel(QWidget):
                 enabled=cb.isChecked() if cb else True,
                 pool_id=pid,
                 name=_item(2),
+                pool_type=pool_type,
                 start_day=start_day,
                 end_day=start_day + duration,
                 cost=cost_text,
-                distribution_file=f"pools/{pid}.txt",
+                distribution_template="",
                 bindings=bindings,
                 distribution=distribution,
+                batch_size=batch_size,
             ))
 
         store.pity.enabled = self.pity_enabled.isChecked()
@@ -2914,6 +2982,7 @@ class ConfigPanel(QWidget):
             self._refresh_from_store_impl()
         finally:
             self._refreshing = False
+        self._update_preview()  # 刷新完成后启动去抖预览（_refreshing=True 期间被跳过）
 
     def _refresh_from_store_impl(self):
         store = self._store
@@ -2932,7 +3001,7 @@ class ConfigPanel(QWidget):
                              for d in p.distribution]
                 self._pool_distributions[p.pool_id] = dist_list
 
-            pool_type = p.bindings.get('type', '角色') if p.bindings else '角色'
+            pool_type = p.pool_type or (p.bindings.get('type', '角色') if p.bindings else '角色')
             pools_data.append({
                 'enabled': p.enabled,
                 'id': p.pool_id,
@@ -2943,6 +3012,7 @@ class ConfigPanel(QWidget):
                 'cost': p.cost,
                 'note': '',
                 'distribution': dist_list,
+                'batch_size': getattr(p, 'batch_size', 1),
             })
         self._set_pool_table(pools_data)
 
@@ -2994,8 +3064,8 @@ class ConfigPanel(QWidget):
         for rule in store.gain_rules:
             for rid, amt in rule.gains.items():
                 gain_data.append({
-                    'type': _gain_rule_type_to_gui(rule.rule_type),
-                    'param': _gain_rule_param_to_gui(rule.rule_type),
+                    'type': _gain_rule_type_to_gui(rule.rule_type, rule.param),
+                    'param': _gain_rule_param_to_gui(rule.rule_type, rule.param),
                     'resource_id': rid,
                     'amount': amt,
                 })

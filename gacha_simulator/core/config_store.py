@@ -26,12 +26,13 @@ class PoolEntry:
     start_day: int = 0
     end_day: int = 21
     cost: str = 'draw_resource:160'
-    distribution_file: str = ''
+    distribution_template: str = ''
     bindings: Dict[str, str] = field(default_factory=dict)
     target_specs: List[tuple] = field(default_factory=list)
     rerun_of: Optional[str] = None
     exchange_card_id: Optional[str] = None
     distribution: List[PoolDistEntry] = field(default_factory=list)
+    batch_size: int = 1
 
 
 @dataclass
@@ -108,6 +109,7 @@ class ConfigStore:
     simulation_count: int = 1000
     max_workers: int = 4
     seed: int = 42
+    _distribution_templates: List[dict] = field(default_factory=list)
 
     def __post_init__(self):
         if self.strategy_type:
@@ -138,6 +140,7 @@ class ConfigStore:
         self.simulation_count = 1000
         self.max_workers = 4
         self.seed = 42
+        self._distribution_templates.clear()
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────
     # 从 card_weights 提取，供 make_gdr_calculator() 使用。

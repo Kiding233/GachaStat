@@ -2,10 +2,8 @@
 
 不依赖概率的确定性测试：逐个验证策略行为、停止条件、完整流程。
 """
-import pytest
-from unittest.mock import MagicMock, patch
 from gacha_simulator.core.worst_impact import DrawTargetStrategy
-from gacha_simulator.core.strategy import StrategyContext, create_strategy, STRATEGY_REGISTRY
+from gacha_simulator.core.strategy import StrategyContext, create_strategy
 from gacha_simulator.core.action import DrawAction, WaitAction
 from gacha_simulator.core.stop_condition import ConsecutivePoolTargetCondition
 
@@ -19,6 +17,7 @@ class _FakePool:
         self.id = pid
         self.cost = cost
         self.available_until = available_until
+        self.batch_size = 1
 
 
 class _FakeState:
@@ -30,6 +29,26 @@ class _FakeState:
         for k, v in cost.items():
             if self._resources.get(k, 0) < v:
                 return False
+        return True
+
+    def can_afford_batch(self, cost, batch_size=1):
+        if batch_size <= 1:
+            return self.can_afford(cost)
+        remaining = dict(self._resources)
+        for _ in range(batch_size):
+            option = None
+            if isinstance(cost, dict):
+                if all(remaining.get(r, 0) >= a for r, a in cost.items()):
+                    option = cost
+            elif isinstance(cost, list):
+                for opt in cost:
+                    if all(remaining.get(r, 0) >= a for r, a in opt.items()):
+                        option = opt
+                        break
+            if option is None:
+                return False
+            for r, a in option.items():
+                remaining[r] -= a
         return True
 
     @property

@@ -8,16 +8,27 @@ version = "1.6.0"
 description = "GachaStat — A flexible gacha simulation and statistical analysis system"
 requires-python = ">=3.10"
 dependencies = [
-    "PyQt6>=6.0",
     "numpy>=1.20",
     "matplotlib>=3.5",
     "scipy>=1.10",
+    "binsreg>=3.1.0",
+    "tomli>=2.0; python_version < '3.11'",
+    "tomli-w>=1.0",
 ]
 
 [project.optional-dependencies]
+gui = [
+    "PyQt6>=6.0",
+    "PyQt6-WebEngine>=6.0",
+    "pysdtest>=0.0.21,<0.1",
+]
+analysis = [
+    "pysdtest>=0.0.21,<0.1",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-timeout>=2.0",
 ]
 
 [tool.pytest.ini_options]

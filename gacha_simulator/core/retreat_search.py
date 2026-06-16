@@ -1,9 +1,12 @@
 from __future__ import annotations
+import logging
 import zlib
 from typing import List, Dict, Optional, Callable, Set
 from dataclasses import dataclass, field
 
 from .forward_backward import ResourceSearchStep
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -112,7 +115,7 @@ class PlanSearchEngine:
     def stop(self):
         self._should_stop = True
 
-    def _build_env(self, target_specs, initial_resource_value):
+    def _build_env(self, initial_resource_value):
         """构建模拟环境——根据 from_pool_id 分叉：
         - None: 完整时间线（SimulationEnvBuilder）
         - str:  截断时间线（RetreatConfigBuilder）
@@ -185,6 +188,12 @@ class PlanSearchEngine:
     def _simulate_with_resource(self, env, target_specs, resource_value):
         # 如果没有剩余池子，那么没有任务已完成，成功率 100%
         if not env.pools:
+            if target_specs:
+                logger.warning(
+                    "_simulate_with_resource: no pools but %d target(s) — unreachable",
+                    len(target_specs),
+                )
+                return 0.0
             return 1.0
         from gacha_simulator.service.batch_simulator import run_batch_parallel
         from gacha_simulator.core.gdr import make_gdr_calculator
@@ -295,16 +304,16 @@ class PlanSearchEngine:
         if not self._check_gdr_compatibility(result, _emit):
             return result
 
-        env = self._build_truncated_env(target_specs, self.base_resource)
+        env = self._build_truncated_env(self.base_resource)
 
         # 没有后续池子的情况，直接返回成功
         if not env.pools:
             result.points.append(RetreatSearchPoint(
                 extra_resource=0.0,
                 target_specs=dict(target_specs),
-                success_probability=1.0,
+                success_probability=1.0 if not target_specs else 0.0,
             ))
-            _emit("没有后续池子，已成功", 100)
+            _emit("没有后续池子，已成功" if not target_specs else "无池+有目标——不可达", 100)
             return result
 
         cost_per_draw = self._extract_cost_per_draw(env)
@@ -414,7 +423,7 @@ class PlanSearchEngine:
         if self.from_pool_id is None:
             return dict(target_specs)
 
-        env = self._build_env(target_specs, self.base_resource)
+        env = self._build_env(self.base_resource)
         obtainable = self._get_obtainable_card_ids(env)
 
         unobtainable = [cid for cid in target_specs if cid not in obtainable]
@@ -453,18 +462,18 @@ class PlanSearchEngine:
             search_mode='backward',
         )
 
-        env = self._build_truncated_env(target_specs, self.base_resource)
+        env = self._build_truncated_env(self.base_resource)
 
         # 没有后续池子的情况，直接返回成功
         if not env.pools:
             result.points.append(RetreatSearchPoint(
                 extra_resource=0.0,
                 target_specs=dict(target_specs),
-                success_probability=1.0,
+                success_probability=1.0 if not target_specs else 0.0,
             ))
-            self.progress_callback("没有后续池子，已成功", 100)
+            self.progress_callback("没有后续池子，已成功" if not target_specs else "无池+有目标——不可达", 100)
             return result
-        
+
         current_specs = dict(target_specs)
         card_ids = self._get_sorted_card_ids(target_specs)
 
@@ -486,7 +495,7 @@ class PlanSearchEngine:
             if not reduced_specs:
                 break
 
-            env = self._build_truncated_env(reduced_specs, self.base_resource)
+            env = self._build_truncated_env(self.base_resource)
             prob = self._simulate_with_resource(env, reduced_specs, self.base_resource)
             current_specs = reduced_specs
             result.points.append(RetreatSearchPoint(
@@ -528,16 +537,16 @@ class PlanSearchEngine:
             search_mode='forward',
         )
 
-        env = self._build_truncated_env(candidate_specs, self.base_resource)
+        env = self._build_truncated_env(self.base_resource)
 
         # 没有后续池子的情况，直接返回成功（所有候选卡均可获得）
         if not env.pools:
             result.points.append(RetreatSearchPoint(
                 extra_resource=0.0,
                 target_specs=dict(candidate_specs),
-                success_probability=1.0,
+                success_probability=1.0 if not candidate_specs else 0.0,
             ))
-            self.progress_callback("没有后续池子，已成功", 100)
+            self.progress_callback("没有后续池子，已成功" if not candidate_specs else "无池+有目标——不可达", 100)
             return result
 
         # 按 desire 降序排列——高权重优先添加
@@ -560,7 +569,7 @@ class PlanSearchEngine:
             self.progress_callback(f"前进法: 尝试添加 {card_id}", pct)
 
             current_specs[card_id] = candidate_specs[card_id]
-            env = self._build_truncated_env(current_specs, self.base_resource)
+            env = self._build_truncated_env(self.base_resource)
             prob = self._simulate_with_resource(env, current_specs, self.base_resource)
 
             result.points.append(RetreatSearchPoint(
@@ -624,16 +633,16 @@ class PlanSearchEngine:
             direction=direction,
         )
 
-        env = self._build_truncated_env(target_specs, self.base_resource)
+        env = self._build_truncated_env(self.base_resource)
 
         # 没有后续池子的情况，直接返回成功
         if not env.pools:
             result.points.append(RetreatSearchPoint(
                 extra_resource=0.0,
                 target_specs=dict(target_specs),
-                success_probability=1.0,
+                success_probability=1.0 if not target_specs else 0.0,
             ))
-            self.progress_callback("没有后续池子，已成功", 100)
+            self.progress_callback("没有后续池子，已成功" if not target_specs else "无池+有目标——不可达", 100)
             return result
 
         if direction == 'forward':

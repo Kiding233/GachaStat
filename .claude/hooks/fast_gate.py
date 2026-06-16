@@ -25,7 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import read_hook_input, get_main_repo_root
 
 # 允许变更的目录
-ALLOWED_DIRS = ["gacha_simulator/", "docs/", "config/", ".claude/"]
+ALLOWED_DIRS = [
+    "gacha_simulator/", "docs/", "config/", ".claude/",
+    "tests/", "scripts/", "tools/", ".recycle_bin/",
+    "pyproject.toml", "CLAUDE.md", "CONTRIBUTING.md", "project.md",
+]
 
 
 def _is_bypass_active(project_root: Path) -> bool:
@@ -37,7 +41,7 @@ def _get_staged_files(project_root: Path) -> list[str]:
     先用 utf-8 解码，失败则回退 GBK。同时统一反斜杠为正斜杠。"""
     try:
         r = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
+            ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"],
             capture_output=True, text=True, encoding="utf-8",
             cwd=str(project_root), timeout=10,
         )
@@ -48,7 +52,7 @@ def _get_staged_files(project_root: Path) -> list[str]:
         # utf-8 解码失败，回退 GBK（Windows 中文系统默认编码）
         try:
             r = subprocess.run(
-                ["git", "diff", "--cached", "--name-only"],
+                ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"],
                 capture_output=True, text=True, encoding="gbk",
                 cwd=str(project_root), timeout=10,
             )

@@ -9,7 +9,7 @@ import traceback
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
@@ -17,17 +17,6 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView,
     QStackedWidget, QProgressBar, QSplitter, QScrollArea, QButtonGroup,
 )
-
-
-class WheelEventFilter(QObject):
-    """阻止 QComboBox/QSpinBox/QDoubleSpinBox 在未聚焦时响应鼠标滚轮。
-
-    直接安装在各控件上：未聚焦时吞掉滚轮事件，防止在 ScrollArea 中滚动时误触值变更。
-    """
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
-            return True  # 吞掉事件，阻止值变更
-        return super().eventFilter(obj, event)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -590,10 +579,6 @@ class PlanSearchPanel(QWidget):
 
         main_layout.addWidget(splitter)
 
-        # 安装滚轮过滤器——阻止下拉框/数字框在未聚焦时响应滚轮
-        self._wheel_filter = WheelEventFilter(self)
-        for w in self.findChildren((QComboBox, QSpinBox, QDoubleSpinBox)):
-            w.installEventFilter(self._wheel_filter)
 
     def _setup_mode_group(self, parent_layout):
         group = QGroupBox("搜索模式")
@@ -926,7 +911,6 @@ class PlanSearchPanel(QWidget):
             spin = QSpinBox()
             spin.setRange(0, 99999)
             spin.setValue(default_val)
-            spin.installEventFilter(self._wheel_filter)
             self.pity_table.setCellWidget(i, 5, spin)
 
     def _get_selected_resource(self):
@@ -1070,6 +1054,10 @@ class PlanSearchPanel(QWidget):
                 self.status_label.setText("请先在配置中添加目标卡")
                 self.status_update.emit("请先在配置中添加目标卡")
                 return
+
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.terminate()
+                self._worker.wait(3000)
 
             self._worker = PlanSearchWorker(
                 config_store=self._store,
@@ -1376,12 +1364,10 @@ class PlanSearchPanel(QWidget):
             add_spin.setRange(0.0, 100.0)
             add_spin.setValue(1.0)
             add_spin.setSingleStep(0.1)
-            add_spin.installEventFilter(self._wheel_filter)
             self.weight_table.setCellWidget(i, 1, add_spin)
 
             remove_spin = QDoubleSpinBox()
             remove_spin.setRange(0.0, 100.0)
             remove_spin.setValue(1.0)
             remove_spin.setSingleStep(0.1)
-            remove_spin.installEventFilter(self._wheel_filter)
             self.weight_table.setCellWidget(i, 2, remove_spin)

@@ -690,7 +690,7 @@ Read 打开计划文件，输出分类结果。
 4. dimensions: 受影响子系统/面板/动态维度，每个附 rationale
 5. excluded: 明确排除的默认维度及理由（如"并行模拟"与计划无关）
 6. defect_count: 计划中列出的缺陷/修复条目总数（从"实施路线"/"方案"章节统计）
-7. recommendation: max_adversarial_rounds(simple→2,medium→3,complex→4), max_gate_retries(simple→1,medium→2,complex→3)
+7. recommendation: max_adversarial_rounds(simple→4,medium→5,complex→6), max_gate_retries(simple→1,medium→2,complex→3)
 8. skip_stages: greenfield→["code_audit"]; simple+无.py→["fan_out_impact","code_audit"]; simple+1面板→["fan_out_impact"]
 
 脚本层自动校验: 涉及≥5 .py但complexity=simple→修正为medium；缺陷数≥6但complexity≠complex→修正为complex；计划提及的.py不在维度中→追加面板维度；分类器排除的维度在grep信号中出现→恢复维度`
@@ -757,7 +757,7 @@ if (restoredDims.length > 0) {
   autoCorrected = true
 }
 
-const maxRounds = classification.recommendation.max_adversarial_rounds || 3
+const maxRounds = classification.recommendation.max_adversarial_rounds || 5
 const maxGateRetries = classification.recommendation.max_gate_retries || 2
 const globalBacktrackLimit = maxRounds + 2
 let totalBacktracks = 0

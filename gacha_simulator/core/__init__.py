@@ -64,7 +64,10 @@ from .gdr_binning import (
 )
 from .comparison_analyzer import (
     DescriptiveStats, HypothesisTestResult, ParetoFrontier,
-    dd_bootstrap_test, compute_dominance_matrix, compute_pvalue_matrix,
+    ClassificationResult, classify_dominance,
+    dd_bootstrap_test, dd_bootstrap_test_v2,
+    compute_dominance_matrix, compute_dominance_matrix_v2,
+    compute_pvalue_matrix, compute_integrated_cdf,
     compute_gdr_values_for_datasets, holm_bonferroni, benjamini_hochberg,
 )
 # BootstrapEngine / BootstrapResult 改为惰性导入（__getattr__），
@@ -130,7 +133,10 @@ __all__ = [
     'ResultStore', 'StoredDataset', 'ComparabilityFingerprint', 'ComparabilityDiff', 'compute_config_hash',
     'BinningResult', 'compute_bins', 'detect_step_size', 'compute_aligned_bins',
     'DescriptiveStats', 'HypothesisTestResult', 'ParetoFrontier',
-    'dd_bootstrap_test', 'compute_dominance_matrix', 'compute_pvalue_matrix',
+    'ClassificationResult', 'classify_dominance',
+    'dd_bootstrap_test', 'dd_bootstrap_test_v2',
+    'compute_dominance_matrix', 'compute_dominance_matrix_v2',
+    'compute_pvalue_matrix', 'compute_integrated_cdf',
     'compute_gdr_values_for_datasets', 'holm_bonferroni', 'benjamini_hochberg',
 ]
 

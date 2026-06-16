@@ -4,7 +4,7 @@ GachaStat 抽卡概率模拟与分析系统。版本号/Tab 列表由 C1 cron �
 
 ## 一、项目事实
 
-**技术栈：** Python 3.10+ · PyQt6 · numpy · Plotly (WebEngine) · pytest+cov · binsreg (CCFF 2024)
+**技术栈：** Python 3.10+ · PyQt6 · numpy · Plotly (WebEngine) · pytest+cov · binsreg (CCFF 2024) · PySDTest v0.0.21 (L2 随机占优可选依赖)
 并行模拟：`multiprocessing.Pool` + worker initializer 模式
 
 ```bash
@@ -61,6 +61,12 @@ gacha_simulator/
 
 `STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。
 
+### 并行模拟入口（强制）
+
+所有批量/并行模拟必须通过 `service/batch_simulator.py` 的 `run_batch_parallel()` 执行。
+禁止直接使用 `multiprocessing.Pool` + `GachaService` 的组合。
+CLI / GUI / 脚本 / 测试均通过此统一入口。
+
 ### 扩展指南
 
 | 扩展 | 入口 |
@@ -71,6 +77,7 @@ gacha_simulator/
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
 | 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |
+| 新随机占优检验 | `core/comparison_analyzer.py` → `dd_bootstrap_test_v2()` + `compute_dominance_matrix_v2()` → `compute_dominance_matrix()` 派发器（当前：v2=PySDTest Donald-Hsu 2016 选择性重中心化 / v1=等式中心化 Bootstrap） |
 
 ---
 

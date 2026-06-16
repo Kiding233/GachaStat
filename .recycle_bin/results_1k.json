@@ -1,0 +1,28 @@
+{
+  "config": {
+    "path": "D:\\Users\\DELL\\Desktop\\gacha_simulator\\\u62bd\u5361\u6a21\u62df\u4e0e\u5206\u6790\u7a0b\u5e8f\\gacha_simulator\\config\\config.toml",
+    "num_pools": 8,
+    "num_cards": 24,
+    "pity_enabled": true,
+    "num_targets": 6
+  },
+  "num_simulations": 1000,
+  "elapsed_time": 4.52470588684082,
+  "summary": {
+    "total_draws": {
+      "mean": 394.535,
+      "median": 398.0,
+      "std": 14.066441447644104
+    },
+    "ssr_counts": {
+      "mean": 4.549,
+      "median": 4.0
+    },
+    "gdr_percent": {
+      "mean": 75.81666666666668,
+      "median": 66.66666666666666,
+      "p25": 66.66666666666666,
+      "p75": 83.33333333333334
+    }
+  }
+}

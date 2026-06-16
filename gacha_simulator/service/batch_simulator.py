@@ -10,7 +10,7 @@
 import logging
 import random
 import traceback
-from typing import List, Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable
 from multiprocessing import Pool as MPPool
 from dataclasses import dataclass, field as dc_field
 
@@ -310,7 +310,7 @@ def run_batch_parallel(
     strategy_name: str = '',
     strategy_params: Optional[dict] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-) -> List[Optional[Dict[str, Any]]]:
+) -> 'BatchResult':
     """批量并行模拟。
 
     env: 模拟环境（池、保底、资源等静态配置）。
@@ -371,11 +371,14 @@ def run_batch_parallel(
                 else:
                     n_failed += 1
             else:
-                results.append(result)
+                if result is not None:
+                    results.append(result)
+                else:
+                    n_failed += 1
             if progress_callback:
                 progress_callback(i + 1, num_simulations)
         if n_failed > 0:
-            print(f"[WARNING] {n_failed}/{num_simulations} simulations failed")
+            logging.warning("%s/%s simulations failed", n_failed, num_simulations)
         merged_ext = merge_extraction_packets(
             extraction_packets,
             heatmap_config={'n_heatmap_bins': getattr(env, 'n_heatmap_bins', 50), 'max_keep': 200},
@@ -428,22 +431,18 @@ def run_batch_parallel(
                     if progress_callback:
                         progress_callback(i + 1, num_simulations)
                 if n_failed > 0:
-                    print(f"[WARNING] {n_failed}/{num_simulations} simulations failed")
+                    logging.warning("%s/%s simulations failed", n_failed, num_simulations)
             break
         except Exception as e:
             ename = type(e).__name__
             if workers > 1:
-                import sys
                 import time
-                print(f"[run_batch_parallel] {ename}，以 workers={max(1, workers // 2)} 重试…",
-                      file=sys.stderr)
+                logging.warning("%s，以 workers=%s 重试…", ename, max(1, workers // 2))
                 time.sleep(0.5)
                 continue
             # workers=1 也失败 → 记录并走单进程兜底
-            import sys
             import traceback as _tb
-            print(f"[run_batch_parallel] {ename} (workers=1)，回退到单进程内联执行",
-                  file=sys.stderr)
+            logging.warning("%s (workers=1)，回退到单进程内联执行", ename)
             _tb.print_exc()
             mp_failed = True
             break
@@ -492,7 +491,7 @@ def run_batch_parallel(
             if progress_callback:
                 progress_callback(idx + 1, num_simulations)
         if n_failed > 0:
-            print(f"[WARNING] {n_failed}/{num_simulations} simulations failed (single-process fallback)")
+            logging.warning("%s/%s simulations failed (single-process fallback)", n_failed, num_simulations)
 
     # 合并 worker / 单进程提取结果
     merged_extraction = None

@@ -27,8 +27,8 @@ from common import read_hook_input, get_main_repo_root
 # 允许变更的目录
 ALLOWED_DIRS = [
     "gacha_simulator/", "docs/", "config/", ".claude/",
-    "tests/", "scripts/", ".recycle_bin/",
-    "pyproject.toml", "CLAUDE.md", "CONTRIBUTING.md",
+    "tests/", "scripts/", "tools/", ".recycle_bin/",
+    "pyproject.toml", "CLAUDE.md", "CONTRIBUTING.md", "project.md",
 ]
 
 

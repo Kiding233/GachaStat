@@ -14,45 +14,8 @@ logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(mess
 sys.path.insert(0, str(Path(__file__).parent))
 
 from gacha_simulator.core.config_toml import load_toml  # noqa: E402
-from gacha_simulator.core.strategy import create_strategy  # noqa: E402
-from gacha_simulator.core.stop_condition import AllPoolsEndCondition  # noqa: E402
-from gacha_simulator.service import GachaService  # noqa: E402
-from gacha_simulator.service.batch_simulator import SimulationEnvBuilder  # noqa: E402
-from multiprocessing import Pool as MPPool  # noqa: E402
+from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
 from gacha_simulator.paths import get_config_dir  # noqa: E402
-
-
-DAY = 86400
-
-
-def run_single_sim(args):
-    import random
-    store, resources, end_day, seed = args
-    random.seed(seed)
-
-    env = SimulationEnvBuilder.from_config_store(store)
-    strategy = create_strategy('smart', {})
-    stop_cond = AllPoolsEndCondition(end_day * DAY)
-
-    # 构造 TargetCardSet
-    from gacha_simulator.core.target_card import TargetCard, TargetCardSet
-    targets = []
-    for tc in store.target_cards:
-        targets.append(TargetCard(card_id=tc.card_id, pool_ids=list(tc.pool_ids),
-                                  quantity_needed=tc.quantity))
-    target_set = TargetCardSet(targets) if targets else TargetCardSet([])
-
-    service = GachaService(
-        env.pools, strategy, stop_cond, target_set,
-        schedule_manager=env.schedule_mgr,
-        pity_engine=env.pity_engine,
-        resource_gain=env.resource_gain,
-        ssr_ids=env.ssr_ids,
-        card_defs=env.card_defs,
-    )
-    from gacha_simulator.core import GachaState
-    state = GachaState(resources=dict(resources) if resources else {})
-    return service.run_simulation_compact(state)
 
 
 def main():
@@ -66,6 +29,18 @@ def main():
     parser.add_argument('-s', '--seed', type=int, default=42, help='Random seed')
     parser.add_argument('-o', '--output', default='results.json', help='Output file')
     parser.add_argument('--no-pity', action='store_true', help='Disable pity system')
+    parser.add_argument('--strategy', default=None,
+        choices=['smart', 'pool_quota', 'pity_reserve', 'target_hunting',
+                 'stop_on_target', 'fixed_count', 'draw_target'],
+        help='抽卡策略（默认：使用 config.toml 中指定的策略，回退 smart）')
+    parser.add_argument('--strategy-params', default=None,
+        help='策略参数，JSON 字符串。例：\'{"desire_weights": {"A": 1.5}, "miss_cost": 0.8}\' '
+             '（仅当 --strategy 显式指定时生效；若未指定，使用 config.toml 中的策略参数）')
+    parser.add_argument('--output-format', default='simple',
+        choices=['simple', 'full'],
+        help='输出格式：simple=基础统计JSON, full=含extraction完整数据')
+    parser.add_argument('--no-progress', action='store_true',
+        help='禁用进度条输出')
 
     args = parser.parse_args()
 
@@ -77,6 +52,9 @@ def main():
         default_toml = os.path.join(get_config_dir(), 'config.toml')
         store = load_toml(default_toml)
 
+    if args.no_pity:
+        store.pity.enabled = False
+
     # 为 output_data 构造 config 元数据 dict（替代旧 JSON config）
     config_meta = {
         'path': str(args.config) if args.config else default_toml,
@@ -86,11 +64,22 @@ def main():
         'num_targets': len(store.target_cards),
     }
 
-    if args.no_pity:
-        store.pity.enabled = False
+    # 策略覆盖逻辑
+    if args.strategy:
+        strategy_name = args.strategy  # CLI 参数优先
+        if args.strategy_params:
+            try:
+                strategy_params = json.loads(args.strategy_params)
+            except json.JSONDecodeError as e:
+                print(f"错误：--strategy-params JSON 解析失败: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            strategy_params = store.strategy_params  # 回退 TOML 配置
+    else:
+        strategy_name = getattr(store, 'strategy_name', 'smart') or 'smart'
+        strategy_params = store.strategy_params
 
-    SimulationEnvBuilder.from_config_store(store)
-    end_day = max(p.end_day for p in store.pools) if store.pools else 365
+    env = SimulationEnvBuilder.from_config_store(store)
 
     print("=" * 50)
     print("GachaStat CLI")
@@ -107,19 +96,28 @@ def main():
         print(f"  Range: {start}-{end}")
     print("=" * 50)
 
-    resources = dict(store.initial_resources)
+    target_specs = {tc.card_id: getattr(tc, 'quantity', 1)
+                    for tc in store.target_cards}
 
-    args_list = [
-        (store, resources, end_day, args.seed + i)
-        for i in range(args.num_simulations)
-    ]
+    def _cli_progress(done, total):
+        if done % max(1, total // 10) == 0 or done >= total:
+            print(f"\r  进度: {done}/{total} ({100*done//total}%)", end='', flush=True)
 
     print(f"\nRunning {args.num_simulations} simulations...")
     start_time = time.time()
 
-    with MPPool(processes=args.workers) as mp_pool:
-        results = mp_pool.map(run_single_sim, args_list,
-                              chunksize=max(1, args.num_simulations // 100))
+    batch_result = run_batch_parallel(
+        env=env,
+        target_specs=target_specs,
+        initial_resources=env.initial_resources,
+        num_simulations=args.num_simulations,
+        max_workers=args.workers,
+        seed=args.seed,
+        progress_callback=_cli_progress if not args.no_progress else None,
+        strategy_name=strategy_name,
+        strategy_params=strategy_params,
+    )
+    print()  # progress line 换行
 
     elapsed = time.time() - start_time
 
@@ -134,7 +132,7 @@ def main():
     ssr_counts = []
     gdr_percents = []
 
-    for r in results:
+    for r in batch_result:
         draws = r.get('total_draws', 0)
         total_draws.append(draws)
         cc = r.get('card_counts', {})
@@ -147,7 +145,7 @@ def main():
     print("\n" + "=" * 50)
     print("Results Summary")
     print("=" * 50)
-    print(f"Total Simulations: {len(results)}")
+    print(f"Total Simulations: {len(batch_result)}")
     print("\nTotal Draws:")
     print(f"  Mean: {np.mean(total_draws):.1f}")
     print(f"  Median: {np.median(total_draws):.1f}")
@@ -169,7 +167,8 @@ def main():
         'elapsed_time': elapsed,
         'summary': {
             'total_draws': {'mean': float(np.mean(total_draws)),
-                            'median': float(np.median(total_draws))},
+                            'median': float(np.median(total_draws)),
+                            'std': float(np.std(total_draws))},
             'ssr_counts': {'mean': float(np.mean(ssr_counts)),
                            'median': float(np.median(ssr_counts))},
             'gdr_percent': {
@@ -180,6 +179,19 @@ def main():
             }
         }
     }
+
+    if args.output_format == 'full' and batch_result.extraction:
+        output_data['extraction'] = {
+            'n_results': batch_result.extraction.get('n_results', 0),
+            'aggregates_count': len(
+                batch_result.extraction.get('aggregates', [])),
+            'kept_sequences_count': len(
+                batch_result.extraction.get('kept_sequences', [])),
+            'cumulative_snapshots_pools': list(
+                batch_result.extraction.get('cumulative_snapshots', {}).keys()),
+            'transition_flags_count': len(
+                batch_result.extraction.get('transition_flags', [])),
+        }
 
     with open(args.output, 'w') as f:
         json.dump(output_data, f, indent=2)

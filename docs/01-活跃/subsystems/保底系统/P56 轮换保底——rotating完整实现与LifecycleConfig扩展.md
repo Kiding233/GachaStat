@@ -621,17 +621,24 @@ P55（基础设施）
   ├── PityBehavior（独立化接口）
   ├── CounterBasedBehavior + LifecycleConfig(max_triggers)
   ├── BEHAVIOR_REGISTRY（含参数元数据，对齐 STRATEGY_REGISTRY）
-  ├── 执行顺序自动推导（soft → rotating/targeted → hard）
+  ├── 执行顺序自动推导（soft → rotating/targeted → milestone → hard）
         │
-        └── P56（本计划）
-              ├── _redistribute_scope()（模块级工具——rotating + targeted 共用）
-              ├── RotatingBehavior（stub → 完整，~60 行）
-              ├── TargetedBehavior（独立于 rotating，~80 行）
-              ├── NonDrawAction + gacha_service 分发（~55 行）
-              ├── [[pool]].epitomizable_cards（~20 行解析）
-              ├── LifecycleConfig 扩展（+deactivate_on_early_hit / +depends_on）
-              └── PityEngine 声明式依赖传播（+_activation_graph）
+        ├── P56（本计划）
+        │     ├── _redistribute_scope()（模块级工具——rotating + targeted 共用）
+        │     ├── RotatingBehavior（stub → 完整，~60 行）
+        │     ├── TargetedBehavior（独立于 rotating，~80 行）
+        │     ├── NonDrawAction + gacha_service 分发（~55 行）
+        │     ├── [[pool]].epitomizable_cards（~20 行解析）
+        │     ├── LifecycleConfig 扩展（+deactivate_on_early_hit / +depends_on）
+        │     └── PityEngine 声明式依赖传播（+_activation_graph）
+        │
+        └── P58B（MilestoneBehavior）—— 与本计划并行
+              ├── 共享 P55 平台层（PityState + CounterBasedBehavior + Registry）
+              ├── 互不依赖——milestone 是计数器驱动，rotating/targeted 是事件驱动
+              └── 两者可并行开发——P55 Phase 1-4 完成后即可启动
 ```
+
+**关键识别：P56 与 P58B 互不依赖。** P56 的 rotating/targeted 是事件驱动（SSR 出货→状态转移），P58B 的 milestone 是计数器驱动（抽数→达阈值→注入）。两者共享 P55 平台层但彼此独立——P55 Phase 1-4（PityState + DrawInfo + CounterBasedBehavior + BEHAVIOR_REGISTRY）完成后可并行推进。
 
 ## 五、波及范围
 

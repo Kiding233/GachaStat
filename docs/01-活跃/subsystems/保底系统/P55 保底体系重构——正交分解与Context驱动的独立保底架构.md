@@ -841,6 +841,26 @@ switch_resets_progress = false
 
 ### 3.13 实施阶段
 
+**关键识别：阶段一至四构成「平台层」——是 P56（rotating/targeted）和 P58B（milestone）的共同基础设施。平台层完成后，P56、P58B、P55 后续阶段可并行推进。**
+
+**可提前提取的微型任务（不依赖 P55 任何其他阶段）：**
+
+| 微型任务 | 归属 | 行数 | 受益方 |
+|---------|------|:---:|--------|
+| `ConfigStore.is_limited(card_id)` | 独立——利用现有 `PoolPitySpec.featured_ids` | ~5 | P57（替代 `card_id.startswith('limited')`） |
+| `[rarities]` 配置段解析 | P55 Phase 10 中提取 | ~15 | P55（scope 校验）、P57（scope 参数校验）、P58B（milestone scope 默认值推导） |
+
+这两个微型任务可在 P58A 之后、P55 平台层之前以一次提交完成——低成本、零风险、高收益（统一稀有度名称校验、消除 P57 命名约定依赖）。
+
+**平台层（Phase 1-4）对其他计划的简化效应：**
+
+| 被简化方 | 简化点 | 效应 |
+|---------|------|------|
+| **P58B** | `MilestoneBehavior(CounterBasedBehavior)` —— 计数器生命周期（增/查/重置/停用）全部继承 | 60→35行 |
+| **P56** | `RotatingBehavior` / `TargetedBehavior` 状态存储——`PityState` namespace + `Counter`/`Flag` | 每个 behavior 的状态管理零新代码 |
+| **P55 自身** | `SoftInterval`/`Additive`/`HardPity` 只写 `_compute_probabilities()` | 各 ~80→~30行 |
+| **任何未来 type** | `BEHAVIOR_REGISTRY` 一行注册 + 写类 | 引擎零改动 |
+
 | 阶段 | 内容 | 文件 |
 |------|------|------|
 | **阶段一** | `PityState` 抽象化（namespace 容器 + `get`/`set`/`incr`）+ `Counter` / `Flag` 微抽象 | `pity.py` |

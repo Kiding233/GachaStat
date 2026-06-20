@@ -37,17 +37,21 @@ gacha_simulator/
 
 ### 策略 (`core/strategy.py`)
 
-`STRATEGY_REGISTRY` 注册 7 种策略（`smart`/`pool_quota`/`pity_reserve`/`stop_on_target`/`target_hunting`/`fixed_count`/`draw_target`），统一接口 `select_action(self, ctx: StrategyContext) -> Action`。`StrategyContext` 封装 `state`/`current_pools`/`target_cards`/`acquired`/`pool_draw_counts`/`total_draws` 等，`get_pity_probabilities()` 惰性计算。工厂：`create_strategy(name, params)`。
+`STRATEGY_REGISTRY` 注册 7 种策略（`smart`/`pool_quota`/`pity_reserve`/`stop_on_target`/`target_hunting`/`fixed_count`/`draw_target`），统一接口 `select_action(self, ctx: StrategyContext) -> Action`。`StrategyContext` 封装 `state`/`current_pools`/`target_cards`/`acquired`/`pool_draw_counts`/`total_draws` 等，`get_pity_probabilities()` 惰性计算。工厂：`create_strategy(name, params)`。**P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。显式传入值覆盖默认值。
 
 ### 保底 (`core/pity.py`)
 
-`PityEngine`：软保底（`start_at`→`end_at` 概率爬升）、硬保底（`threshold` 100%）。重置条件：`any_ssr`/`featured`/`never`。多保底按顺序叠加。
+`PityEngine`：退化为纯调度器——按池过滤 behavior，`before_draw`/`after_draw` 统一管道。所有保底逻辑由 behavior 内部管理。`PityState`：三层嵌套 namespace 容器——`get(name, key, default)` / `set(name, key, value)` / `incr(name, key, delta)`。计数器/标志通过 `Counter` / `Flag` 遥控器封装。`BEHAVIOR_REGISTRY` 统一注册保底类型（各条目含 `default_scope`）。`DrawInfo`（frozen dataclass）封装抽卡静态事实，`PityContext`（可变载体）在管道中流转。`CounterBasedBehavior`（ABC）：子类覆写 `_compute_probabilities(ctx, counter)`——基类统一管理计数器生命周期。旧格式 `{"counters":{...}}` → `from_dict()` 自动升级为新格式 `{"data":{...}}`。
+
+### GachaState (`core/state.py`)
+
+dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id)` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。
 
 ### GDR (`core/gdr.py` + `core/generalized_drop_rate.py`)
 
 `UNIFIED_GDR_REGISTRY` 定义 13 种广义出率指标。两路计算：`compute_from_compact`（O(1)）/ `compute_from_history`（O(T)）。
 
-**调用规范（强制）：** 必须用 `make_gdr_calculator(store, target_specs, gdr_key)` 构造 `GDRCalculator`——权重从 `ConfigStore` 自动提取。**禁止绕过直接调** `compute_gdr_from_compact`/`compute_success_probability`（权重易漏传、静默退化 1.0）。例外：`process_trace.py`/`per_pool_analysis.py` 通过 `**kwargs` 透传权重。
+**调用规范（强制）：** 必须用 `make_gdr_calculator(store, target_specs, gdr_key)` 构造 `GDRCalculator`——权重从 `ConfigStore` 自动提取。**禁止绕过直接调** `compute_gdr_from_compact`/`compute_success_probability`（权重易漏传、静默退化 1.0）。例外：`process_trace.py`/`per_pool_analysis.py` 通过 `**kwargs` 透传权重。**P60 变更：** `PityProgressAtT` 读取 `history[t].pity_state`（dict，非 PityState 对象）时，必须通过 `PityState.from_dict()` 反序列化后再使用 `ps.get(name, 'counter', 0)`——禁止直接对 dict 调用 3 参数 `get()`（TypeError）。
 
 ### 过程分析 (`core/process_trace.py` + `core/process_analysis.py`)
 
@@ -59,7 +63,7 @@ gacha_simulator/
 
 ### 停止条件 · 并行模拟 · GUI · 配置
 
-`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。
+`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。P60 新增：`rarity_rank` 字段（稀有度→层级，0=最高）+ `is_limited(card_id)` 推导方法（基于 `PoolEntry.featured_card_ids` 池子级别聚合，不依赖卡名命名约定）+ `_parse_rarities(data)` 从 TOML `[rarities].ranks` 解析。
 
 ### 并行模拟入口（强制）
 

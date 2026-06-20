@@ -213,9 +213,9 @@ class GachaPanel(QWidget):
         param_layout = QFormLayout(param_group)
 
         self.sim_count = QSpinBox()
-        self.sim_count.setRange(100, 100000)
+        self.sim_count.setRange(10, 100000)
         self.sim_count.setValue(1000)
-        self.sim_count.setSingleStep(100)
+        self.sim_count.setSingleStep(10)
         param_layout.addRow("模拟次数:", self.sim_count)
 
         self.max_workers = QSpinBox()

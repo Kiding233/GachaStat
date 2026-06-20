@@ -2498,6 +2498,10 @@ class ConfigPanel(QWidget):
         import datetime as _dt
         store.sim_start_date = config.get('sim_start_date') or _dt.date.today().isoformat()
 
+        # P60：统一填充 featured_card_ids
+        for pool in store.pools:
+            pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
+
         self.refresh_from_store()
 
     def _sync_card_defs_from_pools(self):
@@ -2973,6 +2977,10 @@ class ConfigPanel(QWidget):
                 miss_cost_weight=w.get('miss_cost_weight', 1.0),
                 card_value=w.get('card_value', 1.0),
             )
+
+        # P60：统一填充 featured_card_ids
+        for pool in store.pools:
+            pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
 
     def refresh_from_store(self):
         if self._store is None:

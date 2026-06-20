@@ -13,7 +13,7 @@ from ..core.pool import NO_CARD_ID as _NO_CARD_ID, compute_bonus_resources
 class SimulationStats:
     __slots__ = ('total_actions', 'total_draws', 'total_waits',
                  'total_resources_consumed', 'total_resources_gained',
-                 'card_counts', 'acquired_counts', 'pool_draw_counts', 'pity_triggers',
+                 'card_counts', 'pool_draw_counts', 'pity_triggers',             # ← P60：移除 acquired_counts
                  'last_draw_card_id', 'last_action_time',
                  'last_draw_pity_triggered')
 
@@ -24,7 +24,6 @@ class SimulationStats:
         self.total_resources_consumed = {}
         self.total_resources_gained = {}
         self.card_counts = {}
-        self.acquired_counts = {}
         self.pool_draw_counts = {}
         self.pity_triggers = 0
         self.last_draw_card_id = None
@@ -39,9 +38,6 @@ class SimulationStats:
         self.last_draw_pity_triggered = pity_triggered
         cc = self.card_counts
         cc[card_id] = cc.get(card_id, 0) + 1
-        if card_id != _NO_CARD_ID:
-            ac = self.acquired_counts
-            ac[card_id] = ac.get(card_id, 0) + 1
         pc = self.pool_draw_counts
         pc[pool_id] = pc.get(pool_id, 0) + 1
 
@@ -149,7 +145,6 @@ class GachaService:
                 stop_condition=_stop,
                 _pity_engine=_pity_engine,
                 _pity_state=pity_state,
-                acquired=dict(stats.acquired_counts),
                 pool_draw_counts=dict(stats.pool_draw_counts),
                 total_draws=stats.total_draws,
                 last_draw_pity_triggered=stats.last_draw_pity_triggered,
@@ -206,7 +201,7 @@ class GachaService:
                                 behavior = _pity_engine.behaviors.get(pname)
                                 if behavior is None:
                                     continue
-                                cv = pity_state.get(pname)
+                                cv = pity_state.get(pname, 'counter', 0)
                                 if behavior.is_active(cv):
                                     triggered_names.append(pname)
                             triggered_pity_name = ','.join(triggered_names) if triggered_names else None
@@ -215,19 +210,23 @@ class GachaService:
                     pool_counter_max = 0
                     if pool_spec:
                         for pname in pool_spec.pity_names:
-                            cv = pity_state.get(pname)
+                            cv = pity_state.get(pname, 'counter', 0)
                             pool_counter_max = max(pool_counter_max, cv)
 
                     if _pity_engine:
                         _pity_engine.after_draw(pool.id, pity_state, reward.id)
 
                     stats.on_draw(reward.id, pool.id, pity_triggered)
+                    # P60：卡片计入 state.acquired（一等公民）——替代旧 stats.acquired_counts
+                    if reward.id != _NO_CARD_ID:
+                        state.add_card(reward.id)
+
                     if pity_triggered:
                         stats.pity_triggers += 1
 
                     rg = dict(reward.resources_gained or {})
                     if reward.first_time_bonus or reward.nth_time_bonus or reward.excess_bonus:
-                        ac_new = stats.acquired_counts.get(reward.id, 0)
+                        ac_new = state.get_card_count(reward.id)          # ← P60：从 state 读取
                         init = _initial_counts.get(reward.id, 0)
                         total_before = init + ac_new - 1
                         total_after = init + ac_new

@@ -7,7 +7,7 @@ from .distribution import EmpiricalDistribution
 from .pool import Pool, Reward, parse_cost_string
 from .pity import (
     PityEngine, PoolPitySpec, PityDefParsed,
-    SoftPityBehavior, HardPityBehavior,
+    SoftPityBehavior, HardPityBehavior, PityState,
 )
 from .action import DrawAction, WaitAction
 from .stop_condition import ConsecutivePoolTargetCondition
@@ -277,7 +277,11 @@ class WorstImpactAnalyzer:
         pity_state_init = None
         init_pity = self._get_initial_pity_state()
         if init_pity:
-            pity_state_init = {'counters': init_pity}
+            # P60 方案 A——构造初始 PityState 后序列化
+            ps_init = PityState()
+            for cname, cval in init_pity.items():
+                ps_init.set(cname, 'counter', cval)
+            pity_state_init = ps_init.to_dict()
 
         return {
             'pools': pools,

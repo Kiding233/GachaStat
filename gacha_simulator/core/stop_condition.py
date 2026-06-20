@@ -60,9 +60,10 @@ class TargetAcquiredCondition(StopCondition):
 
     def check(self, state: 'GachaState', history: List['InfoVector'],
               stats: Optional['SimulationStats'] = None) -> bool:
-        if stats:
-            return stats.card_counts.get(self.target_id, 0) >= self.quantity
-        count = sum(1 for iv in history if iv.card_id == self.target_id)
+        # P60：优先从 state.acquired 直读（单一真相源）
+        count = state.get_card_count(self.target_id)
+        if count <= 0:  # 回退——state.acquired 可能为 0（兼容旧调用路径）
+            count = sum(1 for iv in history if iv.card_id == self.target_id)
         return count >= self.quantity
 
     def description(self) -> str:

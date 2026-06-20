@@ -7,7 +7,7 @@ from .pool import Pool, CostOption
 @dataclass
 class GachaState:
     resources: Dict[str, float] = field(default_factory=dict)
-    pity_counters: Dict[str, int] = field(default_factory=dict)
+    acquired: Dict[str, int] = field(default_factory=dict)          # ← P60：卡牌持有一等公民
     real_time: float = 0.0
     total_actions: int = 0
     extra_state: Dict[str, Any] = field(default_factory=dict)
@@ -90,8 +90,23 @@ class GachaState:
     def clone(self) -> 'GachaState':
         return GachaState(
             resources=self.resources.copy(),
-            pity_counters=self.pity_counters.copy(),
+            acquired=self.acquired.copy(),                           # ← P60
             real_time=self.real_time,
             total_actions=self.total_actions,
             extra_state=copy.deepcopy(self.extra_state) if self.extra_state else {},
         )
+
+    # ── P60 新增：卡牌持有操作 ──
+
+    def add_card(self, card_id: str) -> int:
+        """抽到/赠送一张卡。返回新增后的持有数量。"""
+        self.acquired[card_id] = self.acquired.get(card_id, 0) + 1
+        return self.acquired[card_id]
+
+    def get_card_count(self, card_id: str) -> int:
+        """模拟中获得的该卡数量（不含初始持有）。"""
+        return self.acquired.get(card_id, 0)
+
+    def total_holding(self, card_id: str, initial_counts: Dict[str, int]) -> int:
+        """含初始持有的总数量。"""
+        return initial_counts.get(card_id, 0) + self.acquired.get(card_id, 0)

@@ -189,6 +189,14 @@ id = "r_6"
 name = "R角色6"
 rarity = "r"
 
+# ── 稀有度层级注册（P60 新增） ──
+[rarities]
+ranks = [
+    ["SSR"],
+    ["SR"],
+    ["R"],
+]
+
 # ── 分布模板（原 pools/character_pool.txt + standard_pool.txt + weapon_pool.txt） ──
 
 # 模板1：角色限定池（SSR 0.4%，featured/offrate 各 50%）

@@ -103,40 +103,40 @@ class TestPityState:
 
     def test_increment_new_counter(self):
         state = PityState()
-        state.increment('soft_ssr')
-        assert state.get('soft_ssr') == 1
+        state.incr('soft_ssr', 'counter')
+        assert state.get('soft_ssr', 'counter', 0) == 1
 
     def test_increment_existing(self):
         state = PityState()
-        state.counters['soft_ssr'] = 5
-        state.increment('soft_ssr')
-        assert state.get('soft_ssr') == 6
+        state.data.setdefault('soft_ssr', {})['counter'] = 5
+        state.incr('soft_ssr', 'counter')
+        assert state.get('soft_ssr', 'counter', 0) == 6
 
     def test_reset(self):
         state = PityState()
-        state.counters['soft_ssr'] = 10
-        state.reset('soft_ssr')
-        assert state.get('soft_ssr') == 0
+        state.data.setdefault('soft_ssr', {})['counter'] = 10
+        state.set('soft_ssr', 'counter', 0)
+        assert state.get('soft_ssr', 'counter', 0) == 0
 
     def test_get_nonexistent(self):
         state = PityState()
-        assert state.get('nonexistent') == 0
+        assert state.get('nonexistent', 'counter', 0) == 0
 
     def test_clone_independent(self):
         state = PityState()
-        state.increment('soft_ssr')
+        state.incr('soft_ssr', 'counter')
         cloned = state.clone()
-        cloned.increment('soft_ssr')
-        assert state.get('soft_ssr') == 1
-        assert cloned.get('soft_ssr') == 2
+        cloned.incr('soft_ssr', 'counter')
+        assert state.get('soft_ssr', 'counter', 0) == 1
+        assert cloned.get('soft_ssr', 'counter', 0) == 2
 
     def test_to_from_dict_roundtrip(self):
         state = PityState()
-        state.counters = {'soft_ssr': 5, 'hard_ssr': 2}
+        state.data = {'soft_ssr': {'counter': 5}, 'hard_ssr': {'counter': 2}}
         d = state.to_dict()
         restored = PityState.from_dict(d)
-        assert restored.get('soft_ssr') == 5
-        assert restored.get('hard_ssr') == 2
+        assert restored.get('soft_ssr', 'counter', 0) == 5
+        assert restored.get('hard_ssr', 'counter', 0) == 2
 
 
 class TestPityEngineReset:
@@ -168,39 +168,39 @@ class TestPityEngineReset:
     def test_any_ssr_reset_on_ssr(self):
         engine = self._make_engine('any_ssr')
         state = PityState()
-        state.increment('test_pity')
-        state.increment('test_pity')
-        assert state.get('test_pity') == 2
+        state.incr('test_pity', 'counter')
+        state.incr('test_pity', 'counter')
+        assert state.get('test_pity', 'counter', 0) == 2
         engine.after_draw('test_pool', state, 'ssr_card')
-        assert state.get('test_pity') == 0  # any SSR → reset
+        assert state.get('test_pity', 'counter', 0) == 0  # any SSR → reset
 
     def test_any_ssr_no_reset_on_sr(self):
         engine = self._make_engine('any_ssr')
         state = PityState()
-        state.increment('test_pity')
+        state.incr('test_pity', 'counter')
         engine.after_draw('test_pool', state, 'sr_card')
-        assert state.get('test_pity') == 1  # not SSR → no reset
+        assert state.get('test_pity', 'counter', 0) == 1  # not SSR → no reset
 
     def test_featured_ssr_reset_only_on_featured(self):
         engine = self._make_engine('featured_ssr')
         state = PityState()
-        state.increment('test_pity')
+        state.incr('test_pity', 'counter')
         engine.after_draw('test_pool', state, 'ssr_card')  # SSR but not featured
-        assert state.get('test_pity') == 1  # no reset
+        assert state.get('test_pity', 'counter', 0) == 1  # no reset
 
     def test_featured_ssr_reset_on_featured(self):
         engine = self._make_engine('featured_ssr')
         state = PityState()
-        state.increment('test_pity')
+        state.incr('test_pity', 'counter')
         engine.after_draw('test_pool', state, 'featured_card')
-        assert state.get('test_pity') == 0
+        assert state.get('test_pity', 'counter', 0) == 0
 
     def test_never_no_reset(self):
         engine = self._make_engine('never')
         state = PityState()
-        state.increment('test_pity')
+        state.incr('test_pity', 'counter')
         engine.after_draw('test_pool', state, 'ssr_card')
-        assert state.get('test_pity') == 1  # never → no reset ever
+        assert state.get('test_pity', 'counter', 0) == 1  # never → no reset ever
 
 
 class TestPityEngineBeforeDraw:
@@ -217,7 +217,7 @@ class TestPityEngineBeforeDraw:
         )
         state = PityState()
         probs = engine.before_draw('pool', state, {'ssr': 0.006, 'r': 0.994})
-        assert state.get('test_pity') == 1
+        assert state.get('test_pity', 'counter', 0) == 1
         assert 'ssr' in probs
 
     def test_before_draw_unknown_pool(self):
@@ -236,7 +236,7 @@ class TestPityEngineBeforeDraw:
             behaviors={'test_pity': behavior},
         )
         state = PityState()
-        state.counters['test_pity'] = 90  # at pity cap
+        state.data.setdefault('test_pity', {})['counter'] = 90  # at pity cap
         probs = engine.get_probabilities('pool', state, {'ssr': 0.006, 'r': 0.994})
         assert probs['ssr'] == pytest.approx(1.0)
 
@@ -264,12 +264,12 @@ class TestMultiPityStacking:
         )
         # counter=82: 软保底生效但未达100%（progress≈0.56），硬保底未触发
         state = PityState()
-        state.counters = {'soft': 82, 'hard': 82}
+        state.data = {'soft': {'counter': 82}, 'hard': {'counter': 82}}
         probs = engine.get_probabilities('pool', state, {'ssr': 0.006, 'r': 0.994})
         assert 0.3 < probs['ssr'] < 0.99  # soft pity active, not 100%
 
         # counter=90: 硬保底覆盖 → SSR=100%
-        state.counters = {'soft': 90, 'hard': 90}
+        state.data = {'soft': {'counter': 90}, 'hard': {'counter': 90}}
         probs = engine.get_probabilities('pool', state, {'ssr': 0.006, 'r': 0.994})
         assert probs['ssr'] == pytest.approx(1.0)
 
@@ -288,7 +288,7 @@ class TestMultiPityStacking:
             behaviors={'s': soft, 'h': hard},
         )
         state = PityState()
-        state.counters = {'s': 82, 'h': 82}
+        state.data = {'s': {'counter': 82}, 'h': {'counter': 82}}
         # 软保底先提升概率，硬保底尚未触发——SSR 概率在中间范围
         probs = engine.get_probabilities('pool', state, {'ssr': 0.006, 'r': 0.994})
         assert 0.3 < probs['ssr'] < 0.99

@@ -33,6 +33,7 @@ class PoolEntry:
     exchange_card_id: Optional[str] = None
     distribution: List[PoolDistEntry] = field(default_factory=list)
     batch_size: int = 1
+    featured_card_ids: List[str] = field(default_factory=list)       # ← P60：池子级别 featured 卡 ID 聚合
 
 
 @dataclass
@@ -110,6 +111,7 @@ class ConfigStore:
     max_workers: int = 4
     seed: int = 42
     _distribution_templates: List[dict] = field(default_factory=list)
+    rarity_rank: Dict[str, int] = field(default_factory=dict)       # ← P60：稀有度 → 层级（0=最高）
 
     def __post_init__(self):
         if self.strategy_type:
@@ -141,6 +143,7 @@ class ConfigStore:
         self.max_workers = 4
         self.seed = 42
         self._distribution_templates.clear()
+        self.rarity_rank.clear()                                      # ← P60
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────
     # 从 card_weights 提取，供 make_gdr_calculator() 使用。
@@ -160,3 +163,28 @@ class ConfigStore:
     def card_value_weights(self):
         """Dict[str, float]: 每张卡的卡牌价值权重"""
         return {cid: cw.card_value for cid, cw in self.card_weights.items()}
+
+    # ── P60 新增：推导属性 + 稀有度解析 ──
+
+    def is_limited(self, card_id: str) -> bool:
+        """推导属性：这张卡是否至少在某个池子被 featured 过。
+
+        遍历所有池子的 featured_card_ids 字段（池子级别聚合），不依赖卡名命名约定。
+        """
+        for pool in self.pools:
+            if card_id in pool.featured_card_ids:
+                return True
+        return False
+
+    def _parse_rarities(self, data: dict) -> None:
+        """从 TOML [rarities].ranks 生成 rarity_rank 映射。
+        同一 rank 数组内为平级；rank 0 = 最高。
+        默认值：[["SSR"], ["SR"], ["R"]]。
+        """
+        ranks = data.get("rarities", {}).get("ranks", [["SSR"], ["SR"], ["R"]])
+        for rank_idx, tier in enumerate(ranks):
+            for rarity_name in tier:
+                self.rarity_rank[rarity_name.upper()] = rank_idx
+        # 内部格式不变式校验——确保 rank 值连续无空洞
+        assert max(self.rarity_rank.values(), default=-1) + 1 == len(set(self.rarity_rank.values())), \
+            f"rarity_rank 值不连续：{self.rarity_rank}"

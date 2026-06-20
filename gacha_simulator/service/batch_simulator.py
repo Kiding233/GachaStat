@@ -252,10 +252,8 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
     pity_state = None
     if env.pity_state_init:
         from gacha_simulator.core.pity import PityState
-        pity_state = PityState()
-        counters = env.pity_state_init.get('counters', {})
-        for cname, cval in counters.items():
-            pity_state.counters[cname] = cval
+        # P60：from_dict 已内置旧格式自动升级（检测 'counters' 键自动迁移）
+        pity_state = PityState.from_dict(env.pity_state_init)
 
     service = GachaService(
         env.pools, strategy, stop_cond, target_set,
@@ -279,6 +277,8 @@ def _wk_run_single(args):
     seed, initial_resources = args
     try:
         compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
+        # P60诊断已暂停——仅保留卡ID诊断
+        pass
     except Exception:
         traceback.print_exc()
         return (None, None) if _wk_return_compact else None
@@ -544,7 +544,8 @@ class SimulationEnvBuilder:
                                pid, start_day + 21)
 
             rewards = []
-            featured_ids = set()
+            # P60：featured_ids 直接从 PoolEntry.featured_card_ids 读取——覆盖全部 featured 卡
+            featured_ids = set(pe.featured_card_ids)
             ssr_ids = set()
             for de in getattr(pe, 'distribution', []):
                 rg = dict(getattr(de, 'resources_gained', {}) or {})
@@ -555,8 +556,6 @@ class SimulationEnvBuilder:
                              resources_gained=rg, first_time_bonus=ft,
                              nth_time_bonus=nth, excess_bonus=xs)
                 rewards.append((rwd, de.probability / 100.0))
-                if de.featured and de.card_id != '_no_card':
-                    featured_ids.add(de.card_id)
                 if de.rarity.upper() == 'SSR' and de.card_id != '_no_card':
                     ssr_ids.add(de.card_id)
 
@@ -645,7 +644,12 @@ class SimulationEnvBuilder:
                 if v > 0 and k in pity_engine.pity_defs:
                     init_counters[k] = v
         if init_counters:
-            pity_state_init = {'counters': init_counters}
+            # P60 方案 A——构造初始 PityState 后序列化，与消费方 from_dict 对称
+            from gacha_simulator.core.pity import PityState as _PS
+            ps_init = _PS()
+            for cname, cval in init_counters.items():
+                ps_init.set(cname, 'counter', cval)
+            pity_state_init = ps_init.to_dict()
 
         # 构建卡牌列表，pools 从池子分布实时推导（非从 store.card_defs 复制）
         # —— 这样用户在 GUI 中修改池子绑定后，pools 自动反映最新状态

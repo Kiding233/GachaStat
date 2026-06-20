@@ -68,6 +68,9 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     # 回填 card_defs.pools：从池子分布逆向推导每张卡属于哪些池子
     _backfill_card_pools(store)
 
+    # P60：稀有度层级解析
+    store._parse_rarities(data)
+
     return store
 
 
@@ -141,6 +144,17 @@ def save_toml(store: ConfigStore, path: str) -> None:
              'miss_cost': cw.miss_cost_weight, 'card_value': cw.card_value}
             for cid, cw in store.card_weights.items()
         ]
+
+    # rarities —— P60 新增：往返对称（load_toml 已解析 → 写入保证不丢失）
+    if store.rarity_rank:
+        # rarity_rank 是 name→rank 的反向映射（如 {"SSR": 0, "SR": 1, "R": 2}）
+        # 逆转为 ranks 分组格式：[[names_at_rank_0], [names_at_rank_1], ...]
+        # dict 分桶替代 range 预分配——消除极端 rank 值的 O(max_rank) 膨胀
+        buckets = {}
+        for name, rank_idx in store.rarity_rank.items():
+            buckets.setdefault(rank_idx, []).append(name)
+        ranks = [buckets[r] for r in sorted(buckets)]
+        data['rarities'] = {'ranks': ranks}
 
     header = (
         '# ============================================================\n'
@@ -510,6 +524,10 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
             source = pool_index.get(pool.rerun_of)
             if source:
                 pool.distribution = list(source.distribution)
+
+    # P60：统一填充 featured_card_ids——覆盖所有 pool（含复刻池，其 distribution 在第二步才赋值）
+    for pool in store.pools:
+        pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
 
 
 def _backfill_card_pools(store: ConfigStore) -> None:

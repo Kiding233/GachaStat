@@ -435,19 +435,36 @@ sr = "sr_1, sr_2, sr_3, sr_4, sr_5, sr_6"
 r = "r_1, r_2, r_3, r_4, r_5, r_6"
 
 
-# ── 保底配置（原 pity.txt） ──────────────────────────────────
+# ── 保底配置（P55 扁平化格式） ──────────────────────────────
+# 支持 type: soft_interval / soft_additive / soft_step / hard
+# 事件驱动型 (rotating/targeted 等) 由 P56 交付
 
 [[pity]]
 name = "ssr_soft"
-type = "soft"
+type = "soft_interval"
+scope = "ssr"
 start = 80
 end = 90
-func = "linear"
-threshold = 0
-reset = "featured_ssr"
-pools = "pool_c*"
-target = { limited_ssr = 100 }
+target_featured = true
+reset = "featured"
+pools = ["pool_c*"]
 counter_init = 0
+
+# [[pity]]
+# name = "ssr_hard"
+# type = "hard"
+# scope = "ssr"
+# threshold = 180
+# target_featured = true
+# pools = ["pool_c1"]
+
+# [[pity]]
+# name = "sr_soft"
+# type = "soft_additive"
+# scope = "sr"
+# start = 10
+# increment = 10.0
+# pools = ["*"]
 
 # ── 目标卡（原 targets.txt） ─────────────────────────────────
 

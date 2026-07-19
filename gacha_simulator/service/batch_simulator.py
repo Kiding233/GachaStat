@@ -7,6 +7,7 @@
 动态参数（target_specs, initial_resources）通过任务参数传入。
 """
 
+import fnmatch
 import logging
 import random
 import traceback
@@ -69,125 +70,85 @@ class SimulationEnv:
     return_compact: bool = True
 
 
-def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None):
+def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None, rarity_rank=None):
+    """P55 重写：从扁平化 PityDef dict 构造 PityEngine。
+
+    新格式示例：{'name': 'p1', 'type': 'soft_interval', 'scope': 'ssr',
+                  'deltas': ((73,0.0), (17,5.882353)), ...}
+    旧格式向后兼容：{'name': 'p1', 'type': 'soft', 'params': {...}, ...}
+    """
     from gacha_simulator.core.pity import (
-        PityEngine, PoolPitySpec,
-        PityDefParsed, SoftPityBehavior, HardPityBehavior,
+        PityEngine, PoolPitySpec, PityState,
+        compute_scope_mappings,
     )
+    from gacha_simulator.core.config_store import PityDef as _PityDef
+
     if not pity_config.get('enabled', True):
         return None
 
     pities_cfg = pity_config.get('pities', [])
 
-    pity_defs = {}
-    behaviors = {}
-    for p in pities_cfg:
-        name = p.get('name', 'pity')
-        btype = p.get('type', 'soft')
-        target_dist = p.get('target_distribution', {})
-        reset = p.get('reset', 'any_ssr')
-        pools_pattern = p.get('pools', '*')
-        params = p.get('params', {})
+    # 检测新旧格式
+    is_new_format = any('scope' in p or 'deltas' in p or 'target_featured' in p
+                        for p in pities_cfg)
 
-        pdef = PityDefParsed(
-            name=name,
-            btype=btype,
-            params=params,
-            target_distribution=target_dist,
-            reset_condition=reset,
-            pools=pools_pattern,
-        )
-        pity_defs[name] = pdef
-
-        if btype == 'soft':
-            behaviors[name] = SoftPityBehavior(
-                start_at=int(params.get('start', '74')),
-                end_at=int(params.get('end', '90')),
-                func_type=params.get('func', 'linear'),
-                target_distribution=target_dist,
+    if is_new_format:
+        # ── P55 新路径：从扁平化 dict 构造 PityDef → create_behavior() ──
+        pity_defs_list = []
+        for p in pities_cfg:
+            pdef = _PityDef(
+                name=p.get('name', 'pity'),
+                btype=p.get('type', 'soft_interval'),
+                scope=p.get('scope', 'ssr'),
+                target_featured=p.get('target_featured', False),
+                deltas=p.get('deltas'),
+                threshold=p.get('threshold'),
+                counter_init=p.get('counter_init', 0),
+                guaranteed_init=p.get('guaranteed_init', False),
+                fate_points_init=p.get('fate_points_init', 0),
+                soft_start=p.get('start'),
+                soft_end=p.get('end'),
+                soft_increment=p.get('increment'),
+                pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), (list, tuple)) else (p.get('pools', '*'),),
+                max_triggers=p.get('max_triggers', 0),
+                deactivate_on_early_hit=p.get('deactivate_on_early_hit', False),
+                depends_on=p.get('depends_on'),
+                reset=p.get('reset', ''),
             )
-        elif btype == 'hard':
-            behaviors[name] = HardPityBehavior(
-                threshold=int(params.get('threshold', '90')),
-                target_distribution=target_dist,
+            pity_defs_list.append(pdef)
+
+        state = PityState()
+        # 注入 counter_init 和其他初始状态
+        counter_init_overrides = pity_config.get('counter_init', {})
+        from gacha_simulator.core.pity import _build_pity_state_init
+        state = _build_pity_state_init(pity_defs_list, counter_init_overrides)
+
+        if rarity_rank is None:
+            rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
+
+        # 构建 PoolPitySpec
+        pool_specs = {}
+        for pool in pools:
+            spec_pity_names = []
+            for pdef in pity_defs_list:
+                pools_ptn = pdef.pools
+                if pools_ptn == ('*',) or any(fnmatch.fnmatch(pool.id, ptn) for ptn in pools_ptn):
+                    spec_pity_names.append(pdef.name)
+
+            featured = pool_featured_map.get(pool.id, set()) if pool_featured_map else set()
+            ssr = pool_ssr_map.get(pool.id, set()) if pool_ssr_map else set()
+            scope_cards, featured_cards, scope_slots, featured_slots = compute_scope_mappings(pool)
+            pool_specs[pool.id] = PoolPitySpec(
+                pity_names=spec_pity_names,
+                featured_ids=featured,
+                ssr_ids=ssr,
+                scope_cards=scope_cards,
+                featured_cards=featured_cards,
+                scope_slots=scope_slots,
+                featured_slots=featured_slots,
             )
 
-    def _featured(pid, pool):
-        if pool_featured_map and pid in pool_featured_map:
-            return pool_featured_map[pid]
-        featured = set()
-        if pool.rewards:
-            featured.add(pool.rewards[0][0].id)
-        return featured
-
-    def _ssr_all(pid, pool):
-        if pool_ssr_map and pid in pool_ssr_map:
-            return pool_ssr_map[pid]
-        ssr_all = set()
-        if pool.rewards:
-            ssr_all.add(pool.rewards[0][0].id)
-        return ssr_all
-
-    def _resolve_targets(pool, featured_ids, ssr_ids, target_dist):
-        if not target_dist:
-            return {}
-        sr_ids = set()
-        r_ids = set()
-        for r, prob in pool.rewards:
-            rid = r.id
-            if rid in ssr_ids:
-                continue
-            if prob <= 0.05:
-                sr_ids.add(rid)
-            else:
-                r_ids.add(rid)
-
-        resolved = {}
-        for key, weight in target_dist.items():
-            k = key.lower()
-            if k == 'limited_ssr' or k == 'featured':
-                for cid in featured_ids:
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            elif k == 'standard_ssr' or k == 'offrate':
-                for cid in (ssr_ids - featured_ids):
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            elif k == 'ssr':
-                for cid in ssr_ids:
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            elif k == 'sr':
-                for cid in sr_ids:
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            elif k == 'r':
-                for cid in r_ids:
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            else:
-                resolved[key] = resolved.get(key, 0) + weight
-        return resolved
-
-    pool_specs = {}
-    import fnmatch
-    for pool in pools:
-        pid = pool.id
-        featured = _featured(pid, pool)
-        ssr_all = _ssr_all(pid, pool)
-
-        matching = []
-        resolved_per_pity = {}
-        for pdef in pity_defs.values():
-            if fnmatch.fnmatch(pid, pdef.pools):
-                matching.append(pdef.name)
-                if pdef.target_distribution:
-                    resolved_per_pity[pdef.name] = _resolve_targets(
-                        pool, featured, ssr_all, pdef.target_distribution)
-
-        pool_specs[pid] = PoolPitySpec(
-            pity_names=matching,
-            featured_ids=featured,
-            ssr_ids=ssr_all,
-            resolved_targets=resolved_per_pity,
-        )
-
-    return PityEngine(pool_specs, pity_defs, behaviors)
+        return PityEngine(pool_specs, pity_defs_list, state=state, rarity_rank=rarity_rank)
 
 
 # --- Worker 全局变量（每个子进程内共享）---
@@ -554,7 +515,9 @@ class SimulationEnvBuilder:
                 xs = dict(getattr(de, 'excess_bonus', {}) or {})
                 rwd = Reward(id=de.card_id, name=getattr(de, 'card_id', ''),
                              resources_gained=rg, first_time_bonus=ft,
-                             nth_time_bonus=nth, excess_bonus=xs)
+                             nth_time_bonus=nth, excess_bonus=xs,
+                             extra_info={'rarity': de.rarity.lower(),
+                                        'featured': de.featured})
                 rewards.append((rwd, de.probability / 100.0))
                 if de.rarity.upper() == 'SSR' and de.card_id != '_no_card':
                     ssr_ids.add(de.card_id)
@@ -599,26 +562,38 @@ class SimulationEnvBuilder:
         schedule_mgr = PoolScheduleManager(schedules)
         end_time = max(s.available_until for s in schedules) if schedules else 0
 
-        pity_cfg_dict = {'enabled': True, 'pities': []}
+        pity_cfg_dict = {'enabled': True, 'pities': [], 'counter_init': {}}
         pc = config_store.pity
         if pc and hasattr(pc, 'pities'):
             pity_cfg_dict['enabled'] = getattr(pc, 'enabled', True)
             for pd in pc.pities:
+                # P55：扁平化 PityDef → 兼容旧 dict 格式（供 _build_pity_engine_from_gui 消费）
                 pentry = {
                     'name': pd.name,
                     'type': getattr(pd, 'btype', 'soft'),
-                    'params': dict(getattr(pd, 'params', {}) or {}),
-                    'target_distribution': dict(getattr(pd, 'target_distribution', {}) or {}),
-                    'reset': getattr(pd, 'reset_condition', 'any_ssr'),
-                    'pools': getattr(pd, 'pools', '*'),
+                    'scope': getattr(pd, 'scope', 'ssr'),
+                    'target_featured': getattr(pd, 'target_featured', False),
+                    'deltas': getattr(pd, 'deltas', None),
+                    'threshold': getattr(pd, 'threshold', None),
+                    'reset': getattr(pd, 'reset', ''),
+                    'pools': getattr(pd, 'pools', ('*',)),
+                    'counter_init': getattr(pd, 'counter_init', 0),
+                    'guaranteed_init': getattr(pd, 'guaranteed_init', False),
+                    'fate_points_init': getattr(pd, 'fate_points_init', 0),
+                    'max_triggers': getattr(pd, 'max_triggers', 0),
+                    'deactivate_on_early_hit': getattr(pd, 'deactivate_on_early_hit', False),
+                    'depends_on': getattr(pd, 'depends_on', None),
                 }
                 pity_cfg_dict['pities'].append(pentry)
+                # counter_init 从 PityDef 读取
+                ci = getattr(pd, 'counter_init', 0)
+                if ci:
+                    pity_cfg_dict['counter_init'][pd.name] = ci
 
-        if hasattr(pc, 'counter_init') and pc.counter_init:
-            pity_cfg_dict['counter_init'] = dict(pc.counter_init)
-
+        rarity_rank = {k.lower(): v for k, v in config_store.rarity_rank.items()}
         pity_engine = _build_pity_engine_from_gui(
-            pity_cfg_dict, pools, pool_featured_map, pool_ssr_map, {})
+            pity_cfg_dict, pools, pool_featured_map, pool_ssr_map, {},
+            rarity_rank=rarity_rank)
 
         initial_resources = {}
         ir_raw = config_store.initial_resources

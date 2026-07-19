@@ -6,8 +6,8 @@ from collections import defaultdict
 from .distribution import EmpiricalDistribution
 from .pool import Pool, Reward, parse_cost_string
 from .pity import (
-    PityEngine, PoolPitySpec, PityDefParsed,
-    SoftPityBehavior, HardPityBehavior, PityState,
+    PityEngine, PoolPitySpec, PityState,
+    compute_scope_mappings,
 )
 from .action import DrawAction, WaitAction
 from .stop_condition import ConsecutivePoolTargetCondition
@@ -337,12 +337,22 @@ class WorstImpactAnalyzer:
         )
         return self._checker
 
+    @staticmethod
+    def _get_pity_end(pdef) -> int:
+        """从 P55 新字段推导保底所需的抽数上限。"""
+        if pdef.threshold is not None:
+            return pdef.threshold
+        if getattr(pdef, 'deltas', None) is not None:
+            return sum(n for n, _ in pdef.deltas)
+        if getattr(pdef, 'soft_end', None) is not None:
+            return pdef.soft_end
+        return 90  # 兜底默认值
+
     def _get_pity_cost(self):
         if not self.store.pity.enabled or not self.store.pity.pities:
             return 90 * 160
-        p = self.store.pity.pities[0]
-        params = p.params if isinstance(p.params, dict) else {}
-        end = int(params.get('end', '90'))
+        # 取所有 PityDef 中最大的 end 值（替代仅读 pities[0]）
+        max_end = max((self._get_pity_end(p) for p in self.store.pity.pities), default=90)
         cost = 160
         if self.store.pools:
             c = self.store.pools[0].cost
@@ -351,7 +361,7 @@ class WorstImpactAnalyzer:
                     cost = int(c.split(':')[1])
                 except ValueError:
                     pass
-        return end * cost
+        return max_end * cost
 
     def _prepare_pool_info(self):
         if self.custom_pool_config and self.custom_pool_config.get('distribution'):
@@ -465,117 +475,70 @@ class WorstImpactAnalyzer:
         if not self.store.pity.enabled:
             return None
 
-        pity_defs: Dict[str, PityDefParsed] = {}
-        behaviors = {}
-        for pd in self.store.pity.pities:
-            params = pd.params if isinstance(pd.params, dict) else {}
-            target_dist = pd.target_distribution if isinstance(pd.target_distribution, dict) else {}
-            name = pd.name
-            btype = getattr(pd, 'btype', 'soft')
-            reset = getattr(pd, 'reset_condition', 'any_ssr')
-            pools_pattern = getattr(pd, 'pools', '*')
+        # P55：从扁平化 PityDef 构造引擎
+        is_new_format = any(hasattr(pd, 'scope') and not hasattr(pd, 'params')
+                           for pd in self.store.pity.pities)
 
-            pdef = PityDefParsed(
-                name=name,
-                btype=btype,
-                params=params,
-                target_distribution=target_dist,
-                reset_condition=reset,
-                pools=pools_pattern,
-            )
-            pity_defs[name] = pdef
+        if is_new_format:
+            from gacha_simulator.core.config_store import PityDef as _PityDef
+            pity_defs_list = []
+            for pd in self.store.pity.pities:
+                if not isinstance(pd, _PityDef):
+                    continue
+                # shallow copy via dataclass fields
+                pity_defs_list.append(pd)
 
-            if btype == 'soft':
-                behaviors[name] = SoftPityBehavior(
-                    start_at=int(params.get('start', '74')),
-                    end_at=int(params.get('end', '90')),
-                    func_type=params.get('func', 'linear'),
-                    target_distribution=target_dist,
-                )
-            elif btype == 'hard':
-                behaviors[name] = HardPityBehavior(
-                    threshold=int(params.get('threshold', '90')),
-                    target_distribution=target_dist,
-                )
+            state = PityState()
+            from gacha_simulator.core.pity import _build_pity_state_init
+            state = _build_pity_state_init(pity_defs_list)
 
-        pool_specs = {}
-        ref_pool_id = self._ref_pool_entry.id if self._ref_pool_entry else None
-        for pool_idx in range(MAX_POOLS):
-            pid = f'_worst_impact_pool_{pool_idx}'
-            matching = []
-            resolved_per_pity = {}
-            for pdef in pity_defs.values():
-                if fnmatch.fnmatch(pid, pdef.pools):
-                    matching.append(pdef.name)
-                elif ref_pool_id and fnmatch.fnmatch(ref_pool_id, pdef.pools):
-                    matching.append(pdef.name)
-                    if pdef.target_distribution:
-                        resolved_per_pity[pdef.name] = self._resolve_targets_for_pool(
-                            pdef.target_distribution, pool_idx,
-                            all_featured_ids, all_ssr_ids, pool_targets,
-                        )
-
-            pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
-            pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
-
-            pool_specs[pid] = PoolPitySpec(
-                pity_names=matching,
-                featured_ids=pool_featured,
-                ssr_ids=pool_ssr,
-                resolved_targets=resolved_per_pity,
-            )
-
-        return PityEngine(pool_specs, pity_defs, behaviors)
-
-    def _resolve_targets_for_pool(self, target_dist, pool_idx,
-                                   all_featured_ids, all_ssr_ids, pool_targets):
-        if not target_dist:
-            return {}
-        featured_id = f'_wi_featured_{pool_idx}'
-        pool_ssr = {featured_id} | self._standard_ssr_ids
-
-        resolved = {}
-        for key, weight in target_dist.items():
-            k = key.lower()
-            if k in ('limited_ssr', 'featured'):
-                resolved[featured_id] = resolved.get(featured_id, 0) + weight
-            elif k in ('standard_ssr', 'offrate'):
-                for cid in self._standard_ssr_ids:
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            elif k == 'ssr':
-                for cid in pool_ssr:
-                    resolved[cid] = resolved.get(cid, 0) + weight
+            # P55 ISSUE-032：从参考池或已知 ID 构建 scope 映射
+            ref_pool = getattr(self, '_ref_pool', None)
+            if ref_pool and hasattr(ref_pool, 'rewards'):
+                scope_cards, featured_cards, scope_slots, featured_slots = compute_scope_mappings(ref_pool)
             else:
-                resolved[key] = resolved.get(key, 0) + weight
-        return resolved
+                scope_cards = {'ssr': tuple(self._ssr_ids)} if self._ssr_ids else {}
+                featured_cards = {'ssr': tuple(self._featured_ids)} if self._featured_ids else {}
+                if self._ssr_ids and self._featured_ids:
+                    scope_slots = {'ssr': ('ssr', 'ssr_featured')}
+                    featured_slots = {'ssr': ('ssr_featured',)}
+                else:
+                    scope_slots = {'ssr': ('ssr',)} if self._ssr_ids else {}
+                    featured_slots = {'ssr': ('ssr',)} if self._featured_ids else {}
 
-    def _resolve_targets(self, target_dist):
-        resolved = {}
-        for key, weight in target_dist.items():
-            k = key.lower()
-            if k in ('limited_ssr', 'featured'):
-                for cid in self._featured_ids:
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            elif k in ('standard_ssr', 'offrate'):
-                for cid in (self._ssr_ids - self._featured_ids):
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            elif k == 'ssr':
-                for cid in self._ssr_ids:
-                    resolved[cid] = resolved.get(cid, 0) + weight
-            else:
-                resolved[key] = resolved.get(key, 0) + weight
-        return resolved
+            pool_specs = {}
+            for pool_idx in range(MAX_POOLS):
+                pid = f'_worst_impact_pool_{pool_idx}'
+                matching = []
+                for pdef in pity_defs_list:
+                    pools_ptn = getattr(pdef, 'pools', ('*',))
+                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(pid, ptn) for ptn in pools_ptn):
+                        matching.append(pdef.name)
+
+                pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
+                pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
+
+                pool_specs[pid] = PoolPitySpec(
+                    pity_names=matching,
+                    featured_ids=pool_featured,
+                    ssr_ids=pool_ssr,
+                    scope_cards=scope_cards,
+                    featured_cards=featured_cards,
+                    scope_slots=scope_slots,
+                    featured_slots=featured_slots,
+                )
+
+            rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
+            return PityEngine(pool_specs, pity_defs_list,
+                            state=state, rarity_rank=rr)
 
     def _get_initial_pity_state(self):
         if not self.store.pity.enabled:
             return {}
         state = {}
-        counter_init = getattr(self.store.pity, 'counter_init', {})
-        if isinstance(counter_init, dict):
-            for k, v in counter_init.items():
-                if v > 0:
-                    state[k] = v
-        elif isinstance(counter_init, int) and counter_init > 0:
-            for p in self.store.pity.pities:
-                state[p.name] = counter_init
+        # P55：counter_init 已从 PityConfig 移至每个 PityDef
+        for pdef in self.store.pity.pities:
+            ci = getattr(pdef, 'counter_init', 0)
+            if ci > 0:
+                state[pdef.name] = ci
         return state

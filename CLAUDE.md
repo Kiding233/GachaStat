@@ -41,7 +41,11 @@ gacha_simulator/
 
 ### 保底 (`core/pity.py`)
 
-`PityEngine`：退化为纯调度器——按池过滤 behavior，`before_draw`/`after_draw` 统一管道。所有保底逻辑由 behavior 内部管理。`PityState`：三层嵌套 namespace 容器——`get(name, key, default)` / `set(name, key, value)` / `incr(name, key, delta)`。计数器/标志通过 `Counter` / `Flag` 遥控器封装。`BEHAVIOR_REGISTRY` 统一注册保底类型（各条目含 `default_scope`）。`DrawInfo`（frozen dataclass）封装抽卡静态事实，`PityContext`（可变载体）在管道中流转。`CounterBasedBehavior`（ABC）：子类覆写 `_compute_probabilities(ctx, counter)`——基类统一管理计数器生命周期。旧格式 `{"counters":{...}}` → `from_dict()` 自动升级为新格式 `{"data":{...}}`。
+**类结构（P55）：** `PityBehavior`（ABC）→ `CounterBasedBehavior`（ABC——`btype` 参数推导 `is_soft`/`is_hard`/`is_event_driven`，`_on_reset()` 钩子，`before_draw`/`after_draw` 生命周期）→ `SoftStepBehavior`（RLE deltas 驱动软保底，`_cumulative_boost()` + `_compute_probabilities()` 按基础权重比例跨稀有度重分配，featured/standard 独立槽位）/ `HardPityBehavior`（CounterBasedBehavior 子类，`_compute_probabilities()` 阈值触发 100%）。旧 `SoftPityBehavior` 已删除。**`BEHAVIOR_REGISTRY`** 注册 10 种保底类型：4 种 counter 驱动型（`soft_interval`/`soft_additive`/`soft_step`→`SoftStepBehavior`，`hard`→`HardPityBehavior`）+ 6 种事件驱动型（`rotating`/`targeted`/`rotating_cr`/`rotating_cr_soft`/`rotating_soft`/`targeted_soft`→P56 交付，class=None stub）。`create_behavior(pdef, state)` 工厂——新格式（`PityDef` 扁平字段），含 lifecycle/reset/target_featured 全参数传递。
+
+**`PityEngine`（P55 新签名）：** `PityEngine(pool_specs, pity_defs: List[PityDef], state: PityState, rarity_rank)`——内部通过 `create_behavior()` 构造 behavior 实例，经 `_resolve_order(behaviors, rarity_rank)`（按稀有度层级→type 优先级排序）+ `_validate_behaviors()`（重名校验+scope 重叠 ConfigError）后存入 `_behavior_list`。旧签名 `PityEngine(pool_specs, pity_defs: Dict, behaviors: Dict)` 向后兼容。`PoolPitySpec` 含 `scope_cards`/`featured_cards`/`scope_slots`/`featured_slots`（featured/standard 独立槽位）；`compute_scope_mappings(pool)` 工厂函数预计算。池匹配使用 `fnmatch` 通配符。
+
+**其他设施：** `PityState`——三层嵌套 namespace；`Counter`/`Flag` 遥控器；`DrawInfo`（frozen dataclass）抽卡静态事实；`PityContext` 管道载体；`LifecycleConfig`（frozen——`max_triggers`/`deactivate_on_early_hit`/`depends_on`）；`_build_pity_state_init()`——从 `PityDef` 注入 `counter_init`/`guaranteed_init`/`fate_points_init` 初始状态；`_expand_soft_to_deltas()`——`soft_interval`/`soft_additive` 语法糖 → deltas。
 
 ### GachaState (`core/state.py`)
 
@@ -63,7 +67,7 @@ dataclass——模拟状态一等公民。`resources`（资源）、`acquired`�
 
 ### 停止条件 · 并行模拟 · GUI · 配置
 
-`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。P60 新增：`rarity_rank` 字段（稀有度→层级，0=最高）+ `is_limited(card_id)` 推导方法（基于 `PoolEntry.featured_card_ids` 池子级别聚合，不依赖卡名命名约定）+ `_parse_rarities(data)` 从 TOML `[rarities].ranks` 解析。
+`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。**P55 变更：** `PityDef` 扁平化为 23 个独立类型字段（`scope`/`target_featured`/`deltas`/`threshold`/`counter_init`/`guaranteed_init`/`fate_points_init`/`soft_start`/`soft_end`/`soft_increment`/`reset`/`pools`/`max_triggers`/`deactivate_on_early_hit`/`depends_on` 等），旧 `params` dict 已移除；`PityConfig.counter_init` 移至每个 `PityDef.counter_init`。`_is_legacy_format()` + `_migrate_legacy_pity()` 自动迁移旧格式 TOML；`_pitydef_to_toml()` round-trip 写回；`_expand_soft_to_deltas()` 展开语法糖参数。`create_behavior()` 完整传递 lifecycle/reset/target_featured。`rarity_rank` 从 `ConfigStore.[rarities].ranks` 解析（小写归一化），传递至 PityEngine 和 `_resolve_order`。
 
 ### 并行模拟入口（强制）
 
@@ -79,6 +83,7 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 | 新策略 | `core/strategy.py` + `STRATEGY_REGISTRY` 注册 |
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
+| 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
 | 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |
 | 新随机占优检验 | `core/comparison_analyzer.py` → `dd_bootstrap_test_v2()` + `compute_dominance_matrix_v2()` → `compute_dominance_matrix()` 派发器（当前：v2=PySDTest Donald-Hsu 2016 选择性重中心化 / v1=等式中心化 Bootstrap） |

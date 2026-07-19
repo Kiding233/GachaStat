@@ -5,6 +5,10 @@ from typing import Dict, List, Optional, Any
 from .strategy import strategy_type_to_key, STRATEGY_REGISTRY
 
 
+class ConfigError(ValueError):
+    """配置解析或校验错误。"""
+
+
 @dataclass
 class PoolDistEntry:
     card_id: str
@@ -38,19 +42,49 @@ class PoolEntry:
 
 @dataclass
 class PityDef:
+    """P55 扁平化：23 个独立类型字段（原 PityDefParsed 6 字段 + param 分裂）。
+
+    旧字段（params/target_distribution/reset_condition）已移除。
+    counter_init 从 PityConfig 全局移至每条 PityDef。
+    """
     name: str
     btype: str = 'soft'
-    params: Dict[str, str] = field(default_factory=dict)
-    target_distribution: Dict[str, float] = field(default_factory=dict)
-    reset_condition: str = 'any_ssr'
-    pools: str = '*'
+    # ── 核心参数（按 btype 选填） ──
+    scope: str = 'ssr'
+    target_featured: bool = False
+    deltas: Optional[tuple] = None             # soft_step 专用——RLE 分段
+    threshold: Optional[int] = None            # hard 专用
+    # ── 初始状态 ──
+    counter_init: int = 0
+    guaranteed_init: bool = False              # rotating 家族大保底初始状态
+    fate_points_init: int = 0                  # targeted 家族命定值初始值
+    # ── 语法糖参数（解析后展开为 deltas） ──
+    soft_start: Optional[int] = None           # soft_interval / soft_additive
+    soft_end: Optional[int] = None             # soft_interval
+    soft_increment: Optional[float] = None     # soft_additive
+    soft_deltas: Optional[tuple] = None        # 展开前的原始 deltas
+    # ── 事件驱动型参数（P56） ──
+    cr_counter_threshold: Optional[int] = None
+    cr_base_rate: Optional[float] = None
+    cr_state_probs: Optional[tuple] = None
+    fate_threshold: Optional[int] = None
+    switch_allowed: bool = True
+    switch_resets_progress: bool = True
+    # ── 池子绑定 ──
+    pools: tuple = ('*',)
+    # ── 生命周期 ──
+    max_triggers: int = 0                      # 0=无限
+    deactivate_on_early_hit: bool = False
+    depends_on: Optional[str] = None
+    # ── 重置条件 ──
+    reset: str = ''                            # '' → scope fallback
 
 
 @dataclass
 class PityConfig:
     enabled: bool = True
     pities: List[PityDef] = field(default_factory=list)
-    counter_init: Dict[str, int] = field(default_factory=dict)
+    # P55：counter_init 已移至每个 PityDef.counter_init
 
 
 @dataclass
@@ -112,6 +146,7 @@ class ConfigStore:
     seed: int = 42
     _distribution_templates: List[dict] = field(default_factory=list)
     rarity_rank: Dict[str, int] = field(default_factory=dict)       # ← P60：稀有度 → 层级（0=最高）
+    _migrated_from_legacy: bool = False                              # ← P55：旧格式迁移标记
 
     def __post_init__(self):
         if self.strategy_type:
@@ -144,6 +179,7 @@ class ConfigStore:
         self.seed = 42
         self._distribution_templates.clear()
         self.rarity_rank.clear()                                      # ← P60
+        self._migrated_from_legacy = False                            # ← P55
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────
     # 从 card_weights 提取，供 make_gdr_calculator() 使用。

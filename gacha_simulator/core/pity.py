@@ -85,122 +85,275 @@ class LifecycleConfig:
 
 
 class PityBehavior(ABC):
-    @abstractmethod
-    def apply(self, counter_value: int, probabilities: Dict[str, float],
-              extra: Dict[str, Any] = None) -> Dict[str, float]:
-        pass
-
     def is_active(self, counter_value: int) -> bool:
         """该保底在给定计数器值下是否影响概率。子类应覆写此方法。"""
         return False
 
 
-class SoftPityBehavior(PityBehavior):
-    def __init__(self, start_at: int, end_at: int,
-                 func_type: str = 'linear',
-                 target_distribution: Dict[str, float] = None):
-        self.start_at = start_at
-        self.end_at = end_at
-        self.func_type = func_type
-        self.target_distribution = target_distribution or {}
+# ── P60 新增：计数器驱动型保底基类 ──
 
-    def is_active(self, counter_value: int) -> bool:
-        return counter_value >= self.start_at
+class CounterBasedBehavior(PityBehavior, ABC):
+    """计数器驱动型保底的通用生命周期。
 
-    def _progress(self, counter_value: int) -> float:
-        if counter_value < self.start_at:
+    子类只需覆写 _compute_probabilities(ctx, counter) → Dict[str, float]。
+    计数器管理（增/查/重置/触发上限/停用）由基类统一处理。
+
+    P55 变更：新增 btype 参数（推导 is_soft/is_hard/is_event_driven）
+    与 _on_reset() 钩子（子类可覆写以绕过默认重置流程）。
+    """
+
+    # ── btype → 分类属性映射 ──
+    _SOFT_TYPES = frozenset({'soft_interval', 'soft_additive', 'soft_step'})
+    _HARD_TYPES = frozenset({'hard'})
+    _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'targeted', 'targeted_soft',
+                                     'rotating_cr', 'rotating_cr_soft', 'rotating_soft'})
+
+    def __init__(self, name: str, state: 'PityState', scope: str, btype: str,
+                 reset: str = None, target_featured: bool = False,
+                 lifecycle: 'LifecycleConfig' = None):
+        self._name = name
+        self._state = state
+        self._scope = scope                      # 稀有度层级
+        self._btype = btype                      # P55：行为类型标识
+        self._target_featured = target_featured
+        self._reset = reset if reset is not None else scope
+        # sentinel 模式——避免可变默认参数共享
+        self._lifecycle = lifecycle if lifecycle is not None else LifecycleConfig()
+        self._triggers = Counter(state, name, "triggers")
+        self._active = Flag(state, name, "_active")
+        if self._lifecycle.depends_on is None:
+            self._active.set()
+
+        # P55：从 btype 推导分类属性
+        self.is_soft = btype in self._SOFT_TYPES
+        self.is_hard = btype in self._HARD_TYPES
+        self.is_event_driven = btype in self._EVENT_DRIVEN_TYPES
+
+    @abstractmethod
+    def _compute_probabilities(self, ctx: 'PityContext', counter: int) -> Dict[str, float]:
+        """子类实现——给定上下文和当前计数器值，返回调整后概率分布。"""
+        ...
+
+    def _counter(self) -> 'Counter':
+        return Counter(self._state, self._name, "counter")
+
+    # ── P55：_on_reset() 钩子 ──
+
+    def _on_reset(self, ctx: 'PityContext') -> bool:
+        """子类可覆写——在 _should_reset() 后、默认重置前调用。
+
+        Returns:
+            True  → 子类已完全处理重置逻辑，跳过默认 reset+incr 流程。
+            False → 继续执行默认重置（counter 归零 + triggers 累加）。
+        """
+        return False
+
+    # ── 生命周期由基类统一管理 ──
+
+    def before_draw(self, ctx: 'PityContext', readonly: bool = False) -> Dict[str, float]:
+        if not self._active.is_set():
+            return ctx.current.copy()
+        if readonly:
+            # 只读查询——仅基于当前值计算概率，不修改状态
+            v = self._counter().value()
+        else:
+            v = self._counter().incr()
+        return self._compute_probabilities(ctx, v)
+
+    def after_draw(self, ctx: 'PityContext') -> None:
+        if not self._active.is_set():
+            return
+        if not self._should_reset(ctx):
+            return
+        # ── P55 新增：_on_reset() 钩子 ──
+        if self._on_reset(ctx):
+            return  # 子类已完全处理——跳过默认 reset+incr 流程
+        # ── 默认重置流程（P60 原有） ──
+        if self._lifecycle.max_triggers and self._triggers.value() >= self._lifecycle.max_triggers:
+            self._active.clear()
+            return
+        self._counter().reset()
+        self._triggers.incr()
+
+    def _should_reset(self, ctx: 'PityContext') -> bool:
+        if self._reset == "featured":
+            return ctx.draw.is_featured
+        return ctx.draw.reward_rarity == self._reset
+
+    def did_fire(self, ctx: 'PityContext') -> bool:
+        return self._should_reset(ctx)
+
+
+# ── P55：SoftStepBehavior —— 唯一的 counter 驱动软保底类 ──
+
+class SoftStepBehavior(CounterBasedBehavior):
+    """RLE deltas 驱动的通用软保底——唯一的 counter 驱动型软保底。
+
+    deltas 格式：((抽数段, 每抽增量%), ...)
+    例：((73, 0.0), (17, 5.88)) → 前 73 抽不增，后 17 抽每抽 +5.88%
+
+    soft_interval / soft_additive 在 TOML 解析时通过 _expand_soft_to_deltas()
+    展开为 deltas，统一由此类消费。
+    """
+
+    def __init__(self, name: str, state: 'PityState', scope: str, btype: str,
+                 deltas: tuple, target_featured: bool = False,
+                 lifecycle: 'LifecycleConfig' = None, reset: str = None):
+        if deltas is None:
+            raise ValueError(
+                f"SoftStepBehavior '{name}' 的 deltas 为 None——"
+                f"soft_interval/soft_additive 语法糖必须在构造前通过 "
+                f"_expand_soft_to_deltas() 展开。"
+            )
+        super().__init__(name, state, scope, btype,
+                         reset=reset, target_featured=target_featured,
+                         lifecycle=lifecycle)
+        self._deltas = deltas  # tuple[tuple[int, float], ...]
+
+    # ── 核心：counter → 累计 boost% ──
+
+    def _cumulative_boost(self, counter: int) -> float:
+        """遍历 deltas RLE，按 counter 定位当前段并计算累计 boost%。
+
+        防御：跳过 n <= 0 的无效段（防止 counter 不减反增、boost 翻倍）。
+        counter 超出所有段时延续最后一档的增量率。
+        """
+        if counter <= 0:
             return 0.0
-        raw = (counter_value - self.start_at) / max(self.end_at - self.start_at, 1)
-        raw = min(raw, 1.0)
-        if self.func_type == 'exp':
-            return raw * raw
-        elif self.func_type == 'step':
-            if raw < 0.33:
-                return 0.0
-            elif raw < 0.66:
-                return 0.5
-            else:
-                return 1.0
-        return raw
+        boost = 0.0
+        remaining = counter
+        for n, inc in self._deltas:
+            if n <= 0:
+                continue  # 防御：跳过无效段
+            if remaining <= n:
+                boost += remaining * inc
+                return min(boost, 100.0)
+            boost += n * inc
+            remaining -= n
+        # counter 超出所有段 → 最后一档延续
+        if self._deltas:
+            boost += remaining * self._deltas[-1][1]
+        return min(boost, 100.0)
 
-    def apply(self, counter_value: int, probabilities: Dict[str, float],
-              extra: Dict[str, Any] = None) -> Dict[str, float]:
-        progress = self._progress(counter_value)
-        if progress <= 0:
-            return probabilities.copy()
+    # ── 概率调整 ──
 
-        resolved = self.target_distribution
-        if extra and 'resolved_targets' in extra:
-            resolved = extra['resolved_targets']
+    def _compute_probabilities(self, ctx: 'PityContext', counter: int) -> Dict[str, float]:
+        """按 counter 计算 boost，跨稀有度重分配概率。
 
-        if resolved:
-            return self._apply_targeted(progress, probabilities, resolved)
-        return self._apply_first(progress, probabilities)
+        算法：
+          1. 累计 deltas → boost_pct（0–100）
+          2. 定位 scope 槽位 + target_featured 收窄目标
+          3. 从非目标槽位（含低稀有度，排除高稀有度）取概率 → 转给目标槽位
+          4. 目标槽位内部按基础权重比例分配（不改变 featured/standard 比例）
+        """
+        # 1. 累计 boost
+        boost_pct = self._cumulative_boost(counter)
+        if boost_pct <= 0:
+            return ctx.current.copy()
 
-    def _apply_targeted(self, progress: float,
-                        probabilities: Dict[str, float],
-                        resolved: Dict[str, float]) -> Dict[str, float]:
-        present = {tid: w for tid, w in resolved.items() if tid in probabilities}
-        if not present:
-            return probabilities.copy()
-        total_target_weight = sum(present.values())
-        if total_target_weight <= 0:
-            return probabilities.copy()
+        # 2. 槽位分组
+        scope_slots = ctx.draw.scope_slots.get(self._scope, ())
+        if not scope_slots:
+            return ctx.current.copy()
 
-        current_target_prob = sum(
-            probabilities.get(tid, 0.0)
-            for tid in present
-        )
-        other_prob = 1.0 - current_target_prob
-        new_target_prob = min(current_target_prob + progress * other_prob, 1.0)
-        new_other_prob = 1.0 - new_target_prob
-        scale = new_other_prob / other_prob if other_prob > 0 else 0
+        if self._target_featured:
+            target_slots = ctx.draw.featured_slots.get(self._scope, scope_slots)
+        else:
+            target_slots = scope_slots
 
-        result = {}
-        for rid, prob in probabilities.items():
-            if rid in present:
-                w = present[rid] / total_target_weight
-                result[rid] = new_target_prob * w
-            else:
-                result[rid] = prob * scale
+        # 3. 确定可抽取的概率池——排除目标槽位 + 更高稀有度槽位（层级保护）
+        result = ctx.current.copy()
+        scope_rank = ctx.draw.rarity_rank.get(self._scope, 99)
+
+        higher_slots = set()
+        for rarity, rank in ctx.draw.rarity_rank.items():
+            if rank < scope_rank:
+                higher_slots.update(ctx.draw.scope_slots.get(rarity, ()))
+
+        non_target = [s for s in result
+                      if s not in target_slots
+                      and s not in higher_slots]
+
+        if not non_target:
+            return result
+
+        pool = sum(result.get(s, 0.0) for s in non_target)
+        if pool <= 0:
+            return result
+
+        # 4. 重分配：非目标 → 目标（按基础权重比例分配）
+        steal = pool * boost_pct / 100.0
+        ratio = 1.0 - boost_pct / 100.0
+
+        for s in non_target:
+            result[s] = result.get(s, 0.0) * ratio
+
+        # 按目标槽位的基础权重比例分配（非均分——均分会破坏 SSR 内部 featured/standard 比例）
+        target_weights = [ctx.draw.base_probabilities.get(s, 0.0) for s in target_slots]
+        total_weight = sum(target_weights)
+        if total_weight > 0:
+            for s, w in zip(target_slots, target_weights):
+                result[s] = result.get(s, 0.0) + steal * w / total_weight
+        else:
+            # 兜底：所有槽位基础权重为 0 时退化为均分
+            per_target = steal / len(target_slots)
+            for s in target_slots:
+                result[s] = result.get(s, 0.0) + per_target
+
         return result
 
-    def _apply_first(self, progress: float,
-                     probabilities: Dict[str, float]) -> Dict[str, float]:
-        items = list(probabilities.items())
-        if not items:
-            return probabilities.copy()
+    # ── P55：硬保底接力 _on_reset() ──
 
-        first_id, first_prob = items[0]
-        other_prob = 1.0 - first_prob
-        new_first_prob = min(first_prob + progress * other_prob, 1.0)
-        new_other_prob = 1.0 - new_first_prob
-        scale = new_other_prob / other_prob if other_prob > 0 else 0
+    def _on_reset(self, ctx: 'PityContext') -> bool:
+        """soft 保底触发后——若配置了 deactivate_on_early_hit，停用自身。
 
-        result = {}
-        for rid, prob in probabilities.items():
-            if rid == first_id:
-                result[rid] = new_first_prob
-            else:
-                result[rid] = prob * scale
-        return result
+        Returns:
+            True  → 已完全处理（停用），跳过默认重置。
+            False → 继续默认重置流程。
+        """
+        if self._lifecycle.deactivate_on_early_hit:
+            self._active.clear()
+            return True
+        return False
 
 
-class HardPityBehavior(PityBehavior):
-    def __init__(self, threshold: int,
+# ── P55：HardPityBehavior —— CounterBasedBehavior 子类，scope 化 ──
+
+class HardPityBehavior(CounterBasedBehavior):
+    """计数器驱动硬保底——counter 达到 threshold 时 scope 概率强制 100%。
+
+    P55 变更：从 PityBehavior 直接子类改为 CounterBasedBehavior 子类，
+    通过 scope 槽位定位目标（替代旧 target_distribution / resolved_targets）。
+    """
+
+    def __init__(self, name: str = '', state: 'PityState' = None,
+                 scope: str = 'ssr', btype: str = 'hard',
+                 threshold: int = 90, target_featured: bool = False,
+                 lifecycle: 'LifecycleConfig' = None, reset: str = None,
+                 # ── 旧接口兼容参数（P55 阶段十三删除） ──
                  target_distribution: Dict[str, float] = None):
-        self.threshold = threshold
-        self.target_distribution = target_distribution or {}
+        # 旧接口兼容：无 state 时跳过 CounterBasedBehavior.__init__
+        if state is None:
+            self._threshold = threshold
+            self._legacy_target_dist = target_distribution or {}
+            self._legacy_mode = True
+            return
+        super().__init__(name, state, scope, btype,
+                         reset=reset, target_featured=target_featured,
+                         lifecycle=lifecycle)
+        self._threshold = threshold
+        self._legacy_target_dist = target_distribution or {}
 
     def is_active(self, counter_value: int) -> bool:
-        return counter_value >= self.threshold
+        return counter_value >= self._threshold
 
     def apply(self, counter_value: int, probabilities: Dict[str, float],
               extra: Dict[str, Any] = None) -> Dict[str, float]:
-        if counter_value < self.threshold:
+        """旧接口桥接——P55 阶段十三删除。"""
+        if counter_value < self._threshold:
             return probabilities.copy()
 
-        resolved = self.target_distribution
+        resolved = self._legacy_target_dist if hasattr(self, '_legacy_target_dist') else {}
         if extra and 'resolved_targets' in extra:
             resolved = extra['resolved_targets']
 
@@ -221,156 +374,384 @@ class HardPityBehavior(PityBehavior):
             result[list(probabilities.keys())[0]] = 1.0
         return result
 
+    # ── 新架构接口 ──
 
-# ── P60 新增：计数器驱动型保底基类 ──
-
-class CounterBasedBehavior(PityBehavior, ABC):
-    """计数器驱动型保底的通用生命周期。
-
-    子类只需覆写 _compute_probabilities(ctx, counter) → Dict[str, float]。
-    计数器管理（增/查/重置/触发上限/停用）由基类统一处理。
-    """
-
-    def __init__(self, name: str, state: 'PityState', scope: str,
-                 reset: str = None, target_featured: bool = False,
-                 lifecycle: 'LifecycleConfig' = None):
-        self._name = name
-        self._state = state
-        self._scope = scope                      # 稀有度层级
-        self._target_featured = target_featured
-        self._reset = reset if reset is not None else scope
-        # sentinel 模式——避免可变默认参数共享
-        self._lifecycle = lifecycle if lifecycle is not None else LifecycleConfig()
-        self._triggers = Counter(state, name, "triggers")
-        self._active = Flag(state, name, "_active")
-        if self._lifecycle.depends_on is None:
-            self._active.set()
-
-    @abstractmethod
     def _compute_probabilities(self, ctx: 'PityContext', counter: int) -> Dict[str, float]:
-        """子类实现——给定上下文和当前计数器值，返回调整后概率分布。"""
-        ...
+        """counter 达到 threshold 时 scope 概率强制 100%。
 
-    def _counter(self) -> 'Counter':
-        return Counter(self._state, self._name, "counter")
-
-    # ── 生命周期由基类统一管理 ──
-
-    def before_draw(self, ctx: 'PityContext', readonly: bool = False) -> Dict[str, float]:
-        if not self._active.is_set():
+        算法：
+          1. 未达 threshold → 原样返回
+          2. 定位 scope 槽位 + target_featured 收窄目标
+          3. 目标槽位概率 = 100%（按基础权重比例分配），其余 = 0%
+        """
+        if counter < self._threshold:
             return ctx.current.copy()
-        if readonly:
-            # 只读查询——仅基于当前值计算概率，不修改状态
-            v = self._counter().value()
+
+        # 槽位分组
+        scope_slots = ctx.draw.scope_slots.get(self._scope, ())
+        if not scope_slots:
+            return ctx.current.copy()
+
+        if self._target_featured:
+            target_slots = ctx.draw.featured_slots.get(self._scope, scope_slots)
         else:
-            v = self._counter().incr()
-        return self._compute_probabilities(ctx, v)
+            target_slots = scope_slots
 
-    def after_draw(self, ctx: 'PityContext') -> None:
-        if not self._active.is_set():
-            return
-        if not self._should_reset(ctx):
-            return
-        if self._lifecycle.max_triggers and self._triggers.value() >= self._lifecycle.max_triggers:
+        # 目标槽位强制 100%（按基础权重比例分配）
+        result = {k: 0.0 for k in ctx.current}
+        target_weights = [ctx.draw.base_probabilities.get(s, 0.0) for s in target_slots]
+        total_weight = sum(target_weights)
+        if total_weight > 0:
+            for s, w in zip(target_slots, target_weights):
+                result[s] = w / total_weight
+        elif target_slots:
+            # 兜底：均分
+            per = 1.0 / len(target_slots)
+            for s in target_slots:
+                result[s] = per
+
+        # 保留非目标槽位的稀有度层级保护——更高稀有度不变
+        scope_rank = ctx.draw.rarity_rank.get(self._scope, 99)
+        for rarity, rank in ctx.draw.rarity_rank.items():
+            if rank < scope_rank:
+                for s in ctx.draw.scope_slots.get(rarity, ()):
+                    result[s] = ctx.current.get(s, 0.0)
+
+        return result
+
+    # ── P55：_on_reset() 钩子 —— deactivate_on_early_hit ──
+
+    def _on_reset(self, ctx: 'PityContext') -> bool:
+        """硬保底触发后——若配置了 deactivate_on_early_hit，停用自身。
+
+        HardPityBehavior 在保底触发时已消耗一次触发计数。
+        若 max_triggers=1 且 deactivate_on_early_hit=True，
+        一次保底后行为自动停用（适用于「仅首轮有硬保底」场景）。
+        """
+        if self._lifecycle.deactivate_on_early_hit:
             self._active.clear()
-            return
-        self._counter().reset()
-        self._triggers.incr()
-
-    def _should_reset(self, ctx: 'PityContext') -> bool:
-        if self._reset == "featured":
-            return ctx.draw.is_featured
-        return ctx.draw.reward_rarity == self._reset
-
-    def did_fire(self, ctx: 'PityContext') -> bool:
-        return self._should_reset(ctx)
+            return True
+        return False
 
 
-# ── P60 新增：保底类型注册表（对齐 STRATEGY_REGISTRY） ──
+
+# ── P60 新增 → P55 更新：保底类型注册表（对齐 STRATEGY_REGISTRY） ──
 
 BEHAVIOR_REGISTRY: Dict[str, dict] = {
+    # ══ P55：counter 驱动型（4 种） ══
     "soft_interval": {
-        "class": None,                          # P55 剩余实现——占位
+        "class": SoftStepBehavior,
         "display_name": "区间软保底",
-        "default_scope": "SSR",
+        "default_scope": "ssr",
         "params": {
             "start": {"type": "int", "display_name": "起始抽数", "default": 80, "min": 1},
             "end":   {"type": "int", "display_name": "结束抽数", "default": 90, "min": 1},
             "func":  {"type": "str", "display_name": "爬升函数", "default": "linear",
-                       "options": ["linear", "exp", "step"]},
+                       "options": ["linear"]},
         },
+        "ui_params": ["start", "end"],
     },
     "soft_additive": {
-        "class": None,                          # P55 剩余实现——占位
+        "class": SoftStepBehavior,
         "display_name": "累加软保底",
-        "default_scope": "SSR",
+        "default_scope": "ssr",
         "params": {
             "start":     {"type": "int",   "display_name": "起始抽数",   "default": 74,  "min": 1},
             "increment": {"type": "float", "display_name": "每抽增量(%)", "default": 6.0, "min": 0.1},
         },
+        "ui_params": ["start", "increment"],
+    },
+    "soft_step": {
+        "class": SoftStepBehavior,
+        "display_name": "分段软保底",
+        "default_scope": "ssr",
+        "params": {
+            "deltas": {"type": "deltas", "display_name": "RLE 分段表", "default": ((73, 0.0), (17, 5.88))},
+        },
+        "ui_params": ["deltas"],
     },
     "hard": {
-        "class": None,                          # P55 剩余实现——占位
+        "class": HardPityBehavior,
         "display_name": "硬保底",
-        "default_scope": "SSR",
+        "default_scope": "ssr",
         "params": {
             "threshold": {"type": "int", "display_name": "保底抽数", "default": 90, "min": 1},
         },
+        "ui_params": ["threshold"],
     },
+    # ══ P56：事件驱动型（6 种——stub） ══
     "rotating": {
-        "class": None,                          # P56 实现——stub
+        "class": None,
         "display_name": "轮换保底",
-        "default_scope": "SSR",
+        "default_scope": "ssr",
         "params": {
-            "initial_win_rate": {"type": "float", "display_name": "初始胜率(%)",  "default": 50.0, "min": 0.0, "max": 100.0},
-            "loss_increment":   {"type": "float", "display_name": "歪后增量(%)",  "default": 50.0, "min": 0.0, "max": 100.0},
+            # featured 占比由基础概率分布唯一确定（大保底=100% featured，小保底=基础分布比例）
         },
     },
     "targeted": {
-        "class": None,                          # P56 实现——stub
+        "class": None,
         "display_name": "定向保底（定轨）",
-        "default_scope": "SSR",
+        "default_scope": "ssr",
         "params": {
-            "initial_win_rate":       {"type": "float", "display_name": "初始胜率(%)",    "default": 50.0, "min": 0.0, "max": 100.0},
-            "loss_increment":         {"type": "float", "display_name": "歪后增量(%)",    "default": 50.0, "min": 0.0, "max": 100.0},
             "fate_threshold":         {"type": "int",   "display_name": "命定值阈值",     "default": 1,    "min": 0},
             "switch_allowed":         {"type": "bool",  "display_name": "允许中途切换",   "default": True},
             "switch_resets_progress": {"type": "bool",  "display_name": "切换后清零进度", "default": True},
         },
     },
+    "rotating_cr": {
+        "class": None,
+        "display_name": "轮换保底（递增概率）",
+        "default_scope": "ssr",
+        "params": {
+            "cr_counter_threshold": {"type": "int",   "display_name": "CR 计数器阈值", "default": 3,  "min": 1},
+            "cr_base_rate":         {"type": "float", "display_name": "基础递增率(%)",  "default": 5.0, "min": 0.0},
+        },
+    },
+    "rotating_cr_soft": {
+        "class": None,
+        "display_name": "轮换保底·递增概率（带软保底）",
+        "default_scope": "ssr",
+        "params": {
+            "cr_counter_threshold": {"type": "int",   "display_name": "CR 计数器阈值", "default": 3,  "min": 1},
+            "cr_base_rate":         {"type": "float", "display_name": "基础递增率(%)",  "default": 5.0, "min": 0.0},
+            "soft_start":           {"type": "int",   "display_name": "软保底起始",     "default": 50, "min": 1},
+            "soft_end":             {"type": "int",   "display_name": "软保底结束",     "default": 80, "min": 1},
+            "soft_increment":       {"type": "float", "display_name": "每抽增量(%)",    "default": 5.0, "min": 0.1},
+        },
+    },
+    "targeted_soft": {
+        "class": None,
+        "display_name": "定向保底·定轨（带软保底）",
+        "default_scope": "ssr",
+        "params": {
+            "fate_threshold":         {"type": "int",   "display_name": "命定值阈值",     "default": 2,    "min": 0},
+            "switch_allowed":         {"type": "bool",  "display_name": "允许中途切换",   "default": True},
+            "switch_resets_progress": {"type": "bool",  "display_name": "切换后清零进度", "default": True},
+            "soft_start":             {"type": "int",   "display_name": "软保底起始",     "default": 50, "min": 1},
+            "soft_end":               {"type": "int",   "display_name": "软保底结束",     "default": 80, "min": 1},
+            "soft_increment":         {"type": "float", "display_name": "每抽增量(%)",    "default": 5.0, "min": 0.1},
+        },
+    },
 }
 
 
-def create_behavior(pdef: 'PityDefParsed', state: 'PityState', **extra) -> 'PityBehavior':
-    """工厂函数——从 PityDefParsed + BEHAVIOR_REGISTRY 构造 behavior 实例。
+def _validate_registry():
+    """BEHAVIOR_REGISTRY 自检——验证所有条目 class 字段可导入。
 
-    scope 从 BEHAVIOR_REGISTRY 条目的 default_scope 读取（非 PityDefParsed，scope 是行为类型固有属性）。
-    参数类型根据 registry 声明的 type 强制转换。
+    P55 阶段八集成：遍历注册表中所有条目，确认 counter 驱动型的 class 字段
+    非 None 且确为 PityBehavior 子类。事件驱动型（P56 stub）跳过。
+    在模块导入时自动执行一次——类型错误在导入阶段立即暴露。
+    """
+    for btype, entry in BEHAVIOR_REGISTRY.items():
+        cls = entry.get("class")
+        if cls is not None:
+            if not isinstance(cls, type) or not issubclass(cls, PityBehavior):
+                raise TypeError(
+                    f"BEHAVIOR_REGISTRY['{btype}'].class={cls!r}——"
+                    f"必须为 PityBehavior 子类"
+                )
+
+
+_validate_registry()
+
+
+def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
+    """工厂函数——从 PityDef（新）或 PityDefParsed（旧）构造 behavior 实例。
+
+    P55 新路径（PityDef 扁平化）：直接从 dataclass 字段读取参数。
+    旧路径（PityDefParsed）：从 .params dict 读取并做类型强制转换。
     """
     entry = BEHAVIOR_REGISTRY[pdef.btype]
     cls = entry["class"]
     if cls is None:
-        raise ValueError(f"Behavior type '{pdef.btype}' 在 P60 中仅为 stub——"
-                         f"完整实现由 P55 剩余/P56 交付。")
+        raise ValueError(
+            f"Behavior type '{pdef.btype}' 尚未实现——"
+            f"P56 将交付事件驱动型保底。"
+        )
 
-    # scope 从 registry 条目读取
-    scope = entry.get("default_scope", "SSR")
+    # scope 从 registry 条目读取（小写归一化）
+    scope = entry.get("default_scope", "ssr").lower()
 
-    # 参数类型强制转换——将 pdef.params 的字符串值转为 registry 声明的类型
-    typed_params = {}
-    for pname, pvalue in pdef.params.items():
-        param_meta = entry.get("params", {}).get(pname, {})
-        ptype = param_meta.get("type", "str")
-        if ptype == "int":
-            typed_params[pname] = int(pvalue)
-        elif ptype == "float":
-            typed_params[pname] = float(pvalue)
-        elif ptype == "bool":
-            typed_params[pname] = pvalue.lower() in ("true", "1", "yes")
-        else:
-            typed_params[pname] = pvalue  # str —— 原样传递
+    # btype 传递给 behavior——基类据此推导 is_soft/is_hard/is_event_driven
+    params = {"btype": pdef.btype}
 
-    return cls(name=pdef.name, state=state, scope=scope, **typed_params)
+    # ── 检测新旧格式 ──
+    if hasattr(pdef, 'params') and isinstance(pdef.params, dict):
+        # 旧路径：PityDefParsed——params dict 中所有值为 str
+        for pname, pvalue in pdef.params.items():
+            param_meta = entry.get("params", {}).get(pname, {})
+            ptype = param_meta.get("type", "str")
+            if ptype == "int":
+                params[pname] = int(pvalue)
+            elif ptype == "float":
+                params[pname] = float(pvalue)
+            elif ptype == "bool":
+                params[pname] = pvalue.lower() in ("true", "1", "yes")
+            elif ptype == "deltas":
+                params[pname] = _parse_deltas_string(pvalue)
+            else:
+                params[pname] = pvalue
+    else:
+        # 新路径：PityDef（config_store）——扁平化字段
+        if getattr(pdef, 'deltas', None) is not None:
+            params['deltas'] = pdef.deltas
+        elif hasattr(pdef, 'soft_start') and pdef.soft_start is not None:
+            from .config_toml import _expand_soft_to_deltas
+            params['deltas'] = _expand_soft_to_deltas(
+                pdef.btype, pdef.soft_start,
+                getattr(pdef, 'soft_end', None),
+                getattr(pdef, 'soft_increment', None),
+            )
+        if getattr(pdef, 'threshold', None) is not None:
+            params['threshold'] = pdef.threshold
+        if getattr(pdef, 'target_featured', False):
+            params['target_featured'] = True
+        if getattr(pdef, 'reset', None):
+            params['reset'] = pdef.reset
+        # 生命周期参数——LifecycleConfig 跨 type 共享
+        lifecycle_kwargs = {}
+        if getattr(pdef, 'max_triggers', 0):
+            lifecycle_kwargs['max_triggers'] = pdef.max_triggers
+        if getattr(pdef, 'deactivate_on_early_hit', False):
+            lifecycle_kwargs['deactivate_on_early_hit'] = True
+        if getattr(pdef, 'depends_on', None):
+            lifecycle_kwargs['depends_on'] = pdef.depends_on
+        if lifecycle_kwargs:
+            params['lifecycle'] = LifecycleConfig(**lifecycle_kwargs)
+
+    return cls(name=pdef.name, state=state, scope=scope, **params)
+
+
+def _parse_deltas_string(value) -> tuple:
+    """解析 deltas 字符串 → tuple[tuple[int, float], ...]。
+    格式：'73:0.0,17:5.88' 或已是 tuple/list。
+    """
+    if isinstance(value, (tuple, list)):
+        return tuple(tuple(seg) for seg in value)
+    if isinstance(value, str) and value.strip():
+        result = []
+        for part in value.split(','):
+            part = part.strip()
+            if ':' in part:
+                n_str, inc_str = part.split(':', 1)
+                result.append((int(n_str.strip()), float(inc_str.strip())))
+        return tuple(result)
+    return ()
+
+
+# ── P55：behavior 排序与校验 ──
+
+# 排序优先级：counter_soft → counter_hard → event_driven_soft → event_driven_hard
+_BTYPE_ORDER = {
+    'soft_interval': 0, 'soft_additive': 0, 'soft_step': 0,
+    'hard': 1,
+    'rotating_soft': 2, 'rotating_cr': 2, 'rotating_cr_soft': 2,
+    'rotating': 3, 'targeted': 3, 'targeted_soft': 3,
+}
+
+
+def _resolve_order(behaviors, rarity_rank=None):
+    """按稀有度层级→type 优先级排序 behavior 列表。
+
+    P55 §3.3：高稀有度先执行（rank 值小→优先级高），同稀有度内
+    counter_soft → counter_hard → event_driven_soft → event_driven_hard。
+    同优先级按 name 字母序（确定性）。
+    """
+    if rarity_rank is None:
+        rarity_rank = {}
+    def _sort_key(bh):
+        scope = getattr(bh, '_scope', '')
+        rank = rarity_rank.get(scope, 99)
+        order = _BTYPE_ORDER.get(getattr(bh, '_btype', ''), 99)
+        return (rank, order, getattr(bh, '_name', ''))
+    return sorted(behaviors, key=_sort_key)
+
+
+def _validate_behaviors(behaviors):
+    """PityEngine 层校验——第二道防线（TOML 解析层为第一道）。
+
+    校验规则：
+      1. name 重名 → ValueError
+      2. 同 scope 两个 hard → ConfigError（互斥）
+      3. 同 scope 两个事件驱动型 → ConfigError（互斥）
+      4. 同 scope 同 btype 两个 soft → ConfigError（重复配置）
+    """
+    from .config_store import ConfigError
+    seen_names = {}
+    scope_hard = set()
+    scope_event = set()
+    scope_soft = {}
+
+    for bh in behaviors:
+        name = getattr(bh, '_name', id(bh))
+        scope = getattr(bh, '_scope', '')
+        btype = getattr(bh, '_btype', '')
+
+        # 规则 1：name 重名
+        if name in seen_names:
+            raise ValueError(
+                f"PityEngine._validate_behaviors: 重复的 behavior name '{name}'——"
+                f"已由 '{seen_names[name].__class__.__name__}' 注册。"
+                f"每个 behavior 必须有唯一的 name。"
+            )
+        seen_names[name] = bh
+
+        # 规则 2-4：scope 重叠校验
+        if getattr(bh, 'is_hard', False):
+            if scope in scope_hard:
+                raise ConfigError(
+                    f"同 scope '{scope}' 存在两个硬保底："
+                    f"'{next(n for n, b in seen_names.items() if getattr(b,'_scope','')==scope and getattr(b,'is_hard',False))}'"
+                    f" 与 '{name}'——每个稀有度最多一个硬保底"
+                )
+            scope_hard.add(scope)
+        elif getattr(bh, 'is_event_driven', False):
+            if scope in scope_event:
+                raise ConfigError(
+                    f"同 scope '{scope}' 存在两个事件驱动型保底——每个稀有度最多一个事件驱动型"
+                )
+            scope_event.add(scope)
+        elif getattr(bh, 'is_soft', False):
+            key = (scope, btype)
+            if key in scope_soft:
+                raise ConfigError(
+                    f"同 scope '{scope}' 同 type '{btype}' 存在两个软保底："
+                    f"'{scope_soft[key]}' 与 '{name}'——请合并或使用不同 type"
+                )
+            scope_soft[key] = name
+
+
+def _build_pity_state_init(pity_defs, counter_init_overrides=None):
+    """从 PityDef 列表构造初始 PityState。
+
+    P55 变更：counter_init 从每个 PityDef.counter_init 读取（而非全局 PityConfig）。
+    同时注入 guaranteed_init / fate_points_init 初始标志。
+
+    Args:
+        pity_defs: List[PityDef]（扁平化后的 17 字段版本）。
+        counter_init_overrides: 可选——per-name counter 覆盖值（GUI 面板传入）。
+    """
+    state = PityState()
+    for pdef in pity_defs:
+        # counter_init：优先使用覆盖值，否则用 PityDef 自身值
+        cv = 0
+        if counter_init_overrides and pdef.name in counter_init_overrides:
+            cv = counter_init_overrides[pdef.name]
+        elif hasattr(pdef, 'counter_init') and pdef.counter_init:
+            cv = pdef.counter_init
+        if cv:
+            state.set(pdef.name, "counter", cv)
+
+        # guaranteed_init（rotating 家族初始大保底状态）
+        if getattr(pdef, 'guaranteed_init', False):
+            state.set(pdef.name, "guaranteed", True)
+
+        # fate_points_init（targeted 家族初始命定值）
+        fp = getattr(pdef, 'fate_points_init', 0)
+        if fp:
+            state.set(pdef.name, "fate_points", fp)
+
+    return state
 
 
 @dataclass
@@ -388,7 +769,55 @@ class PoolPitySpec:
     pity_names: List[str]
     featured_ids: Set[str] = field(default_factory=set)
     ssr_ids: Set[str] = field(default_factory=set)
+    # ⚠️ 旧路径兼容——新路径中此字段始终为空 dict
     resolved_targets: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    # ── P55 新增：槽位映射（供 DrawInfo 构造） ──
+    scope_cards: Dict[str, tuple] = field(default_factory=dict)
+    featured_cards: Dict[str, tuple] = field(default_factory=dict)
+    scope_slots: Dict[str, tuple] = field(default_factory=dict)
+    featured_slots: Dict[str, tuple] = field(default_factory=dict)
+
+
+def compute_scope_mappings(pool) -> tuple:
+    """从池子的 Reward 列表预计算 scope_cards/featured_cards/scope_slots/featured_slots。
+
+    P55 ISSUE-032：Reward.extra_info 含 'rarity'/'featured' 键，
+    据此分组生成 DrawInfo 所需的槽位映射。
+
+    featured SSR 与 standard SSR 分配**不同槽位**——使 target_featured
+    的概率提升仅作用于 featured 卡牌，而非所有同稀有度卡牌。
+
+    Returns:
+        (scope_cards, featured_cards, scope_slots, featured_slots) 四元组 dict。
+    """
+    cards_by_rarity: Dict[str, list] = {}
+    featured_by_rarity: Dict[str, list] = {}
+
+    for rwd, _prob in getattr(pool, 'rewards', []):
+        extra = getattr(rwd, 'extra_info', {}) or {}
+        rarity = extra.get('rarity', '').lower()
+        if not rarity:
+            continue
+        cards_by_rarity.setdefault(rarity, []).append(rwd.id)
+        if extra.get('featured'):
+            featured_by_rarity.setdefault(rarity, []).append(rwd.id)
+
+    scope_cards = {r: tuple(cards) for r, cards in cards_by_rarity.items()}
+    featured_cards = {r: tuple(cards) for r, cards in featured_by_rarity.items()}
+
+    # 槽位映射——featured 拆分为独立槽位名（如 'ssr_featured'）
+    scope_slots = {}
+    featured_slots = {}
+    for rarity in cards_by_rarity:
+        if rarity in featured_by_rarity:
+            featured_slot = f'{rarity}_featured'
+            scope_slots[rarity] = (rarity, featured_slot)
+            featured_slots[rarity] = (featured_slot,)
+        else:
+            scope_slots[rarity] = (rarity,)
+            featured_slots[rarity] = (rarity,)
+
+    return scope_cards, featured_cards, scope_slots, featured_slots
 
 
 class PityState:
@@ -433,20 +862,61 @@ class PityState:
 
 
 class PityEngine:
-    """保底引擎——P60 退化为纯调度器。所有业务逻辑由 behavior 自行管理。"""
+    """保底引擎——P55 重构：自行管理 behavior 生命周期。
+
+    P55 新签名：PityEngine(pool_specs, pity_defs: List[PityDef], state, rarity_rank)
+    旧签名（向后兼容）：PityEngine(pool_specs, pity_defs: Dict, behaviors: Dict, rarity_rank)
+
+    新引擎在构造时通过 create_behavior() 从 PityDef 构造 behavior 实例，
+    经过 _resolve_order() 排序 + _validate_behaviors() 校验后存入内部 registry。
+    """
 
     def __init__(self, pool_specs: Dict[str, PoolPitySpec],
-                 pity_defs: Dict[str, PityDefParsed],
-                 behaviors: Dict[str, PityBehavior],
-                 rarity_rank: Dict[str, int] = None):
+                 pity_defs,  # List[PityDef] (新) 或 Dict[str, PityDefParsed] (旧)
+                 behaviors=None,  # 旧签名关键字
+                 rarity_rank: Dict[str, int] = None,
+                 # ── 新签名关键字 ──
+                 state: 'PityState' = None):
         self.pool_specs = pool_specs
-        self.pity_defs = pity_defs
-        self.behaviors = behaviors                    # 保留旧接口兼容
-        self._state = None                            # 由 before_draw/after_draw 注入
         self._rarity_rank = rarity_rank or {}
 
-        # _behavior_list 仅作为注册表，调度时按池过滤
-        self._behavior_list: List[PityBehavior] = list(behaviors.values())
+        # ── 检测新旧签名 ──
+        if isinstance(pity_defs, dict):
+            # 旧签名：(pool_specs, pity_defs: Dict, behaviors: Dict, rarity_rank)
+            self._legacy_mode = True
+            self.pity_defs = pity_defs
+            self.behaviors = behaviors or {}
+            self._state = state  # 由 before_draw/after_draw 注入（旧签名中通常为 None）
+            self._behavior_list: List[PityBehavior] = list(self.behaviors.values())
+        else:
+            # 新签名：(pool_specs, pity_defs: List[PityDef], state=..., rarity_rank=...)
+            self._legacy_mode = False
+            self.pity_defs = {p.name: p for p in pity_defs} if pity_defs else {}
+            self._state = state
+
+            # 从 PityDef 构造 behavior 实例
+            self.behaviors: Dict[str, PityBehavior] = {}
+            from .config_store import PityDef as _PityDef
+            for pdef in (pity_defs or []):
+                if not isinstance(pdef, _PityDef):
+                    continue
+                if pdef.btype in ('rotating', 'targeted', 'rotating_cr',
+                                  'rotating_cr_soft', 'rotating_soft', 'targeted_soft'):
+                    continue  # P56 stub——跳过事件驱动型
+                try:
+                    bh = create_behavior(pdef, self._state)
+                    self.behaviors[pdef.name] = bh
+                except Exception:
+                    logger.warning(
+                        f"PityEngine: 跳过 behavior '{pdef.name}' (type={pdef.btype})——"
+                        f"构造失败",
+                        exc_info=True,
+                    )
+
+            # 排序 + 校验
+            ordered = _resolve_order(list(self.behaviors.values()), self._rarity_rank)
+            _validate_behaviors(ordered)
+            self._behavior_list: List[PityBehavior] = ordered
 
     # ── 辅助：按池过滤 behavior ──
 
@@ -472,34 +942,21 @@ class PityEngine:
             return base_probabilities.copy()
 
         draw_info = DrawInfo(
-            pool_id=pool_id,
-            pool_instance_id=pool_id,
-            reward_id="",
-            reward_rarity="",
-            is_featured=False,
-            scope_cards={},
-            scope_slots={},
-            featured_slots={},
+            pool_id=pool_id, pool_instance_id=pool_id,
+            reward_id="", reward_rarity="", is_featured=False,
+            scope_cards=spec.scope_cards,
+            scope_slots=spec.scope_slots,
+            featured_slots=spec.featured_slots,
             base_probabilities=base_probabilities,
             rarity_rank=self._rarity_rank,
         )
         ctx = PityContext(draw=draw_info, current=base_probabilities.copy(), state=state)
 
-        # 只读查询——对每个池关联 behavior 调度，跳过计数器递增
+        # 只读查询——对每个池关联 behavior 调度
         for pname, bh in self._behaviors_for_pool(pool_id):
-            try:
-                new_probs = bh.before_draw(ctx, readonly=True)
-                if new_probs is not None:
-                    ctx.current = new_probs
-            except AttributeError:
-                # 🔴 P55 迁移后删除：旧 behavior（SoftPityBehavior/HardPityBehavior）仅有 apply()，
-                # 无 before_draw()。P55 阶段五/六将其改为 CounterBasedBehavior 子类后，此桥接不再触发。
-                cv = state.get(pname, "counter", 0)
-                extra = {}
-                resolved = spec.resolved_targets.get(pname)
-                if resolved:
-                    extra['resolved_targets'] = resolved
-                ctx.current = bh.apply(cv, ctx.current, extra if extra else None)
+            new_probs = bh.before_draw(ctx, readonly=True)
+            if new_probs is not None:
+                ctx.current = new_probs
 
         return ctx.current
 
@@ -512,34 +969,21 @@ class PityEngine:
             return base_probabilities.copy()
 
         draw_info = DrawInfo(
-            pool_id=pool_id,
-            pool_instance_id=pool_id,
-            reward_id="",
-            reward_rarity="",
-            is_featured=False,
-            scope_cards={},
-            scope_slots={},
-            featured_slots={},
+            pool_id=pool_id, pool_instance_id=pool_id,
+            reward_id="", reward_rarity="", is_featured=False,
+            scope_cards=spec.scope_cards,
+            scope_slots=spec.scope_slots,
+            featured_slots=spec.featured_slots,
             base_probabilities=base_probabilities,
             rarity_rank=self._rarity_rank,
         )
         ctx = PityContext(draw=draw_info, current=base_probabilities.copy(), state=state)
 
-        # 按池过滤调度 + 旧接口桥接
+        # 按池过滤调度
         for pname, bh in self._behaviors_for_pool(pool_id):
-            try:
-                new_probs = bh.before_draw(ctx)
-                if new_probs is not None:
-                    ctx.current = new_probs
-            except AttributeError:
-                # 🔴 P55 迁移后删除：旧 behavior 仅有 apply()——P55 阶段五/六改为 CounterBasedBehavior 子类后不再触发
-                cv = state.get(pname, "counter", 0)
-                state.incr(pname, "counter")
-                extra = {}
-                resolved = spec.resolved_targets.get(pname)
-                if resolved:
-                    extra['resolved_targets'] = resolved
-                ctx.current = bh.apply(cv + 1, ctx.current, extra if extra else None)
+            new_probs = bh.before_draw(ctx)
+            if new_probs is not None:
+                ctx.current = new_probs
 
         return ctx.current
 
@@ -553,39 +997,30 @@ class PityEngine:
         reward_rarity = self._infer_rarity(reward_id, spec)
 
         draw_info = DrawInfo(
-            pool_id=pool_id,
-            pool_instance_id=pool_id,
-            reward_id=reward_id,
-            reward_rarity=reward_rarity,
+            pool_id=pool_id, pool_instance_id=pool_id,
+            reward_id=reward_id, reward_rarity=reward_rarity,
             is_featured=is_featured,
-            scope_cards={},
-            scope_slots={},
-            featured_slots={},
+            scope_cards=spec.scope_cards,
+            scope_slots=spec.scope_slots,
+            featured_slots=spec.featured_slots,
             base_probabilities={},
             rarity_rank=self._rarity_rank,
         )
         ctx = PityContext(draw=draw_info, current={}, state=state)
 
-        # 按池过滤调度 + 旧接口桥接
+        # 按池过滤调度
         for pname, bh in self._behaviors_for_pool(pool_id):
-            try:
-                bh.after_draw(ctx)
-            except AttributeError:
-                # 🔴 P55 迁移后删除：旧 behavior 无 after_draw()——P55 阶段五/六改为 CounterBasedBehavior 子类后不再触发
-                pdef = self.pity_defs.get(pname)
-                if pdef is None:
-                    continue
-                is_ssr = reward_id in spec.ssr_ids
-                if pdef.reset_condition == 'any_ssr' and is_ssr:
-                    state.set(pname, "counter", 0)
-                elif pdef.reset_condition == 'featured_ssr' and is_featured:
-                    state.set(pname, "counter", 0)
-                # 'never' → 无操作
+            bh.after_draw(ctx)
 
     def _infer_rarity(self, reward_id: str, spec: PoolPitySpec) -> str:
-        """从 reward_id 推断稀有度。"""
-        if reward_id in spec.ssr_ids:
-            return "SSR"
+        """从 reward_id 推断稀有度（大小写归一化）。"""
+        rid_lower = reward_id.lower()
+        if rid_lower in {c.lower() for c in spec.ssr_ids}:
+            return "ssr"
+        # 通过 scope_cards 遍历所有稀有度
+        for rarity, cards in spec.scope_cards.items():
+            if rid_lower in {c.lower() for c in cards}:
+                return rarity.lower()
         return ""
 
     def get_spec(self, pool_id: str) -> Optional[PoolPitySpec]:

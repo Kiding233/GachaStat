@@ -14,9 +14,9 @@ from PyQt6.QtGui import QFont, QColor
 
 from ..core.config_store import (
     CardDefEntry, PoolEntry, PoolDistEntry,
-    PityDef, PityConfig,
-    GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
+    PityDef, PityConfig, GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
 )
+from ..core.pity import BEHAVIOR_REGISTRY
 
 
 def _bonus_to_text(d):
@@ -948,8 +948,31 @@ class ConfigPanel(QWidget):
                 note_item.setText(f"{len(result)}卡")
             self._sync_card_defs_from_pools()
 
+    # ══════════════════════════════════════════════════════════════════
+    # P55 阶段十一：保底配置 UI——BEHAVIOR_REGISTRY 元数据驱动
+    # ══════════════════════════════════════════════════════════════════
+
+    # 可选的保底类型（仅已实现的 counter 驱动型）
+    _PITY_TYPES = [
+        ('soft_interval', '区间软保底'),
+        ('soft_additive', '累加软保底'),
+        ('soft_step', '分段软保底'),
+        ('hard', '硬保底'),
+    ]
+
+    # 动态控件工厂——参数类型 → (widget_class, widget_kwargs)
+    _WIDGET_FACTORY = {
+        'int': (QSpinBox, {'range': (1, 999), 'value': 80}),
+        'float': (QDoubleSpinBox, {'range': (0.1, 1000.0), 'value': 6.0, 'decimals': 2, 'singleStep': 0.5}),
+        'bool': (QCheckBox, {}),
+        'str': (QLineEdit, {}),
+        'deltas': (None, {}),  # 特殊处理——deltas 表格
+    }
+
     def _setup_pity_config(self, parent):
         self._pity_defs = []
+        self._pity_dynamic_widgets = {}  # pname → widget
+        self._pity_dynamic_labels = {}   # pname → label
 
         self.pity_enabled = QCheckBox("启用保底")
         self.pity_enabled.setChecked(True)
@@ -974,64 +997,64 @@ class ConfigPanel(QWidget):
         left_layout.addLayout(pity_btn_layout)
         main_layout.addLayout(left_layout, 1)
 
+        # ── 详情面板（右侧） ──
         detail_group = QGroupBox("保底详情")
         detail_group.setEnabled(False)
         self._pity_detail_group = detail_group
         detail_form = QFormLayout(detail_group)
 
+        # 名称
         self.pity_name_edit = QLineEdit()
         detail_form.addRow("名称:", self.pity_name_edit)
 
+        # 类型
         self.pity_type_combo = QComboBox()
-        self.pity_type_combo.addItems(["soft", "hard"])
+        self.pity_type_combo.addItems([d for _, d in self._PITY_TYPES])
         self.pity_type_combo.currentIndexChanged.connect(self._on_pity_type_changed)
         detail_form.addRow("类型:", self.pity_type_combo)
 
-        self.pity_start_spin = QSpinBox()
-        self.pity_start_spin.setRange(1, 999)
-        self.pity_start_spin.setValue(74)
-        self._pity_start_label = QLabel("起始抽数:")
-        detail_form.addRow(self._pity_start_label, self.pity_start_spin)
+        # scope
+        self.pity_scope_combo = QComboBox()
+        self.pity_scope_combo.addItems(["ssr", "sr", "r"])
+        detail_form.addRow("稀有度:", self.pity_scope_combo)
 
-        self.pity_end_spin = QSpinBox()
-        self.pity_end_spin.setRange(1, 999)
-        self.pity_end_spin.setValue(90)
-        self._pity_end_label = QLabel("结束抽数:")
-        detail_form.addRow(self._pity_end_label, self.pity_end_spin)
+        # target_featured
+        self.pity_target_featured_cb = QCheckBox("仅限Featured卡")
+        detail_form.addRow("目标:", self.pity_target_featured_cb)
 
-        self.pity_func_combo = QComboBox()
-        self.pity_func_combo.addItems(["linear", "exp", "step"])
-        self._pity_func_label = QLabel("递增函数:")
-        detail_form.addRow(self._pity_func_label, self.pity_func_combo)
+        # ── 动态参数区（由 BEHAVIOR_REGISTRY 元数据生成） ──
+        self._pity_dynamic_area = QFormLayout()
+        self._pity_dynamic_area.setContentsMargins(0, 0, 0, 0)
+        self._pity_dynamic_container = QWidget()
+        self._pity_dynamic_container.setLayout(self._pity_dynamic_area)
+        detail_form.addRow(QLabel("参数:"), self._pity_dynamic_container)
 
-        target_label = QLabel("目标分布:")
-        detail_form.addRow(target_label)
-        self.pity_target_table = QTableWidget()
-        self.pity_target_table.setColumnCount(2)
-        self.pity_target_table.setHorizontalHeaderLabels(["绑定键", "权重"])
-        pt_header = self.pity_target_table.horizontalHeader()
-        pt_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        pt_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.pity_target_table.setColumnWidth(1, 80)
-        self.pity_target_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.pity_target_table.setMaximumHeight(120)
-        detail_form.addRow(self.pity_target_table)
+        # ── deltas 表格（仅 soft_step 可见） ──
+        self._pity_deltas_group = QGroupBox("deltas 分段表")
+        deltas_layout = QVBoxLayout(self._pity_deltas_group)
+        self.pity_deltas_table = QTableWidget()
+        self.pity_deltas_table.setColumnCount(2)
+        self.pity_deltas_table.setHorizontalHeaderLabels(["抽数段", "增量(%)"])
+        dt_header = self.pity_deltas_table.horizontalHeader()
+        dt_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        dt_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.pity_deltas_table.setMaximumHeight(150)
+        deltas_layout.addWidget(self.pity_deltas_table)
+        deltas_btn_layout = QHBoxLayout()
+        add_delta_btn = QPushButton("添加段")
+        add_delta_btn.clicked.connect(self._add_deltas_row)
+        remove_delta_btn = QPushButton("移除段")
+        remove_delta_btn.clicked.connect(self._remove_deltas_row)
+        deltas_btn_layout.addWidget(add_delta_btn)
+        deltas_btn_layout.addWidget(remove_delta_btn)
+        deltas_btn_layout.addStretch()
+        deltas_layout.addLayout(deltas_btn_layout)
+        detail_form.addRow(self._pity_deltas_group)
+        self._pity_deltas_group.setVisible(False)
 
-        target_btn_layout = QHBoxLayout()
-        add_target_btn = QPushButton("添加")
-        add_target_btn.clicked.connect(self._add_pity_target)
-        remove_target_btn = QPushButton("移除")
-        remove_target_btn.clicked.connect(self._remove_pity_target)
-        target_btn_layout.addWidget(add_target_btn)
-        target_btn_layout.addWidget(remove_target_btn)
-        target_btn_layout.addStretch()
-        detail_form.addRow(target_btn_layout)
-
-        self.pity_reset_combo = QComboBox()
-        self.pity_reset_combo.addItems(["any_ssr", "featured_ssr", "never"])
-        detail_form.addRow("重置条件:", self.pity_reset_combo)
-
+        # ── 池子 + 初始值 ──
         self.pity_pools_edit = QLineEdit()
+        self.pity_pools_edit.setPlaceholderText("* (全部池子)")
         detail_form.addRow("适用池子:", self.pity_pools_edit)
 
         self.pity_init_spin = QSpinBox()
@@ -1039,32 +1062,204 @@ class ConfigPanel(QWidget):
         self.pity_init_spin.setValue(0)
         detail_form.addRow("初始水位:", self.pity_init_spin)
 
+        # ── 生命周期 ──
+        self.pity_max_triggers_spin = QSpinBox()
+        self.pity_max_triggers_spin.setRange(0, 100)
+        self.pity_max_triggers_spin.setValue(0)
+        self.pity_max_triggers_spin.setToolTip("0=无限次触发")
+        detail_form.addRow("最大触发次数:", self.pity_max_triggers_spin)
+
+        self.pity_deactivate_cb = QCheckBox("提前出货后停用")
+        detail_form.addRow("", self.pity_deactivate_cb)
+
+        self.pity_depends_edit = QLineEdit()
+        self.pity_depends_edit.setPlaceholderText("依赖的 behavior name（可选）")
+        detail_form.addRow("依赖:", self.pity_depends_edit)
+
         main_layout.addWidget(detail_group, 2)
         parent.addLayout(main_layout)
 
+        # 信号连接
         self.pity_enabled.stateChanged.connect(self._update_preview)
         self.pity_name_edit.textChanged.connect(self._update_preview)
-        self.pity_start_spin.valueChanged.connect(self._update_preview)
-        self.pity_end_spin.valueChanged.connect(self._update_preview)
-        self.pity_func_combo.currentIndexChanged.connect(self._update_preview)
-        self.pity_reset_combo.currentIndexChanged.connect(self._update_preview)
+        self.pity_type_combo.currentIndexChanged.connect(self._update_preview)
+        self.pity_scope_combo.currentIndexChanged.connect(self._update_preview)
+        self.pity_target_featured_cb.stateChanged.connect(self._update_preview)
         self.pity_pools_edit.textChanged.connect(self._update_preview)
         self.pity_init_spin.valueChanged.connect(self._update_preview)
+        self.pity_max_triggers_spin.valueChanged.connect(self._update_preview)
+        self.pity_deactivate_cb.stateChanged.connect(self._update_preview)
+        self.pity_depends_edit.textChanged.connect(self._update_preview)
+
+    # ── 动态控件构建 ──
+
+    def _build_param_widgets(self, btype: str) -> dict:
+        """根据 BEHAVIOR_REGISTRY 中 btype 的 params 元数据生成控件。
+        返回 {param_name: widget} dict。
+        """
+        widgets = {}
+        # 清除旧控件
+        self._clear_dynamic_widgets()
+
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+
+        for pname, pmeta in params_meta.items():
+            ptype = pmeta.get('type', 'str')
+            if ptype == 'deltas':
+                continue  # deltas 由专用表格处理
+
+            factory = self._WIDGET_FACTORY.get(ptype)
+            if factory is None:
+                continue
+
+            widget_cls, kwargs = factory
+            if widget_cls is None:
+                continue
+
+            # registry 声明了 options → 使用 QComboBox（覆盖类型默认控件）
+            if "options" in pmeta:
+                w = QComboBox()
+                options = pmeta["options"]
+                for opt in options:
+                    w.addItem(str(opt))
+                default = pmeta.get('default', options[0])
+                idx = w.findText(str(default))
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+            elif widget_cls is QSpinBox:
+                w = QSpinBox()
+                w.setRange(*kwargs.get('range', (1, 999)))
+                default = pmeta.get('default', kwargs.get('value', 0))
+                w.setValue(int(default) if default else 0)
+            elif widget_cls is QDoubleSpinBox:
+                w = QDoubleSpinBox()
+                w.setRange(*kwargs.get('range', (0.1, 1000.0)))
+                w.setDecimals(kwargs.get('decimals', 2))
+                w.setSingleStep(kwargs.get('singleStep', 1.0))
+                default = pmeta.get('default', kwargs.get('value', 1.0))
+                w.setValue(float(default) if default else 0.0)
+            elif widget_cls is QCheckBox:
+                w = QCheckBox()
+                w.setChecked(pmeta.get('default', False))
+            elif widget_cls is QLineEdit:
+                w = QLineEdit()
+                default = pmeta.get('default', '')
+                w.setText(str(default) if default else '')
+            else:
+                continue
+
+            display = pmeta.get('display_name', pname)
+            label = QLabel(f"{display}:")
+            self._pity_dynamic_area.addRow(label, w)
+            # 连接预览信号
+            if hasattr(w, 'valueChanged'):
+                w.valueChanged.connect(self._update_preview)
+            elif hasattr(w, 'currentIndexChanged'):
+                w.currentIndexChanged.connect(self._update_preview)
+            elif hasattr(w, 'textChanged'):
+                w.textChanged.connect(self._update_preview)
+            elif hasattr(w, 'stateChanged'):
+                w.stateChanged.connect(self._update_preview)
+
+            widgets[pname] = w
+            self._pity_dynamic_labels[pname] = label
+
+        self._pity_dynamic_widgets = widgets
+        return widgets
+
+    def _clear_dynamic_widgets(self):
+        """清除旧的动态控件。"""
+        area = self._pity_dynamic_area
+        # 从后往前移除所有行
+        for i in range(area.rowCount() - 1, -1, -1):
+            row = area.takeRow(i)
+            # PyQt6: takeRow() 返回 TakeRowResult (namedtuple-like)；
+            # 可通过 .labelItem / .fieldItem 属性安全访问
+            if row is not None:
+                label_item = row.labelItem
+                field_item = row.fieldItem
+                if label_item and label_item.widget():
+                    label_item.widget().setParent(None)
+                if field_item and field_item.widget():
+                    field_item.widget().setParent(None)
+        self._pity_dynamic_widgets = {}
+        self._pity_dynamic_labels = {}
+
+    # ── deltas 表格 ──
+
+    def _show_deltas_table(self, visible: bool):
+        self._pity_deltas_group.setVisible(visible)
+
+    def _populate_deltas_table(self, deltas):
+        """deltas: ((n, inc), ...) 或 None"""
+        table = self.pity_deltas_table
+        table.setRowCount(0)
+        if not deltas:
+            return
+        table.setRowCount(len(deltas))
+        for i, (n, inc) in enumerate(deltas):
+            n_item = QTableWidgetItem(str(n))
+            inc_item = QTableWidgetItem(str(inc))
+            table.setItem(i, 0, n_item)
+            table.setItem(i, 1, inc_item)
+
+    def _read_deltas_table(self):
+        """读取 deltas 表格 → tuple[tuple[int, float], ...]"""
+        table = self.pity_deltas_table
+        result = []
+        for i in range(table.rowCount()):
+            n_item = table.item(i, 0)
+            inc_item = table.item(i, 1)
+            if n_item and inc_item:
+                try:
+                    n = int(n_item.text())
+                    inc = float(inc_item.text())
+                    result.append((n, inc))
+                except ValueError:
+                    continue
+        return tuple(result) if result else None
+
+    def _add_deltas_row(self):
+        table = self.pity_deltas_table
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem("10"))
+        table.setItem(row, 1, QTableWidgetItem("5.0"))
+
+    def _remove_deltas_row(self):
+        table = self.pity_deltas_table
+        rows = sorted([r.row() for r in table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            table.removeRow(row)
+
+    # ── CRUD 操作 ──
 
     def _add_pity(self):
         idx = len(self._pity_defs) + 1
         name = f"pity_{idx}"
-        while any(pd['name'] == name for pd in self._pity_defs):
+        while any(pd.get('name') == name for pd in self._pity_defs):
             idx += 1
             name = f"pity_{idx}"
+        # P55 新格式
         new_def = {
             'name': name,
-            'btype': 'soft',
-            'params': {'start': '80', 'end': '90', 'func': 'linear'},
-            'target_distribution': {},
-            'reset_condition': 'featured_ssr',
-            'pools': '*',
+            'btype': 'soft_interval',
+            'scope': 'ssr',
+            'target_featured': False,
+            'deltas': None,
+            'threshold': None,
             'counter_init': 0,
+            'guaranteed_init': False,
+            'fate_points_init': 0,
+            'soft_start': 80,
+            'soft_end': 90,
+            'soft_increment': None,
+            'reset': '',
+            'pools': '*',
+            'max_triggers': 0,
+            'deactivate_on_early_hit': False,
+            'depends_on': None,
         }
         self._pity_defs.append(new_def)
         self.pity_list.addItem(name)
@@ -1088,27 +1283,86 @@ class ConfigPanel(QWidget):
             return
         self._pity_detail_group.setEnabled(True)
         pd = self._pity_defs[row]
-        self.pity_name_edit.setText(pd['name'])
-        btype = pd['btype']
-        self.pity_type_combo.setCurrentIndex(0 if btype == 'soft' else 1)
-        params = pd.get('params', {})
-        if btype == 'soft':
-            self.pity_start_spin.setValue(int(params.get('start', '74')))
-            self.pity_end_spin.setValue(int(params.get('end', '90')))
-            func = params.get('func', 'linear')
-            func_idx = self.pity_func_combo.findText(func)
-            if func_idx >= 0:
-                self.pity_func_combo.setCurrentIndex(func_idx)
-        elif btype == 'hard':
-            self.pity_start_spin.setValue(int(params.get('threshold', '90')))
-        reset = pd.get('reset_condition', 'any_ssr')
-        reset_idx = self.pity_reset_combo.findText(reset)
-        if reset_idx >= 0:
-            self.pity_reset_combo.setCurrentIndex(reset_idx)
-        self.pity_pools_edit.setText(pd.get('pools', '*'))
+
+        # 阻断信号避免级联触发
+        self.pity_name_edit.blockSignals(True)
+        self.pity_type_combo.blockSignals(True)
+        self.pity_scope_combo.blockSignals(True)
+
+        self.pity_name_edit.setText(pd.get('name', ''))
+
+        # 类型
+        btype = pd.get('btype', 'soft_interval')
+        type_idx = next((i for i, (t, _) in enumerate(self._PITY_TYPES) if t == btype), 0)
+        self.pity_type_combo.setCurrentIndex(type_idx)
+
+        # scope
+        scope = pd.get('scope', 'ssr')
+        scope_idx = self.pity_scope_combo.findText(scope)
+        if scope_idx >= 0:
+            self.pity_scope_combo.setCurrentIndex(scope_idx)
+
+        # target_featured
+        self.pity_target_featured_cb.setChecked(pd.get('target_featured', False))
+
+        # 动态参数
+        self._build_param_widgets(btype)
+        self._populate_dynamic_values(pd, btype)
+
+        # deltas 表格（仅 soft_step 显示并填充）
+        is_soft_step = (btype == 'soft_step')
+        self._show_deltas_table(is_soft_step)
+        if is_soft_step:
+            self._populate_deltas_table(pd.get('deltas'))
+
+        # 池子 / 初始值
+        pools = pd.get('pools', '*')
+        if isinstance(pools, (tuple, list)):
+            pools = ','.join(pools)
+        self.pity_pools_edit.setText(pools if pools != '*' else '')
         self.pity_init_spin.setValue(pd.get('counter_init', 0))
-        self._populate_pity_target_table(pd.get('target_distribution', {}))
-        self._on_pity_type_changed(self.pity_type_combo.currentIndex())
+
+        # 生命周期
+        self.pity_max_triggers_spin.setValue(pd.get('max_triggers', 0))
+        self.pity_deactivate_cb.setChecked(pd.get('deactivate_on_early_hit', False))
+        self.pity_depends_edit.setText(pd.get('depends_on') or '')
+
+        self.pity_name_edit.blockSignals(False)
+        self.pity_type_combo.blockSignals(False)
+        self.pity_scope_combo.blockSignals(False)
+
+        self._on_pity_type_changed(type_idx)
+
+    # Registry 参数名 → PityDef 标准字段名映射
+    _PARAM_TO_FIELD = {'start': 'soft_start', 'end': 'soft_end', 'increment': 'soft_increment'}
+
+    def _populate_dynamic_values(self, pd: dict, btype: str):
+        """将 pd 的字段值填入动态控件。"""
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+        for pname, w in self._pity_dynamic_widgets.items():
+            pmeta = params_meta.get(pname, {})
+            ptype = pmeta.get('type', 'str')
+            val = pd.get(pname)
+            # 若 registry 参数名不存在，尝试标准 PityDef 字段名
+            if val is None:
+                canonical = self._PARAM_TO_FIELD.get(pname)
+                if canonical:
+                    val = pd.get(canonical)
+            if val is None:
+                val = pmeta.get('default', 0 if ptype in ('int', 'float') else '')
+            if isinstance(w, QSpinBox):
+                w.setValue(int(val) if val else 0)
+            elif isinstance(w, QDoubleSpinBox):
+                w.setValue(float(val) if val else 0)
+            elif isinstance(w, QComboBox):
+                idx = w.findText(str(val)) if val else -1
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+            elif isinstance(w, QCheckBox):
+                w.setChecked(bool(val))
+            elif isinstance(w, QLineEdit):
+                w.setText(str(val) if val else '')
 
     def _apply_pity_edit(self):
         row = self.pity_list.currentRow()
@@ -1116,79 +1370,95 @@ class ConfigPanel(QWidget):
             return
         pd = self._pity_defs[row]
         pd['name'] = self.pity_name_edit.text().strip() or f"pity_{row+1}"
-        pd['btype'] = self.pity_type_combo.currentText()
-        if pd['btype'] == 'soft':
-            pd['params'] = {
-                'start': str(self.pity_start_spin.value()),
-                'end': str(self.pity_end_spin.value()),
-                'func': self.pity_func_combo.currentText(),
-            }
-        elif pd['btype'] == 'hard':
-            pd['params'] = {
-                'threshold': str(self.pity_start_spin.value()),
-            }
-        pd['target_distribution'] = self._read_pity_target_table()
-        pd['reset_condition'] = self.pity_reset_combo.currentText()
-        pd['pools'] = self.pity_pools_edit.text().strip() or '*'
+
+        # btype
+        bt_idx = self.pity_type_combo.currentIndex()
+        pd['btype'] = self._PITY_TYPES[bt_idx][0] if 0 <= bt_idx < len(self._PITY_TYPES) else 'soft_interval'
+
+        # scope
+        pd['scope'] = self.pity_scope_combo.currentText()
+
+        # target_featured
+        pd['target_featured'] = self.pity_target_featured_cb.isChecked()
+
+        # 动态参数 → pd 字段
+        btype = pd['btype']
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+        for pname, w in self._pity_dynamic_widgets.items():
+            pmeta = params_meta.get(pname, {})
+            ptype = pmeta.get('type', 'str')
+            try:
+                if isinstance(w, QComboBox):
+                    pd[pname] = w.currentText()
+                elif ptype == 'int':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = int(raw) if str(raw).strip() else 0
+                elif ptype == 'float':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = float(raw) if str(raw).strip() else 0.0
+                elif ptype == 'bool':
+                    pd[pname] = w.isChecked() if hasattr(w, 'isChecked') else False
+                else:
+                    pd[pname] = w.text() if hasattr(w, 'text') else str(w.value())
+            except (ValueError, TypeError):
+                pd[pname] = pmeta.get('default', 0 if ptype in ('int', 'float') else '')
+
+        # deltas（仅 soft_step 类型保存）
+        if btype == 'soft_step':
+            deltas = self._read_deltas_table()
+            if deltas:
+                pd['deltas'] = deltas
+            else:
+                pd['deltas'] = None
+
+        # 语法糖参数（soft_interval/soft_additive）
+        if btype == 'soft_interval':
+            pd['soft_start'] = pd.get('start')
+            pd['soft_end'] = pd.get('end')
+        elif btype == 'soft_additive':
+            pd['soft_start'] = pd.get('start')
+            pd['soft_increment'] = pd.get('increment')
+
+        # 池子 / 初始值
+        pools_text = self.pity_pools_edit.text().strip()
+        pd['pools'] = tuple(pools_text.split(',')) if pools_text else ('*',)
         pd['counter_init'] = self.pity_init_spin.value()
+
+        # 生命周期
+        pd['max_triggers'] = self.pity_max_triggers_spin.value()
+        pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
+        depends = self.pity_depends_edit.text().strip()
+        pd['depends_on'] = depends if depends else None
+
         self.pity_list.item(row).setText(pd['name'])
         self._update_preview()
 
     def _on_pity_type_changed(self, idx):
-        is_soft = self.pity_type_combo.currentText() == 'soft'
-        self.pity_end_spin.setVisible(is_soft)
-        self._pity_end_label.setVisible(is_soft)
-        self.pity_func_combo.setVisible(is_soft)
-        self._pity_func_label.setVisible(is_soft)
-        if is_soft:
-            self._pity_start_label.setText("起始抽数:")
-        else:
-            self._pity_start_label.setText("阈值:")
+        if idx < 0 or idx >= len(self._PITY_TYPES):
+            return
+        btype = self._PITY_TYPES[idx][0]
+        is_soft_step = (btype == 'soft_step')
+        is_event = btype in ('rotating', 'targeted', 'rotating_cr',
+                             'rotating_cr_soft', 'rotating_soft', 'targeted_soft')
 
-    def _populate_pity_target_table(self, target_dist):
-        self.pity_target_table.setRowCount(len(target_dist))
-        keys = ["limited_ssr", "standard_ssr", "ssr", "sr", "r"]
-        for i, (cid, weight) in enumerate(target_dist.items()):
-            combo = QComboBox()
-            combo.addItems(keys)
-            cidx = combo.findText(cid)
-            if cidx >= 0:
-                combo.setCurrentIndex(cidx)
-            self.pity_target_table.setCellWidget(i, 0, combo)
-            spin = QSpinBox()
-            spin.setRange(1, 100)
-            spin.setValue(int(weight))
-            self.pity_target_table.setCellWidget(i, 1, spin)
+        # deltas 表格显隐
+        self._show_deltas_table(is_soft_step)
 
-    def _read_pity_target_table(self):
-        result = {}
-        for i in range(self.pity_target_table.rowCount()):
-            combo = self.pity_target_table.cellWidget(i, 0)
-            spin = self.pity_target_table.cellWidget(i, 1)
-            if combo and spin:
-                key = combo.currentText()
-                weight = spin.value()
-                if key:
-                    result[key] = weight
-        return result
+        # 动态参数重建
+        self._build_param_widgets(btype)
+        # 重建后重新填充当前选中条目的值（否则只剩默认值）
+        row = self.pity_list.currentRow()
+        if 0 <= row < len(self._pity_defs):
+            self._populate_dynamic_values(self._pity_defs[row], btype)
 
-    def _add_pity_target(self):
-        row = self.pity_target_table.rowCount()
-        self.pity_target_table.insertRow(row)
-        keys = ["limited_ssr", "standard_ssr", "ssr", "sr", "r"]
-        combo = QComboBox()
-        combo.addItems(keys)
-        self.pity_target_table.setCellWidget(row, 0, combo)
-        spin = QSpinBox()
-        spin.setRange(1, 100)
-        spin.setValue(50)
-        self.pity_target_table.setCellWidget(row, 1, spin)
+        # 联动校验：hard+非ssr 禁用 target_featured
+        is_hard = (btype == 'hard')
+        is_ssr_scope = self.pity_scope_combo.currentText() == 'ssr'
+        self.pity_target_featured_cb.setEnabled(not (is_hard and not is_ssr_scope))
 
-    def _remove_pity_target(self):
-        rows = sorted([r.row() for r in self.pity_target_table.selectionModel().selectedRows()], reverse=True)
-        for row in rows:
-            self.pity_target_table.removeRow(row)
-        self._update_preview()
+        # deactivate_on_early_hit 仅 counter 驱动型可用
+        self.pity_deactivate_cb.setEnabled(not is_event)
 
     def _setup_strategy_tab(self, parent):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY
@@ -2085,11 +2355,23 @@ class ConfigPanel(QWidget):
             type_counts[pt] = type_counts.get(pt, 0) + 1
         type_lines = '\n'.join(f'  - {t}: {c}' for t, c in sorted(type_counts.items()))
 
-        counter_init = config['pity']['counter_init']
-        if isinstance(counter_init, dict):
-            counter_str = ', '.join(f'{k}={v}' for k, v in sorted(counter_init.items()))
-        else:
-            counter_str = str(counter_init)
+        # P55：pity 预览——遍历 pities 列表
+        pity_lines = []
+        for pdef in config['pity'].get('pities', []):
+            btype = pdef.get('type', '?')
+            scope = pdef.get('scope', '?')
+            line = f"  {pdef['name']}: {btype}({scope})"
+            if pdef.get('deltas'):
+                total_n = sum(n for n, _ in pdef['deltas'])
+                line += f" deltas={total_n}抽"
+            if pdef.get('threshold'):
+                line += f" threshold={pdef['threshold']}"
+            if pdef.get('target_featured'):
+                line += " featured"
+            if pdef.get('counter_init'):
+                line += f" init={pdef['counter_init']}"
+            pity_lines.append(line)
+        pity_str = '\n'.join(pity_lines) if pity_lines else '  无'
 
         resource_defs = config.get('resource_defs', [])
         gain_rules = config.get('resource_gain_rules', [])
@@ -2116,9 +2398,8 @@ class ConfigPanel(QWidget):
 
 总时长: {max((p['start_day'] + p['duration']) for p in config['pools']) if config['pools'] else 0} 天
 
-保底类型: {config['pity']['type']}
-保底范围: {config['pity']['start']} - {config['pity']['end']}
-初始计数器: {counter_str}
+保底 ({len(config['pity'].get('pities', []))} 条):
+{pity_str}
 
 资源类型: {len(resource_defs)} 种
 初始资源: {init_res_str}
@@ -2257,16 +2538,16 @@ class ConfigPanel(QWidget):
                                  for d in p.distribution] if p.distribution else None,
             })
 
-        pity_type = 'soft'
-        pity_start = 80
-        pity_end = 90
+        # P55：pity 输出扁平化格式
+        pity_summary = {}
         if store.pity.pities:
             first = store.pity.pities[0]
-            pity_type = first.btype
-            pity_start = int(first.params.get('start', first.params.get('threshold', '80')))
-            pity_end = int(first.params.get('end', '90'))
-
-        counter_init = dict(store.pity.counter_init)
+            pity_summary['type'] = first.btype
+            if first.deltas is not None:
+                total_n = sum(n for n, _ in first.deltas)
+                pity_summary['deltas_total'] = total_n
+            elif first.threshold is not None:
+                pity_summary['threshold'] = first.threshold
 
         [{'resource_id': rid, 'amount': amt}
                              for rid, amt in store.initial_resources.items() if amt > 0]
@@ -2304,18 +2585,25 @@ class ConfigPanel(QWidget):
             'pools': pools,
             'pity': {
                 'enabled': store.pity.enabled,
-                'type': pity_type,
-                'start': pity_start,
-                'end': pity_end,
-                'counter_init': counter_init,
-                'counter_group': _pity_counter_group(store.pity),
-                'ssr_rate': 0.006,
-                'pities': [{'name': pd['name'], 'type': pd['btype'],
-                            'params': pd['params'],
-                            'target_distribution': dict(pd['target_distribution']),
-                            'reset': pd['reset_condition'],
-                            'pools': pd['pools']}
-                           for pd in self._pity_defs],
+                'pities': [{
+                    'name': pd.get('name', ''),
+                    'type': pd.get('btype', 'soft_interval'),
+                    'scope': pd.get('scope', 'ssr'),
+                    'target_featured': pd.get('target_featured', False),
+                    'deltas': pd.get('deltas'),
+                    'threshold': pd.get('threshold'),
+                    'counter_init': pd.get('counter_init', 0),
+                    'start': pd.get('soft_start'),
+                    'end': pd.get('soft_end'),
+                    'increment': pd.get('soft_increment'),
+                    'reset': pd.get('reset', ''),
+                    'pools': pd.get('pools', '*'),
+                    'lifecycle': {
+                        'max_triggers': pd.get('max_triggers', 0),
+                        'deactivate_on_early_hit': pd.get('deactivate_on_early_hit', False),
+                        'depends_on': pd.get('depends_on'),
+                    } if (pd.get('max_triggers') or pd.get('deactivate_on_early_hit') or pd.get('depends_on')) else {},
+                } for pd in self._pity_defs],
             },
             'strategy': {
                 'type': store.strategy_type,
@@ -2400,25 +2688,44 @@ class ConfigPanel(QWidget):
         for pd in pities_data:
             pities.append(PityDef(
                 name=pd.get('name', 'pity'),
-                btype=pd.get('type', 'soft'),
-                params=pd.get('params', {}),
-                target_distribution=pd.get('target_distribution', {}),
-                reset_condition=pd.get('reset', 'any_ssr'),
-                pools=pd.get('pools', '*'),
+                btype=pd.get('type', 'soft_interval'),
+                scope=pd.get('scope', 'ssr'),
+                target_featured=pd.get('target_featured', False),
+                deltas=pd.get('deltas'),
+                threshold=pd.get('threshold'),
+                counter_init=pd.get('counter_init', 0),
+                guaranteed_init=pd.get('guaranteed_init', False),
+                fate_points_init=pd.get('fate_points_init', 0),
+                soft_start=pd.get('start'),
+                soft_end=pd.get('end'),
+                soft_increment=pd.get('increment'),
+                reset=pd.get('reset', ''),
+                pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), (list, tuple)) else (pd.get('pools', '*'),),
+                max_triggers=(pd.get('lifecycle') or {}).get('max_triggers', 0),
+                deactivate_on_early_hit=(pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
+                depends_on=(pd.get('lifecycle') or {}).get('depends_on'),
             ))
+            # 同步到 _pity_defs UI 内部格式
             self._pity_defs.append({
                 'name': pd.get('name', 'pity'),
-                'btype': pd.get('type', 'soft'),
-                'params': pd.get('params', {}),
-                'target_distribution': pd.get('target_distribution', {}),
-                'reset_condition': pd.get('reset', 'any_ssr'),
+                'btype': pd.get('type', 'soft_interval'),
+                'scope': pd.get('scope', 'ssr'),
+                'target_featured': pd.get('target_featured', False),
+                'deltas': pd.get('deltas'),
+                'threshold': pd.get('threshold'),
+                'counter_init': pd.get('counter_init', 0),
+                'soft_start': pd.get('start'),
+                'soft_end': pd.get('end'),
+                'soft_increment': pd.get('increment'),
+                'reset': pd.get('reset', ''),
                 'pools': pd.get('pools', '*'),
-                'counter_init': pity.get('counter_init', {}).get(pd.get('name', 'pity'), 0),
+                'max_triggers': (pd.get('lifecycle') or {}).get('max_triggers', 0),
+                'deactivate_on_early_hit': (pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
+                'depends_on': (pd.get('lifecycle') or {}).get('depends_on'),
             })
         store.pity = PityConfig(
             enabled=pity.get('enabled', True),
             pities=pities,
-            counter_init=pity.get('counter_init', {}),
         )
 
         strategy = config.get('strategy', {})
@@ -2910,15 +3217,26 @@ class ConfigPanel(QWidget):
         pities = []
         for pd in self._pity_defs:
             pities.append(PityDef(
-                name=pd['name'],
-                btype=pd['btype'],
-                params=dict(pd['params']),
-                target_distribution=dict(pd['target_distribution']),
-                reset_condition=pd['reset_condition'],
-                pools=pd['pools'],
+                name=pd.get('name', ''),
+                btype=pd.get('btype', 'soft_interval'),
+                scope=pd.get('scope', 'ssr'),
+                target_featured=pd.get('target_featured', False),
+                deltas=pd.get('deltas'),
+                threshold=pd.get('threshold'),
+                counter_init=pd.get('counter_init', 0),
+                guaranteed_init=pd.get('guaranteed_init', False),
+                fate_points_init=pd.get('fate_points_init', 0),
+                soft_start=pd.get('soft_start'),
+                soft_end=pd.get('soft_end'),
+                soft_increment=pd.get('soft_increment'),
+                soft_deltas=pd.get('deltas') if pd.get('btype') == 'soft_step' else None,
+                reset=pd.get('reset', ''),
+                pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), list) else (pd.get('pools', '*'),) if isinstance(pd.get('pools'), str) else pd.get('pools', ('*',)),
+                max_triggers=pd.get('max_triggers', 0),
+                deactivate_on_early_hit=pd.get('deactivate_on_early_hit', False),
+                depends_on=pd.get('depends_on'),
             ))
         store.pity.pities = pities
-        store.pity.counter_init = {pd['name']: pd.get('counter_init', 0) for pd in self._pity_defs}
 
         store.strategy_type = self.strategy_type.currentText()
         store.strategy_name = strategy_type_to_key(store.strategy_type)
@@ -3027,14 +3345,26 @@ class ConfigPanel(QWidget):
         self.pity_enabled.setChecked(store.pity.enabled)
         self._pity_defs = []
         for p in store.pity.pities:
+            # P55：扁平化字段
+            pools_val = getattr(p, 'pools', ('*',))
+            if isinstance(pools_val, tuple):
+                pools_val = ','.join(pools_val) if pools_val != ('*',) else '*'
             self._pity_defs.append({
                 'name': p.name,
                 'btype': p.btype,
-                'params': dict(p.params),
-                'target_distribution': dict(p.target_distribution),
-                'reset_condition': p.reset_condition,
-                'pools': p.pools,
-                'counter_init': store.pity.counter_init.get(p.name, 0),
+                'scope': getattr(p, 'scope', 'ssr'),
+                'target_featured': getattr(p, 'target_featured', False),
+                'deltas': getattr(p, 'deltas', None),
+                'threshold': getattr(p, 'threshold', None),
+                'counter_init': getattr(p, 'counter_init', 0),
+                'soft_start': getattr(p, 'soft_start', None),
+                'soft_end': getattr(p, 'soft_end', None),
+                'soft_increment': getattr(p, 'soft_increment', None),
+                'reset': getattr(p, 'reset', ''),
+                'pools': pools_val,
+                'max_triggers': getattr(p, 'max_triggers', 0),
+                'deactivate_on_early_hit': getattr(p, 'deactivate_on_early_hit', False),
+                'depends_on': getattr(p, 'depends_on', None),
             })
         self.pity_list.clear()
         for pd in self._pity_defs:

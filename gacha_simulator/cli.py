@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(mess
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from gacha_simulator.core.config_toml import load_toml  # noqa: E402
+from gacha_simulator.core.config_toml import load_toml, save_toml  # noqa: E402
 from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
 from gacha_simulator.paths import get_config_dir  # noqa: E402
 
@@ -41,6 +41,8 @@ def main():
         help='输出格式：simple=基础统计JSON, full=含extraction完整数据')
     parser.add_argument('--no-progress', action='store_true',
         help='禁用进度条输出')
+    parser.add_argument('--migrate', action='store_true',
+        help='将旧格式 TOML 迁移为新格式并覆盖保存（P55）')
 
     args = parser.parse_args()
 
@@ -51,6 +53,17 @@ def main():
         # 无参数 → 加载打包默认 config.toml
         default_toml = os.path.join(get_config_dir(), 'config.toml')
         store = load_toml(default_toml)
+
+    # P55：--migrate——检测旧格式迁移标记 → save_toml 覆盖
+    if args.migrate:
+        if store._migrated_from_legacy:
+            config_path = args.config if args.config else default_toml
+            save_toml(store, config_path)
+            print(f"TOML 已从旧格式迁移并保存至: {config_path}")
+            sys.exit(0)
+        else:
+            print("TOML 已为新格式，无需迁移。")
+            sys.exit(0)
 
     if args.no_pity:
         store.pity.enabled = False
@@ -90,10 +103,16 @@ def main():
     print(f"Pity: {'Enabled' if store.pity.enabled else 'Disabled'}")
     if store.pity.enabled and store.pity.pities:
         p0 = store.pity.pities[0]
-        start = p0.params.get('start', '74')
-        end = p0.params.get('end', '90')
         print(f"  Type: {p0.btype}")
-        print(f"  Range: {start}-{end}")
+        if p0.deltas is not None:
+            total_n = sum(n for n, _ in p0.deltas)
+            print(f"  Deltas: {p0.deltas} (总抽数={total_n})")
+        elif p0.threshold is not None:
+            print(f"  Threshold: {p0.threshold}")
+        if p0.target_featured:
+            print("  Target: featured only")
+        if p0.counter_init:
+            print(f"  Counter Init: {p0.counter_init}")
     print("=" * 50)
 
     target_specs = {tc.card_id: getattr(tc, 'quantity', 1)

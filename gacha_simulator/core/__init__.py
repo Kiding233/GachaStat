@@ -5,9 +5,13 @@ from .action import Action, DrawAction, WaitAction
 from .state import GachaState
 from .info_vector import InfoVector
 from .pity import (
-    PityBehavior, SoftPityBehavior, HardPityBehavior,
-    PityDefParsed, PoolPitySpec,
+    PityBehavior, SoftStepBehavior,
+    CounterBasedBehavior, HardPityBehavior,
+    PityDefParsed, PoolPitySpec,  # PityDefParsed 保留至 P56 旧签名兼容
     PityState, PityEngine,
+    DrawInfo, PityContext, Counter, Flag, LifecycleConfig,
+    BEHAVIOR_REGISTRY, create_behavior,
+    compute_scope_mappings,
 )
 from .strategy import (
     Strategy, StrategyContext,
@@ -90,9 +94,13 @@ __all__ = [
     'Action', 'DrawAction', 'WaitAction',
     'GachaState',
     'InfoVector',
-    'PityBehavior', 'SoftPityBehavior', 'HardPityBehavior',
+    'PityBehavior', 'SoftStepBehavior',
+    'CounterBasedBehavior', 'HardPityBehavior',
     'PityDefParsed', 'PoolPitySpec',
     'PityState', 'PityEngine',
+    'DrawInfo', 'PityContext', 'Counter', 'Flag', 'LifecycleConfig',
+    'BEHAVIOR_REGISTRY', 'create_behavior',
+    'compute_scope_mappings',
     'Strategy', 'StrategyContext',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'CompositeStrategy',

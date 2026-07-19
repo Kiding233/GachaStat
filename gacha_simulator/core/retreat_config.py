@@ -62,17 +62,35 @@ class RetreatConfigBuilder:
                     ) for d in p.distribution],
                 ))
 
+        # P55：PityDef 扁平化——shallow-copy 23 字段（dataclass 字段不可变）
+        pities = []
+        for pd in original_store.pity.pities:
+            # 应用 per-behavior counter_init 覆盖
+            custom_init = pity_counter_init.get(pd.name)
+            ci = custom_init if custom_init is not None else pd.counter_init
+            pities.append(PityDef(
+                name=pd.name, btype=pd.btype, scope=pd.scope,
+                target_featured=pd.target_featured,
+                deltas=pd.deltas, threshold=pd.threshold,
+                counter_init=ci,
+                guaranteed_init=pd.guaranteed_init,
+                fate_points_init=pd.fate_points_init,
+                soft_start=pd.soft_start, soft_end=pd.soft_end,
+                soft_increment=pd.soft_increment, soft_deltas=pd.soft_deltas,
+                cr_counter_threshold=pd.cr_counter_threshold,
+                cr_base_rate=pd.cr_base_rate, cr_state_probs=pd.cr_state_probs,
+                fate_threshold=pd.fate_threshold,
+                switch_allowed=pd.switch_allowed,
+                switch_resets_progress=pd.switch_resets_progress,
+                pools=pd.pools,
+                max_triggers=pd.max_triggers,
+                deactivate_on_early_hit=pd.deactivate_on_early_hit,
+                depends_on=pd.depends_on,
+                reset=pd.reset,
+            ))
         truncated.pity = PityConfig(
             enabled=original_store.pity.enabled,
-            pities=[PityDef(
-                name=pd.name,
-                btype=pd.btype,
-                params=dict(pd.params),
-                target_distribution=dict(pd.target_distribution),
-                reset_condition=pd.reset_condition,
-                pools=pd.pools,
-            ) for pd in original_store.pity.pities],
-            counter_init=dict(pity_counter_init),
+            pities=pities,
         )
 
         truncated.initial_resources = dict(initial_resources)

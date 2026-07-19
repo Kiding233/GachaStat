@@ -418,7 +418,7 @@ ${modeInstructions[repairMode]}
 1. Read 打开计划文件 → 逐条处理每个 ISSUE
 2. 优先用 relevant_code_snippet 验证问题，仅在缺失时自行读代码
 3. 每条修复标注: \`<!-- REVIEW-R1-FIX: ISSUE-XXX -->\`
-4. 冲突 → 选保守方案，标注 \`⚠️ 待人工裁决\`
+4. 冲突 → 选保守方案，标注 \`⚠ 待人工裁决\`
 5. 使用 Edit 直接修改计划文件
 6. 返回 modified_sections, applied_labels, skipped_issues, write_success`
 }
@@ -587,12 +587,12 @@ const idempotencyResult = await agent(
 
 1. 文件是否已有 \`<!-- REVIEW-FIX:\` 或 \`<!-- REVIEW-R\` 标注？
 2. 文件是否已有「自动化审查记录」章节（含 \<details\> 折叠区）？
-3. 文件是否已有「⚠️ 自动化审查阻塞项」章节？
+3. 文件是否已有「⚠ 自动化审查阻塞项」章节？
 
 处理规则：
 - 若存在旧的 REVIEW-FIX 标注 → 使用 Edit 将它们全部重编号为 \`<!-- REVIEW-FIX-PREV: -->\`，避免与新一轮混淆
 - 若存在「自动化审查记录」→ 将最近的 \<details\> 区块标题改为「第 N-1 次审查（上次）」，无需额外操作
-- 若存在「⚠️ 自动化审查阻塞项」→ 使用 Edit 删除该章节（默认行为：重新开始）
+- 若存在「⚠ 自动化审查阻塞项」→ 使用 Edit 删除该章节（默认行为：重新开始）
 - 若以上均不存在 → 无操作
 
 返回: { had_previous_review: true/false, had_block_section: true/false, actions_taken: ["..."] }`,
@@ -710,7 +710,7 @@ const planPyFiles = grepSignalResult
   : []
 
 if (planPyFiles.length >= 5 && classification.complexity === 'simple') {
-  log(`⚠️ complexity simple→medium（${planPyFiles.length} 个 .py 文件）`)
+  log(`⚠ complexity simple→medium（${planPyFiles.length} 个 .py 文件）`)
   classification.complexity = 'medium'
   autoCorrected = true
 }
@@ -722,7 +722,7 @@ const missingPanels = planPyFiles
   .filter(p => !dimNames.some(d => d.includes(p)))
 
 if (missingPanels.length > 0) {
-  log(`⚠️ 追加 ${missingPanels.length} 个遗漏面板维度: ${missingPanels.join(', ')}`)
+  log(`⚠ 追加 ${missingPanels.length} 个遗漏面板维度: ${missingPanels.join(', ')}`)
   classification.dimensions.push(...missingPanels.map(p => ({
     type: 'panel', name: p, rationale: '脚本层自动追加',
   })))
@@ -732,7 +732,7 @@ if (missingPanels.length > 0) {
 // 缺陷数校验：≥6 但 complexity ≠ complex → 自动修正
 const defectCount = classification.defect_count || 0
 if (defectCount >= 6 && classification.complexity !== 'complex') {
-  log(`⚠️ complexity ${classification.complexity}→complex（${defectCount} 个缺陷/条目）`)
+  log(`⚠ complexity ${classification.complexity}→complex（${defectCount} 个缺陷/条目）`)
   classification.complexity = 'complex'
   autoCorrected = true
 }
@@ -753,7 +753,7 @@ for (const excl of excludedDims) {
   }
 }
 if (restoredDims.length > 0) {
-  log(`⚠️ 恢复 ${restoredDims.length} 个被排除的维度: ${restoredDims.join(', ')}`)
+  log(`⚠ 恢复 ${restoredDims.length} 个被排除的维度: ${restoredDims.join(', ')}`)
   autoCorrected = true
 }
 
@@ -816,7 +816,7 @@ while (dryRounds < 2 && totalRounds < maxRounds) {
     { label: `finder-r${totalRounds}`, phase: 'Find', schema: FINDER_SCHEMA }
   )
 
-  if (!finderResult) { log(`⚠️ Finder 返回 null——跳过`); continue }
+  if (!finderResult) { log(`⚠ Finder 返回 null——跳过`); continue }
 
   const trulyNewIssues = (finderResult.new_issues || []).filter(issue => {
     const key = `${issue.dimension || ''}::${issue.title || ''}::${(issue.affected_files || []).join(',')}`
@@ -850,7 +850,7 @@ while (dryRounds < 2 && totalRounds < maxRounds) {
   )
 
   if (!fixerResult || !fixerResult.write_success) {
-    log(`⚠️ Fixer 失败——问题保留`)
+    log(`⚠ Fixer 失败——问题保留`)
     pendingUnresolved = issuesToFix.map(i => ({
       issue_id: i.id || i.issue_id, description: i.description, dimension: i.dimension,
     }))
@@ -859,7 +859,7 @@ while (dryRounds < 2 && totalRounds < maxRounds) {
 
   log(`  Fixer: ${fixerResult.modified_sections.length} 处修改, ${fixerResult.applied_labels.length} 标注`)
   if (fixerResult.conflicts && fixerResult.conflicts.length > 0) {
-    log(`  ⚠️ ${fixerResult.conflicts.length} 处冲突`)
+    log(`  ⚠ ${fixerResult.conflicts.length} 处冲突`)
   }
 
   // Verify
@@ -870,7 +870,7 @@ while (dryRounds < 2 && totalRounds < maxRounds) {
   )
 
   if (!verifierResult) {
-    log(`⚠️ Verifier null——假设全部未解决`)
+    log(`⚠ Verifier null——假设全部未解决`)
     pendingUnresolved = issuesToFix.map(i => ({
       issue_id: i.id || i.issue_id, description: i.description, dimension: i.dimension,
     }))
@@ -901,7 +901,7 @@ if (dryRounds < 2 && totalRounds >= maxRounds) {
   log(`🛑 对抗循环熔断: ${maxRounds} 轮未收敛, ${pendingUnresolved.length} 遗留`)
 
   await agent(
-    `Read 打开 ${planFilePath}，在末尾追加「## ⚠️ 自动化审查阻塞项」章节，列出 ${pendingUnresolved.length} 个未解决问题及详情: ${JSON.stringify(pendingUnresolved)}。标注原因: ${maxRounds} 轮对抗循环未收敛。`,
+    `Read 打开 ${planFilePath}，在末尾追加「## ⚠ 自动化审查阻塞项」章节，列出 ${pendingUnresolved.length} 个未解决问题及详情: ${JSON.stringify(pendingUnresolved)}。标注原因: ${maxRounds} 轮对抗循环未收敛。`,
     { label: 'block-writer', phase: 'Verify' }
   )
 }
@@ -921,7 +921,7 @@ while (!gatePassed && gateFixAttempts <= maxGateRetries) {
     )
 
     if (!gateResult) {
-      log('⚠️ 门控器返回 null——跳过门控')
+      log('⚠ 门控器返回 null——跳过门控')
       gatePassed = true
       break
     }
@@ -958,7 +958,7 @@ while (!gatePassed && gateFixAttempts <= maxGateRetries) {
       )
 
       if (!gateFixerResult || !gateFixerResult.write_success) {
-        log('  ⚠️ 门控修复失败——重试')
+        log('  ⚠ 门控修复失败——重试')
         continue
       }
 
@@ -981,7 +981,7 @@ while (!gatePassed && gateFixAttempts <= maxGateRetries) {
       if (totalBacktracks > globalBacktrackLimit) {
         log(`🛑 全局熔断: ${totalBacktracks} 次退回 > ${globalBacktrackLimit}`)
         await agent(
-          `Read ${planFilePath}，追加「⚠️ 自动化审查阻塞项」章节: 全局熔断——${totalBacktracks} 次退回阶段 2，超过上限 ${globalBacktrackLimit}。${JSON.stringify(gateResult.checks.filter(c => c.verdict === 'FAIL'))}`,
+          `Read ${planFilePath}，追加「⚠ 自动化审查阻塞项」章节: 全局熔断——${totalBacktracks} 次退回阶段 2，超过上限 ${globalBacktrackLimit}。${JSON.stringify(gateResult.checks.filter(c => c.verdict === 'FAIL'))}`,
           { label: 'block-writer', phase: 'Gate' }
         )
         break
@@ -1008,12 +1008,12 @@ while (!gatePassed && gateFixAttempts <= maxGateRetries) {
   }
 
   if (!gatePassed) {
-    log('⚠️ 门控未通过——继续后续阶段（门控非硬阻塞）')
+    log('⚠ 门控未通过——继续后续阶段（门控非硬阻塞）')
   }
 
   // complex+breaking 警告
   if (gatePassed && classification.complexity === 'complex' && classification.change_nature === 'breaking') {
-    log('⚠️ 此为 complex+breaking 计划——建议人工复核后再继续代码审计')
+    log('⚠ 此为 complex+breaking 计划——建议人工复核后再继续代码审计')
   }
 
 
@@ -1031,10 +1031,10 @@ if (!skipStage('code_audit')) {
   if (auditMapResult) {
     log(`  4a 代码映射: ${auditMapResult.mappings.length} 条`)
     if (auditMapResult.conflicts && auditMapResult.conflicts.length > 0) {
-      log(`  ⚠️ ${auditMapResult.conflicts.length} 处冲突`)
+      log(`  ⚠ ${auditMapResult.conflicts.length} 处冲突`)
     }
     if (auditMapResult.transitive_gaps && auditMapResult.transitive_gaps.length > 0) {
-      log(`  ⚠️ ${auditMapResult.transitive_gaps.length} 个传递缺口`)
+      log(`  ⚠ ${auditMapResult.transitive_gaps.length} 个传递缺口`)
     }
 
     // 4b: 全链条审计
@@ -1051,7 +1051,7 @@ if (!skipStage('code_audit')) {
         if (totalBacktracks > globalBacktrackLimit) {
           log(`🛑 全局熔断: ${totalBacktracks}/${globalBacktrackLimit}`)
           await agent(
-            `Read ${planFilePath}，追加「⚠️ 自动化审查阻塞项」: 代码审计发现 ${auditExecResult.blocking_breaks} 处阻塞断裂，全局熔断触发。${JSON.stringify(auditExecResult.execution_path.filter(s => s.type_break || s.null_break || s.permission_break || s.signal_break))}`,
+            `Read ${planFilePath}，追加「⚠ 自动化审查阻塞项」: 代码审计发现 ${auditExecResult.blocking_breaks} 处阻塞断裂，全局熔断触发。${JSON.stringify(auditExecResult.execution_path.filter(s => s.type_break || s.null_break || s.permission_break || s.signal_break))}`,
             { label: 'block-writer', phase: 'Audit' }
           )
         } else {
@@ -1097,13 +1097,13 @@ if (matrixSyncResult) {
     const changes = matrixSyncResult.changes_made || []
     log(`  矩阵同步: ${changes.length} 处更新${changes.length > 0 ? ' — ' + changes.join(', ') : ''}`)
   } else {
-    log('  ⚠️ 未在矩阵中找到该计划行——可能需要手动注册')
+    log('  ⚠ 未在矩阵中找到该计划行——可能需要手动注册')
   }
   if (matrixSyncResult.stale_predecessors && matrixSyncResult.stale_predecessors.length > 0) {
-    log(`  ⚠️ 前置计划状态可能滞后: ${matrixSyncResult.stale_predecessors.join(', ')}`)
+    log(`  ⚠ 前置计划状态可能滞后: ${matrixSyncResult.stale_predecessors.join(', ')}`)
   }
 } else {
-  log('  ⚠️ 矩阵同步 agent 返回 null——跳过')
+  log('  ⚠ 矩阵同步 agent 返回 null——跳过')
 }
 
 

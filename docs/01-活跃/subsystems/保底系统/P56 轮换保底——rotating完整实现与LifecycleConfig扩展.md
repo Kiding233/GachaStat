@@ -58,9 +58,9 @@ P55 提供了三种 counter 驱动的基础保底（`soft_interval` / `soft_addi
 
 ## 三、方案
 
-### 3.1 RotatingBehavior——纯净 50/50 轮换保底
+### 3.1 RotatingBehavior——纯净轮换保底
 
-不继承 `CounterBasedBehavior`——无计数器。SSR 事件触发状态转移。不改变 SSR 总出率，只重分配 featured/非featured 的内部概率权重。**仅维护 `guaranteed` flag（大保底/小保底）。小保底不修改概率——featured 占比由基础分布决定。连歪计数器归入子类 `RotatingCRBehavior`。**
+不继承 `CounterBasedBehavior`——无计数器。SSR 事件触发状态转移。不改变 SSR 总出率，只重分配 featured/非featured 的内部概率权重。**仅维护 `guaranteed` flag（大保底/小保底）。小保底不修改概率——featured 占比由基础分布决定（不硬编码 50%——如星铁光锥池 75/25、鸣潮武器池 100/0 均自动适配）。连歪计数器归入子类 `RotatingCRBehavior`。**
 
 ```python
 class RotatingBehavior(PityBehavior):
@@ -171,7 +171,7 @@ class TargetedBehavior(PityBehavior):
         self._switch_resets_progress = switch_resets_progress
         self._guaranteed = Flag(state, name, "guaranteed")
         self._losses = Counter(state, name, "losses")
-        self._lost_flag = Flag(state, name, "lost_5050")
+        self._lost_flag = Flag(state, name, "lost_rotating")
         self._fate_points = Counter(state, name, "fate_points")
         # selected_card 不从构造参数传入——策略通过 NonDrawAction 设定
         # PityState[name]["selected_card"] 初始为 None（不定轨状态）
@@ -251,21 +251,41 @@ class TargetedBehavior(PityBehavior):
 
 def _redistribute_scope(ctx, featured_ratio, total, featured_slots, scope):
     """在 featured/非featured 之间重分配 scope 总概率。
-    供 RotatingBehavior 和 TargetedBehavior 共用。"""
+
+    按基础权重比例分配（非均分）——保持 featured 内部和非 featured 内部各自的
+    基础比例不变。均分会破坏多 featured 卡之间的权重关系。
+    供 RotatingBehavior 和 TargetedBehavior 共用。
+    """
     result = ctx.current.copy()
     featured_total = total * featured_ratio
     non_featured_total = total - featured_total
 
-    for s in featured_slots:
-        result[s] = featured_total / len(featured_slots)
+    # featured 内部按基础权重比例分配
+    f_weights = [ctx.draw.base_probabilities.get(s, 0.0) for s in featured_slots]
+    f_total_w = sum(f_weights)
+    if f_total_w > 0:
+        for s, w in zip(featured_slots, f_weights):
+            result[s] = featured_total * w / f_total_w
+    elif featured_slots:
+        per_target = featured_total / len(featured_slots)
+        for s in featured_slots:
+            result[s] = per_target
 
+    # 非 featured 内部按基础权重比例分配
     non_featured_slots = [
         s for s in ctx.draw.scope_slots.get(scope, ())
         if s not in featured_slots
     ]
     if non_featured_slots:
-        for s in non_featured_slots:
-            result[s] = non_featured_total / len(non_featured_slots)
+        nf_weights = [ctx.draw.base_probabilities.get(s, 0.0) for s in non_featured_slots]
+        nf_total_w = sum(nf_weights)
+        if nf_total_w > 0:
+            for s, w in zip(non_featured_slots, nf_weights):
+                result[s] = non_featured_total * w / nf_total_w
+        else:
+            per_target = non_featured_total / len(non_featured_slots)
+            for s in non_featured_slots:
+                result[s] = per_target
 
     return result
 ```
@@ -278,14 +298,14 @@ def _redistribute_scope(ctx, featured_ratio, total, featured_slots, scope):
 
 **设计逻辑：**
 
-捕获明光不能独立存在——它依附于 50/50 轮换。但没有 rotating 就没有「小保底」概念。因此：**同一份 rotating 逻辑，子类追加 CR 状态机。** 不与 `type="rotating"` 并存——一个池子只配一种。
+捕获明光不能独立存在——它依附于轮换保底（rotating）。但没有 rotating 就没有「小保底」概念。因此：**同一份 rotating 逻辑，子类追加 CR 状态机。** 不与 `type="rotating"` 并存——一个池子只配一种。
 
 **机制概要：**
 
 ```
 出 SSR 时：
   ├─ 大保底（上次歪了）→ 100% featured → CR 无事可做
-  └─ 小保底 → 50/50 判定
+  └─ 小保底 → rotating 判定（featured 占比由基础分布决定）
        ├─ 直接赢 → cr_counter = 0
        ├─ 歪了但 CR 拦截 → 转败为胜，cr_counter 重置
        └─ 歪了且 CR 未拦截 → cr_counter++
@@ -297,7 +317,7 @@ cr_counter ≥ cr_counter_threshold → 下次小保底 100% 拦截
 class RotatingCRBehavior(RotatingBehavior):
     """轮换保底 + 捕获明光。
 
-    继承纯净 RotatingBehavior 的全部 50/50 逻辑，追加：
+    继承纯净 RotatingBehavior 的全部轮换逻辑，追加：
       - cr_counter：连歪次数追踪
       - cr_state_probs：每个 counter 状态的拦截概率（数组预留）
       - cr_base_rate：每次祈愿的基础触发概率
@@ -332,7 +352,7 @@ class RotatingCRBehavior(RotatingBehavior):
         if state_prob > 0 and random.random() < state_prob:
             return self._force_featured(ctx)
 
-        return super().before_draw(ctx)       # 正常 50/50
+        return super().before_draw(ctx)       # 正常轮换（featured 占比由基础分布决定）
 
     def _force_featured(self, ctx):
         """将 scope 内概率全部导向 featured。"""
@@ -405,7 +425,7 @@ cr_state_probs = [0.0, 0.0, 0.0, 1.0]  # 每个 counter 状态的拦截概率（
 class RotatingSoftBehavior(RotatingBehavior):
     """轮换保底 + 软保底。
 
-    继承 RotatingBehavior 的全部 50/50 逻辑，追加：
+    继承 RotatingBehavior 的全部轮换逻辑，追加：
       - counter：软保底抽数计数器
       - _soft_engine：SoftStepBehavior 实例——deltas 引擎统一消费三态语法糖（interval/additive/step）
 
@@ -704,14 +724,14 @@ epitomizable_cards = [            # 默认 []——空 = 不支持定轨
 # 纯净 rotating——仅轮换，无软保底（组合 soft_interval 使用）
 # featured 占比由基础分布决定——无需 initial_win_rate
 [[pity]]
-name = "rotating_5050"
+name = "rotating_char"
 type = "rotating"
 scope = "ssr"
 pools = ["limited_character"]
 
 # ── rotating_soft ——轮换 + 软保底 ──
 
-# 原神 4.x 角色池——74→90 软保底 + 50/50
+# 原神 4.x 角色池——74→90 软保底 + 轮换（featured 占比 50% 由基础分布决定）
 [[pity]]
 name = "rotating_soft_char"
 type = "rotating_soft"
@@ -825,6 +845,83 @@ threshold = 240
 depends_on = "featured_hard_120"   # 120 保底命中 featured 后激活
 ```
 
+### 3.8 附加：初始状态字段——模拟开始前的快照
+
+`counter_init`（P55 已定义）覆盖了计数器驱动型保底的初始水位，但事件驱动型保底也有初始状态需求。以下两个字段在 P55 的 `PityDef` 中定义，语义说明在此。
+
+#### `guaranteed_init` —— rotating 家族初始大保底状态
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | `bool` |
+| 默认 | `false`（从小保底开始） |
+| 适用 | `rotating` / `rotating_soft` / `rotating_cr` / `rotating_cr_soft` |
+
+`true` = 模拟开始时已处于大保底——等价于「上一个 SSR 歪了，下一个 SSR 必出 featured」。
+
+典型场景：玩家在上一期卡池中歪了常驻，保底状态继承到本期。模拟此场景时，不需要追溯上一期的抽卡历史——直接将初始状态标记为大保底即可：
+
+```toml
+# 米池场景：已垫 73 抽 + 大保底状态
+[[pity]]
+name = "rotating_soft_char"
+type = "rotating_soft"
+scope = "ssr"
+soft_start = 74
+soft_end = 90
+counter_init = 73
+guaranteed_init = true
+```
+
+`SimulationEnvBuilder` 在构造 `PityState` 时：
+
+```python
+if pdef.guaranteed_init and pdef.btype in ROTATING_FAMILY:
+    state.set(pdef.name, "guaranteed", True)
+```
+
+#### `fate_points_init` —— targeted 家族初始命定值
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | `int` |
+| 默认 | `0`（从零开始） |
+| 适用 | `targeted` / `targeted_soft` |
+
+`1` = 已歪一次但未触发保证——等价于「定轨值=1，再歪一次触发命定值保证」。
+
+典型场景：武器池已歪了一次非目标武器，命定值=1。模拟此场景时：
+
+```toml
+[[pity]]
+name = "epitomized_weapon"
+type = "targeted"
+scope = "ssr"
+fate_threshold = 1
+fate_points_init = 1               # 已歪一次，命定值=1
+```
+
+`SimulationEnvBuilder` 在构造 `PityState` 时：
+
+```python
+if pdef.fate_points_init and pdef.btype in TARGETED_FAMILY:
+    state.set(pdef.name, "fate_points", pdef.fate_points_init)
+```
+
+#### 设计决策：独立字段 vs 通用 `initial_state: dict`
+
+三个初始状态字段（`counter_init` / `guaranteed_init` / `fate_points_init`）各自类型明确：
+- `counter_init: int` → QSpinBox
+- `guaranteed_init: bool` → 复选框
+- `fate_points_init: int` → QSpinBox
+
+若改为 `initial_state = {counter = 73, guaranteed = true}` 自由 dict：
+- 失去类型安全——GUI 无法自动渲染正确控件
+- TOML 语义不直观——嵌套表不如平级字段清晰
+- 写入 PityState 时退化为盲目遍历——不知道哪些 key 是合法的
+
+**结论：三个独立字段——简洁、类型安全、GUI 元数据驱动渲染无障碍。**
+
 ### 3.9 `selected_card` 的建模方式——决议
 
 > **决议日期：2026-06-16 | 结论：策略运行时设定 + 池子声明可选范围 + `NonDrawAction` 作为切换载体**
@@ -868,7 +965,7 @@ NonDrawAction("cancel_epitomized_path", {
 
 `selected_card = None`（初始默认值）。此时 `TargetedBehavior`：
 - `_is_hit()` 返回 `False` → 命定值不累积
-- `before_draw()` 正常调整概率（50/50 或 75/25 照常）——不定轨也能抽
+- `before_draw()` 正常调整概率（featured 占比由基础分布决定）——不定轨也能抽
 - `after_draw()` 看到 `selected_card is None` → 直接 return，不累积不翻转
 
 对应现实：原神取消定轨后照样抽武器池，出金随机。
@@ -1011,7 +1108,7 @@ P55（基础设施）
 | 能力 | P55 机制 | P56 如何使用 |
 |------|---------|-------------|
 | behavior 独立生命周期 | `PityBehavior.before_draw()` / `after_draw()` | `RotatingBehavior` 覆写这两个方法，不碰 Engine |
-| 状态存储 | `PityState` namespace + `Counter` / `Flag` | `RotatingBehavior` 用 `Flag` 存 `guaranteed` / `lost_5050`，用 `Counter` 存 `losses` |
+| 状态存储 | `PityState` namespace + `Counter` / `Flag` | `RotatingBehavior` 用 `Flag` 存 `guaranteed` / `lost_rotating`，用 `Counter` 存 `losses` |
 | 不可变上下文 | `DrawInfo`（`frozen`） | rotating 通过 `featured_slots` / `scope_slots` 获取槽位信息 |
 | 停用/激活 | `_active` flag + `CounterBasedBehavior.before_draw` 检查 | 终末地 240 的 `depends_on` 依赖此机制——初始 `_active=False`，引擎激活 |
 | 触发上限 | `max_triggers` → `_active.clear()` | 终末地 120 复用此机制 |
@@ -1037,7 +1134,7 @@ P55（基础设施）
 
 ## 七、验收标准
 
-- [ ] 纯净 rotating：歪后下一次必中 featured；中 featured 后回归 50/50
+- [ ] 纯净 rotating：歪后下一次必中 featured；中 featured 后回归小保底（featured 占比由基础分布决定）
 - [ ] 捕获明光：三连歪后 100% 拦截；拦截后 cr_counter 重置；小保底赢了 cr_counter 归零
 - [ ] 捕获明光—base_rate：`cr_base_rate=0.00018` 时每次祈愿有独立判定
 - [ ] 捕获明光—state_probs：`cr_state_probs=[0.0, 0.05, 0.55, 1.0]` 按状态分段判定

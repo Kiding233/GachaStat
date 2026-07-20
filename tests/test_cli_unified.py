@@ -6,6 +6,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from gacha_simulator._version import __version__
+
 
 def _run_cli(*args: str) -> str:
     """运行 CLI 并捕获 stdout。"""
@@ -105,6 +107,46 @@ def test_no_progress_flag():
                          "-o", tempfile.gettempdir() + "/test_np_cli.json")
     # 进度条不应出现在输出中
     assert "进度:" not in stdout
+
+
+def test_version_flag():
+    """P67 Task 3-1: --version 单独传入应输出版本号并退出 (exit code 0)。"""
+    cmd = [sys.executable, "-m", "gacha_simulator.cli", "--version"]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                            cwd=str(Path(__file__).parent.parent))
+    assert result.returncode == 0, f"Expected exit 0, got {result.returncode}"
+    assert "gacha_simulator" in result.stdout, \
+        f"stdout should contain 'gacha_simulator', got: {result.stdout!r}"
+    assert __version__ in result.stdout, \
+        f"stdout should contain version '{__version__}', got: {result.stdout!r}"
+
+
+def test_version_with_other_args():
+    """P67 Task 3-2: --version 与其他参数组合时 argparse 优先处理，exit 0。"""
+    cmd = [sys.executable, "-m", "gacha_simulator.cli", "--version", "-n", "100"]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                            cwd=str(Path(__file__).parent.parent))
+    assert result.returncode == 0, f"Expected exit 0, got {result.returncode}"
+    assert "gacha_simulator" in result.stdout, \
+        f"stdout should contain 'gacha_simulator', got: {result.stdout!r}"
+    # --version 优先于其他参数，不应执行模拟流程
+    assert "Running" not in result.stdout, \
+        "simulation should not run when --version is present"
+
+
+def test_help_unaffected():
+    """P67 Task 3-3: 现有 --help 参数行为不变，且包含 --version 说明。"""
+    cmd = [sys.executable, "-m", "gacha_simulator.cli", "--help"]
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", timeout=30,
+                            cwd=str(Path(__file__).parent.parent))
+    assert result.returncode == 0, f"Expected exit 0, got {result.returncode}"
+    # 帮助文本应包含基本用法信息
+    assert "GachaStat CLI" in result.stdout, \
+        f"help should contain 'GachaStat CLI', got: {result.stdout!r}"
+    # 新增的 --version 应出现在帮助文本中
+    assert "--version" in result.stdout, \
+        f"help should mention --version, got: {result.stdout!r}"
 
 
 def test_code_cleanliness():

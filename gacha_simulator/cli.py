@@ -13,6 +13,7 @@ logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(mess
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from gacha_simulator._version import __version__  # noqa: E402
 from gacha_simulator.core.config_toml import load_toml, save_toml  # noqa: E402
 from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
 from gacha_simulator.paths import get_config_dir  # noqa: E402
@@ -43,6 +44,8 @@ def main():
         help='禁用进度条输出')
     parser.add_argument('--migrate', action='store_true',
         help='将旧格式 TOML 迁移为新格式并覆盖保存（P55）')
+    parser.add_argument('--version', action='version',
+        version=f'gacha_simulator {__version__}')
 
     args = parser.parse_args()
 

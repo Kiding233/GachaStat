@@ -978,6 +978,7 @@ class ConfigPanel(QWidget):
 
     def _setup_pity_config(self, parent):
         self._pity_defs = []
+        self._current_pity_row: int = -1  # 当前选中索引（用于切换前 flush）
         self._pity_dynamic_widgets = {}  # pname → widget
         self._pity_dynamic_labels = {}   # pname → label
 
@@ -1121,19 +1122,19 @@ class ConfigPanel(QWidget):
         main_layout.addWidget(detail_group, 2)
         parent.addLayout(main_layout)
 
-        # 信号连接
-        self.pity_enabled.stateChanged.connect(self._update_preview)
-        self.pity_name_edit.textChanged.connect(self._update_preview)
-        self.pity_type_combo.currentIndexChanged.connect(self._update_preview)
-        self.pity_scope_combo.currentIndexChanged.connect(self._update_preview)
-        self.pity_target_featured_cb.stateChanged.connect(self._update_preview)
-        self.pity_pools_edit.textChanged.connect(self._update_preview)
-        self.pity_init_spin.valueChanged.connect(self._update_preview)
-        self.pity_deactivate_cb.stateChanged.connect(self._update_preview)
-        self.pity_guaranteed_init_cb.stateChanged.connect(self._update_preview)
-        self.pity_fate_points_spin.valueChanged.connect(self._update_preview)
-        self.pity_selected_card_combo.currentIndexChanged.connect(self._update_preview)
-        self.pity_depends_combo.currentIndexChanged.connect(self._update_preview)
+        # 信号连接——控件变更 → 实时写回数据 → 触发预览
+        self.pity_enabled.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_name_edit.textChanged.connect(self._flush_pity_current_detail)
+        self.pity_type_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_scope_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_target_featured_cb.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_pools_edit.textChanged.connect(self._flush_pity_current_detail)
+        self.pity_init_spin.valueChanged.connect(self._flush_pity_current_detail)
+        self.pity_deactivate_cb.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_guaranteed_init_cb.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_fate_points_spin.valueChanged.connect(self._flush_pity_current_detail)
+        self.pity_selected_card_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_depends_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
 
     # ── 动态控件构建 ──
 
@@ -1198,13 +1199,13 @@ class ConfigPanel(QWidget):
             self._pity_dynamic_area.addRow(label, w)
             # 连接预览信号
             if hasattr(w, 'valueChanged'):
-                w.valueChanged.connect(self._update_preview)
+                w.valueChanged.connect(self._flush_pity_current_detail)
             elif hasattr(w, 'currentIndexChanged'):
-                w.currentIndexChanged.connect(self._update_preview)
+                w.currentIndexChanged.connect(self._flush_pity_current_detail)
             elif hasattr(w, 'textChanged'):
-                w.textChanged.connect(self._update_preview)
+                w.textChanged.connect(self._flush_pity_current_detail)
             elif hasattr(w, 'stateChanged'):
-                w.stateChanged.connect(self._update_preview)
+                w.stateChanged.connect(self._flush_pity_current_detail)
 
             widgets[pname] = w
             self._pity_dynamic_labels[pname] = label
@@ -1404,9 +1405,13 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _on_pity_selected(self, row):
+        # 切换前先保存当前编辑（仿照 _on_card_selected 模式）
+        self._flush_pity_current_detail()
         if row < 0 or row >= len(self._pity_defs):
+            self._current_pity_row = -1
             self._pity_detail_group.setEnabled(False)
             return
+        self._current_pity_row = row
         self._pity_detail_group.setEnabled(True)
         pd = self._pity_defs[row]
 
@@ -1500,6 +1505,88 @@ class ConfigPanel(QWidget):
                 w.setChecked(bool(val))
             elif isinstance(w, QLineEdit):
                 w.setText(str(val) if val else '')
+
+    def _flush_pity_current_detail(self):
+        """从右侧控件读取当前值 → 实时写回 self._pity_defs[idx]"""
+        row = self._current_pity_row
+        if row < 0 or row >= len(self._pity_defs):
+            return
+        pd = self._pity_defs[row]
+        pd['name'] = self.pity_name_edit.text().strip() or f"pity_{row+1}"
+
+        # btype
+        bt_idx = self.pity_type_combo.currentIndex()
+        pd['btype'] = self._PITY_TYPES[bt_idx][0] if 0 <= bt_idx < len(self._PITY_TYPES) else 'soft_interval'
+
+        # scope
+        pd['scope'] = self.pity_scope_combo.currentText()
+
+        # target_featured
+        pd['target_featured'] = self.pity_target_featured_cb.isChecked()
+
+        # 动态参数 → pd 字段
+        btype = pd['btype']
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+        for pname, w in self._pity_dynamic_widgets.items():
+            pmeta = params_meta.get(pname, {})
+            ptype = pmeta.get('type', 'str')
+            try:
+                if isinstance(w, QComboBox):
+                    pd[pname] = w.currentText()
+                elif ptype == 'int':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = int(raw) if str(raw).strip() else 0
+                elif ptype == 'float':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = float(raw) if str(raw).strip() else 0.0
+                elif ptype == 'bool':
+                    pd[pname] = w.isChecked() if hasattr(w, 'isChecked') else False
+                else:
+                    pd[pname] = w.text() if hasattr(w, 'text') else str(w.value())
+            except (ValueError, TypeError):
+                pd[pname] = pmeta.get('default', 0 if ptype in ('int', 'float') else '')
+
+        # deltas（仅 soft_step 类型保存）
+        if btype == 'soft_step':
+            deltas = self._read_deltas_table()
+            if deltas:
+                pd['deltas'] = deltas
+            else:
+                pd['deltas'] = None
+
+        # 语法糖参数映射（registry 控件名 → PityDef 标准字段）
+        if btype in ('soft_interval',):
+            pd['soft_start'] = pd.get('start')
+            pd['soft_end'] = pd.get('end')
+        elif btype in ('soft_additive', 'rotating_soft',
+                        'rotating_cr_soft', 'targeted_soft'):
+            pd['soft_start'] = pd.get('start')
+            pd['soft_increment'] = pd.get('increment')
+
+        # 池子 / 初始值
+        pools_text = self.pity_pools_edit.text().strip()
+        pd['pools'] = tuple(pools_text.split(',')) if pools_text else ('*',)
+        pd['counter_init'] = self.pity_init_spin.value()
+
+        # 生命周期
+        pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
+        depends = self.pity_depends_combo.currentData()
+        pd['depends_on'] = depends if depends else None
+
+        # ── P56：初始状态 ──
+        pd['guaranteed_init'] = self.pity_guaranteed_init_cb.isChecked()
+        pd['fate_points_init'] = self.pity_fate_points_spin.value()
+        sc = self.pity_selected_card_combo.currentData()
+        pd['selected_card_init'] = sc if sc else None
+
+        # ── P56：cr_state_probs 表格（仅 rotating_cr 家族保存） ──
+        if btype in ('rotating_cr', 'rotating_cr_soft'):
+            cr_probs = self._read_cr_probs_table()
+            pd['cr_state_probs'] = cr_probs if cr_probs else None
+
+        self.pity_list.item(row).setText(pd['name'])
+        self._update_preview()
 
     def _apply_pity_edit(self):
         row = self.pity_list.currentRow()
@@ -1598,7 +1685,8 @@ class ConfigPanel(QWidget):
         # P56：cr_state_probs 表格显隐
         self._pity_cr_probs_group.setVisible(is_cr)
 
-        # 动态参数重建
+        # 动态参数重建——先 flush 保存当前值，再销毁旧控件
+        self._flush_pity_current_detail()
         self._build_param_widgets(btype)
         # 重建后重新填充当前选中条目的值（否则只剩默认值）
         row = self.pity_list.currentRow()

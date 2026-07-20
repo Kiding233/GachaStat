@@ -60,7 +60,7 @@ class TestPityPanelStartup:
         assert pd["scope"] in ("ssr", "sr", "r")
         for key in ["name", "btype", "scope", "target_featured", "deltas",
                      "threshold", "counter_init", "soft_start", "soft_end",
-                     "reset", "pools", "max_triggers", "deactivate_on_early_hit"]:
+                     "reset", "pools", "deactivate_on_early_hit"]:
             assert key in pd, f"缺少字段: {key}"
 
     def test_select_first_pity_no_crash(self, qapp):

@@ -227,7 +227,7 @@ class TestPityEngineReset:
         pdef = _PityDef(
             name='test_once', btype='soft_interval', scope='ssr',
             deltas=deltas, reset='ssr',
-            max_triggers=1, deactivate_on_early_hit=True,
+            deactivate_on_early_hit=True,
             pools=('*',),
         )
         state2 = PityState()

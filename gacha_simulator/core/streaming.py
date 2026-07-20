@@ -261,6 +261,7 @@ class WorkerLocalExtractor:
 
             while pool_idx < self._n_pools and t > self._sorted_pools[pool_idx][1]:
                 pid = self._sorted_pools[pool_idx][0]
+                pool_end_time = self._sorted_pools[pool_idx][1]
                 pool_end_res = compact.get('pool_end_resources', {}).get(pid, {})
                 cumulative_snapshots.append({
                     'pool_id': pid,
@@ -271,6 +272,7 @@ class WorkerLocalExtractor:
                     'cumulative_gained': dict(cum_gained),
                     'pool_end_resource': pool_end_res.get('draw_resource', 0.0),
                     'pool_end_resources': dict(pool_end_res),
+                    'pool_end_time': pool_end_time,
                 })
                 transition_flags.append(self._check_success(cum_cards))
                 pool_idx += 1
@@ -278,6 +280,7 @@ class WorkerLocalExtractor:
         # 处理剩余池（所有抽卡在最后池结束前完成）
         while pool_idx < self._n_pools:
             pid = self._sorted_pools[pool_idx][0]
+            pool_end_time = self._sorted_pools[pool_idx][1]
             pool_end_res = compact.get('pool_end_resources', {}).get(pid, {})
             cumulative_snapshots.append({
                 'pool_id': pid,
@@ -288,6 +291,7 @@ class WorkerLocalExtractor:
                 'cumulative_gained': dict(cum_gained),
                 'pool_end_resource': pool_end_res.get('draw_resource', 0.0),
                 'pool_end_resources': dict(pool_end_res),
+                'pool_end_time': pool_end_time,
             })
             transition_flags.append(self._check_success(cum_cards))
             pool_idx += 1

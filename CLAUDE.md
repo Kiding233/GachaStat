@@ -53,7 +53,7 @@ dataclass——模拟状态一等公民。`resources`（资源）、`acquired`�
 
 ### GDR (`core/gdr.py` + `core/generalized_drop_rate.py`)
 
-`UNIFIED_GDR_REGISTRY` 定义 13 种广义出率指标。两路计算：`compute_from_compact`（O(1)）/ `compute_from_history`（O(T)）。
+`UNIFIED_GDR_REGISTRY` 定义 21 种广义出率指标（含 P62 4 个可达变体）。两路计算：`compute_from_compact`（O(1)）/ `compute_from_history`（O(T)）。**P62 变更：** `GDRDefinition.needs_store: bool = False` 标志位——告知调用方该 GDR 需传入 `store` 方可正确计算（如 `_obtainable` 可达变体）。`filter_target_specs_by_obtainable(target_specs, store, final_time) -> Dict[str, int]` 公共函数——依据池子 `start_day ≤ final_time` 判定目标卡可达性，`store=None` 时保守回退返回原始 `target_specs`。4 个 `_obtainable` 后缀 GDR key（`target_achievement_obtainable` / `target_collection_obtainable` / `all_targets_obtainable` / `weighted_satisfaction_obtainable`）分母仅含模拟期间池子已开放的目标卡，排除不可达卡的虚降/永久惩罚。`compute_gdr_from_compact()` / `compute_gdr_from_cumulative()` / `compute_success_probability()` 均新增 `store=None` 参数并透传至 wrapper；`GDRCalculator.__init__` / `make_gdr_calculator()` 同理。`streaming.py` 累积快照新增 `pool_end_time` 字段供可达过滤使用。
 
 **调用规范（强制）：** 必须用 `make_gdr_calculator(store, target_specs, gdr_key)` 构造 `GDRCalculator`——权重从 `ConfigStore` 自动提取。**禁止绕过直接调** `compute_gdr_from_compact`/`compute_success_probability`（权重易漏传、静默退化 1.0）。例外：`process_trace.py`/`per_pool_analysis.py` 通过 `**kwargs` 透传权重。**P60 变更：** `PityProgressAtT` 读取 `history[t].pity_state`（dict，非 PityState 对象）时，必须通过 `PityState.from_dict()` 反序列化后再使用 `ps.get(name, 'counter', 0)`——禁止直接对 dict 调用 3 参数 `get()`（TypeError）。
 

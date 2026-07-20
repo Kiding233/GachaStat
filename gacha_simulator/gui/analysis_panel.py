@@ -1109,6 +1109,7 @@ class AnalysisWorker(QThread):
                                     desire_weights=self._store.desire_weights if self._store else None,
                                     miss_cost_weights=self._store.miss_cost_weights if self._store else None,
                                     card_value_weights=self._store.card_value_weights if self._store else None,
+                                    store=self._store,
                                 )
                                 raw.append(float(v))
                             except Exception:

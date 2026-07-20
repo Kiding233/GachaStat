@@ -5,6 +5,7 @@ from gacha_simulator.core.gdr import (
     GDRDefinition, GDRCalculator, compute_success_probability,
     UNIFIED_GDR_REGISTRY, compute_gdr_from_compact, populate_gdr_combo,
 )
+from gacha_simulator.core.config_store import ConfigStore, CardDefEntry, PoolEntry
 
 
 # ─── P11: target_card_draws GDR ────────────────────────────────────────
@@ -348,7 +349,7 @@ class TestGetExpandedGdrEntries:
     def test_no_resource_defs_returns_17(self):
         from gacha_simulator.core.gdr import get_expanded_gdr_entries
         entries = get_expanded_gdr_entries()
-        assert len(entries) == 17
+        assert len(entries) == 21   # P62: 17 → 21
 
     def test_two_resource_types_returns_21(self):
         from gacha_simulator.core.gdr import get_expanded_gdr_entries
@@ -356,7 +357,7 @@ class TestGetExpandedGdrEntries:
             'draw_resource': '抽卡资源',
             'exchange_currency': '兑换货币',
         })
-        assert len(entries) == 21
+        assert len(entries) == 25   # P62: 21 → 25
 
     def test_no_duplicate_original_keys(self):
         """展开后不应出现原始 resource_remaining（无 : 后缀）"""
@@ -549,7 +550,7 @@ class TestMultiResourceCompute:
             'draw_resource': '抽卡资源',
             'exchange_currency': '兑换货币',
         })
-        assert combo.count() == 21
+        assert combo.count() == 25   # P62: 21 → 25
         keys = [combo.itemData(i) for i in range(combo.count())]
         assert 'resource_remaining' not in keys
         assert 'resource_remaining:draw_resource' in keys
@@ -593,3 +594,245 @@ def test_make_gdr_calculator_resource_gdr():
     store = ConfigStore()
     calc = make_gdr_calculator(store, {'card_a': 1}, 'resource_per_card')
     assert calc is not None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# P62 可达目标卡筛选测试
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _make_store_for_p62():
+    """P62 测试专用 ConfigStore fixture：
+    - card_a: 仅池子 pool_early (day 0–10)
+    - card_b: 仅池子 pool_late (day 100–120)
+    - card_c: 同时属于两个池子
+    - pool_disabled: enabled=False，不应使 card_d 变为可达
+    """
+    store = ConfigStore()
+    store.card_defs = [
+        CardDefEntry(card_id='card_a', pools=['pool_early']),
+        CardDefEntry(card_id='card_b', pools=['pool_late']),
+        CardDefEntry(card_id='card_c', pools=['pool_early', 'pool_late']),
+        CardDefEntry(card_id='card_d', pools=['pool_disabled']),
+    ]
+    store.pools = [
+        PoolEntry(pool_id='pool_early', start_day=0, end_day=10, enabled=True),
+        PoolEntry(pool_id='pool_late', start_day=100, end_day=120, enabled=True),
+        PoolEntry(pool_id='pool_disabled', start_day=0, end_day=10, enabled=False),
+    ]
+    return store
+
+
+class TestFilterTargetSpecsByObtainable:
+    """filter_target_specs_by_obtainable() 单元测试"""
+
+    def test_all_obtainable_when_early_stop(self):
+        """final_time=5: 仅 pool_early 已开放 → card_a + card_c 可达"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        result = filter_target_specs_by_obtainable(
+            {'card_a': 1, 'card_b': 1, 'card_c': 2},
+            store, final_time=5.0,
+        )
+        assert result == {'card_a': 1, 'card_c': 2}
+        assert 'card_b' not in result
+
+    def test_all_obtainable_when_long_run(self):
+        """final_time=110: 两个池子均开放 → 全部可达"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        result = filter_target_specs_by_obtainable(
+            {'card_a': 1, 'card_b': 1, 'card_c': 2},
+            store, final_time=110.0,
+        )
+        assert result == {'card_a': 1, 'card_b': 1, 'card_c': 2}
+
+    def test_none_obtainable(self):
+        """final_time=-1: 无任何池子开放 → 返回空 dict"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        result = filter_target_specs_by_obtainable({'card_a': 1}, store, final_time=-1.0)
+        assert result == {}
+
+    def test_disabled_pool_ignored(self):
+        """card_d 仅在 disabled 池子中 → 不可达"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        result = filter_target_specs_by_obtainable({'card_d': 1}, store, final_time=5.0)
+        assert result == {}
+
+    def test_store_none_fallback(self):
+        """store=None → 返回原始 target_specs（保守回退）"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        result = filter_target_specs_by_obtainable({'card_a': 1, 'card_b': 1}, None, final_time=5.0)
+        assert result == {'card_a': 1, 'card_b': 1}
+
+    def test_empty_target_specs(self):
+        """空 target_specs → 返回空"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        result = filter_target_specs_by_obtainable({}, store, final_time=5.0)
+        assert result == {}
+
+    def test_cross_pool_card_counted_once(self):
+        """card_c 出现在两个池子中，只要一个开放即判定可达（不重复计数）"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        result = filter_target_specs_by_obtainable({'card_c': 3}, store, final_time=5.0)
+        assert result == {'card_c': 3}
+        assert len(result) == 1
+
+    def test_final_time_zero_pool_start_zero_still_obtainable(self):
+        """final_time=0, pool start_day=0 → 可达（no_draw 场景）"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        result = filter_target_specs_by_obtainable({'card_a': 1}, store, final_time=0.0)
+        assert result == {'card_a': 1}
+
+
+class TestObtainableGdrComputation:
+    """通过 compute_gdr_from_compact 端到端验证 4 个可达 GDR"""
+
+    def _make_compact(self, card_counts, final_time=5.0):
+        return {
+            'card_counts': card_counts,
+            'final_time': final_time,
+            'total_consumed': {'draw_resource': 1600},
+            'final_resources': {'draw_resource': 0},
+            'pool_draw_counts': {},
+            'pool_card_counts': {},
+            'total_draws': 10,
+        }
+
+    # ── target_achievement_obtainable ──
+
+    def test_target_achievement_obtainable_full(self):
+        """全量 3 张目标卡，仅 card_a 和 card_c 可达 → card_c 未抽到 → 1/3"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        store = _make_store_for_p62()
+        compact = self._make_compact({'card_a': 1, 'card_b': 0, 'card_c': 0})
+        target_specs = {'card_a': 1, 'card_b': 1, 'card_c': 2}
+        val = compute_gdr_from_compact(
+            compact, target_specs, 'target_achievement_obtainable', store=store,
+        )
+        # 可达: card_a(qty=1) + card_c(qty=2) = 3, got=1 → 1/3
+        assert val == pytest.approx(1.0 / 3.0)
+
+    def test_target_achievement_obtainable_partial(self):
+        """card_c 可达(qty=2)+card_a 可达(qty=1)，只抽到 card_c×1 → 1/3"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        store = _make_store_for_p62()
+        compact = self._make_compact({'card_a': 0, 'card_b': 0, 'card_c': 1})
+        target_specs = {'card_a': 1, 'card_b': 1, 'card_c': 2}
+        val = compute_gdr_from_compact(
+            compact, target_specs, 'target_achievement_obtainable', store=store,
+        )
+        # 可达: card_a(qty=1) + card_c(qty=2) = 3, got=1 → 1/3
+        assert val == pytest.approx(1.0 / 3.0)
+
+    def test_target_achievement_obtainable_zero_obtainable(self):
+        """无任何可达卡 → 返回 0.0"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        store = _make_store_for_p62()
+        compact = self._make_compact({'card_a': 3}, final_time=-1.0)
+        val = compute_gdr_from_compact(
+            compact, {'card_a': 1}, 'target_achievement_obtainable', store=store,
+        )
+        assert val == 0.0  # 非 NaN/非 inf
+
+    # ── target_collection_obtainable ──
+
+    def test_target_collection_obtainable(self):
+        """3 种全量目标卡，2 种可达 → 收集 1 种 → 50%"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        store = _make_store_for_p62()
+        compact = self._make_compact({'card_a': 1, 'card_c': 0})
+        target_specs = {'card_a': 1, 'card_b': 1, 'card_c': 2}
+        val = compute_gdr_from_compact(
+            compact, target_specs, 'target_collection_obtainable', store=store,
+        )
+        assert val == pytest.approx(0.5)
+
+    # ── all_targets_obtainable ──
+
+    def test_all_targets_obtainable_success(self):
+        """可达卡全部达标 → 1.0"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        store = _make_store_for_p62()
+        compact = self._make_compact({'card_a': 1, 'card_c': 2})
+        target_specs = {'card_a': 1, 'card_b': 1, 'card_c': 2}
+        val = compute_gdr_from_compact(
+            compact, target_specs, 'all_targets_obtainable', store=store,
+        )
+        assert val == 1.0
+
+    def test_all_targets_obtainable_fail(self):
+        """card_c 可达但不足 → 0.0"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        store = _make_store_for_p62()
+        compact = self._make_compact({'card_a': 1, 'card_c': 1})
+        target_specs = {'card_a': 1, 'card_b': 1, 'card_c': 2}
+        val = compute_gdr_from_compact(
+            compact, target_specs, 'all_targets_obtainable', store=store,
+        )
+        assert val == 0.0
+
+    # ── weighted_satisfaction_obtainable ──
+
+    def test_weighted_satisfaction_obtainable_no_permanent_penalty(self):
+        """不可达卡不产生 miss_cost 惩罚——与全量版对比验证"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        store = _make_store_for_p62()
+        compact = self._make_compact({'card_a': 1, 'card_c': 2})
+        target_specs = {'card_a': 1, 'card_b': 1, 'card_c': 2}
+        desire = {'card_a': 1.0, 'card_b': 1.0, 'card_c': 1.0}
+        miss = {'card_a': 2.0, 'card_b': 2.0, 'card_c': 2.0}
+
+        # 全量版：card_b 不可达 → missed=1 → 有惩罚
+        val_full = compute_gdr_from_compact(
+            compact, target_specs, 'weighted_satisfaction',
+            desire_weights=desire, miss_cost_weights=miss,
+        )
+        # 可达版：card_b 被排除 → 无惩罚
+        val_obt = compute_gdr_from_compact(
+            compact, target_specs, 'weighted_satisfaction_obtainable',
+            desire_weights=desire, miss_cost_weights=miss, store=store,
+        )
+        assert val_obt > val_full
+
+    # ── 向后兼容 ──
+
+    def test_store_none_fallback_original(self):
+        """store=None 时，_obtainable GDR 回退到原始 target_specs，值与原版相同"""
+        from gacha_simulator.core.gdr import compute_gdr_from_compact
+        compact = self._make_compact({'card_a': 1, 'card_b': 0, 'card_c': 0})
+        target_specs = {'card_a': 1, 'card_b': 1, 'card_c': 2}
+
+        val_full = compute_gdr_from_compact(compact, target_specs, 'target_achievement')
+        val_obt = compute_gdr_from_compact(compact, target_specs, 'target_achievement_obtainable')
+        assert val_obt == pytest.approx(val_full)
+
+    def test_gdr_calculator_with_store(self):
+        """GDRCalculator 传入 store → compute_gdr 使用可达过滤"""
+        from gacha_simulator.core.gdr import GDRCalculator
+        store = _make_store_for_p62()
+        calc = GDRCalculator(
+            {'card_a': 1, 'card_b': 1, 'card_c': 2},
+            gdr_key='target_achievement_obtainable',
+            store=store,
+        )
+        compact = self._make_compact({'card_a': 1, 'card_b': 0, 'card_c': 0})
+        val = calc.compute_gdr(compact)
+        # 可达: card_a(qty=1) + card_c(qty=2) = 3, got=1 → 1/3
+        assert val == pytest.approx(1.0 / 3.0)
+
+    def test_make_gdr_calculator_obtainable(self):
+        """make_gdr_calculator + _obtainable GDR 端到端"""
+        from gacha_simulator.core.gdr import make_gdr_calculator
+        store = _make_store_for_p62()
+        calc = make_gdr_calculator(store, {'card_a': 1, 'card_b': 1, 'card_c': 2},
+                                    'target_achievement_obtainable')
+        compact = self._make_compact({'card_a': 1, 'card_b': 0, 'card_c': 0})
+        val = calc.compute_gdr(compact)
+        # 可达: card_a(qty=1) + card_c(qty=2) = 3, got=1 → 1/3
+        assert val == pytest.approx(1.0 / 3.0)

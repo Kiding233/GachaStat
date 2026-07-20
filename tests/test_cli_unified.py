@@ -9,10 +9,11 @@ from pathlib import Path
 from gacha_simulator._version import __version__
 
 
-def _run_cli(*args: str) -> str:
-    """运行 CLI 并捕获 stdout。"""
+def _run_cli(*args: str) -> tuple[str, str]:
+    """运行 CLI 并捕获 stdout/stderr。"""
     cmd = [sys.executable, "-m", "gacha_simulator.cli", *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", timeout=120,
                             cwd=str(Path(__file__).parent.parent))
     return result.stdout, result.stderr
 

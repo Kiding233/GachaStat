@@ -83,7 +83,6 @@ class RetreatConfigBuilder:
                 switch_allowed=pd.switch_allowed,
                 switch_resets_progress=pd.switch_resets_progress,
                 pools=pd.pools,
-                max_triggers=pd.max_triggers,
                 deactivate_on_early_hit=pd.deactivate_on_early_hit,
                 depends_on=pd.depends_on,
                 reset=pd.reset,

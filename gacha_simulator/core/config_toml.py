@@ -203,6 +203,11 @@ def _save_templates_and_pools(store: ConfigStore, data: dict) -> None:
             'target_cards': [cid for cid, _ in pool.target_specs],
         }
 
+        # P56：epitomizable_cards——仅非空时写入以保持 TOML 简洁
+        epitomizable = getattr(pool, 'epitomizable_cards', None)
+        if epitomizable:
+            pool_dict['epitomizable_cards'] = list(epitomizable)
+
         # rerun_of / exchange_card_id 可选
         if pool.rerun_of:
             pool_dict['rerun_of'] = pool.rerun_of
@@ -533,9 +538,18 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
 
         # 生命周期参数
         lifecycle_raw = p.get('lifecycle', {})
-        max_triggers = lifecycle_raw.get('max_triggers', 0)
         deactivate_on_early_hit = lifecycle_raw.get('deactivate_on_early_hit', False)
         depends_on = lifecycle_raw.get('depends_on')
+
+        # P56：deactivate_on_early_hit 仅 counter 驱动型支持
+        # 事件驱动型（rotating/targeted）没有「阈值前提前命中」的概念
+        _EVENT_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
+                                   'rotating_cr_soft', 'targeted', 'targeted_soft'})
+        if deactivate_on_early_hit and btype in _EVENT_TYPES:
+            raise ConfigError(
+                f"保底 '{name}'：deactivate_on_early_hit=true 不适用于"
+                f"事件驱动型保底（type='{btype}'）。"
+            )
 
         # 构造扁平化 PityDef
         pities.append(PityDef(
@@ -548,6 +562,7 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             counter_init=p.get('counter_init', 0),
             guaranteed_init=p.get('guaranteed_init', False),
             fate_points_init=p.get('fate_points_init', 0),
+            selected_card_init=p.get('selected_card_init'),
             soft_start=soft_start,
             soft_end=soft_end,
             soft_increment=soft_increment,
@@ -559,7 +574,6 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             switch_allowed=p.get('switch_allowed', True),
             switch_resets_progress=p.get('switch_resets_progress', True),
             pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), list) else (p.get('pools', '*'),),
-            max_triggers=max_triggers,
             deactivate_on_early_hit=deactivate_on_early_hit,
             depends_on=depends_on,
             reset=p.get('reset', ''),
@@ -673,6 +687,8 @@ def _pitydef_to_toml(p) -> dict:
         entry['guaranteed_init'] = True
     if p.fate_points_init:
         entry['fate_points_init'] = p.fate_points_init
+    if p.selected_card_init:
+        entry['selected_card_init'] = p.selected_card_init
 
     # 事件驱动型参数
     if p.cr_counter_threshold is not None:
@@ -690,8 +706,6 @@ def _pitydef_to_toml(p) -> dict:
 
     # 生命周期
     lifecycle = {}
-    if p.max_triggers:
-        lifecycle['max_triggers'] = p.max_triggers
     if p.deactivate_on_early_hit:
         lifecycle['deactivate_on_early_hit'] = True
     if p.depends_on:
@@ -894,6 +908,20 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
             (cid, 1) for cid in p.get('target_cards', [])
         ]
 
+        # P56：解析 epitomizable_cards——校验 card_id 在 distribution 中存在
+        epitomizable_raw = p.get('epitomizable_cards', [])
+        epitomizable_cards = []
+        if epitomizable_raw:
+            dist_card_ids = {d.card_id for d in distribution}
+            for cid in epitomizable_raw:
+                if cid not in dist_card_ids:
+                    raise ConfigError(
+                        f"池子 '{p['id']}' 的 epitomizable_cards 中包含 "
+                        f"未在 distribution 中出现的卡牌 '{cid}'——"
+                        f"请检查卡牌 ID 拼写或将该卡加入池子分布"
+                    )
+                epitomizable_cards.append(cid)
+
         pool_entry = PoolEntry(
             pool_id=p['id'],
             name=p.get('name', p['id']),
@@ -908,6 +936,7 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
             rerun_of=p.get('rerun_of'),
             exchange_card_id=p.get('exchange_card_id'),
             distribution=distribution,
+            epitomizable_cards=epitomizable_cards,
         )
         store.pools.append(pool_entry)
 

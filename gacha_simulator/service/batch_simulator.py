@@ -106,11 +106,18 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
                 counter_init=p.get('counter_init', 0),
                 guaranteed_init=p.get('guaranteed_init', False),
                 fate_points_init=p.get('fate_points_init', 0),
+                selected_card_init=p.get('selected_card_init'),
                 soft_start=p.get('start'),
                 soft_end=p.get('end'),
                 soft_increment=p.get('increment'),
+                soft_deltas=p.get('soft_deltas'),
+                cr_counter_threshold=p.get('cr_counter_threshold'),
+                cr_base_rate=p.get('cr_base_rate'),
+                cr_state_probs=p.get('cr_state_probs'),
+                fate_threshold=p.get('fate_threshold'),
+                switch_allowed=p.get('switch_allowed'),
+                switch_resets_progress=p.get('switch_resets_progress'),
                 pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), (list, tuple)) else (p.get('pools', '*'),),
-                max_triggers=p.get('max_triggers', 0),
                 deactivate_on_early_hit=p.get('deactivate_on_early_hit', False),
                 depends_on=p.get('depends_on'),
                 reset=p.get('reset', ''),
@@ -137,7 +144,7 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
 
             featured = pool_featured_map.get(pool.id, set()) if pool_featured_map else set()
             ssr = pool_ssr_map.get(pool.id, set()) if pool_ssr_map else set()
-            scope_cards, featured_cards, scope_slots, featured_slots = compute_scope_mappings(pool)
+            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(pool)
             pool_specs[pool.id] = PoolPitySpec(
                 pity_names=spec_pity_names,
                 featured_ids=featured,
@@ -146,6 +153,7 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
                 featured_cards=featured_cards,
                 scope_slots=scope_slots,
                 featured_slots=featured_slots,
+                card_to_slot=card_to_slot,
             )
 
         return PityEngine(pool_specs, pity_defs_list, state=state, rarity_rank=rarity_rank)
@@ -551,6 +559,7 @@ class SimulationEnvBuilder:
                 exchange_card_id=exchange_cid,
                 pool_type=ptype,
                 batch_size=getattr(pe, 'batch_size', 1),
+                epitomizable_cards=getattr(pe, 'epitomizable_cards', []),
             )
             pools.append(pool)
             schedules.append(PoolSchedule(
@@ -580,9 +589,19 @@ class SimulationEnvBuilder:
                     'counter_init': getattr(pd, 'counter_init', 0),
                     'guaranteed_init': getattr(pd, 'guaranteed_init', False),
                     'fate_points_init': getattr(pd, 'fate_points_init', 0),
-                    'max_triggers': getattr(pd, 'max_triggers', 0),
+                    'selected_card_init': getattr(pd, 'selected_card_init', None),
                     'deactivate_on_early_hit': getattr(pd, 'deactivate_on_early_hit', False),
                     'depends_on': getattr(pd, 'depends_on', None),
+                    'start': getattr(pd, 'soft_start', None),
+                    'end': getattr(pd, 'soft_end', None),
+                    'increment': getattr(pd, 'soft_increment', None),
+                    'soft_deltas': getattr(pd, 'soft_deltas', None),
+                    'cr_counter_threshold': getattr(pd, 'cr_counter_threshold', None),
+                    'cr_base_rate': getattr(pd, 'cr_base_rate', None),
+                    'cr_state_probs': getattr(pd, 'cr_state_probs', None),
+                    'fate_threshold': getattr(pd, 'fate_threshold', None),
+                    'switch_allowed': getattr(pd, 'switch_allowed', None),
+                    'switch_resets_progress': getattr(pd, 'switch_resets_progress', None),
                 }
                 pity_cfg_dict['pities'].append(pentry)
                 # counter_init 从 PityDef 读取

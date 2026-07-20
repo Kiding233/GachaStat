@@ -193,7 +193,6 @@ counter_init = 0
 
 # 生命周期（可选）
 [lifecycle]
-max_triggers = 0          # 0=无限次
 deactivate_on_early_hit = false
 depends_on = ""</pre>
         <p>软保底 type：<code>soft_interval</code>（区间递增，start→end 线性）/ <code>soft_additive</code>（累加递增，每抽+increment%）/ <code>soft_step</code>（RLE deltas 自定义分段）。硬保底：<code>type="hard"</code> + <code>threshold</code>。事件驱动型（rotating/targeted 等）由 P56 交付。</p>

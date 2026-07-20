@@ -37,7 +37,8 @@ class PoolEntry:
     exchange_card_id: Optional[str] = None
     distribution: List[PoolDistEntry] = field(default_factory=list)
     batch_size: int = 1
-    featured_card_ids: List[str] = field(default_factory=list)       # ← P60：池子级别 featured 卡 ID 聚合
+    featured_card_ids: List[str] = field(default_factory=list)
+    epitomizable_cards: List[str] = field(default_factory=list)      # ← P56
 
 
 @dataclass
@@ -58,6 +59,7 @@ class PityDef:
     counter_init: int = 0
     guaranteed_init: bool = False              # rotating 家族大保底初始状态
     fate_points_init: int = 0                  # targeted 家族命定值初始值
+    selected_card_init: Optional[str] = None   # P56：targeted 家族初始定轨卡片 ID
     # ── 语法糖参数（解析后展开为 deltas） ──
     soft_start: Optional[int] = None           # soft_interval / soft_additive
     soft_end: Optional[int] = None             # soft_interval
@@ -73,7 +75,6 @@ class PityDef:
     # ── 池子绑定 ──
     pools: tuple = ('*',)
     # ── 生命周期 ──
-    max_triggers: int = 0                      # 0=无限
     deactivate_on_early_hit: bool = False
     depends_on: Optional[str] = None
     # ── 重置条件 ──

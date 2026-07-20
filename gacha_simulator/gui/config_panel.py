@@ -958,6 +958,13 @@ class ConfigPanel(QWidget):
         ('soft_additive', '累加软保底'),
         ('soft_step', '分段软保底'),
         ('hard', '硬保底'),
+        # P56 新增
+        ('rotating', '轮换保底'),
+        ('rotating_soft', '轮换+软保底'),
+        ('rotating_cr', '轮换+捕获明光'),
+        ('rotating_cr_soft', '轮换+捕获明光+软保底'),
+        ('targeted', '定轨保底'),
+        ('targeted_soft', '定轨+软保底'),
     ]
 
     # 动态控件工厂——参数类型 → (widget_class, widget_kwargs)
@@ -1002,6 +1009,7 @@ class ConfigPanel(QWidget):
         detail_group.setEnabled(False)
         self._pity_detail_group = detail_group
         detail_form = QFormLayout(detail_group)
+        self._pity_detail_form = detail_form  # P56：供 _on_pity_type_changed 整行显隐
 
         # 名称
         self.pity_name_edit = QLineEdit()
@@ -1052,6 +1060,28 @@ class ConfigPanel(QWidget):
         detail_form.addRow(self._pity_deltas_group)
         self._pity_deltas_group.setVisible(False)
 
+        # ── P56：cr_state_probs 表格（仅 rotating_cr / rotating_cr_soft 可见） ──
+        self._pity_cr_probs_group = QGroupBox("捕获明光——每状态拦截概率")
+        cr_probs_layout = QVBoxLayout(self._pity_cr_probs_group)
+        self.pity_cr_probs_table = QTableWidget()
+        self.pity_cr_probs_table.setColumnCount(1)
+        self.pity_cr_probs_table.setHorizontalHeaderLabels(["拦截概率"])
+        cr_header = self.pity_cr_probs_table.horizontalHeader()
+        cr_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.pity_cr_probs_table.setMaximumHeight(150)
+        cr_probs_layout.addWidget(self.pity_cr_probs_table)
+        cr_probs_btn_layout = QHBoxLayout()
+        add_cr_btn = QPushButton("添加行")
+        add_cr_btn.clicked.connect(self._add_cr_probs_row)
+        remove_cr_btn = QPushButton("移除行")
+        remove_cr_btn.clicked.connect(self._remove_cr_probs_row)
+        cr_probs_btn_layout.addWidget(add_cr_btn)
+        cr_probs_btn_layout.addWidget(remove_cr_btn)
+        cr_probs_btn_layout.addStretch()
+        cr_probs_layout.addLayout(cr_probs_btn_layout)
+        detail_form.addRow(self._pity_cr_probs_group)
+        self._pity_cr_probs_group.setVisible(False)
+
         # ── 池子 + 初始值 ──
         self.pity_pools_edit = QLineEdit()
         self.pity_pools_edit.setPlaceholderText("* (全部池子)")
@@ -1062,19 +1092,31 @@ class ConfigPanel(QWidget):
         self.pity_init_spin.setValue(0)
         detail_form.addRow("初始水位:", self.pity_init_spin)
 
-        # ── 生命周期 ──
-        self.pity_max_triggers_spin = QSpinBox()
-        self.pity_max_triggers_spin.setRange(0, 100)
-        self.pity_max_triggers_spin.setValue(0)
-        self.pity_max_triggers_spin.setToolTip("0=无限次触发")
-        detail_form.addRow("最大触发次数:", self.pity_max_triggers_spin)
+        # ── P56：初始状态（rotating / targeted 家族） ──
+        self.pity_guaranteed_init_cb = QCheckBox("初始处于大保底状态")
+        self.pity_guaranteed_init_cb.setVisible(False)
+        detail_form.addRow("", self.pity_guaranteed_init_cb)
 
+        self.pity_fate_points_spin = QSpinBox()
+        self.pity_fate_points_spin.setRange(0, 10)
+        self.pity_fate_points_spin.setValue(0)
+        self.pity_fate_points_spin.setVisible(False)
+        detail_form.addRow("初始命定值:", self.pity_fate_points_spin)
+
+        # P56：初始定轨卡片（targeted 家族可见，从池子 epitomizable_cards 填充）
+        self.pity_selected_card_combo = QComboBox()
+        self.pity_selected_card_combo.setVisible(False)
+        self.pity_selected_card_combo.setToolTip("模拟开始时的定轨目标——留空 = 不定轨")
+        detail_form.addRow("初始定轨:", self.pity_selected_card_combo)
+
+        # ── 生命周期 ──
         self.pity_deactivate_cb = QCheckBox("提前出货后停用")
         detail_form.addRow("", self.pity_deactivate_cb)
 
-        self.pity_depends_edit = QLineEdit()
-        self.pity_depends_edit.setPlaceholderText("依赖的 behavior name（可选）")
-        detail_form.addRow("依赖:", self.pity_depends_edit)
+        self.pity_depends_combo = QComboBox()
+        self.pity_depends_combo.addItem("(无依赖)", "")
+        self.pity_depends_combo.setToolTip("依赖的 behavior——该 behavior 首次触发后本保底才激活")
+        detail_form.addRow("依赖:", self.pity_depends_combo)
 
         main_layout.addWidget(detail_group, 2)
         parent.addLayout(main_layout)
@@ -1087,9 +1129,11 @@ class ConfigPanel(QWidget):
         self.pity_target_featured_cb.stateChanged.connect(self._update_preview)
         self.pity_pools_edit.textChanged.connect(self._update_preview)
         self.pity_init_spin.valueChanged.connect(self._update_preview)
-        self.pity_max_triggers_spin.valueChanged.connect(self._update_preview)
         self.pity_deactivate_cb.stateChanged.connect(self._update_preview)
-        self.pity_depends_edit.textChanged.connect(self._update_preview)
+        self.pity_guaranteed_init_cb.stateChanged.connect(self._update_preview)
+        self.pity_fate_points_spin.valueChanged.connect(self._update_preview)
+        self.pity_selected_card_combo.currentIndexChanged.connect(self._update_preview)
+        self.pity_depends_combo.currentIndexChanged.connect(self._update_preview)
 
     # ── 动态控件构建 ──
 
@@ -1233,6 +1277,86 @@ class ConfigPanel(QWidget):
         for row in rows:
             table.removeRow(row)
 
+    # ── P56：cr_state_probs 表格操作 ──
+
+    def _populate_cr_probs_table(self, cr_state_probs):
+        """cr_state_probs: [float, ...] 或 None"""
+        table = self.pity_cr_probs_table
+        table.setRowCount(0)
+        if not cr_state_probs:
+            return
+        table.setRowCount(len(cr_state_probs))
+        for i, val in enumerate(cr_state_probs):
+            table.setItem(i, 0, QTableWidgetItem(str(val)))
+
+    def _read_cr_probs_table(self):
+        """读取 cr_state_probs 表格 → list[float]"""
+        table = self.pity_cr_probs_table
+        result = []
+        for i in range(table.rowCount()):
+            item = table.item(i, 0)
+            if item:
+                try:
+                    result.append(float(item.text()))
+                except ValueError:
+                    continue
+        return result if result else None
+
+    def _add_cr_probs_row(self):
+        table = self.pity_cr_probs_table
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem("0.0"))
+
+    def _remove_cr_probs_row(self):
+        table = self.pity_cr_probs_table
+        rows = sorted([r.row() for r in table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            table.removeRow(row)
+
+    # ── P56：depends_on 下拉框刷新 ──
+
+    def _refresh_depends_combo(self):
+        """用当前 _pity_defs 中的 behavior 名称填充 depends_on 下拉框。"""
+        combo = self.pity_depends_combo
+        current_data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("(无依赖)", "")
+        for pd in self._pity_defs:
+            name = pd.get('name', '')
+            if name:
+                combo.addItem(name, name)
+        idx = combo.findData(current_data)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    # ── P56：QFormLayout 整行显隐 + selected_card 下拉填充 ──
+
+    def _set_form_row_visible(self, widget, visible: bool):
+        """隐藏/显示 QFormLayout 中一整行（标签 + 控件）。"""
+        widget.setVisible(visible)
+        label = self._pity_detail_form.labelForField(widget)
+        if label:
+            label.setVisible(visible)
+
+    def _populate_selected_card_combo(self):
+        """从池子 epitomizable_cards 填充初始定轨下拉框。无配置时仅显示「不定轨」。"""
+        combo = self.pity_selected_card_combo
+        current_data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("(不定轨)", "")
+        if self._store:
+            for pool in self._store.pools:
+                for cid in getattr(pool, 'epitomizable_cards', []):
+                    combo.addItem(cid, cid)
+        idx = combo.findData(current_data)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
     # ── CRUD 操作 ──
 
     def _add_pity(self):
@@ -1252,18 +1376,19 @@ class ConfigPanel(QWidget):
             'counter_init': 0,
             'guaranteed_init': False,
             'fate_points_init': 0,
+            'selected_card_init': None,
             'soft_start': 80,
             'soft_end': 90,
             'soft_increment': None,
             'reset': '',
             'pools': '*',
-            'max_triggers': 0,
             'deactivate_on_early_hit': False,
             'depends_on': None,
         }
         self._pity_defs.append(new_def)
         self.pity_list.addItem(name)
         self.pity_list.setCurrentRow(self.pity_list.count() - 1)
+        self._refresh_depends_combo()  # P56：新增后刷新引用列表
         self._update_preview()
 
     def _remove_pity(self):
@@ -1273,6 +1398,7 @@ class ConfigPanel(QWidget):
         self._pity_defs.pop(row)
         self.pity_list.takeItem(row)
         self._pity_detail_group.setEnabled(False)
+        self._refresh_depends_combo()  # P56：删除后刷新引用列表
         if self._pity_defs and self.pity_list.count() > 0:
             self.pity_list.setCurrentRow(min(row, self.pity_list.count() - 1))
         self._update_preview()
@@ -1323,9 +1449,20 @@ class ConfigPanel(QWidget):
         self.pity_init_spin.setValue(pd.get('counter_init', 0))
 
         # 生命周期
-        self.pity_max_triggers_spin.setValue(pd.get('max_triggers', 0))
         self.pity_deactivate_cb.setChecked(pd.get('deactivate_on_early_hit', False))
-        self.pity_depends_edit.setText(pd.get('depends_on') or '')
+        self._refresh_depends_combo()
+        depends_val = pd.get('depends_on') or ''
+        idx = self.pity_depends_combo.findData(depends_val)
+        if idx >= 0:
+            self.pity_depends_combo.setCurrentIndex(idx)
+
+        # ── P56：初始状态 ──
+        self.pity_guaranteed_init_cb.setChecked(pd.get('guaranteed_init', False))
+        self.pity_fate_points_spin.setValue(pd.get('fate_points_init', 0))
+        sc = pd.get('selected_card_init') or ''
+        idx = self.pity_selected_card_combo.findData(sc)
+        if idx >= 0:
+            self.pity_selected_card_combo.setCurrentIndex(idx)
 
         self.pity_name_edit.blockSignals(False)
         self.pity_type_combo.blockSignals(False)
@@ -1412,11 +1549,14 @@ class ConfigPanel(QWidget):
             else:
                 pd['deltas'] = None
 
-        # 语法糖参数（soft_interval/soft_additive）
-        if btype == 'soft_interval':
+        # 语法糖参数映射（registry 控件名 → PityDef 标准字段）
+        # soft_interval               → start + end       (interval 模式)
+        # soft_additive + P56 _soft   → start + increment (additive 模式)
+        if btype in ('soft_interval',):
             pd['soft_start'] = pd.get('start')
             pd['soft_end'] = pd.get('end')
-        elif btype == 'soft_additive':
+        elif btype in ('soft_additive', 'rotating_soft',
+                        'rotating_cr_soft', 'targeted_soft'):
             pd['soft_start'] = pd.get('start')
             pd['soft_increment'] = pd.get('increment')
 
@@ -1426,10 +1566,20 @@ class ConfigPanel(QWidget):
         pd['counter_init'] = self.pity_init_spin.value()
 
         # 生命周期
-        pd['max_triggers'] = self.pity_max_triggers_spin.value()
         pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
-        depends = self.pity_depends_edit.text().strip()
+        depends = self.pity_depends_combo.currentData()
         pd['depends_on'] = depends if depends else None
+
+        # ── P56：初始状态 ──
+        pd['guaranteed_init'] = self.pity_guaranteed_init_cb.isChecked()
+        pd['fate_points_init'] = self.pity_fate_points_spin.value()
+        sc = self.pity_selected_card_combo.currentData()
+        pd['selected_card_init'] = sc if sc else None
+
+        # ── P56：cr_state_probs 表格（仅 rotating_cr 家族保存） ──
+        if btype in ('rotating_cr', 'rotating_cr_soft'):
+            cr_probs = self._read_cr_probs_table()
+            pd['cr_state_probs'] = cr_probs if cr_probs else None
 
         self.pity_list.item(row).setText(pd['name'])
         self._update_preview()
@@ -1439,11 +1589,14 @@ class ConfigPanel(QWidget):
             return
         btype = self._PITY_TYPES[idx][0]
         is_soft_step = (btype == 'soft_step')
-        is_event = btype in ('rotating', 'targeted', 'rotating_cr',
-                             'rotating_cr_soft', 'rotating_soft', 'targeted_soft')
+        is_counter = btype in ('soft_interval', 'soft_additive', 'soft_step', 'hard')
+        is_cr = btype in ('rotating_cr', 'rotating_cr_soft')
 
         # deltas 表格显隐
         self._show_deltas_table(is_soft_step)
+
+        # P56：cr_state_probs 表格显隐
+        self._pity_cr_probs_group.setVisible(is_cr)
 
         # 动态参数重建
         self._build_param_widgets(btype)
@@ -1451,14 +1604,26 @@ class ConfigPanel(QWidget):
         row = self.pity_list.currentRow()
         if 0 <= row < len(self._pity_defs):
             self._populate_dynamic_values(self._pity_defs[row], btype)
+            # 填充 cr_state_probs 表格
+            if is_cr:
+                self._populate_cr_probs_table(self._pity_defs[row].get('cr_state_probs'))
 
         # 联动校验：hard+非ssr 禁用 target_featured
         is_hard = (btype == 'hard')
         is_ssr_scope = self.pity_scope_combo.currentText() == 'ssr'
         self.pity_target_featured_cb.setEnabled(not (is_hard and not is_ssr_scope))
 
-        # deactivate_on_early_hit 仅 counter 驱动型可用
-        self.pity_deactivate_cb.setEnabled(not is_event)
+        # deactivate_on_early_hit 对 counter 驱动型均可用（soft/hard 均可）
+        self.pity_deactivate_cb.setEnabled(is_counter)
+
+        # ── P56：初始状态控件整行显隐（标签 + 控件） ──
+        is_rotating = btype in ('rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft')
+        is_targeted = btype in ('targeted', 'targeted_soft')
+        self._set_form_row_visible(self.pity_guaranteed_init_cb, is_rotating)
+        self._set_form_row_visible(self.pity_fate_points_spin, is_targeted)
+        self._set_form_row_visible(self.pity_selected_card_combo, is_targeted)
+        if is_targeted:
+            self._populate_selected_card_combo()
 
     def _setup_strategy_tab(self, parent):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY
@@ -2885,6 +3050,7 @@ class ConfigPanel(QWidget):
                 'cost': p.cost,
                 'note': '',
                 'batch_size': getattr(p, 'batch_size', 1),
+                'epitomizable_cards': getattr(p, 'epitomizable_cards', []),
                 'distribution': [{'card_id': d.card_id, 'probability': d.probability,
                                   'rarity': d.rarity, 'featured': d.featured,
                                   'resources_gained': d.resources_gained,
@@ -2956,11 +3122,20 @@ class ConfigPanel(QWidget):
                     'increment': pd.get('soft_increment'),
                     'reset': pd.get('reset', ''),
                     'pools': pd.get('pools', '*'),
+                    'guaranteed_init': pd.get('guaranteed_init', False),
+                    'fate_points_init': pd.get('fate_points_init', 0),
+                    'selected_card_init': pd.get('selected_card_init'),
+                    'soft_deltas': pd.get('soft_deltas'),
+                    'cr_counter_threshold': pd.get('cr_counter_threshold'),
+                    'cr_base_rate': pd.get('cr_base_rate'),
+                    'cr_state_probs': pd.get('cr_state_probs'),
+                    'fate_threshold': pd.get('fate_threshold'),
+                    'switch_allowed': pd.get('switch_allowed'),
+                    'switch_resets_progress': pd.get('switch_resets_progress'),
                     'lifecycle': {
-                        'max_triggers': pd.get('max_triggers', 0),
                         'deactivate_on_early_hit': pd.get('deactivate_on_early_hit', False),
                         'depends_on': pd.get('depends_on'),
-                    } if (pd.get('max_triggers') or pd.get('deactivate_on_early_hit') or pd.get('depends_on')) else {},
+                    } if (pd.get('deactivate_on_early_hit') or pd.get('depends_on')) else {},
                 } for pd in self._pity_defs],
             },
             'strategy': {
@@ -3032,6 +3207,7 @@ class ConfigPanel(QWidget):
                 bindings=bindings,
                 distribution=distribution,
                 batch_size=p.get('batch_size', 1),
+                epitomizable_cards=p.get('epitomizable_cards', []),
             ))
 
         pity = config.get('pity', {})
@@ -3057,9 +3233,15 @@ class ConfigPanel(QWidget):
                 soft_start=pd.get('start'),
                 soft_end=pd.get('end'),
                 soft_increment=pd.get('increment'),
+                soft_deltas=pd.get('soft_deltas'),
+                cr_counter_threshold=pd.get('cr_counter_threshold'),
+                cr_base_rate=pd.get('cr_base_rate'),
+                cr_state_probs=pd.get('cr_state_probs'),
+                fate_threshold=pd.get('fate_threshold'),
+                switch_allowed=pd.get('switch_allowed'),
+                switch_resets_progress=pd.get('switch_resets_progress'),
                 reset=pd.get('reset', ''),
                 pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), (list, tuple)) else (pd.get('pools', '*'),),
-                max_triggers=(pd.get('lifecycle') or {}).get('max_triggers', 0),
                 deactivate_on_early_hit=(pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
                 depends_on=(pd.get('lifecycle') or {}).get('depends_on'),
             ))
@@ -3077,7 +3259,16 @@ class ConfigPanel(QWidget):
                 'soft_increment': pd.get('increment'),
                 'reset': pd.get('reset', ''),
                 'pools': pd.get('pools', '*'),
-                'max_triggers': (pd.get('lifecycle') or {}).get('max_triggers', 0),
+                'guaranteed_init': pd.get('guaranteed_init', False),
+                'fate_points_init': pd.get('fate_points_init', 0),
+                'selected_card_init': pd.get('selected_card_init'),
+                'soft_deltas': pd.get('soft_deltas'),
+                'cr_counter_threshold': pd.get('cr_counter_threshold'),
+                'cr_base_rate': pd.get('cr_base_rate'),
+                'cr_state_probs': pd.get('cr_state_probs'),
+                'fate_threshold': pd.get('fate_threshold'),
+                'switch_allowed': pd.get('switch_allowed'),
+                'switch_resets_progress': pd.get('switch_resets_progress'),
                 'deactivate_on_early_hit': (pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
                 'depends_on': (pd.get('lifecycle') or {}).get('depends_on'),
             })
@@ -3494,6 +3685,10 @@ class ConfigPanel(QWidget):
         from gacha_simulator.core.strategy import strategy_type_to_key
         store = self._store
 
+        # P56：保存旧池子的 epitomizable_cards 映射，避免 apply_to_store 中失丢
+        _old_epitomizable = {p.pool_id: getattr(p, 'epitomizable_cards', [])
+                             for p in store.pools}
+
         store.pools = []
         for i in range(self.pool_table.rowCount()):
             cb = self.pool_table.cellWidget(i, 0)
@@ -3555,6 +3750,7 @@ class ConfigPanel(QWidget):
                 bindings=bindings,
                 distribution=distribution,
                 batch_size=batch_size,
+                epitomizable_cards=_old_epitomizable.get(pid, []),
             ))
 
         store.pity.enabled = self.pity_enabled.isChecked()
@@ -3570,13 +3766,19 @@ class ConfigPanel(QWidget):
                 counter_init=pd.get('counter_init', 0),
                 guaranteed_init=pd.get('guaranteed_init', False),
                 fate_points_init=pd.get('fate_points_init', 0),
+                selected_card_init=pd.get('selected_card_init'),
                 soft_start=pd.get('soft_start'),
                 soft_end=pd.get('soft_end'),
                 soft_increment=pd.get('soft_increment'),
                 soft_deltas=pd.get('deltas') if pd.get('btype') == 'soft_step' else None,
+                cr_counter_threshold=pd.get('cr_counter_threshold'),
+                cr_base_rate=pd.get('cr_base_rate'),
+                cr_state_probs=pd.get('cr_state_probs'),
+                fate_threshold=pd.get('fate_threshold'),
+                switch_allowed=pd.get('switch_allowed'),
+                switch_resets_progress=pd.get('switch_resets_progress'),
                 reset=pd.get('reset', ''),
                 pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), list) else (pd.get('pools', '*'),) if isinstance(pd.get('pools'), str) else pd.get('pools', ('*',)),
-                max_triggers=pd.get('max_triggers', 0),
                 deactivate_on_early_hit=pd.get('deactivate_on_early_hit', False),
                 depends_on=pd.get('depends_on'),
             ))
@@ -3708,7 +3910,16 @@ class ConfigPanel(QWidget):
                 'soft_increment': getattr(p, 'soft_increment', None),
                 'reset': getattr(p, 'reset', ''),
                 'pools': pools_val,
-                'max_triggers': getattr(p, 'max_triggers', 0),
+                'guaranteed_init': getattr(p, 'guaranteed_init', False),
+                'fate_points_init': getattr(p, 'fate_points_init', 0),
+                'selected_card_init': getattr(p, 'selected_card_init', None),
+                'soft_deltas': getattr(p, 'soft_deltas', None),
+                'cr_counter_threshold': getattr(p, 'cr_counter_threshold', None),
+                'cr_base_rate': getattr(p, 'cr_base_rate', None),
+                'cr_state_probs': getattr(p, 'cr_state_probs', None),
+                'fate_threshold': getattr(p, 'fate_threshold', None),
+                'switch_allowed': getattr(p, 'switch_allowed', None),
+                'switch_resets_progress': getattr(p, 'switch_resets_progress', None),
                 'deactivate_on_early_hit': getattr(p, 'deactivate_on_early_hit', False),
                 'depends_on': getattr(p, 'depends_on', None),
             })

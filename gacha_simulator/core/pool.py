@@ -186,6 +186,7 @@ class Pool:
     exchange_card_id: Optional[str] = None
     pool_type: str = ''
     batch_size: int = 1
+    epitomizable_cards: list = field(default_factory=list)           # ← P56
 
     def __post_init__(self):
         if not self.is_exchange and self.rewards:

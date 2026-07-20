@@ -7,9 +7,8 @@ from gacha_simulator.core.config_toml import (
     _deltas_to_soft_interval,
     _parse_deltas_value,
     load_toml,
-    save_toml,
 )
-from gacha_simulator.core.config_store import ConfigStore, ConfigError
+from gacha_simulator.core.config_store import ConfigError
 import tempfile
 import os
 
@@ -205,11 +204,10 @@ class TestParseDeltasValue:
 
 
 class TestMigrationMarkRoundTrip:
-    """_migrated_from_legacy 标记往返测试"""
+    """migrated_from_legacy 标记往返测试"""
 
     def test_flag_set_on_migration(self):
-        """旧格式加载后 _migrated_from_legacy=True"""
-        import tempfile, os
+        """旧格式加载后 migrated_from_legacy=True"""
         content = """[rarities]
 ranks = [["SSR"], ["SR"], ["R"]]
 
@@ -227,14 +225,14 @@ end = 90
 
         try:
             store = load_toml(path)
-            assert store._migrated_from_legacy is True
+            assert store.migrated_from_legacy is True
             assert len(store.pity.pities) == 1
             assert store.pity.pities[0].btype == 'soft_interval'
         finally:
             os.unlink(path)
 
     def test_flag_false_on_new_format(self):
-        """新格式加载后 _migrated_from_legacy=False"""
+        """新格式加载后 migrated_from_legacy=False"""
         content = """[rarities]
 ranks = [["SSR"], ["SR"], ["R"]]
 
@@ -253,6 +251,6 @@ end = 90
 
         try:
             store = load_toml(path)
-            assert store._migrated_from_legacy is False
+            assert store.migrated_from_legacy is False
         finally:
             os.unlink(path)

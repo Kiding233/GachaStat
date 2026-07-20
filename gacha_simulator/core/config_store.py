@@ -148,7 +148,7 @@ class ConfigStore:
     seed: int = 42
     _distribution_templates: List[dict] = field(default_factory=list)
     rarity_rank: Dict[str, int] = field(default_factory=dict)       # ← P60：稀有度 → 层级（0=最高）
-    _migrated_from_legacy: bool = False                              # ← P55：旧格式迁移标记
+    migrated_from_legacy: bool = False                               # ← P55：旧格式迁移标记
 
     def __post_init__(self):
         if self.strategy_type:
@@ -181,7 +181,7 @@ class ConfigStore:
         self.seed = 42
         self._distribution_templates.clear()
         self.rarity_rank.clear()                                      # ← P60
-        self._migrated_from_legacy = False                            # ← P55
+        self.migrated_from_legacy = False                             # ← P55
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────
     # 从 card_weights 提取，供 make_gdr_calculator() 使用。

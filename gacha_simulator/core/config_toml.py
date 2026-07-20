@@ -481,7 +481,7 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
     # P55 阶段十B：旧格式自动迁移
     if _is_legacy_format(pity_list):
         pity_list = _migrate_legacy_pity(pity_list)
-        store._migrated_from_legacy = True
+        store.migrated_from_legacy = True
 
     # 稀有度 rank map（小写归一化——ISSUE-023/§0.2）
     rarity_rank_map = {k.lower(): v for k, v in store.rarity_rank.items()}

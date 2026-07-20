@@ -59,7 +59,7 @@ def main():
 
     # P55：--migrate——检测旧格式迁移标记 → save_toml 覆盖
     if args.migrate:
-        if store._migrated_from_legacy:
+        if store.migrated_from_legacy:
             config_path = args.config if args.config else default_toml
             save_toml(store, config_path)
             print(f"TOML 已从旧格式迁移并保存至: {config_path}")

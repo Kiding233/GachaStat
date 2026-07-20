@@ -495,16 +495,23 @@ class WorstImpactAnalyzer:
             # P55 ISSUE-032：从参考池或已知 ID 构建 scope 映射
             ref_pool = getattr(self, '_ref_pool', None)
             if ref_pool and hasattr(ref_pool, 'rewards'):
-                scope_cards, featured_cards, scope_slots, featured_slots = compute_scope_mappings(ref_pool)
+                scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(ref_pool)
             else:
                 scope_cards = {'ssr': tuple(self._ssr_ids)} if self._ssr_ids else {}
                 featured_cards = {'ssr': tuple(self._featured_ids)} if self._featured_ids else {}
+                card_to_slot = {}
                 if self._ssr_ids and self._featured_ids:
                     scope_slots = {'ssr': ('ssr', 'ssr_featured')}
                     featured_slots = {'ssr': ('ssr_featured',)}
+                    for cid in self._featured_ids:
+                        card_to_slot[cid] = 'ssr_featured'
+                    for cid in (self._ssr_ids - self._featured_ids):
+                        card_to_slot[cid] = 'ssr'
                 else:
                     scope_slots = {'ssr': ('ssr',)} if self._ssr_ids else {}
                     featured_slots = {'ssr': ('ssr',)} if self._featured_ids else {}
+                    for cid in self._ssr_ids:
+                        card_to_slot[cid] = 'ssr'
 
             pool_specs = {}
             for pool_idx in range(MAX_POOLS):
@@ -526,6 +533,7 @@ class WorstImpactAnalyzer:
                     featured_cards=featured_cards,
                     scope_slots=scope_slots,
                     featured_slots=featured_slots,
+                card_to_slot=card_to_slot,
                 )
 
             rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}

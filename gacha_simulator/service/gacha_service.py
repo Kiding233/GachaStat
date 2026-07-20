@@ -2,10 +2,11 @@ from typing import Dict, List, Optional, Union
 import time
 import uuid
 from ..core import (
-    GachaState, Pool, DrawAction, WaitAction,
+    GachaState, Pool, DrawAction, WaitAction, NonDrawAction,
     InfoVector, Strategy, StrategyContext, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
     SimulationCollector, InfoVectorCollector, CompactCollector,
 )
+from ..core.action import NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from ..core.pity import PityEngine, PityState
 from ..core.pool import NO_CARD_ID as _NO_CARD_ID, compute_bonus_resources
 
@@ -78,6 +79,43 @@ class GachaService:
         self._pools_list = list(self.pools.values())
 
     # ── P55：概率聚合（AUDIT-BREAK-8） ──
+
+
+    def _apply_non_draw(self, action, pools, pity_engine, pity_state):
+        """P56：执行 NonDrawAction——定轨切换/取消。"""
+        from ..core.pity import TargetedBehavior
+        if action.action_id not in NON_DRAW_ACTION_REGISTRY:
+            raise InvalidActionError(f"未注册的 NonDrawAction action_id: '{action.action_id}'")
+        pool_id = action.params.get('pool_id')
+        if not pool_id:
+            raise InvalidActionError("NonDrawAction 缺少 'pool_id'")
+        pool = pools.get(pool_id)
+        if pool is None:
+            raise InvalidActionError(f"NonDrawAction 引用了不存在的池子 '{pool_id}'")
+        targeted_name = None
+        for pname, bh in pity_engine.get_behaviors_for_pool(pool_id):
+            if isinstance(bh, TargetedBehavior):
+                targeted_name = pname
+                break
+        if targeted_name is None:
+            raise InvalidActionError(f"池子 '{pool_id}' 未配置 targeted 保底")
+        if action.action_id == 'switch_epitomized_target':
+            card_id = action.params.get('card_id')
+            if not card_id:
+                raise InvalidActionError("switch_epitomized_target 缺少 'card_id'")
+            epi_cards = getattr(pool, 'epitomizable_cards', [])
+            if epi_cards and card_id not in epi_cards:
+                raise InvalidActionError(f"卡牌 '{card_id}' 不在 epitomizable_cards 中")
+            pity_def = pity_engine.get_pity_def(targeted_name)
+            if pity_def and not getattr(pity_def, 'switch_allowed', True):
+                raise InvalidActionError(f"保底 '{targeted_name}' 不允许切换目标")
+            if pity_def and getattr(pity_def, 'switch_resets_progress', True):
+                pity_state.set(targeted_name, "fate_points", 0)
+            pity_state.set(targeted_name, "selected_card", card_id)
+        elif action.action_id == 'cancel_epitomized_path':
+            pity_state.set(targeted_name, "selected_card", None)
+            pity_state.set(targeted_name, "lost_rotating", False)
+            pity_state.set(targeted_name, "losses", 0)
 
     def _aggregate_probs_by_rarity(self, pool_id: str, pool, pity_spec) -> Dict[str, float]:
         """将 {card_id: prob} 聚合为槽位级别概率。
@@ -326,6 +364,9 @@ class GachaService:
                         real_time=real_time, pity_state=pity_state,
                         combined_gained=combined_gained,
                     )
+
+            elif _isinstance(action, NonDrawAction):
+                self._apply_non_draw(action, _pools, _pity_engine, pity_state)
 
             elif _isinstance(action, _WaitAction):
                 rt_before = real_time

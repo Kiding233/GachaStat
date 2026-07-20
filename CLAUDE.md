@@ -84,6 +84,7 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |
+| 新卡片维度 | `CardDefEntry.tags`（单值）/`CardDefEntry.list_tags`（多值）——TOML 中 `[card.tags]` 加一行即可，无需改代码（P65） |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
 | 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |
 | 新随机占优检验 | `core/comparison_analyzer.py` → `dd_bootstrap_test_v2()` + `compute_dominance_matrix_v2()` → `compute_dominance_matrix()` 派发器（当前：v2=PySDTest Donald-Hsu 2016 选择性重中心化 / v1=等式中心化 Bootstrap） |

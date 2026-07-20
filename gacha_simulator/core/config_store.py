@@ -114,6 +114,8 @@ class CardDefEntry:
     rarity: str = 'r'
     pools: List[str] = field(default_factory=list)
     initial_count: int = 0
+    tags: Dict[str, str] = field(default_factory=dict)               # P65：单值标签
+    list_tags: Dict[str, List[str]] = field(default_factory=dict)     # P65：多值标签
 
 
 @dataclass
@@ -201,16 +203,6 @@ class ConfigStore:
         return {cid: cw.card_value for cid, cw in self.card_weights.items()}
 
     # ── P60 新增：推导属性 + 稀有度解析 ──
-
-    def is_limited(self, card_id: str) -> bool:
-        """推导属性：这张卡是否至少在某个池子被 featured 过。
-
-        遍历所有池子的 featured_card_ids 字段（池子级别聚合），不依赖卡名命名约定。
-        """
-        for pool in self.pools:
-            if card_id in pool.featured_card_ids:
-                return True
-        return False
 
     def _parse_rarities(self, data: dict) -> None:
         """从 TOML [rarities].ranks 生成 rarity_rank 映射。

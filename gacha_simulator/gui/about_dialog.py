@@ -135,7 +135,7 @@ class AboutDialog(QDialog):
         <h3>配置文件指南</h3>
         <p>所有配置集中在单一 <code>config.toml</code> 文件中，使用标准 TOML 格式。</p>
 
-        <h4>[[cards]] — 卡牌定义</h4>
+        <h4>[[card]] — 卡牌定义</h4>
         <pre>[[cards]]
 id = "刻晴"
 name = "刻晴"

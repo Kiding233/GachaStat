@@ -1,8 +1,9 @@
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
-VERSION_DISPLAY = "v2.2.0"
+VERSION_DISPLAY = "v2.3.0"
 
 VERSION_HISTORY = [
+    ("2.3.0", "2026-07-20", "DEFAULT — P65 卡片标签系统：CardDefEntry 新增 tags/list_tags + TOML [[card]] 破坏性变更（段名单数化 + id→card_id）+ QListWidget 详情面板 + 动态标签表 + is_limited() 删除"),
     ("2.2.0", "2026-06-14", "DEFAULT — P44 池子批次抽卡（十连强制）：Pool/PoolConfig/PoolEntry 三级 batch_size + can_afford_batch 资源预检查 + 服务层批次循环 + 策略层 11 处适配 + 保底逐发直调"),
     ("2.1.0", "2026-06-12", "DEFAULT — P37 资源管理日历增强（事件分组 + 交互联动 + 默认视图）+ 默认模拟起始日期改为当天 + Harness 基础设施完善（H7 Windows 中文路径匹配修复——反斜杠归一化 + GBK 回退）+ 前进法卡牌排序修复——补回缺失 reverse=True（高 desire 优先）+ 全仓库 lint 清理"),
     ("2.0.0", "2026-06-09", "PROUD — 预发布版里程碑：面板合并（3→1 方案搜索）+ 数据管理层（ResultStore + 数据管理Tab）+ 比较分析面板（L1-L4 递进分析）+ 应用打包（PyInstaller onedir，608MB）+ 统一分箱模块（GDR直方图自动检测）+ 脆弱性分析独立Tab + 文档体系重构（六文件+主题计划模式）"),

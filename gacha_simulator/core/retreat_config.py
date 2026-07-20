@@ -128,6 +128,9 @@ class RetreatConfigBuilder:
                 name=cd.name,
                 rarity=cd.rarity,
                 pools=list(cd.pools),
+                initial_count=cd.initial_count,
+                tags=dict(cd.tags),
+                list_tags={k: list(v) for k, v in cd.list_tags.items()},
             )
             for cd in original_store.card_defs
         ]

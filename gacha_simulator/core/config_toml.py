@@ -7,6 +7,7 @@ S2c: _expand_template_with_bindings
 """
 
 import math
+import warnings
 from typing import Dict, List, Optional, Tuple
 
 try:
@@ -105,11 +106,24 @@ def save_toml(store: ConfigStore, path: str) -> None:
             for d in store.day_overrides
         ]
 
-    # cards
-    data['cards'] = [
-        {'id': c.card_id, 'name': c.name, 'rarity': c.rarity}
-        for c in store.card_defs
-    ]
+    # cards（P65：段名 [[card]]，字段 card_id）
+    data['card'] = []
+    for c in store.card_defs:
+        entry = {
+            'card_id': c.card_id,
+            'name': c.name,
+            'rarity': c.rarity,
+            'initial_count': c.initial_count,
+        }
+        if c.tags:
+            filtered = {k: v for k, v in c.tags.items() if v}
+            if filtered:
+                entry['tags'] = filtered
+        if c.list_tags:
+            lt = {k: v for k, v in c.list_tags.items() if v}
+            if lt:
+                entry['list_tags'] = lt
+        data['card'].append(entry)
 
     # templates + pools
     _save_templates_and_pools(store, data)
@@ -339,13 +353,93 @@ def _expand_template_with_bindings(
 # ══════════════════════════════════════════════════════════════════
 
 
+def _check_card_format(data: dict) -> None:
+    """P65：防御性检测——阻断旧格式卡片段，避免静默数据丢失。
+
+    检测旧段名 [[cards]]（复数）和旧字段名 id（应为 card_id）。
+    仅旧格式 → ConfigError 提示手动升级。
+    新旧并存 → ConfigError 报告歧义。
+    """
+    has_old = 'cards' in data
+    has_new = 'card' in data
+
+    if has_old and not has_new:
+        raise ConfigError(
+            "检测到旧格式卡片段 [[cards]]。\n"
+            "P65 已将卡片段升级为 [[card]] + card_id 字段。\n"
+            "请手动升级 config.toml：\n"
+            "  1. [[cards]] → [[card]]\n"
+            "  2. id → card_id\n"
+            "  3. rarity 保留在顶层\n"
+            "  4. 其他维度按需移入 [card.tags] 和 [card.list_tags]"
+        )
+    if has_old and has_new:
+        raise ConfigError(
+            "config.toml 中同时存在 [[cards]]（旧格式）和 [[card]]（新格式）段。\n"
+            "请移除 [[cards]] 段，仅保留 [[card]] 段。"
+        )
+
+    # 字段级检测：[[card]] 段中条目含 id 但缺 card_id
+    for i, c in enumerate(data.get('card', [])):
+        if 'id' in c and 'card_id' not in c:
+            raise ConfigError(
+                f"[[card]] 第 {i+1} 个条目使用了旧字段名 'id'，应为 'card_id'。\n"
+                f"请将所有卡片条目中的 id 改为 card_id。"
+            )
+        # ISSUE-014: id 和 card_id 同时存在——歧义场景
+        if 'id' in c and 'card_id' in c:
+            raise ConfigError(
+                f"[[card]] 第 {i+1} 个条目同时包含 'id'（旧字段名，值={c['id']}）和 "
+                f"'card_id'（新字段名，值={c['card_id']}）。"
+                f"请删除 'id' 字段，仅保留 'card_id'。"
+            )
+
+
+def _warn_cross_table_keys(tags: dict, list_tags: dict, card_id: str) -> None:
+    """TOML 加载时检测跨表同名 key——[card.tags] 和 [card.list_tags] 中重复的 key。
+
+    检测逻辑：set(tags.keys()) & set(list_tags.keys())，排除空字符串。
+    以单值 tags 为准（多值表中冲突 key 不删除，由用户裁决）。
+    """
+    overlap = set(tags.keys()) & set(list_tags.keys())
+    overlap.discard('')
+    if overlap:
+        warnings.warn(
+            f"卡片 '{card_id}' 的 [card.tags] 和 [card.list_tags] 中存在同名 key："
+            f"{', '.join(sorted(overlap))}。将以单值标签为准。"
+        )
+
+
 def _build_cards(data: dict, store: ConfigStore) -> None:
-    """[[cards]] → store.card_defs"""
-    for c in data.get('cards', []):
+    """[[card]] → store.card_defs（P65：新格式）"""
+    _check_card_format(data)
+    for c in data.get('card', []):
+        # ── 顶层字段 ──
+        card_id = c['card_id']
+        name = c.get('name', card_id)
+        rarity = c.get('rarity', 'r')
+        ic = c.get('initial_count', 0)
+
+        # ── 标签 ──
+        tags = dict(c.get('tags', {}))
+        list_tags: Dict[str, List[str]] = {}
+        raw_lt = c.get('list_tags', {})
+        for k, v in raw_lt.items():
+            if isinstance(v, list):
+                list_tags[k] = [str(x) for x in v]
+            else:
+                list_tags[k] = [str(v)]
+
+        # P65：跨表同名 key 检测
+        _warn_cross_table_keys(tags, list_tags, card_id)
+
         store.card_defs.append(CardDefEntry(
-            card_id=c['id'],
-            name=c.get('name', c['id']),
-            rarity=c.get('rarity', 'r'),
+            card_id=card_id,
+            name=name,
+            rarity=rarity,
+            initial_count=ic,
+            tags=tags,
+            list_tags=list_tags,
         ))
 
 

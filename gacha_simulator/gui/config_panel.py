@@ -1905,127 +1905,531 @@ class ConfigPanel(QWidget):
         self.day_overrides_table.cellChanged.connect(self._update_preview)
 
     def _setup_card_def_tab(self, parent):
-        layout = QVBoxLayout(parent)
+        # ── 实例变量 ──
+        self._card_defs: list = []           # List[dict] —— 内部数据
+        self._current_card_idx: int = -1     # 当前选中索引
+        self._card_id_counter: int = 0       # P65：_add_card() 递增计数器——在 set_card_defs 中初始化
 
+        outer = QVBoxLayout(parent)
+
+        # ═══ 筛选栏 ═══
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("筛选:"))
 
         self.card_rarity_filter = QComboBox()
-        self.card_rarity_filter.addItems(["全部", "SSR", "SR", "R", "无"])
-        self.card_rarity_filter.currentIndexChanged.connect(self._filter_card_defs)
+        self.card_rarity_filter.addItem("全部")
+        self.card_rarity_filter.currentIndexChanged.connect(self._filter_card_list)
         filter_layout.addWidget(self.card_rarity_filter)
 
         self.card_search = QLineEdit()
-        self.card_search.setPlaceholderText("搜索卡ID或名称...")
-        self.card_search.textChanged.connect(self._search_card_defs)
+        self.card_search.setPlaceholderText("搜索卡ID、名称或标签...")
+        self.card_search.textChanged.connect(self._filter_card_list)
         filter_layout.addWidget(self.card_search)
 
-        layout.addLayout(filter_layout)
+        outer.addLayout(filter_layout)
 
-        self.card_def_table = QTableWidget()
-        self.card_def_table.setColumnCount(5)
-        self.card_def_table.setHorizontalHeaderLabels(["卡ID", "名称", "稀有度", "所属池子", "初始持有"])
-        header = self.card_def_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.card_def_table.setColumnWidth(2, 80)
-        self.card_def_table.setColumnWidth(4, 80)
-        self.card_def_table.verticalHeader().setVisible(False)
-        self.card_def_table.setAlternatingRowColors(True)
-        self.card_def_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.card_def_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.card_def_table.setMinimumHeight(200)
-        self.card_def_table.cellChanged.connect(self._on_card_def_changed)
-        layout.addWidget(self.card_def_table)
+        # ═══ 水平两栏 ═══
+        main_layout = QHBoxLayout()
 
-        btn_layout = QHBoxLayout()
+        # ── 左栏：卡片列表 ──
+        left_layout = QVBoxLayout()
+        self._card_list = QListWidget()
+        self._card_list.currentRowChanged.connect(self._on_card_selected)
+        left_layout.addWidget(self._card_list)
+
+        card_btn_layout = QHBoxLayout()
         add_btn = QPushButton("添加")
-        add_btn.clicked.connect(self._add_card_def)
+        add_btn.clicked.connect(self._add_card)
         remove_btn = QPushButton("移除选中")
-        remove_btn.clicked.connect(self._remove_card_def)
+        remove_btn.clicked.connect(self._remove_card)
         auto_btn = QPushButton("自动生成")
         auto_btn.clicked.connect(self._auto_generate_card_defs)
-        btn_layout.addWidget(add_btn)
-        btn_layout.addWidget(remove_btn)
-        btn_layout.addWidget(auto_btn)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        card_btn_layout.addWidget(add_btn)
+        card_btn_layout.addWidget(remove_btn)
+        card_btn_layout.addWidget(auto_btn)
+        card_btn_layout.addStretch()
+        left_layout.addLayout(card_btn_layout)
 
-        self.card_defs = []
+        main_layout.addLayout(left_layout, 1)
 
-    def _add_card_def(self):
-        row = self.card_def_table.rowCount()
-        self.card_def_table.insertRow(row)
-        self.card_def_table.setItem(row, 0, QTableWidgetItem(""))
-        self.card_def_table.setItem(row, 1, QTableWidgetItem(""))
-        rarity_combo = QComboBox()
-        rarity_combo.addItems(["SSR", "SR", "R", "无"])
-        self.card_def_table.setCellWidget(row, 2, rarity_combo)
-        pools_item = QTableWidgetItem("")
-        pools_item.setFlags(pools_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.card_def_table.setItem(row, 3, pools_item)
-        init_spin = QSpinBox()
-        init_spin.setRange(0, 9999)
-        init_spin.setValue(0)
-        self.card_def_table.setCellWidget(row, 4, init_spin)
+        # ── 右栏：详情面板 ──
+        self._card_detail_group = QGroupBox("卡片详情")
+        self._card_detail_group.setEnabled(False)
+        detail_form = QFormLayout(self._card_detail_group)
 
-    def _remove_card_def(self):
-        rows = sorted([r.row() for r in self.card_def_table.selectionModel().selectedRows()], reverse=True)
-        for row in rows:
-            self.card_def_table.removeRow(row)
+        self._card_id_edit = QLineEdit()
+        self._card_id_edit.textChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("card_id:", self._card_id_edit)
+
+        self._card_name_edit = QLineEdit()
+        self._card_name_edit.textChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("名称:", self._card_name_edit)
+
+        self._card_rarity_combo = QComboBox()
+        self._card_rarity_combo.currentIndexChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("稀有度:", self._card_rarity_combo)
+
+        self._card_init_spin = QSpinBox()
+        self._card_init_spin.setRange(0, 9999)
+        self._card_init_spin.valueChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("初始持有:", self._card_init_spin)
+
+        # ── 单值标签表 ──
+        tags_group = QGroupBox("标签")
+        tags_layout = QVBoxLayout(tags_group)
+        self._card_tags_table = QTableWidget()
+        self._card_tags_table.setColumnCount(2)
+        self._card_tags_table.setHorizontalHeaderLabels(["Key", "Value"])
+        t_header = self._card_tags_table.horizontalHeader()
+        t_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        t_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._card_tags_table.verticalHeader().setVisible(False)
+        self._card_tags_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._card_tags_table.cellChanged.connect(self._on_tag_cell_changed)
+        tags_layout.addWidget(self._card_tags_table)
+
+        tags_btn = QHBoxLayout()
+        tags_btn.addWidget(QPushButton("添加", clicked=self._add_tag_row))
+        tags_btn.addWidget(QPushButton("移除选中", clicked=self._remove_tag_row))
+        tags_btn.addStretch()
+        tags_layout.addLayout(tags_btn)
+
+        detail_form.addRow(tags_group)
+
+        # ── 多值标签表 ──
+        lt_group = QGroupBox("多值标签")
+        lt_layout = QVBoxLayout(lt_group)
+        self._card_list_tags_table = QTableWidget()
+        self._card_list_tags_table.setColumnCount(2)
+        self._card_list_tags_table.setHorizontalHeaderLabels(["Key", "Value"])
+        lt_header = self._card_list_tags_table.horizontalHeader()
+        lt_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        lt_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._card_list_tags_table.verticalHeader().setVisible(False)
+        self._card_list_tags_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        lt_layout.addWidget(self._card_list_tags_table)
+
+        lt_btn = QHBoxLayout()
+        lt_btn.addWidget(QPushButton("添加", clicked=self._add_list_tag_row))
+        lt_btn.addWidget(QPushButton("移除选中", clicked=self._remove_list_tag_row))
+        lt_btn.addStretch()
+        lt_layout.addLayout(lt_btn)
+
+        detail_form.addRow(lt_group)
+
+        # ── 所属池子（只读） ──
+        self._card_pools_label = QLabel("(自动推导)")
+        self._card_pools_label.setWordWrap(True)
+        detail_form.addRow("所属池子:", self._card_pools_label)
+
+        main_layout.addWidget(self._card_detail_group, 2)
+        outer.addLayout(main_layout)
+
+    def _on_detail_changed(self):
+        """详情面板控件变动 → 实时回写当前卡片"""
+        if self._current_card_idx >= 0:
+            self._flush_current_detail()
+            self._update_preview()
+
+    # ══════════════════════════════════════════════════════════════════
+    # 卡片列表操作方法
+    # ══════════════════════════════════════════════════════════════════
+
+    def _add_card(self):
+        """创建空卡片 → 追加到列表 → 自动选中"""
+        self._card_id_counter += 1
+        new_card = {
+            'card_id': f'card_{self._card_id_counter}',
+            'name': '',
+            'rarity': 'R',
+            'pools': [],
+            'initial_count': 0,
+            'tags': {},
+            'list_tags': {},
+        }
+        self._card_defs.append(new_card)
+        self._card_list.addItem(f"{new_card['card_id']}")
+        self._card_list.setCurrentRow(self._card_list.count() - 1)
         self._update_preview()
 
+    def _remove_card(self):
+        """移除选中卡片"""
+        row = self._card_list.currentRow()
+        if row < 0:
+            return
+        self._card_defs.pop(row)
+        self._card_list.takeItem(row)
+        self._card_detail_group.setEnabled(False)
+        self._current_card_idx = -1
+        if self._card_defs and self._card_list.count() > 0:
+            self._card_list.setCurrentRow(min(row, self._card_list.count() - 1))
+        self._update_preview()
+
+    # ══════════════════════════════════════════════════════════════════
+    # 详情面板数据交换
+    # ══════════════════════════════════════════════════════════════════
+
+    def _on_card_selected(self, row: int):
+        """左侧列表切换 → 保存当前编辑 → 填充新卡片"""
+        self._flush_current_detail()
+        if row < 0 or row >= len(self._card_defs):
+            self._card_detail_group.setEnabled(False)
+            self._current_card_idx = -1
+            return
+        self._current_card_idx = row
+        self._card_detail_group.setEnabled(True)
+        self._populate_card_detail(self._card_defs[row])
+
+    def _flush_current_detail(self):
+        """从右侧控件读取当前值 → 写回 self._card_defs[idx]"""
+        if self._current_card_idx < 0 or self._current_card_idx >= len(self._card_defs):
+            return
+        card = self._card_defs[self._current_card_idx]
+        card.setdefault('tags', {})
+        card.setdefault('list_tags', {})
+        card['card_id'] = self._card_id_edit.text().strip()
+        card['name'] = self._card_name_edit.text().strip()
+        card['rarity'] = self._card_rarity_combo.currentText()
+        card['initial_count'] = self._card_init_spin.value()
+        card['tags'] = self._read_tags_from_table()
+        card['list_tags'] = self._read_list_tags_from_table()
+        # P65：跨表冲突检测
+        self._validate_cross_table_keys(card['tags'], card['list_tags'])
+        # 更新左侧列表显示
+        new_label = f"{card['card_id']} ({card['name']})" if card['name'] else card['card_id']
+        self._card_list.item(self._current_card_idx).setText(new_label)
+
+    def _validate_cross_table_keys(self, tags: dict, list_tags: dict) -> bool:
+        """检查单值标签表和多值标签表是否有同名 Key。返回是否有冲突"""
+        overlap = set(tags.keys()) & set(list_tags.keys())
+        overlap.discard('')
+        if overlap:
+            QMessageBox.warning(self, "标签冲突",
+                f"以下 Key 同时出现在单值标签和多值标签表中：{', '.join(sorted(overlap))}\n"
+                f"将以单值标签表为准，多值表中对应的 Key 将被忽略。")
+            for k in overlap:
+                list_tags.pop(k, None)
+            return True
+        return False
+
+    def _populate_card_detail(self, card: dict):
+        """将单张卡的数据填入右侧控件（阻断信号——避免逐字段触发 _flush_current_detail 串扰）"""
+        widgets = [self._card_id_edit, self._card_name_edit,
+                    self._card_rarity_combo, self._card_init_spin]
+        for w in widgets:
+            w.blockSignals(True)
+
+        self._card_id_edit.setText(card.get('card_id', ''))
+        self._card_name_edit.setText(card.get('name', ''))
+        rarity_val = card.get('rarity', 'R')
+        idx = self._card_rarity_combo.findText(rarity_val, Qt.MatchFlag.MatchFixedString)
+        if idx < 0:
+            idx = self._card_rarity_combo.findText(rarity_val.upper(), Qt.MatchFlag.MatchFixedString)
+        self._card_rarity_combo.setCurrentIndex(idx if idx >= 0 else 2)
+        self._card_init_spin.setValue(card.get('initial_count', 0))
+
+        for w in widgets:
+            w.blockSignals(False)
+
+        self._populate_tags_table(card.get('tags', {}))
+        self._populate_list_tags_table(card.get('list_tags', {}))
+        pools_map = self._compute_pools_map()
+        pools = pools_map.get(card.get('card_id', ''), [])
+        self._card_pools_label.setText(','.join(pools) if pools else '(未关联任何池子)')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 标签表操作
+    # ══════════════════════════════════════════════════════════════════
+
+    def _populate_tags_table(self, tags: dict):
+        """填充单值标签表——card_type 首行（QComboBox）+ 其余行"""
+        self._card_tags_table.blockSignals(True)
+        self._card_tags_table.setRowCount(0)
+        row = 0
+
+        # card_type 系统行
+        self._card_tags_table.insertRow(0)
+        key_item = QTableWidgetItem("card_type")
+        key_item.setFlags(key_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self._card_tags_table.setItem(0, 0, key_item)
+        ct_combo = QComboBox()
+        ct_combo.setEditable(True)
+        ct_combo.addItems(['', 'character', 'weapon'])
+        ct_combo.setCurrentText(tags.get('card_type', ''))
+        self._card_tags_table.setCellWidget(0, 1, ct_combo)
+        row = 1
+
+        # 其余自定义标签
+        for k, v in tags.items():
+            if k == 'card_type':
+                continue
+            self._card_tags_table.insertRow(row)
+            self._card_tags_table.setItem(row, 0, QTableWidgetItem(k))
+            self._card_tags_table.setItem(row, 1, QTableWidgetItem(v))
+            row += 1
+
+        self._card_tags_table.blockSignals(False)
+
+    def _populate_list_tags_table(self, list_tags: dict):
+        """展开 Dict[str, List[str]] → 每值一行"""
+        self._card_list_tags_table.blockSignals(True)
+        self._card_list_tags_table.setRowCount(0)
+        row = 0
+        for k, values in list_tags.items():
+            for v in values:
+                self._card_list_tags_table.insertRow(row)
+                self._card_list_tags_table.setItem(row, 0, QTableWidgetItem(k))
+                self._card_list_tags_table.setItem(row, 1, QTableWidgetItem(v))
+                row += 1
+        self._card_list_tags_table.blockSignals(False)
+
+    def _read_tags_from_table(self) -> dict:
+        """遍历单值表 → Dict[str, str]"""
+        result = {}
+        for i in range(self._card_tags_table.rowCount()):
+            key_item = self._card_tags_table.item(i, 0)
+            if not key_item:
+                continue
+            key = key_item.text().strip()
+            if not key:
+                continue
+            widget = self._card_tags_table.cellWidget(i, 1)
+            if isinstance(widget, QComboBox):
+                value = widget.currentText().strip()
+            else:
+                val_item = self._card_tags_table.item(i, 1)
+                value = val_item.text().strip() if val_item else ''
+            if value:
+                result[key] = value
+        return result
+
+    def _read_list_tags_from_table(self) -> dict:
+        """遍历多值表 → Dict[str, List[str]]"""
+        result: dict = {}
+        for i in range(self._card_list_tags_table.rowCount()):
+            key_item = self._card_list_tags_table.item(i, 0)
+            val_item = self._card_list_tags_table.item(i, 1)
+            if not key_item or not val_item:
+                continue
+            key = key_item.text().strip()
+            val = val_item.text().strip()
+            if not key or not val:
+                continue
+            result.setdefault(key, []).append(val)
+        return result
+
+    def _add_tag_row(self):
+        """单值标签表：添加空行"""
+        row = self._card_tags_table.rowCount()
+        self._card_tags_table.insertRow(row)
+        self._card_tags_table.setItem(row, 0, QTableWidgetItem(''))
+        self._card_tags_table.setItem(row, 1, QTableWidgetItem(''))
+
+    def _remove_tag_row(self):
+        """单值标签表：移除选中行——跳过 card_type 行"""
+        rows = sorted([r.row() for r in self._card_tags_table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            key_item = self._card_tags_table.item(row, 0)
+            if key_item and key_item.text().strip() == 'card_type':
+                continue
+            self._card_tags_table.removeRow(row)
+
+    def _add_list_tag_row(self):
+        """多值标签表：添加空行"""
+        row = self._card_list_tags_table.rowCount()
+        self._card_list_tags_table.insertRow(row)
+        self._card_list_tags_table.setItem(row, 0, QTableWidgetItem(''))
+        self._card_list_tags_table.setItem(row, 1, QTableWidgetItem(''))
+
+    def _remove_list_tag_row(self):
+        """多值标签表：移除选中行"""
+        rows = sorted([r.row() for r in self._card_list_tags_table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            self._card_list_tags_table.removeRow(row)
+
+    def _on_tag_cell_changed(self, row: int, col: int):
+        """单值标签表 Key 列编辑完成 → 校验唯一性"""
+        if col != 0:
+            return
+        item = self._card_tags_table.item(row, 0)
+        if not item:
+            return
+        key = item.text().strip()
+        if not key:
+            return
+        if key == 'card_type':
+            QMessageBox.warning(self, "系统保留",
+                f"'{key}' 是系统标签，不可自定义。")
+            item.setText('')
+            return
+        for i in range(self._card_tags_table.rowCount()):
+            if i != row:
+                other = self._card_tags_table.item(i, 0)
+                if other and other.text().strip() == key:
+                    QMessageBox.warning(self, "重复标签",
+                        f"标签 Key '{key}' 已存在。如需修改，请直接编辑现有行。")
+                    item.setText('')
+                    return
+
+    # ══════════════════════════════════════════════════════════════════
+    # 筛选与搜索
+    # ══════════════════════════════════════════════════════════════════
+
+    def _filter_card_list(self):
+        """稀有度筛选 + 文本搜索 → clear + rebuild 列表"""
+        filter_rarity = self.card_rarity_filter.currentText()
+        search_text = self.card_search.text().strip().lower()
+
+        saved_idx = self._current_card_idx
+        self._card_list.blockSignals(True)
+        self._card_list.clear()
+
+        for card in self._card_defs:
+            cid = card.get('card_id', '')
+            # 过滤 _no_card 内部占位条目
+            if cid == '_no_card':
+                continue
+            # 稀有度筛选（大小写不敏感——rarity_rank 大写，卡片数据小写）
+            if filter_rarity != "全部":
+                if card.get('rarity', '').upper() != filter_rarity.upper():
+                    continue
+            # 文本搜索
+            if search_text:
+                name = card.get('name', '').lower()
+                tags_match = any(search_text in str(v).lower() for v in card.get('tags', {}).values())
+                lt_match = any(
+                    search_text in str(v).lower()
+                    for vs in card.get('list_tags', {}).values()
+                    for v in vs
+                )
+                if not (search_text in cid.lower() or search_text in name or tags_match or lt_match):
+                    continue
+            # 通过筛选
+            label = f"{cid} ({card.get('name', '')})" if card.get('name') else cid
+            self._card_list.addItem(label)
+
+        self._card_list.blockSignals(False)
+
+        # 恢复选中
+        if saved_idx >= 0 and saved_idx < len(self._card_defs):
+            # 在可见列表中定位原卡片
+            for i in range(self._card_list.count()):
+                item_text = self._card_list.item(i).text()
+                cid = self._card_defs[saved_idx].get('card_id', '')
+                if item_text.startswith(cid):
+                    self._card_list.setCurrentRow(i)
+                    break
+
+    # ══════════════════════════════════════════════════════════════════
+    # 兼容旧 API：get_card_defs / set_card_defs
+    # ══════════════════════════════════════════════════════════════════
+
+    def get_card_defs(self):
+        """读取所有卡片定义（先刷新当前编辑）"""
+        self._flush_current_detail()
+        return [dict(c) for c in self._card_defs]
+
+    def set_card_defs(self, defs):
+        """批量设置卡片定义 → 重建列表"""
+        self._card_defs = [dict(d) for d in defs]
+        # 确保每条有 tags/list_tags 键
+        for c in self._card_defs:
+            c.setdefault('tags', {})
+            c.setdefault('list_tags', {})
+        # P65：从已有 card_N ID 初始化计数器，避免冲突
+        max_n = 0
+        for c in self._card_defs:
+            cid = c.get('card_id', '')
+            if cid.startswith('card_') and cid.split('_')[-1].isdigit():
+                max_n = max(max_n, int(cid.split('_')[-1]))
+        self._card_id_counter = max_n
+        self._rebuild_card_list()
+
+    def _rebuild_card_list(self):
+        """根据 self._card_defs 重建 QListWidget"""
+        self._card_list.clear()
+        for c in self._card_defs:
+            cid = c.get('card_id', '')
+            name = c.get('name', '')
+            label = f"{cid} ({name})" if name else cid
+            self._card_list.addItem(label)
+        self._filter_card_list()
+
+    def _populate_card_rarity_filter(self):
+        """从 rarity_rank 动态填充稀有度下拉（筛选栏 + 详情面板共用）。
+
+        store 未就绪或 rarity_rank 为空时回退到默认 SSR/SR/R/无。
+        """
+        ranks = self._store.rarity_rank if self._store else {}
+        rarities = sorted(ranks.keys(), key=lambda r: ranks.get(r, 99)) if ranks else ["SSR", "SR", "R", "无"]
+        for combo in [self.card_rarity_filter, self._card_rarity_combo]:
+            if combo is None:
+                continue
+            combo.blockSignals(True)
+            combo.clear()
+            if combo is self.card_rarity_filter:
+                combo.addItem("全部")
+            combo.addItems(rarities)
+            combo.blockSignals(False)
+
     def _auto_generate_card_defs(self):
-        defs_map = {}
+        """从池子分布补充缺失的卡牌——合并模式，不覆盖已有卡片。
+
+        1. 扫描所有池子的分布，收集 (card_id, rarity, pool_id) 三元组
+        2. 已有卡片：仅更新 pools 列表
+        3. 新卡片：追加到末尾，只填 card_id + rarity + pools，名称和 tag 留空
+        4. 排序：已有卡片保持原位，新卡片追加在末尾
+        """
+        # 阻断串位：松开当前选中，详情面板灰掉
+        self._current_card_idx = -1
+        self._card_detail_group.setEnabled(False)
+
+        # ── 从池子分布收集卡片 ──
+        pool_cards: dict[str, dict] = {}  # card_id → {rarity, pools}
         for i in range(self.pool_table.rowCount()):
             pool_id_item = self.pool_table.item(i, 1)
-            pool_name_item = self.pool_table.item(i, 2)
-            if pool_id_item and pool_id_item.text():
-                pid = pool_id_item.text()
-                pname = pool_name_item.text() if pool_name_item else pid
-                dist = self._pool_distributions.get(pid)
-                if dist:
-                    for d in dist:
-                        cid = d.get('card_id', '')
-                        if cid == '_no_card':
-                            key = f"_no_card_{pid}"
-                            defs_map[key] = {
-                                'card_id': '_no_card',
-                                'name': '空抽(仅资源)',
-                                'rarity': '无',
-                                'pools': [pid],
-                            }
-                        elif cid:
-                            rarity = d.get('rarity', 'R')
-                            label_map = {'SSR': 'SSR', 'SR': 'SR', 'R': 'R', '无': '无'}
-                            label = label_map.get(rarity, rarity)
-                            if cid in defs_map:
-                                if pid not in defs_map[cid]['pools']:
-                                    defs_map[cid]['pools'].append(pid)
-                            else:
-                                defs_map[cid] = {
-                                    'card_id': cid,
-                                    'name': f"{pname} {label}" if cid.startswith(pid) else cid,
-                                    'rarity': rarity,
-                                    'pools': [pid],
-                                }
+            if not pool_id_item or not pool_id_item.text():
+                continue
+            pid = pool_id_item.text()
+            dist = self._pool_distributions.get(pid)
+            if not dist:
+                continue
+            for d in dist:
+                cid = d.get('card_id', '')
+                if not cid or cid == '_no_card':
+                    continue
+                if cid not in pool_cards:
+                    pool_cards[cid] = {
+                        'rarity': d.get('rarity', 'R'),
+                        'pools': [pid],
+                    }
                 else:
-                    for suffix, rarity, label in [('_ssr', 'SSR', 'SSR'), ('_sr', 'SR', 'SR'), ('_r', 'R', 'R')]:
-                        cid = f"{pid}{suffix}"
-                        if cid in defs_map:
-                            if pid not in defs_map[cid]['pools']:
-                                defs_map[cid]['pools'].append(pid)
-                        else:
-                            defs_map[cid] = {
-                                'card_id': cid,
-                                'name': f"{pname} {label}",
-                                'rarity': rarity,
-                                'pools': [pid],
-                            }
-        self.set_card_defs(list(defs_map.values()))
+                    if pid not in pool_cards[cid]['pools']:
+                        pool_cards[cid]['pools'].append(pid)
+
+        # ── 合并：已有卡片保留数据和位置 ──
+        merged = []
+        for c in self._card_defs:
+            cid = c.get('card_id', '')
+            if cid in pool_cards:
+                # 已有卡片：更新 pools
+                c['pools'] = pool_cards[cid]['pools']
+                del pool_cards[cid]
+            merged.append(c)
+
+        # ── 追加：池子中新增的卡片 ──
+        for cid, info in pool_cards.items():
+            merged.append({
+                'card_id': cid,
+                'name': '',
+                'rarity': info['rarity'],
+                'pools': info['pools'],
+                'initial_count': 0,
+                'tags': {},
+                'list_tags': {},
+            })
+
+        self.set_card_defs(merged)
         self._update_preview()
 
     def _compute_pools_map(self):
@@ -2037,54 +2441,6 @@ class ConfigPanel(QWidget):
                 if cid and cid != '_no_card':
                     result.setdefault(cid, []).append(pid)
         return result
-
-    def get_card_defs(self):
-        pools_map = self._compute_pools_map()
-        defs = []
-        for i in range(self.card_def_table.rowCount()):
-            card_id_item = self.card_def_table.item(i, 0)
-            name_item = self.card_def_table.item(i, 1)
-            rarity_widget = self.card_def_table.cellWidget(i, 2)
-            init_widget = self.card_def_table.cellWidget(i, 4)
-            card_id = card_id_item.text().strip() if card_id_item else ''
-            name = name_item.text().strip() if name_item else ''
-            rarity = rarity_widget.currentText() if rarity_widget else 'R'
-            initial_count = init_widget.value() if init_widget else 0
-            defs.append({
-                'card_id': card_id,
-                'name': name,
-                'rarity': rarity,
-                'pools': pools_map.get(card_id, []),
-                'initial_count': initial_count,
-            })
-        return defs
-
-    def set_card_defs(self, defs):
-        self.card_defs = list(defs)
-        pools_map = self._compute_pools_map()
-        self.card_def_table.blockSignals(True)
-        self.card_def_table.setRowCount(len(defs))
-        rarity_options = ["SSR", "SR", "R", "无"]
-        rarity_map = {o.lower(): i for i, o in enumerate(rarity_options)}
-        for i, d in enumerate(defs):
-            self.card_def_table.setItem(i, 0, QTableWidgetItem(d.get('card_id', '')))
-            self.card_def_table.setItem(i, 1, QTableWidgetItem(d.get('name', '')))
-            rarity_combo = QComboBox()
-            rarity_combo.addItems(rarity_options)
-            rarity = d.get('rarity', 'R').lower()
-            idx = rarity_map.get(rarity, 2)
-            rarity_combo.setCurrentIndex(idx)
-            self.card_def_table.setCellWidget(i, 2, rarity_combo)
-            cid = d.get('card_id', '')
-            pools_text = ','.join(pools_map.get(cid, []))
-            pools_item = QTableWidgetItem(pools_text)
-            pools_item.setFlags(pools_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.card_def_table.setItem(i, 3, pools_item)
-            init_spin = QSpinBox()
-            init_spin.setRange(0, 9999)
-            init_spin.setValue(d.get('initial_count', 0))
-            self.card_def_table.setCellWidget(i, 4, init_spin)
-        self.card_def_table.blockSignals(False)
 
     def _setup_preview(self, parent):
         group = QGroupBox("配置预览")
@@ -2569,7 +2925,9 @@ class ConfigPanel(QWidget):
                         for tc in store.target_cards]
 
         card_defs = [{'card_id': cd.card_id, 'name': cd.name, 'rarity': cd.rarity, 'pools': cd.pools,
-                      'initial_count': getattr(cd, 'initial_count', 0)}
+                      'initial_count': getattr(cd, 'initial_count', 0),
+                      'tags': getattr(cd, 'tags', {}),
+                      'list_tags': getattr(cd, 'list_tags', {})}
                      for cd in store.card_defs]
 
         resource_defs = [{'resource_id': rid, 'display_name': name,
@@ -2765,6 +3123,9 @@ class ConfigPanel(QWidget):
                 name=cd.get('name', ''),
                 rarity=cd.get('rarity', 'R'),
                 pools=cd.get('pools', []),
+                initial_count=cd.get('initial_count', 0),
+                tags=cd.get('tags', {}),
+                list_tags=cd.get('list_tags', {}),
             ))
 
         for rd in config.get('resource_defs', []):
@@ -2833,12 +3194,14 @@ class ConfigPanel(QWidget):
                             pools.append(pid)
                         existing_map[cid]['pools'] = pools
                     else:
+                        base = {'tags': {}, 'list_tags': {}, 'initial_count': 0}
                         if cid == '_no_card':
                             existing_map[cid] = {
                                 'card_id': '_no_card',
                                 'name': '空抽(仅资源)',
                                 'rarity': '无',
                                 'pools': [pid],
+                                **base,
                             }
                         else:
                             existing_map[cid] = {
@@ -2846,6 +3209,7 @@ class ConfigPanel(QWidget):
                                 'name': cid,
                                 'rarity': d.get('rarity', 'R'),
                                 'pools': [pid],
+                                **base,
                             }
             else:
                 for suffix, rarity in [('_ssr', 'SSR'), ('_sr', 'SR'), ('_r', 'R')]:
@@ -2861,6 +3225,9 @@ class ConfigPanel(QWidget):
                             'name': cid,
                             'rarity': rarity,
                             'pools': [pid],
+                            'tags': {},
+                            'list_tags': {},
+                            'initial_count': 0,
                         }
 
         merged = list(existing_map.values())
@@ -2880,31 +3247,8 @@ class ConfigPanel(QWidget):
         if col == 3:
             self._sync_card_defs_from_pools()
 
-    def _on_card_def_changed(self, row, col):
-        self._update_preview()
-
-    def _filter_card_defs(self):
-        filter_rarity = self.card_rarity_filter.currentText()
-        search_text = self.card_search.text().strip().lower()
-        for i in range(self.card_def_table.rowCount()):
-            if filter_rarity == "全部" and not search_text:
-                self.card_def_table.setRowHidden(i, False)
-                continue
-            rarity_widget = self.card_def_table.cellWidget(i, 2)
-            rarity = rarity_widget.currentText() if rarity_widget else ''
-            rarity_match = filter_rarity == "全部" or rarity == filter_rarity
-            if not search_text:
-                self.card_def_table.setRowHidden(i, not rarity_match)
-                continue
-            id_item = self.card_def_table.item(i, 0)
-            name_item = self.card_def_table.item(i, 1)
-            id_match = id_item.text().lower().find(search_text) >= 0 if id_item else False
-            name_match = name_item.text().lower().find(search_text) >= 0 if name_item else False
-            text_match = id_match or name_match
-            self.card_def_table.setRowHidden(i, not (rarity_match and text_match))
-
-    def _search_card_defs(self, text):
-        self._filter_card_defs()
+    # _filter_card_defs / _search_card_defs / _on_card_def_changed 已由
+    # P65 的 _filter_card_list 替代——见 _setup_card_def_tab 区域
 
     def _on_resource_def_changed(self, row, col):
         self._refresh_resource_combos()
@@ -3261,6 +3605,8 @@ class ConfigPanel(QWidget):
                 rarity=cd.get('rarity', 'R'),
                 pools=cd.get('pools', []),
                 initial_count=cd.get('initial_count', 0),
+                tags=cd.get('tags', {}),
+                list_tags=cd.get('list_tags', {}),
             ))
 
         store.resource_defs = {}
@@ -3384,9 +3730,13 @@ class ConfigPanel(QWidget):
         self._set_target_cards(target_data)
 
         card_data = [{'card_id': cd.card_id, 'name': cd.name, 'rarity': cd.rarity, 'pools': cd.pools,
-                      'initial_count': getattr(cd, 'initial_count', 0)}
+                      'initial_count': getattr(cd, 'initial_count', 0),
+                      'tags': getattr(cd, 'tags', {}),
+                      'list_tags': getattr(cd, 'list_tags', {})}
                      for cd in store.card_defs]
         self.set_card_defs(card_data)
+        # P65：store 就绪后从 rarity_rank 动态填充稀有度下拉
+        self._populate_card_rarity_filter()
 
         res_defs = [{'resource_id': rid, 'display_name': name,
                      'initial_amount': store.initial_resources.get(rid, 0)}

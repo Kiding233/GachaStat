@@ -92,16 +92,12 @@ class SmartStrategy(Strategy):
                         self._pool_to_targets[pid] = []
                     self._pool_to_targets[pid].append(t)
             self._last_target_cards_id = tc_id
-            # P60诊断已暂停
-            pass
 
     def _pool_needs_target(self, pool_id: str, ctx: StrategyContext) -> bool:
         self._ensure_pool_to_targets(ctx)
         for t in self._pool_to_targets.get(pool_id, []):
             ac_val = ctx.acquired.get(t.card_id, 0)
             if ac_val < t.quantity_needed:
-                # P60诊断已暂停
-                pass
                 return True
         return False
 
@@ -117,25 +113,6 @@ class SmartStrategy(Strategy):
 
     def select_action(self, ctx: StrategyContext) -> Action:
         from .action import DrawAction, WaitAction
-
-        # ── P60 诊断：目标卡 acquired 状态变化时打印 ──
-        if not hasattr(self, '_p60_diag_sid'):
-            import uuid
-            self._p60_diag_sid = str(uuid.uuid4())[:8]
-            self._p60_diag_seen = {}
-            self._p60_diag_step = 0
-        self._p60_diag_step += 1
-
-        changed = []
-        for t in ctx.target_cards.targets:
-            ac = ctx.acquired.get(t.card_id, 0)
-            prev = self._p60_diag_seen.get(t.card_id, -1)
-            if ac != prev:
-                self._p60_diag_seen[t.card_id] = ac
-                changed.append(f"{t.card_id}={ac}/{t.quantity_needed}")
-
-        # P60诊断已暂停——仅保留卡ID诊断
-        pass
 
         exchange_pool_id = self._get_needed_card_exchange(ctx)
         if exchange_pool_id:

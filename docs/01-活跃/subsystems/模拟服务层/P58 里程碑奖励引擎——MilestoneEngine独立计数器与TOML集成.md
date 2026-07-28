@@ -1,4 +1,4 @@
-<!-- META: P58 | module:模拟服务层 | status:designing | last:2026-06-20 | depends:P60✅ -->
+<!-- META: P58 | module:模拟服务层 | status:designing | last:2026-06-20 | depends:P60✅,P63（溢出管道） -->
 
 # P58 里程碑奖励引擎——独立 MilestoneEngine 实现
 
@@ -42,7 +42,7 @@
 | **计数对象** | 「不出目标稀有度」的抽数 | **所有抽数**——无论出什么 |
 | **重置条件** | 出了目标稀有度 | 自身触发后（repeat）或永久停用（at） |
 | **产出位置** | 通过 `pool.draw()` 正常产出 | **旁路注入**，不走抽卡管线 |
-| **副产物** | 照常计算（星辉/井币等） | **不产生副产物** |
+| **副产物** | 照常计算（星辉/井币等） | 通过 P63 统一 `add_card` 管道产生（与正常抽卡一致） |
 | **生命周期参数** | `reset` / `scope` / `target_featured` / `deactivate_on_early_hit` / `depends_on` | 均不需要——milestone 的计数器逻辑自包含 |
 
 唯一共同点是「计数」。但保底计数是为了「累计未出目标稀有度的抽数」，milestone 计数是为了「累计所有抽数」——语义不同。
@@ -91,7 +91,7 @@ gacha_service 模拟循环
 │   ├─ state.add_card() / state.gain()
 │   └─ collector.on_bonus()
 │
-├─ 资源结算（正常 reward.resources_gained + compute_bonus_resources）
+├─ 资源结算（正常产出溢出 + milestone 卡片溢出 + milestone 直接资源，统一经 P63 add_card 管道归入 rg）
 └─ collector.on_draw()
 ```
 
@@ -99,7 +99,8 @@ gacha_service 模拟循环
 - MilestoneEngine 不触碰概率分布
 - MilestoneEngine 不依赖 PityState——计数器自管
 - bonus 注入发生在 PityEngine.after_draw() 之后、资源结算之前
-- collector.on_bonus() 独立于 on_draw()——赠送卡不出现在出率计算中
+- collector.on_bonus() 独立于 on_draw()——元数据（事件名、时间戳、赠送内容）走 on_bonus，资源金额统一走 `combined_gained`（P63 单通道约束）
+- milestone 注入的卡牌通过 P63 统一 `state.add_card(bonus_config)` 管道触发溢出（`first_time_bonus` / `nth_time_bonus` / `excess_bonus`），与正常抽卡一致——P58 自身不实现溢出逻辑，由 P63 提供
 - **GDR 始终包含里程碑奖励。** 里程碑是池子的固有属性——抽 A 池 40 发实打实多一张 SSR，GDR 如实反映。不提供排除开关：需要裸概率时删 `[[milestone]]` 段重跑即可
 
 ### 3.2 MilestoneEngine 实现
@@ -320,23 +321,32 @@ if _pity_engine:
     _pity_engine.after_draw(pool.id, pity_state, reward.id)
 
 # ── 【新增】里程碑判定与注入 ──
+milestone_rg: dict = {}
 if _milestone_engine:
     for entry in _milestone_engine.after_draw(pool.id):
         bonus = entry['bonus']
-        # 卡牌——固定赠送 + 随机抽取，统一入 state.acquired
-        for cid in bonus.get('card_ids', []):
-            state.add_card(cid)
-        # 资源——直接入账
+        # 直接资源——归入 milestone_rg
         for k, v in bonus.get('resources', {}).items():
-            resources[k] = resources.get(k, 0) + v
+            milestone_rg[k] = milestone_rg.get(k, 0) + v
+        # 卡牌——经 P63 add_card(bonus_config) 自动计算溢出资源
+        for cid in bonus.get('card_ids', []):
+            overflow = state.add_card(cid,
+                                      bonus_config=card_bonus_map.get(cid),
+                                      initial_counts=_initial_counts)
+            for k, v in overflow.items():
+                milestone_rg[k] = milestone_rg.get(k, 0) + v
         collector.on_bonus(
             pity_name=entry['name'],
             card_ids=bonus.get('card_ids', []),
             resources=bonus.get('resources', {}),
             real_time=real_time,
         )
+    # milestone 溢出资源合并到本抽 rg（P63 单通道约束）
+    if milestone_rg:
+        for k, v in milestone_rg.items():
+            rg[k] = rg.get(k, 0) + v
 
-# ── 资源结算（正常 reward.resources_gained + compute_bonus_resources）──
+# ── 资源结算（正常产出溢出经 P63 add_card 已返回）──
 rg = dict(reward.resources_gained or {})
 # ... 后续保持不变
 ```
@@ -347,9 +357,11 @@ rg = dict(reward.resources_gained or {})
 before_draw → PityEngine.before_draw (不含 milestone)
   → pool.draw() → 正常出卡
   → PityEngine.after_draw → 常规保底重置（hard/soft 等，不含 milestone）
+  → state.add_card(reward.id, bonus_config) → 正常产出溢出（P63）
   → MilestoneEngine.after_draw → 达阈值 → 返回 bonus
-  → state.add_card() / state.gain() ← 注入，不碰保底
-  → 资源结算（正常 reward.resources_gained + compute_bonus_resources）
+  → state.add_card(cid, bonus_config) → milestone 卡片溢出（P63 统一管道）
+  → state.gain() → milestone 直接资源（如有）
+  → milestone 溢出 + 直接资源 → 归入 rg（P63 单通道）
   → collector.on_bonus() / collector.on_draw()
 ```
 
@@ -430,7 +442,10 @@ for name, md in ctx.get_milestone_defs().items():
 class SimulationCollector(ABC):
     def on_bonus(self, pity_name: str, card_ids: List[str],
                  resources: Dict[str, float], real_time: float):
-        """milestone 注入事件——区分「抽得」和「赠得」."""
+        """milestone 注入事件——只存元数据（事件名、时间戳、赠送内容）。
+
+        P63 单通道约束：资源金额不在这里存储——统一走 combined_gained。
+        """
 
 # CompactCollector
 def on_bonus(self, ...):
@@ -438,8 +453,8 @@ def on_bonus(self, ...):
     r.bonus_events.append({
         'pity_name': pity_name,
         'card_ids': list(card_ids),
-        'resources': dict(resources),
         'real_time': real_time,
+        # 资源金额不在此存储——已通过 milestone_rg 归入 combined_gained（P63）
     })
 ```
 
@@ -453,7 +468,7 @@ bonus_events: list = field(default_factory=list)
 
 #### 3.6a GDR 层合并 bonus_events
 
-`bonus_events` 与 `card_counts` 是独立通道。GDR 计算时需要合并：
+`bonus_events` 与 `card_counts` 是独立通道。GDR 计算时需要将 milestone 赠卡合并到正常产出中以正确计算出率。资源金额已通过 P63 单通道（`milestone_rg` → `combined_gained`）自动归入，无需额外合并：
 
 ```python
 # generalized_drop_rate.py —— 各 compute_* 函数中
@@ -731,6 +746,9 @@ P60（已完成 ✅）
 ├── is_limited()                            ← M2 可选校验
 └── [rarities]                              ← 不依赖（milestone 不操作概率）
 
+P63（设计中）
+└── state.add_card(bonus_config) → 溢出资源  ← milestone 注入的卡通过 P63 统一管道获得 first_time_bonus / nth_time_bonus / excess_bonus。P58 自身不实现溢出逻辑
+
 本计划（P58——独立 MilestoneEngine）
 ├── 零依赖 PityEngine / BEHAVIOR_REGISTRY
 ├── 零依赖 CounterBasedBehavior / PityState
@@ -769,7 +787,7 @@ P60（已完成 ✅）
 | `SimulationStats.acquired_counts` 移除后外部引用遗漏 | 全局 grep `acquired_counts` 确认无残留——P60 已处理 |
 | 旧序列化快照（无 `acquired`）反序列化失败 | `from_dict` 中 `d.get('acquired', {})`——P60 已处理 |
 | `milestone` 计数器生命周期（`repeat`=true 重置 vs false 停用）自管 bug | 极简逻辑——`int` 自增 + `if c >= threshold`，M8 集成测试覆盖 |
-| bonus 注入时序不当（早于/晚于保底重置导致状态不一致） | 时序固定：`PityEngine.after_draw` → `MilestoneEngine.after_draw` → 资源结算 |
+| bonus 注入时序不当（早于/晚于保底重置导致状态不一致） | 时序固定：`PityEngine.after_draw` → `state.add_card`（正常溢出，P63）→ `MilestoneEngine.after_draw` → `state.add_card`（milestone 溢出，P63）→ 资源结算 |
 | TOML 中 `resources_gained`/bonus 字段从未被解析 | M6 顺带修复 |
 | `random.choice` 破坏可复现性 | 使用 `random.Random(seed)` 实例——从 GachaService 传入 |
 | 配置面板 UI 与 P55/P56 保底 UI 改造潜在冲突 | 独立 Tab——不碰 `_setup_pity_config()` |
@@ -787,8 +805,9 @@ P60（已完成 ✅）
 - [ ] `repeat = true`（every=N）：触发后计数器归零继续计数，下一轮继续触发
 - [ ] `max_triggers` 正确限制触发次数——达上限后永久停用
 - [ ] bonus 注入不触发常规保底重置（`hard`/`soft` 计数器不受 milestone 影响）
-- [ ] bonus 注入不产生副产物（不走 `compute_bonus_resources`）
-- [ ] `collector.on_bonus()` 正确记录——赠送卡独立存储于 `bonus_events`，不进入 `card_counts`
+- [ ] milestone 注入的卡经 P63 `state.add_card(bonus_config)` 统一管道正确触发溢出（`first_time_bonus` / `nth_time_bonus` / `excess_bonus`），与正常抽卡一致
+- [ ] milestone 溢出资源 + 直接资源统一归入 `rg`（P63 单通道），不重复入账
+- [ ] `collector.on_bonus()` 只存元数据（事件名、时间戳、赠送卡 ID），不承载资源金额（P63 单通道约束）
 - [ ] GDR 计算层合并 `bonus_events`——里程碑卡按时间戳对齐到正确抽数，参与 GDR 计算
 - [ ] GDR 合并不改函数签名——在 `compute_gdr_from_compact/compute_gdr_from_history` 入口处完成
 - [ ] `PityEngine` 零改动——milestone 完全不参与保底管道

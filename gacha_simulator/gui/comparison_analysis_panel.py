@@ -548,8 +548,8 @@ class ComparisonAnalysisPanel(QWidget):
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
         )
         _ylabel = "频数" if bin_result.bar_mode else "密度"
-        fig.update_yaxes(title_text=_ylabel, fixedrange=True, row=1, col=1)
-        fig.update_yaxes(title_text="累积概率", range=[0, 1.02], fixedrange=True, row=1, col=2)
+        fig.update_yaxes(title_text=_ylabel, fixedrange=False, row=1, col=1)
+        fig.update_yaxes(title_text="累积概率", range=[0, 1.02], fixedrange=False, row=1, col=2)
         fig.update_xaxes(title_text="GDR 值", row=1, col=1)
         fig.update_xaxes(title_text="GDR 值", row=1, col=2)
 

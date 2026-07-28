@@ -1,8 +1,8 @@
-<!-- META: P66 | module:harness | status:designing | last:2026-07-20 -->
+<!-- META: P66 | module:harness | status:implementing | last:2026-07-20 -->
 
 # P66 plan-execute：计划执行 + Fidelity 审计一站式 Workflow
 
-> 日期：2026-07-20 | 状态：设计中
+> 日期：2026-07-20 | 状态：实现中
 > 触发：用户需求——在现有 superpowers 指导基础上补充实施后自动反复对照计划文件检查的环节
 
 ## 一、问题
@@ -102,14 +102,16 @@ while dry < 2:
 
 ### 依赖现有文件（只读复用，不修改）
 
+> 注：以下文件为 superpowers 6.1.1 宿主环境提供的稳定接口，由 Claude Code harness 全局注入，不在项目本地磁盘。workflow.js 当前使用内联实现（内嵌提示词函数）以确保自包含性，与 superpowers 脚本接口逻辑等价。后续可在 harness 支持文件读取后迁移为引用外部模板。
+
 | 文件 | 用途 |
 |------|------|
-| `superpowers 6.1.1/skills/subagent-driven-development/scripts/task-brief` | 提取任务文本 |
-| `superpowers 6.1.1/skills/subagent-driven-development/scripts/review-package` | 生成 diff 包 |
-| `superpowers 6.1.1/skills/subagent-driven-development/implementer-prompt.md` | 实现者提示模板 |
-| `superpowers 6.1.1/skills/subagent-driven-development/task-reviewer-prompt.md` | 审查者提示模板 |
-| `superpowers 6.1.1/skills/requesting-code-review/code-reviewer.md` | 最终审查模板 |
-| `superpowers:finishing-a-development-branch` | 收尾 git 操作 |
+| `superpowers 6.1.1/skills/subagent-driven-development/scripts/task-brief` | 提取任务文本（宿主环境全局注入） |
+| `superpowers 6.1.1/skills/subagent-driven-development/scripts/review-package` | 生成 diff 包（宿主环境全局注入） |
+| `superpowers 6.1.1/skills/subagent-driven-development/implementer-prompt.md` | 实现者提示模板（宿主环境全局注入） |
+| `superpowers 6.1.1/skills/subagent-driven-development/task-reviewer-prompt.md` | 审查者提示模板（宿主环境全局注入） |
+| `superpowers 6.1.1/skills/requesting-code-review/code-reviewer.md` | 最终审查模板（宿主环境全局注入） |
+| `superpowers:finishing-a-development-branch` | 收尾 git 操作（宿主环境全局注入） |
 
 ### 不修改的文件
 

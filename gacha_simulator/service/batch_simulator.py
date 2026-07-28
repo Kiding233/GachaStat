@@ -246,8 +246,6 @@ def _wk_run_single(args):
     seed, initial_resources = args
     try:
         compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
-        # P60诊断已暂停——仅保留卡ID诊断
-        pass
     except Exception:
         traceback.print_exc()
         return (None, None) if _wk_return_compact else None

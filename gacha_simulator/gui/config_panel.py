@@ -342,7 +342,17 @@ class ConfigPanel(QWidget):
         self._setup_strategy_tab(strategy_tab_layout)
         strategy_tab_layout.addStretch()
         strategy_tab_scroll.setWidget(strategy_tab_content)
-        self.left_tabs.addTab(strategy_tab_scroll, "策略与目标")
+        self.left_tabs.addTab(strategy_tab_scroll, "抽卡策略")
+
+        target_tab_scroll = QScrollArea()
+        target_tab_scroll.verticalScrollBar().setSingleStep(15)
+        target_tab_scroll.setWidgetResizable(True)
+        target_tab_content = QWidget()
+        target_tab_layout = QVBoxLayout(target_tab_content)
+        self._setup_target_tab(target_tab_layout)
+        target_tab_layout.addStretch()
+        target_tab_scroll.setWidget(target_tab_content)
+        self.left_tabs.addTab(target_tab_scroll, "目标卡")
 
         weight_tab_scroll = QScrollArea()
         weight_tab_scroll.verticalScrollBar().setSingleStep(15)
@@ -1630,7 +1640,7 @@ class ConfigPanel(QWidget):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY
         from gacha_simulator.core.stop_condition import STOP_CONDITION_REGISTRY
 
-        group = QGroupBox("策略与目标卡")
+        group = QGroupBox("抽卡策略")
         layout = QVBoxLayout(group)
 
         strategy_layout = QFormLayout()
@@ -1661,6 +1671,13 @@ class ConfigPanel(QWidget):
 
         self.strategy_type.currentIndexChanged.connect(self._on_strategy_type_changed)
         self._on_strategy_type_changed(0)
+
+        parent.addWidget(group)
+
+    def _setup_target_tab(self, parent):
+        """目标卡编辑标签页。"""
+        group = QGroupBox("目标卡")
+        layout = QVBoxLayout(group)
 
         target_label = QLabel("目标卡（卡ID + 需求数量）:")
         layout.addWidget(target_label)
@@ -1705,7 +1722,6 @@ class ConfigPanel(QWidget):
         self.card_id_list.itemDoubleClicked.connect(self._on_card_id_double_clicked)
         layout.addWidget(self.card_id_list)
 
-        self.strategy_type.currentIndexChanged.connect(self._on_strategy_type_changed)
         self.target_table.cellChanged.connect(self._update_preview)
 
         parent.addWidget(group)

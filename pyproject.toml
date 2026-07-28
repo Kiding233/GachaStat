@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "gacha_simulator"
 version = "1.6.0"
 description = "GachaStat — A flexible gacha simulation and statistical analysis system"
+license = {text = "GPL-3.0-only"}
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.20",

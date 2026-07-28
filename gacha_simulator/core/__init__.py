@@ -1,6 +1,7 @@
 from .result_types import CompactResult
 from .collector import SimulationCollector, InfoVectorCollector, CompactCollector
-from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, compute_bonus_resources
+from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string
+from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
 from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
 from .info_vector import InfoVector
@@ -94,7 +95,8 @@ from .process_analysis import (
 __all__ = [
     'CompactResult',
     'SimulationCollector', 'InfoVectorCollector', 'CompactCollector',
-    'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string', 'compute_bonus_resources',
+    'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
+    'OverflowBand', 'match_overflow_bands', 'expand_sugar_to_bands',
     'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
     'InfoVector',

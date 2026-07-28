@@ -2,6 +2,7 @@ import datetime as _dt
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
+from .overflow import OverflowBand
 from .strategy import strategy_type_to_key, STRATEGY_REGISTRY
 
 
@@ -16,9 +17,6 @@ class PoolDistEntry:
     rarity: str = 'R'
     featured: bool = False
     resources_gained: Dict[str, float] = field(default_factory=dict)
-    first_time_bonus: Dict[str, float] = field(default_factory=dict)
-    nth_time_bonus: Dict[str, Any] = field(default_factory=dict)
-    excess_bonus: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -117,6 +115,7 @@ class CardDefEntry:
     initial_count: int = 0
     tags: Dict[str, str] = field(default_factory=dict)               # P65：单值标签
     list_tags: Dict[str, List[str]] = field(default_factory=dict)     # P65：多值标签
+    overflow_bands: Optional[List[OverflowBand]] = None               # P63：卡片溢出分段表
 
 
 @dataclass
@@ -149,6 +148,8 @@ class ConfigStore:
     seed: int = 42
     _distribution_templates: List[dict] = field(default_factory=list)
     rarity_rank: Dict[str, int] = field(default_factory=dict)       # ← P60：稀有度 → 层级（0=最高）
+    rarity_defaults: Dict[str, Any] = field(default_factory=dict)    # ← P63：稀有度默认溢出规则（键名 .lower()）
+    card_overflow_map: Dict[str, List[OverflowBand]] = field(default_factory=dict)  # ← P63：card_id → 分段表
     _migrated_from_legacy: bool = False                              # ← P55：旧格式迁移标记
 
     def __post_init__(self):
@@ -182,6 +183,8 @@ class ConfigStore:
         self.seed = 42
         self._distribution_templates.clear()
         self.rarity_rank.clear()                                      # ← P60
+        self.rarity_defaults.clear()                                  # ← P63
+        self.card_overflow_map.clear()                                # ← P63
         self._migrated_from_legacy = False                            # ← P55
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────

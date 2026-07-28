@@ -16,87 +16,8 @@ from ..core.config_store import (
     CardDefEntry, PoolEntry, PoolDistEntry,
     PityDef, PityConfig, GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
 )
+from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
-
-
-def _bonus_to_text(d):
-    """将额外资源字段序列化为紧凑文本格式"""
-    parts = []
-    ft = d.get('first_time_bonus', {})
-    if ft:
-        parts.append('ft:' + ','.join(f'{k}:{v}' for k, v in ft.items()))
-    nth = d.get('nth_time_bonus', {})
-    if nth:
-        nth_parts = []
-        for n, res in sorted(nth.items()):
-            nth_parts.append(f'{n}={",".join(f"{k}:{v}" for k, v in res.items())}')
-        parts.append('nth:' + ';'.join(nth_parts))
-    xs = d.get('excess_bonus', {})
-    if xs:
-        threshold = xs.get('threshold', 999999)
-        res = xs.get('resources', {})
-        xs_str = f'{threshold}>' + ','.join(f'{k}:{v}' for k, v in res.items())
-        parts.append('xs:' + xs_str)
-    return ' & '.join(parts)
-
-
-def _parse_bonus_text(text):
-    """解析紧凑格式的额外资源文本"""
-    result = {'first_time_bonus': {}, 'nth_time_bonus': {}, 'excess_bonus': {}}
-    if not text or not text.strip():
-        return result
-    for segment in text.split('&'):
-        segment = segment.strip()
-        if not segment:
-            continue
-        if segment.startswith('ft:'):
-            for part in segment[3:].split(','):
-                part = part.strip()
-                if ':' in part:
-                    k, v = part.split(':', 1)
-                    try:
-                        result['first_time_bonus'][k.strip()] = float(v.strip())
-                    except ValueError:
-                        pass
-        elif segment.startswith('nth:'):
-            for entry in segment[4:].split(';'):
-                entry = entry.strip()
-                if '=' in entry:
-                    n_str, res_str = entry.split('=', 1)
-                    try:
-                        n = int(n_str.strip())
-                    except ValueError:
-                        continue
-                    resources = {}
-                    for part in res_str.split(','):
-                        part = part.strip()
-                        if ':' in part:
-                            k, v = part.split(':', 1)
-                            try:
-                                resources[k.strip()] = float(v.strip())
-                            except ValueError:
-                                pass
-                    if resources:
-                        result['nth_time_bonus'][n] = resources
-        elif segment.startswith('xs:'):
-            xs_content = segment[3:].strip()
-            if '>' in xs_content:
-                t_str, res_str = xs_content.split('>', 1)
-                try:
-                    threshold = int(t_str.strip())
-                except ValueError:
-                    threshold = 999999
-                resources = {}
-                for part in res_str.split(','):
-                    part = part.strip()
-                    if ':' in part:
-                        k, v = part.split(':', 1)
-                        try:
-                            resources[k.strip()] = float(v.strip())
-                        except ValueError:
-                            pass
-                result['excess_bonus'] = {'threshold': threshold, 'resources': resources}
-    return result
 
 
 class PoolDistributionDialog(QDialog):
@@ -109,8 +30,8 @@ class PoolDistributionDialog(QDialog):
         layout = QVBoxLayout(self)
 
         self.dist_table = QTableWidget()
-        self.dist_table.setColumnCount(6)
-        self.dist_table.setHorizontalHeaderLabels(["卡ID", "概率(%)", "稀有度", "Featured", "资源获取", "额外资源"])
+        self.dist_table.setColumnCount(5)
+        self.dist_table.setHorizontalHeaderLabels(["卡ID", "概率(%)", "稀有度", "Featured", "资源获取"])
         self.dist_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.dist_table.verticalHeader().setVisible(False)
         self.dist_table.setAlternatingRowColors(True)
@@ -189,11 +110,6 @@ class PoolDistributionDialog(QDialog):
             res_edit.setPlaceholderText("resource_id:amount,...")
             self.dist_table.setCellWidget(i, 4, res_edit)
 
-            bonus_text = _bonus_to_text(d)
-            bonus_edit = QLineEdit(bonus_text)
-            bonus_edit.setPlaceholderText("ft:r:a & nth:n=r:a;n=r:a & xs:t>r:a")
-            self.dist_table.setCellWidget(i, 5, bonus_edit)
-
         self._update_total()
 
     def _add_row(self):
@@ -218,10 +134,6 @@ class PoolDistributionDialog(QDialog):
         res_edit = QLineEdit()
         res_edit.setPlaceholderText("resource_id:amount,...")
         self.dist_table.setCellWidget(row, 4, res_edit)
-
-        bonus_edit = QLineEdit()
-        bonus_edit.setPlaceholderText("ft:r:a & nth:n=r:a;n=r:a & xs:t>r:a")
-        self.dist_table.setCellWidget(row, 5, bonus_edit)
 
         self._update_total()
 
@@ -253,10 +165,6 @@ class PoolDistributionDialog(QDialog):
         res_edit = QLineEdit()
         res_edit.setPlaceholderText("resource_id:amount,...")
         self.dist_table.setCellWidget(row, 4, res_edit)
-
-        bonus_edit = QLineEdit()
-        bonus_edit.setPlaceholderText("ft:r:a & nth:n=r:a;n=r:a & xs:t>r:a")
-        self.dist_table.setCellWidget(row, 5, bonus_edit)
 
         self._update_total()
 
@@ -309,7 +217,6 @@ class PoolDistributionDialog(QDialog):
             rarity_combo = self.dist_table.cellWidget(i, 2)
             featured_cb = self.dist_table.cellWidget(i, 3)
             res_edit = self.dist_table.cellWidget(i, 4)
-            bonus_edit = self.dist_table.cellWidget(i, 5)
 
             card_id = card_id_item.text().strip() if card_id_item else ''
 
@@ -326,8 +233,6 @@ class PoolDistributionDialog(QDialog):
                             except ValueError:
                                 pass
 
-            bonus = _parse_bonus_text(bonus_edit.text() if bonus_edit else '')
-
             rarity = rarity_combo.currentText() if rarity_combo else 'R'
             featured = featured_cb.isChecked() if featured_cb else False
             if card_id == '_no_card':
@@ -340,9 +245,6 @@ class PoolDistributionDialog(QDialog):
                 'rarity': rarity,
                 'featured': featured,
                 'resources_gained': resources_gained,
-                'first_time_bonus': bonus.get('first_time_bonus', {}),
-                'nth_time_bonus': bonus.get('nth_time_bonus', {}),
-                'excess_bonus': bonus.get('excess_bonus', {}),
             })
         return result
 
@@ -451,6 +353,17 @@ class ConfigPanel(QWidget):
         weight_tab_layout.addStretch()
         weight_tab_scroll.setWidget(weight_tab_content)
         self.left_tabs.addTab(weight_tab_scroll, "权重配置")
+
+        # P63：满突溢出标签页
+        overflow_tab_scroll = QScrollArea()
+        overflow_tab_scroll.verticalScrollBar().setSingleStep(15)
+        overflow_tab_scroll.setWidgetResizable(True)
+        overflow_tab_content = QWidget()
+        overflow_tab_layout = QVBoxLayout(overflow_tab_content)
+        self._setup_overflow_tab(overflow_tab_layout)
+        overflow_tab_layout.addStretch()
+        overflow_tab_scroll.setWidget(overflow_tab_content)
+        self.left_tabs.addTab(overflow_tab_scroll, "满突溢出")
 
         splitter.addWidget(self.left_tabs)
 
@@ -1941,6 +1854,223 @@ class ConfigPanel(QWidget):
 
         self._weight_data = {}
 
+    # ═══════════════════════════════════════════════════════════════
+    # P63：满突溢出标签页
+    # ═══════════════════════════════════════════════════════════════
+
+    def _setup_overflow_tab(self, parent):
+        info_label = QLabel(
+            "配置稀有度级别的卡片溢出规则。\n"
+            "卡片获得时根据累计持有次数匹配分段表，命中区间即产出资源。\n"
+            "优先级：卡片显式配置 > 稀有度默认。键名大小写不敏感。\n"
+            "产出格式：资源名:数值，多个用逗号分隔（如 exchange_currency:10,starglitter:5）"
+        )
+        info_label.setWordWrap(True)
+        parent.addWidget(info_label)
+
+        self.overflow_table = QTableWidget()
+        self.overflow_table.setColumnCount(5)
+        self.overflow_table.setHorizontalHeaderLabels([
+            "稀有度", "首次获得产出", "满突张数", "满突前每次产出", "满突后每次产出"
+        ])
+        header = self.overflow_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(1, 5):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        self.overflow_table.verticalHeader().setVisible(False)
+        self.overflow_table.setAlternatingRowColors(True)
+        self.overflow_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.overflow_table.setMinimumHeight(150)
+        parent.addWidget(self.overflow_table)
+
+        # 变更即写回 store（P56 自动应用模式）
+        self.overflow_table.cellChanged.connect(self._on_overflow_cell_changed)
+
+        parent.addStretch()
+
+        # 初始化时填充表格
+        self._refresh_overflow_tab()
+
+    def _get_rarity_list(self):
+        """从 [rarities].ranks 动态解析稀有度列表；无配置时回退默认三级。"""
+        store = getattr(self, '_store', None)
+        if store and store.rarity_rank:
+            # rarities.ranks 如 [["SSR"], ["SR"], ["R"]] → 展平按 rank 排序
+            buckets = {}
+            for name, rank_idx in store.rarity_rank.items():
+                buckets.setdefault(rank_idx, []).append(name.upper())
+            result = []
+            for r in sorted(buckets):
+                result.extend(buckets[r])
+            return result
+        return ["SSR", "SR", "R"]
+
+    def _refresh_overflow_tab(self):
+        """从 ConfigStore.rarity_defaults 填充溢出表格。"""
+        store = getattr(self, '_store', None)
+        rarities = self._get_rarity_list()
+
+        # 阻断信号避免刷新期间的 cellChanged 触发写入
+        self.overflow_table.blockSignals(True)
+
+        self.overflow_table.setRowCount(len(rarities))
+        for i, rarity_name in enumerate(rarities):
+            # 稀有度列（只读）
+            rarity_item = QTableWidgetItem(rarity_name)
+            rarity_item.setFlags(rarity_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.overflow_table.setItem(i, 0, rarity_item)
+
+            # 从 store 读取该稀有度的溢出规则（键名 .lower()）
+            rarity_key = rarity_name.lower()
+            rd = {}
+            if store and hasattr(store, 'rarity_defaults'):
+                rd = store.rarity_defaults.get(rarity_key, {})
+
+            bands = rd.get('overflow_bands', [])
+            # 将分段表反推为三字段
+            first, threshold, pre_excess, post_excess = self._bands_to_fields(bands)
+
+            # 首次获得产出
+            first_text = ','.join(f'{k}:{v}' for k, v in sorted(first.items())) if first else ''
+            first_item = QTableWidgetItem(first_text)
+            self.overflow_table.setItem(i, 1, first_item)
+
+            # 满突张数（阈值）
+            threshold_item = QTableWidgetItem(str(threshold) if threshold else '')
+            self.overflow_table.setItem(i, 2, threshold_item)
+
+            # 满突前每次产出
+            pre_text = ','.join(f'{k}:{v}' for k, v in sorted(pre_excess.items())) if pre_excess else ''
+            pre_item = QTableWidgetItem(pre_text)
+            self.overflow_table.setItem(i, 3, pre_item)
+
+            # 满突后每次产出
+            post_text = ','.join(f'{k}:{v}' for k, v in sorted(post_excess.items())) if post_excess else ''
+            post_item = QTableWidgetItem(post_text)
+            self.overflow_table.setItem(i, 4, post_item)
+
+        self.overflow_table.blockSignals(False)
+
+    def _bands_to_fields(self, bands):
+        """将 OverflowBand 列表反推为三字段（首次/阈值/满突前/满突后）。
+
+        Returns:
+            (first, threshold, pre_excess, post_excess)
+        """
+        first = {}
+        threshold = 7
+        pre_excess = {}
+        post_excess = {}
+
+        for band in bands:
+            if band.min == 1 and band.max == 1:
+                first = dict(band.resources)
+            elif band.max is None:
+                # [N, ∞) → 满突后
+                post_excess = dict(band.resources)
+                threshold = band.min
+            elif band.min == 2 and band.max is not None:
+                # [2, N] → 满突前（假设首次=1, 满突后=N+1）
+                pre_excess = dict(band.resources)
+                if threshold is None:
+                    threshold = band.max + 1
+            elif band.min > 1 and band.max is None:
+                post_excess = dict(band.resources)
+                threshold = band.min
+            elif band.min == 1 and band.max is not None and band.max > 1:
+                # [1, N] 恒真单段——无首次、无满突后
+                pre_excess = dict(band.resources)
+
+        return first, threshold, pre_excess, post_excess
+
+    def _on_overflow_cell_changed(self, row, col):
+        """溢出表格单元格变更 → 实时展开为分段表并写回 store.rarity_defaults。"""
+        store = getattr(self, '_store', None)
+        if store is None:
+            return
+
+        rarity_name = self._get_rarity_list()[row]
+        rarity_key = rarity_name.lower()
+
+        # 读取四组字段
+        def _parse_resources(item):
+            if item is None:
+                return {}
+            text = item.text().strip()
+            if not text:
+                return {}
+            result = {}
+            for part in text.split(','):
+                part = part.strip()
+                if not part:
+                    continue
+                if ':' in part:
+                    k, v = part.split(':', 1)
+                    try:
+                        val = float(v.strip())
+                        if val < 0:
+                            continue  # GUI-3：负数拒绝写入
+                        result[k.strip()] = val
+                    except ValueError:
+                        continue  # GUI-4：非数值拒绝写入，保持旧值
+            return result
+
+        first = _parse_resources(self.overflow_table.item(row, 1))
+        threshold_text = (self.overflow_table.item(row, 2).text().strip()
+                          if self.overflow_table.item(row, 2) else '')
+        try:
+            threshold = int(threshold_text) if threshold_text else None
+        except ValueError:
+            threshold = None
+        pre_excess = _parse_resources(self.overflow_table.item(row, 3))
+        post_excess = _parse_resources(self.overflow_table.item(row, 4))
+
+        # 展开为分段表（四种组合映射）
+        bands = self._expand_fields_to_bands(first, threshold, pre_excess, post_excess)
+
+        # 写回 store.rarity_defaults（键名 .lower()）
+        if not hasattr(store, 'rarity_defaults'):
+            store.rarity_defaults = {}
+        if bands:
+            store.rarity_defaults[rarity_key] = {'overflow_bands': bands}
+        elif rarity_key in store.rarity_defaults:
+            del store.rarity_defaults[rarity_key]
+
+        # 重新构建 card_overflow_map
+        from ..core.config_toml import _build_card_overflow_map
+        _build_card_overflow_map(store)
+
+    def _expand_fields_to_bands(self, first, threshold, pre_excess, post_excess):
+        """将三字段展开为 OverflowBand 列表（四种组合映射）。
+
+        组合：
+          首次 + 满突张数N + 满突前 + 满突后 → [1,1]→首次 + [2,N]→满突前 + [N+1,∞)→满突后
+          满突张数N + 满突前 + 满突后（无首次）→ [1,N]→满突前 + [N+1,∞)→满突后
+          仅有满突前（无张数）→ [1,∞)→满突前（恒真单段）
+          全空 → 无溢出规则
+        """
+        bands = []
+
+        if first:
+            bands.append(OverflowBand(min=1, max=1, resources=first))
+
+        if threshold is not None and threshold > 0:
+            if post_excess:
+                bands.append(OverflowBand(min=threshold, max=None, resources=post_excess))
+            if pre_excess:
+                # 满突前区间取决于是否有首次
+                pre_start = 2 if first else 1
+                pre_end = threshold - 1
+                if pre_start <= pre_end:
+                    bands.append(OverflowBand(min=pre_start, max=pre_end, resources=pre_excess))
+        elif pre_excess and not post_excess:
+            # 仅有满突前、无张数、无满突后 → 恒真单段 [1,∞)
+            pre_start = 2 if first else 1
+            bands.append(OverflowBand(min=pre_start, max=None, resources=pre_excess))
+
+        bands.sort(key=lambda b: b.min)
+        return bands if bands else None
+
     def _sync_weight_cards(self):
         card_defs = self.get_card_defs()
         existing_weights = self._get_weight_data()
@@ -3141,10 +3271,7 @@ class ConfigPanel(QWidget):
                 'epitomizable_cards': getattr(p, 'epitomizable_cards', []),
                 'distribution': [{'card_id': d.card_id, 'probability': d.probability,
                                   'rarity': d.rarity, 'featured': d.featured,
-                                  'resources_gained': d.resources_gained,
-                                  'first_time_bonus': getattr(d, 'first_time_bonus', {}),
-                                  'nth_time_bonus': getattr(d, 'nth_time_bonus', {}),
-                                  'excess_bonus': getattr(d, 'excess_bonus', {}),}
+                                  'resources_gained': d.resources_gained,}
                                  for d in p.distribution] if p.distribution else None,
             })
 
@@ -3275,9 +3402,6 @@ class ConfigPanel(QWidget):
                         rarity=d.get('rarity', 'R'),
                         featured=d.get('featured', False),
                         resources_gained=d.get('resources_gained', {}),
-                        first_time_bonus=d.get('first_time_bonus', {}),
-                        nth_time_bonus=d.get('nth_time_bonus', {}),
-                        excess_bonus=d.get('excess_bonus', {}),
                     ))
             pool_type = p.get('type', '角色')
             bindings = {}
@@ -3817,9 +3941,6 @@ class ConfigPanel(QWidget):
                         rarity=d.get('rarity', 'R'),
                         featured=d.get('featured', False),
                         resources_gained=d.get('resources_gained', {}),
-                        first_time_bonus=d.get('first_time_bonus', {}),
-                        nth_time_bonus=d.get('nth_time_bonus', {}),
-                        excess_bonus=d.get('excess_bonus', {}),
                     ))
 
             bindings = {}
@@ -3956,10 +4077,7 @@ class ConfigPanel(QWidget):
             if p.distribution:
                 dist_list = [{'card_id': d.card_id, 'probability': d.probability,
                               'rarity': d.rarity, 'featured': d.featured,
-                              'resources_gained': d.resources_gained,
-                              'first_time_bonus': getattr(d, 'first_time_bonus', {}),
-                              'nth_time_bonus': getattr(d, 'nth_time_bonus', {}),
-                              'excess_bonus': getattr(d, 'excess_bonus', {}),}
+                              'resources_gained': d.resources_gained,}
                              for d in p.distribution]
                 self._pool_distributions[p.pool_id] = dist_list
 
@@ -4087,6 +4205,12 @@ class ConfigPanel(QWidget):
                 self.sim_start_date_edit.blockSignals(True)
                 self.sim_start_date_edit.setDate(qd)
                 self.sim_start_date_edit.blockSignals(False)
+        except Exception:
+            pass
+
+        # P63：刷新溢出表格
+        try:
+            self._refresh_overflow_tab()
         except Exception:
             pass
 

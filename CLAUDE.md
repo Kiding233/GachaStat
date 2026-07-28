@@ -18,7 +18,7 @@ pytest --cov=gacha_simulator                         # 测试
 **架构分层：**
 ```
 gacha_simulator/
-├── core/       # 引擎：池子、状态、策略、保底、GDR、分析算法（无 GUI 依赖）
+├── core/       # 引擎：池子、状态、策略、保底、GDR、溢出、分析算法（无 GUI 依赖）
 ├── service/    # GachaService + batch_simulator
 ├── gui/        # PyQt6 面板（Tab 列表见 main.py，C1 cron 自动同步）
 │               # wheel_blocker.py — QApplication 全局事件过滤器，统一拦截
@@ -49,7 +49,11 @@ gacha_simulator/
 
 ### GachaState (`core/state.py`)
 
-dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id)` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。
+dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`acquired_by_path`（P63 路径切片）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id, path, overflow_bands, initial_counts) → Dict[str, float]` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。P63：`add_card()` 统一溢出管道——接受分段表，内部匹配区间并返回溢出资源（无规则返回 `{}`）；`clone()` 深拷贝 `acquired_by_path`。
+
+### 溢出 (`core/overflow.py`)
+
+P63 新建——`OverflowBand` dataclass（`min`/`max: int|None`/`resources`，`None`=∞）+ `match_overflow_bands(bands, n)` + `expand_sugar_to_bands(first, nth, excess)` 语法糖展开。分段表统一表示 CardAcquired 触发点的溢出规则，替代旧 `compute_bonus_resources()`（已删除）。
 
 ### GDR (`core/gdr.py` + `core/generalized_drop_rate.py`)
 
@@ -80,6 +84,7 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 | 扩展 | 入口 |
 |------|------|
 | 新 GDR | `core/gdr.py` + `UNIFIED_GDR_REGISTRY` 注册 `GDRDefinition` |
+| 新溢出规则 | `core/overflow.py` → `CardDefEntry.overflow_bands` / `[rarity_defaults]` TOML 段 / GUI「满突溢出」标签页 |
 | 新策略 | `core/strategy.py` + `STRATEGY_REGISTRY` 注册 |
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |

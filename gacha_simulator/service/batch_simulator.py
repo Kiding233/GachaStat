@@ -68,6 +68,7 @@ class SimulationEnv:
     strategy_params: Dict[str, Any] = dc_field(default_factory=dict)
     stop_condition: Any = None
     return_compact: bool = True
+    card_overflow_map: Dict[str, list] = dc_field(default_factory=dict)  # ← P63
 
 
 def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None, rarity_rank=None):
@@ -232,6 +233,7 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
         pity_state=pity_state,
         ssr_ids=env.ssr_ids,
         card_defs=env.card_defs,
+        card_overflow_map=env.card_overflow_map,
     )
     state = GachaState(resources=dict(initial_resources))
     return service.run_simulation_compact(state)
@@ -516,12 +518,8 @@ class SimulationEnvBuilder:
             ssr_ids = set()
             for de in getattr(pe, 'distribution', []):
                 rg = dict(getattr(de, 'resources_gained', {}) or {})
-                ft = dict(getattr(de, 'first_time_bonus', {}) or {})
-                nth = dict(getattr(de, 'nth_time_bonus', {}) or {})
-                xs = dict(getattr(de, 'excess_bonus', {}) or {})
                 rwd = Reward(id=de.card_id, name=getattr(de, 'card_id', ''),
-                             resources_gained=rg, first_time_bonus=ft,
-                             nth_time_bonus=nth, excess_bonus=xs,
+                             resources_gained=rg,
                              extra_info={'rarity': de.rarity.lower(),
                                         'featured': de.featured})
                 rewards.append((rwd, de.probability / 100.0))
@@ -725,6 +723,7 @@ class SimulationEnvBuilder:
             gdr_context=gdr_context,
             strategy_name=strategy_name,
             strategy_params=strategy_params,
+            card_overflow_map=dict(getattr(config_store, 'card_overflow_map', {})),
         )
 
     @staticmethod
@@ -743,6 +742,7 @@ class SimulationEnvBuilder:
             strategy_name=config.get('strategy_name', 'smart'),
             strategy_params=config.get('strategy_params', {}),
             stop_condition=config.get('stop_condition'),
+            card_overflow_map=config.get('card_overflow_map', {}),
         )
 
     @staticmethod

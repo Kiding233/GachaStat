@@ -8,7 +8,7 @@ from ..core import (
 )
 from ..core.action import NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from ..core.pity import PityEngine, PityState
-from ..core.pool import NO_CARD_ID as _NO_CARD_ID, compute_bonus_resources
+from ..core.pool import NO_CARD_ID as _NO_CARD_ID
 
 
 class SimulationStats:
@@ -64,6 +64,7 @@ class GachaService:
         pity_state: Optional[PityState] = None,
         ssr_ids: Optional[set] = None,
         card_defs: Optional[List] = None,
+        card_overflow_map: Optional[Dict[str, list]] = None,
     ):
         self.pools = {p.id: p for p in pools}
         self.strategy = strategy
@@ -75,6 +76,7 @@ class GachaService:
         self.pity_state = pity_state or PityState()
         self.ssr_ids = ssr_ids or set()
         self.card_defs = card_defs or []
+        self.card_overflow_map = card_overflow_map or {}
         self.session_id = str(uuid.uuid4())
         self._pools_list = list(self.pools.values())
 
@@ -323,21 +325,19 @@ class GachaService:
                             pool_counter_max = max(pool_counter_max, cv)
 
                     stats.on_draw(reward.id, pool.id, pity_triggered)
-                    # P60：卡片计入 state.acquired（一等公民）——替代旧 stats.acquired_counts
-                    if reward.id != _NO_CARD_ID:
-                        state.add_card(reward.id)
 
                     if pity_triggered:
                         stats.pity_triggers += 1
 
                     rg = dict(reward.resources_gained or {})
-                    if reward.first_time_bonus or reward.nth_time_bonus or reward.excess_bonus:
-                        ac_new = state.get_card_count(reward.id)          # ← P60：从 state 读取
-                        init = _initial_counts.get(reward.id, 0)
-                        total_before = init + ac_new - 1
-                        total_after = init + ac_new
-                        bonus = compute_bonus_resources(reward, total_before, total_after)
-                        for k, v in bonus.items():
+                    # P63：卡片获得 + 溢出统一走 state.add_card() 管道
+                    if reward.id != _NO_CARD_ID:
+                        overflow = state.add_card(
+                            reward.id, path="draw",
+                            overflow_bands=self.card_overflow_map.get(reward.id),
+                            initial_counts=_initial_counts,
+                        )
+                        for k, v in overflow.items():
                             rg[k] = rg.get(k, 0) + v
                     if rg:
                         for k, v in rg.items():

@@ -28,9 +28,13 @@ class StrategyContext:
     stop_condition: 'StopCondition'
     _pity_engine: Optional['PityEngine'] = field(default=None, repr=False)
     _pity_state: Optional['PityState'] = field(default=None, repr=False)
-    acquired: Dict[str, int] = field(default_factory=dict)
     pool_draw_counts: Dict[str, int] = field(default_factory=dict)
     total_draws: int = 0
+
+    @property                                                          # P60：从 state 实时读取
+    def acquired(self) -> Dict[str, int]:
+        """卡牌持有量单一真相源。"""
+        return self.state.acquired
     last_draw_pity_triggered: bool = False
     ssr_ids: Set[str] = field(default_factory=set)
     _pity_cache: Dict[str, Dict[str, float]] = field(default_factory=dict, repr=False)
@@ -92,7 +96,8 @@ class SmartStrategy(Strategy):
     def _pool_needs_target(self, pool_id: str, ctx: StrategyContext) -> bool:
         self._ensure_pool_to_targets(ctx)
         for t in self._pool_to_targets.get(pool_id, []):
-            if ctx.acquired.get(t.card_id, 0) < t.quantity_needed:
+            ac_val = ctx.acquired.get(t.card_id, 0)
+            if ac_val < t.quantity_needed:
                 return True
         return False
 

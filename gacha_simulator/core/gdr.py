@@ -1,8 +1,11 @@
-from typing import List, Dict, Set, Optional, Callable, Any, NamedTuple, Union
+from typing import List, Dict, Set, Optional, Callable, Any, NamedTuple, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 import logging
 
 from .result_types import CompactResult
+
+if TYPE_CHECKING:
+    from .config_store import ConfigStore
 
 logger = logging.getLogger(__name__)
 
@@ -473,6 +476,87 @@ def _gdr_draw_conversion_efficiency(compact, target_specs,
     return (draw_pool_draws * cost_per_draw) / resource_consumed
 
 
+# ═══════════════════════════════════════════════════════════════
+# P62 可达目标卡筛选
+# ═══════════════════════════════════════════════════════════════
+
+def filter_target_specs_by_obtainable(
+    target_specs: Dict[str, int],
+    store: 'ConfigStore',
+    final_time: float,
+) -> Dict[str, int]:
+    """返回仅包含「可达」目标卡的 target_specs 子集。
+
+    可达定义：目标卡所属的至少一个启用池子的 start_day ≤ final_time。
+    判定依据是池子时间窗口，而非策略是否实际抽取（pool_draw_counts > 0）。
+
+    Args:
+        target_specs: {card_id: quantity} 全量目标卡
+        store: ConfigStore 实例（需含 card_defs.pools + pools 元数据）
+        final_time: 模拟实际结束时间（CompactResult.final_time）
+
+    Returns:
+        仅含可达目标卡的 Dict。若 store 为 None，返回原始 target_specs（保守回退）。
+        若无一可达，返回空 dict。
+    """
+    if store is None:
+        return dict(target_specs)
+
+    # 构建 card_id → set(pool_ids) 索引
+    card_pools: Dict[str, set] = {}
+    for cd in store.card_defs:
+        card_pools[cd.card_id] = set(cd.pools)
+
+    # 构建 pool_id → start_day 映射（仅 enabled 池子）
+    pool_start: Dict[str, int] = {}
+    for p in store.pools:
+        if p.enabled:
+            pool_start[p.pool_id] = p.start_day
+
+    # 筛选：至少一个所属池子的 start_day ≤ final_time
+    obtainable: Dict[str, int] = {}
+    for cid, qty in target_specs.items():
+        for pid in card_pools.get(cid, set()):
+            start = pool_start.get(pid)
+            if start is not None and start <= final_time:
+                obtainable[cid] = qty
+                break
+
+    return obtainable
+
+
+def _gdr_target_achievement_obtainable(compact, target_specs, store=None, **kwargs):
+    """简单目标达成率（可达）——分母仅含模拟期间池子已开放的目标卡。"""
+    final_time = compact.get('final_time', 0) if isinstance(compact, dict) else getattr(compact, 'final_time', 0)
+    obtainable = filter_target_specs_by_obtainable(target_specs, store, final_time)
+    return _gdr_target_achievement(compact, obtainable, **kwargs)
+
+
+def _gdr_target_collection_obtainable(compact, target_specs, store=None, **kwargs):
+    """目标卡收集率（可达）——分母仅含可达目标卡种类数。"""
+    final_time = compact.get('final_time', 0) if isinstance(compact, dict) else getattr(compact, 'final_time', 0)
+    obtainable = filter_target_specs_by_obtainable(target_specs, store, final_time)
+    return _gdr_target_collection(compact, obtainable, **kwargs)
+
+
+def _gdr_all_targets_obtainable(compact, target_specs, store=None, **kwargs):
+    """抽出全部目标卡（可达）——判定域仅含可达目标卡。"""
+    final_time = compact.get('final_time', 0) if isinstance(compact, dict) else getattr(compact, 'final_time', 0)
+    obtainable = filter_target_specs_by_obtainable(target_specs, store, final_time)
+    return _gdr_all_targets(compact, obtainable, **kwargs)
+
+
+def _gdr_weighted_satisfaction_obtainable(compact, target_specs, store=None,
+                                           desire_weights=None, miss_cost_weights=None, **kwargs):
+    """加权满意度（可达）——仅含可达目标卡，排除不可达卡的 miss_cost 永久惩罚。"""
+    final_time = compact.get('final_time', 0) if isinstance(compact, dict) else getattr(compact, 'final_time', 0)
+    obtainable = filter_target_specs_by_obtainable(target_specs, store, final_time)
+    return _gdr_weighted_satisfaction(compact, obtainable,
+                                       desire_weights=desire_weights,
+                                       miss_cost_weights=miss_cost_weights,
+                                       **kwargs)
+
+
 class GDRDefinition(NamedTuple):
     key: str
     display_name: str
@@ -485,6 +569,7 @@ class GDRDefinition(NamedTuple):
     category: str = 'basic'
     lower_is_better: bool = False
     compatible_with_min_resource: bool = True
+    needs_store: bool = False
 
 
 UNIFIED_GDR_REGISTRY: Dict[str, GDRDefinition] = {
@@ -495,6 +580,14 @@ UNIFIED_GDR_REGISTRY: Dict[str, GDRDefinition] = {
         compute_from_compact=_gdr_target_achievement,
         compute_from_history=simple_target_achievement_rate,
     ),
+    # P62 可达变体 —— 分母仅含模拟期间池子已开放的目标卡
+    'target_achievement_obtainable': GDRDefinition(
+        key='target_achievement_obtainable',
+        display_name='简单目标达成率（可达）',
+        default_threshold=1.0,
+        compute_from_compact=_gdr_target_achievement_obtainable,
+        needs_store=True,
+    ),
     'target_collection': GDRDefinition(
         key='target_collection',
         display_name='目标卡收集率',
@@ -502,12 +595,26 @@ UNIFIED_GDR_REGISTRY: Dict[str, GDRDefinition] = {
         compute_from_compact=_gdr_target_collection,
         compute_from_history=target_collection_rate,
     ),
+    'target_collection_obtainable': GDRDefinition(
+        key='target_collection_obtainable',
+        display_name='目标卡收集率（可达）',
+        default_threshold=1.0,
+        compute_from_compact=_gdr_target_collection_obtainable,
+        needs_store=True,
+    ),
     'all_targets': GDRDefinition(
         key='all_targets',
         display_name='抽出全部目标卡',
         default_threshold=1.0,
         compute_from_compact=_gdr_all_targets,
         compute_from_history=all_targets_obtained,
+    ),
+    'all_targets_obtainable': GDRDefinition(
+        key='all_targets_obtainable',
+        display_name='抽出全部目标卡（可达）',
+        default_threshold=1.0,
+        compute_from_compact=_gdr_all_targets_obtainable,
+        needs_store=True,
     ),
     'ssr_collection': GDRDefinition(
         key='ssr_collection',
@@ -601,6 +708,15 @@ UNIFIED_GDR_REGISTRY: Dict[str, GDRDefinition] = {
         needs_weights='desire+miss_cost',
         category='weighted',
     ),
+    'weighted_satisfaction_obtainable': GDRDefinition(
+        key='weighted_satisfaction_obtainable',
+        display_name='加权满意度（可达）',
+        default_threshold=0.0,
+        compute_from_compact=_gdr_weighted_satisfaction_obtainable,
+        needs_weights='desire+miss_cost',
+        category='weighted',
+        needs_store=True,
+    ),
     'total_card_value': GDRDefinition(
         key='total_card_value',
         display_name='总出卡价值',
@@ -682,15 +798,15 @@ def get_expanded_gdr_entries(resource_defs=None):
     """返回展开后的 GDR 条目列表 [(key, display_name, lower_is_better, default_threshold)]。
 
     纯函数，不修改全局状态。
-    - resource_defs 为 None → 17 条，等价遍历原始注册表
+    - resource_defs 为 None → 21 条，等价遍历原始注册表（含 P62 4 个可达变体）
     - resource_defs 不为 None → 资源类 GDR 按资源类型展开为 :qualified 条目
 
     >>> entries = get_expanded_gdr_entries()
     >>> len(entries)
-    17
+    21
     >>> entries = get_expanded_gdr_entries({'draw_resource': '抽卡资源', 'exchange_currency': '兑换货币'})
     >>> len(entries)
-    21
+    25
     """
     entries = []
     for key, defn in UNIFIED_GDR_REGISTRY.items():
@@ -825,6 +941,7 @@ def compute_gdr_from_compact(
     card_value_weights: Dict[str, float] = None,
     ssr_ids: Set[str] = None,
     weapon_character_map: Dict[str, str] = None,
+    store: 'ConfigStore' = None,
     **gdr_kwargs,
 ) -> float:
     _, resource_id = parse_gdr_key(gdr_key)
@@ -832,6 +949,12 @@ def compute_gdr_from_compact(
     if defn is None:
         return 0.0
     gdr_kwargs.pop('resource_id', None)  # 防冲突：解析值优先
+
+    # P62: needs_store 校验缺失时的可观测性提示
+    if getattr(defn, 'needs_store', False) and store is None:
+        logger.debug('GDR %s 需要 store 参数但未传入，回退至全量 target_specs（非可达过滤）', gdr_key)
+
+    # P62: 过滤由 wrapper 函数自行执行，此处仅透传 store
     return defn.compute_from_compact(
         compact,
         target_specs=target_specs,
@@ -841,6 +964,7 @@ def compute_gdr_from_compact(
         ssr_ids=ssr_ids,
         weapon_character_map=weapon_character_map,
         resource_id=resource_id,
+        store=store,
         **gdr_kwargs,
     )
 
@@ -855,7 +979,8 @@ class GDRCalculator:
                  gdr_threshold=None,
                  desire_weights=None, miss_cost_weights=None,
                  card_value_weights=None, ssr_ids=None,
-                 weapon_character_map=None):
+                 weapon_character_map=None,
+                 store=None):
         self.target_specs = target_specs
         self.gdr_key = gdr_key
         self.desire_weights = desire_weights
@@ -863,6 +988,7 @@ class GDRCalculator:
         self.card_value_weights = card_value_weights
         self.ssr_ids = ssr_ids
         self.weapon_character_map = weapon_character_map
+        self.store = store
 
         defn = resolve_gdr_definition(gdr_key)
         if gdr_threshold is None:
@@ -881,6 +1007,7 @@ class GDRCalculator:
             card_value_weights=self.card_value_weights,
             ssr_ids=self.ssr_ids,
             weapon_character_map=self.weapon_character_map,
+            store=self.store,
         )
 
     def is_success(self, compact_or_aggregate):
@@ -918,6 +1045,7 @@ def make_gdr_calculator(store, target_specs, gdr_key, *,
         card_value_weights=store.card_value_weights,
         ssr_ids=ssr_ids,
         weapon_character_map=weapon_character_map,
+        store=store,
     )
 
 
@@ -931,6 +1059,7 @@ def compute_success_probability(
     card_value_weights: Dict[str, float] = None,
     ssr_ids: Set[str] = None,
     weapon_character_map: Dict[str, str] = None,
+    store: 'ConfigStore' = None,
 ) -> float:
     valid = [h for h in histories if h is not None]
     if not valid:
@@ -946,6 +1075,7 @@ def compute_success_probability(
             h, target_specs, gdr_key,
             desire_weights, miss_cost_weights, card_value_weights,
             ssr_ids, weapon_character_map,
+            store=store,
         )
         if lower_is_better:
             if val <= gdr_threshold:
@@ -976,6 +1106,7 @@ def compute_gdr_from_cumulative(cum_snapshot, target_specs, gdr_key,
                                  card_value_weights=None, ssr_ids=None,
                                  weapon_character_map=None,
                                  initial_resources=None,
+                                 store=None,
                                  **gdr_kwargs):
     cum_consumed = cum_snapshot.get('cumulative_consumed', {})
     cum_gained = cum_snapshot.get('cumulative_gained', {})
@@ -1003,6 +1134,7 @@ def compute_gdr_from_cumulative(cum_snapshot, target_specs, gdr_key,
         'total_consumed': cum_consumed,
         'total_gained': cum_gained,
         'final_resources': pseudo_final_resources,
+        'final_time': cum_snapshot.get('pool_end_time', 0),
         'pool_draw_counts': {},
         'pool_card_counts': {},
         'pool_pity_counts': {},
@@ -1011,5 +1143,6 @@ def compute_gdr_from_cumulative(cum_snapshot, target_specs, gdr_key,
         pseudo_compact, target_specs, gdr_key,
         desire_weights, miss_cost_weights, card_value_weights,
         ssr_ids, weapon_character_map,
+        store=store,
         **gdr_kwargs,
     )

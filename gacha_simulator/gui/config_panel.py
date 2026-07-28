@@ -14,9 +14,9 @@ from PyQt6.QtGui import QFont, QColor
 
 from ..core.config_store import (
     CardDefEntry, PoolEntry, PoolDistEntry,
-    PityDef, PityConfig,
-    GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
+    PityDef, PityConfig, GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
 )
+from ..core.pity import BEHAVIOR_REGISTRY
 
 
 def _bonus_to_text(d):
@@ -948,8 +948,39 @@ class ConfigPanel(QWidget):
                 note_item.setText(f"{len(result)}卡")
             self._sync_card_defs_from_pools()
 
+    # ══════════════════════════════════════════════════════════════════
+    # P55 阶段十一：保底配置 UI——BEHAVIOR_REGISTRY 元数据驱动
+    # ══════════════════════════════════════════════════════════════════
+
+    # 可选的保底类型（仅已实现的 counter 驱动型）
+    _PITY_TYPES = [
+        ('soft_interval', '区间软保底'),
+        ('soft_additive', '累加软保底'),
+        ('soft_step', '分段软保底'),
+        ('hard', '硬保底'),
+        # P56 新增
+        ('rotating', '轮换保底'),
+        ('rotating_soft', '轮换+软保底'),
+        ('rotating_cr', '轮换+捕获明光'),
+        ('rotating_cr_soft', '轮换+捕获明光+软保底'),
+        ('targeted', '定轨保底'),
+        ('targeted_soft', '定轨+软保底'),
+    ]
+
+    # 动态控件工厂——参数类型 → (widget_class, widget_kwargs)
+    _WIDGET_FACTORY = {
+        'int': (QSpinBox, {'range': (1, 999), 'value': 80}),
+        'float': (QDoubleSpinBox, {'range': (0.1, 1000.0), 'value': 6.0, 'decimals': 2, 'singleStep': 0.5}),
+        'bool': (QCheckBox, {}),
+        'str': (QLineEdit, {}),
+        'deltas': (None, {}),  # 特殊处理——deltas 表格
+    }
+
     def _setup_pity_config(self, parent):
         self._pity_defs = []
+        self._current_pity_row: int = -1  # 当前选中索引（用于切换前 flush）
+        self._pity_dynamic_widgets = {}  # pname → widget
+        self._pity_dynamic_labels = {}   # pname → label
 
         self.pity_enabled = QCheckBox("启用保底")
         self.pity_enabled.setChecked(True)
@@ -974,64 +1005,87 @@ class ConfigPanel(QWidget):
         left_layout.addLayout(pity_btn_layout)
         main_layout.addLayout(left_layout, 1)
 
+        # ── 详情面板（右侧） ──
         detail_group = QGroupBox("保底详情")
         detail_group.setEnabled(False)
         self._pity_detail_group = detail_group
         detail_form = QFormLayout(detail_group)
+        self._pity_detail_form = detail_form  # P56：供 _on_pity_type_changed 整行显隐
 
+        # 名称
         self.pity_name_edit = QLineEdit()
         detail_form.addRow("名称:", self.pity_name_edit)
 
+        # 类型
         self.pity_type_combo = QComboBox()
-        self.pity_type_combo.addItems(["soft", "hard"])
+        self.pity_type_combo.addItems([d for _, d in self._PITY_TYPES])
         self.pity_type_combo.currentIndexChanged.connect(self._on_pity_type_changed)
         detail_form.addRow("类型:", self.pity_type_combo)
 
-        self.pity_start_spin = QSpinBox()
-        self.pity_start_spin.setRange(1, 999)
-        self.pity_start_spin.setValue(74)
-        self._pity_start_label = QLabel("起始抽数:")
-        detail_form.addRow(self._pity_start_label, self.pity_start_spin)
+        # scope
+        self.pity_scope_combo = QComboBox()
+        self.pity_scope_combo.addItems(["ssr", "sr", "r"])
+        detail_form.addRow("稀有度:", self.pity_scope_combo)
 
-        self.pity_end_spin = QSpinBox()
-        self.pity_end_spin.setRange(1, 999)
-        self.pity_end_spin.setValue(90)
-        self._pity_end_label = QLabel("结束抽数:")
-        detail_form.addRow(self._pity_end_label, self.pity_end_spin)
+        # target_featured
+        self.pity_target_featured_cb = QCheckBox("仅限Featured卡")
+        detail_form.addRow("目标:", self.pity_target_featured_cb)
 
-        self.pity_func_combo = QComboBox()
-        self.pity_func_combo.addItems(["linear", "exp", "step"])
-        self._pity_func_label = QLabel("递增函数:")
-        detail_form.addRow(self._pity_func_label, self.pity_func_combo)
+        # ── 动态参数区（由 BEHAVIOR_REGISTRY 元数据生成） ──
+        self._pity_dynamic_area = QFormLayout()
+        self._pity_dynamic_area.setContentsMargins(0, 0, 0, 0)
+        self._pity_dynamic_container = QWidget()
+        self._pity_dynamic_container.setLayout(self._pity_dynamic_area)
+        detail_form.addRow(QLabel("参数:"), self._pity_dynamic_container)
 
-        target_label = QLabel("目标分布:")
-        detail_form.addRow(target_label)
-        self.pity_target_table = QTableWidget()
-        self.pity_target_table.setColumnCount(2)
-        self.pity_target_table.setHorizontalHeaderLabels(["绑定键", "权重"])
-        pt_header = self.pity_target_table.horizontalHeader()
-        pt_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        pt_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.pity_target_table.setColumnWidth(1, 80)
-        self.pity_target_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.pity_target_table.setMaximumHeight(120)
-        detail_form.addRow(self.pity_target_table)
+        # ── deltas 表格（仅 soft_step 可见） ──
+        self._pity_deltas_group = QGroupBox("deltas 分段表")
+        deltas_layout = QVBoxLayout(self._pity_deltas_group)
+        self.pity_deltas_table = QTableWidget()
+        self.pity_deltas_table.setColumnCount(2)
+        self.pity_deltas_table.setHorizontalHeaderLabels(["抽数段", "增量(%)"])
+        dt_header = self.pity_deltas_table.horizontalHeader()
+        dt_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        dt_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.pity_deltas_table.setMaximumHeight(150)
+        deltas_layout.addWidget(self.pity_deltas_table)
+        deltas_btn_layout = QHBoxLayout()
+        add_delta_btn = QPushButton("添加段")
+        add_delta_btn.clicked.connect(self._add_deltas_row)
+        remove_delta_btn = QPushButton("移除段")
+        remove_delta_btn.clicked.connect(self._remove_deltas_row)
+        deltas_btn_layout.addWidget(add_delta_btn)
+        deltas_btn_layout.addWidget(remove_delta_btn)
+        deltas_btn_layout.addStretch()
+        deltas_layout.addLayout(deltas_btn_layout)
+        detail_form.addRow(self._pity_deltas_group)
+        self._pity_deltas_group.setVisible(False)
 
-        target_btn_layout = QHBoxLayout()
-        add_target_btn = QPushButton("添加")
-        add_target_btn.clicked.connect(self._add_pity_target)
-        remove_target_btn = QPushButton("移除")
-        remove_target_btn.clicked.connect(self._remove_pity_target)
-        target_btn_layout.addWidget(add_target_btn)
-        target_btn_layout.addWidget(remove_target_btn)
-        target_btn_layout.addStretch()
-        detail_form.addRow(target_btn_layout)
+        # ── P56：cr_state_probs 表格（仅 rotating_cr / rotating_cr_soft 可见） ──
+        self._pity_cr_probs_group = QGroupBox("捕获明光——每状态拦截概率")
+        cr_probs_layout = QVBoxLayout(self._pity_cr_probs_group)
+        self.pity_cr_probs_table = QTableWidget()
+        self.pity_cr_probs_table.setColumnCount(1)
+        self.pity_cr_probs_table.setHorizontalHeaderLabels(["拦截概率"])
+        cr_header = self.pity_cr_probs_table.horizontalHeader()
+        cr_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.pity_cr_probs_table.setMaximumHeight(150)
+        cr_probs_layout.addWidget(self.pity_cr_probs_table)
+        cr_probs_btn_layout = QHBoxLayout()
+        add_cr_btn = QPushButton("添加行")
+        add_cr_btn.clicked.connect(self._add_cr_probs_row)
+        remove_cr_btn = QPushButton("移除行")
+        remove_cr_btn.clicked.connect(self._remove_cr_probs_row)
+        cr_probs_btn_layout.addWidget(add_cr_btn)
+        cr_probs_btn_layout.addWidget(remove_cr_btn)
+        cr_probs_btn_layout.addStretch()
+        cr_probs_layout.addLayout(cr_probs_btn_layout)
+        detail_form.addRow(self._pity_cr_probs_group)
+        self._pity_cr_probs_group.setVisible(False)
 
-        self.pity_reset_combo = QComboBox()
-        self.pity_reset_combo.addItems(["any_ssr", "featured_ssr", "never"])
-        detail_form.addRow("重置条件:", self.pity_reset_combo)
-
+        # ── 池子 + 初始值 ──
         self.pity_pools_edit = QLineEdit()
+        self.pity_pools_edit.setPlaceholderText("* (全部池子)")
         detail_form.addRow("适用池子:", self.pity_pools_edit)
 
         self.pity_init_spin = QSpinBox()
@@ -1039,36 +1093,303 @@ class ConfigPanel(QWidget):
         self.pity_init_spin.setValue(0)
         detail_form.addRow("初始水位:", self.pity_init_spin)
 
+        # ── P56：初始状态（rotating / targeted 家族） ──
+        self.pity_guaranteed_init_cb = QCheckBox("初始处于大保底状态")
+        self.pity_guaranteed_init_cb.setVisible(False)
+        detail_form.addRow("", self.pity_guaranteed_init_cb)
+
+        self.pity_fate_points_spin = QSpinBox()
+        self.pity_fate_points_spin.setRange(0, 10)
+        self.pity_fate_points_spin.setValue(0)
+        self.pity_fate_points_spin.setVisible(False)
+        detail_form.addRow("初始命定值:", self.pity_fate_points_spin)
+
+        # P56：初始定轨卡片（targeted 家族可见，从池子 epitomizable_cards 填充）
+        self.pity_selected_card_combo = QComboBox()
+        self.pity_selected_card_combo.setVisible(False)
+        self.pity_selected_card_combo.setToolTip("模拟开始时的定轨目标——留空 = 不定轨")
+        detail_form.addRow("初始定轨:", self.pity_selected_card_combo)
+
+        # ── 生命周期 ──
+        self.pity_deactivate_cb = QCheckBox("提前出货后停用")
+        detail_form.addRow("", self.pity_deactivate_cb)
+
+        self.pity_depends_combo = QComboBox()
+        self.pity_depends_combo.addItem("(无依赖)", "")
+        self.pity_depends_combo.setToolTip("依赖的 behavior——该 behavior 首次触发后本保底才激活")
+        detail_form.addRow("依赖:", self.pity_depends_combo)
+
         main_layout.addWidget(detail_group, 2)
         parent.addLayout(main_layout)
 
-        self.pity_enabled.stateChanged.connect(self._update_preview)
-        self.pity_name_edit.textChanged.connect(self._update_preview)
-        self.pity_start_spin.valueChanged.connect(self._update_preview)
-        self.pity_end_spin.valueChanged.connect(self._update_preview)
-        self.pity_func_combo.currentIndexChanged.connect(self._update_preview)
-        self.pity_reset_combo.currentIndexChanged.connect(self._update_preview)
-        self.pity_pools_edit.textChanged.connect(self._update_preview)
-        self.pity_init_spin.valueChanged.connect(self._update_preview)
+        # 信号连接——控件变更 → 实时写回数据 → 触发预览
+        self.pity_enabled.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_name_edit.textChanged.connect(self._flush_pity_current_detail)
+        self.pity_type_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_scope_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_target_featured_cb.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_pools_edit.textChanged.connect(self._flush_pity_current_detail)
+        self.pity_init_spin.valueChanged.connect(self._flush_pity_current_detail)
+        self.pity_deactivate_cb.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_guaranteed_init_cb.stateChanged.connect(self._flush_pity_current_detail)
+        self.pity_fate_points_spin.valueChanged.connect(self._flush_pity_current_detail)
+        self.pity_selected_card_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_depends_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+
+    # ── 动态控件构建 ──
+
+    def _build_param_widgets(self, btype: str) -> dict:
+        """根据 BEHAVIOR_REGISTRY 中 btype 的 params 元数据生成控件。
+        返回 {param_name: widget} dict。
+        """
+        widgets = {}
+        # 清除旧控件
+        self._clear_dynamic_widgets()
+
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+
+        for pname, pmeta in params_meta.items():
+            ptype = pmeta.get('type', 'str')
+            if ptype == 'deltas':
+                continue  # deltas 由专用表格处理
+
+            factory = self._WIDGET_FACTORY.get(ptype)
+            if factory is None:
+                continue
+
+            widget_cls, kwargs = factory
+            if widget_cls is None:
+                continue
+
+            # registry 声明了 options → 使用 QComboBox（覆盖类型默认控件）
+            if "options" in pmeta:
+                w = QComboBox()
+                options = pmeta["options"]
+                for opt in options:
+                    w.addItem(str(opt))
+                default = pmeta.get('default', options[0])
+                idx = w.findText(str(default))
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+            elif widget_cls is QSpinBox:
+                w = QSpinBox()
+                w.setRange(*kwargs.get('range', (1, 999)))
+                default = pmeta.get('default', kwargs.get('value', 0))
+                w.setValue(int(default) if default else 0)
+            elif widget_cls is QDoubleSpinBox:
+                w = QDoubleSpinBox()
+                w.setRange(*kwargs.get('range', (0.1, 1000.0)))
+                w.setDecimals(kwargs.get('decimals', 2))
+                w.setSingleStep(kwargs.get('singleStep', 1.0))
+                default = pmeta.get('default', kwargs.get('value', 1.0))
+                w.setValue(float(default) if default else 0.0)
+            elif widget_cls is QCheckBox:
+                w = QCheckBox()
+                w.setChecked(pmeta.get('default', False))
+            elif widget_cls is QLineEdit:
+                w = QLineEdit()
+                default = pmeta.get('default', '')
+                w.setText(str(default) if default else '')
+            else:
+                continue
+
+            display = pmeta.get('display_name', pname)
+            label = QLabel(f"{display}:")
+            self._pity_dynamic_area.addRow(label, w)
+            # 连接预览信号
+            if hasattr(w, 'valueChanged'):
+                w.valueChanged.connect(self._flush_pity_current_detail)
+            elif hasattr(w, 'currentIndexChanged'):
+                w.currentIndexChanged.connect(self._flush_pity_current_detail)
+            elif hasattr(w, 'textChanged'):
+                w.textChanged.connect(self._flush_pity_current_detail)
+            elif hasattr(w, 'stateChanged'):
+                w.stateChanged.connect(self._flush_pity_current_detail)
+
+            widgets[pname] = w
+            self._pity_dynamic_labels[pname] = label
+
+        self._pity_dynamic_widgets = widgets
+        return widgets
+
+    def _clear_dynamic_widgets(self):
+        """清除旧的动态控件。"""
+        area = self._pity_dynamic_area
+        # 从后往前移除所有行
+        for i in range(area.rowCount() - 1, -1, -1):
+            row = area.takeRow(i)
+            # PyQt6: takeRow() 返回 TakeRowResult (namedtuple-like)；
+            # 可通过 .labelItem / .fieldItem 属性安全访问
+            if row is not None:
+                label_item = row.labelItem
+                field_item = row.fieldItem
+                if label_item and label_item.widget():
+                    label_item.widget().setParent(None)
+                if field_item and field_item.widget():
+                    field_item.widget().setParent(None)
+        self._pity_dynamic_widgets = {}
+        self._pity_dynamic_labels = {}
+
+    # ── deltas 表格 ──
+
+    def _show_deltas_table(self, visible: bool):
+        self._pity_deltas_group.setVisible(visible)
+
+    def _populate_deltas_table(self, deltas):
+        """deltas: ((n, inc), ...) 或 None"""
+        table = self.pity_deltas_table
+        table.setRowCount(0)
+        if not deltas:
+            return
+        table.setRowCount(len(deltas))
+        for i, (n, inc) in enumerate(deltas):
+            n_item = QTableWidgetItem(str(n))
+            inc_item = QTableWidgetItem(str(inc))
+            table.setItem(i, 0, n_item)
+            table.setItem(i, 1, inc_item)
+
+    def _read_deltas_table(self):
+        """读取 deltas 表格 → tuple[tuple[int, float], ...]"""
+        table = self.pity_deltas_table
+        result = []
+        for i in range(table.rowCount()):
+            n_item = table.item(i, 0)
+            inc_item = table.item(i, 1)
+            if n_item and inc_item:
+                try:
+                    n = int(n_item.text())
+                    inc = float(inc_item.text())
+                    result.append((n, inc))
+                except ValueError:
+                    continue
+        return tuple(result) if result else None
+
+    def _add_deltas_row(self):
+        table = self.pity_deltas_table
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem("10"))
+        table.setItem(row, 1, QTableWidgetItem("5.0"))
+
+    def _remove_deltas_row(self):
+        table = self.pity_deltas_table
+        rows = sorted([r.row() for r in table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            table.removeRow(row)
+
+    # ── P56：cr_state_probs 表格操作 ──
+
+    def _populate_cr_probs_table(self, cr_state_probs):
+        """cr_state_probs: [float, ...] 或 None"""
+        table = self.pity_cr_probs_table
+        table.setRowCount(0)
+        if not cr_state_probs:
+            return
+        table.setRowCount(len(cr_state_probs))
+        for i, val in enumerate(cr_state_probs):
+            table.setItem(i, 0, QTableWidgetItem(str(val)))
+
+    def _read_cr_probs_table(self):
+        """读取 cr_state_probs 表格 → list[float]"""
+        table = self.pity_cr_probs_table
+        result = []
+        for i in range(table.rowCount()):
+            item = table.item(i, 0)
+            if item:
+                try:
+                    result.append(float(item.text()))
+                except ValueError:
+                    continue
+        return result if result else None
+
+    def _add_cr_probs_row(self):
+        table = self.pity_cr_probs_table
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem("0.0"))
+
+    def _remove_cr_probs_row(self):
+        table = self.pity_cr_probs_table
+        rows = sorted([r.row() for r in table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            table.removeRow(row)
+
+    # ── P56：depends_on 下拉框刷新 ──
+
+    def _refresh_depends_combo(self):
+        """用当前 _pity_defs 中的 behavior 名称填充 depends_on 下拉框。"""
+        combo = self.pity_depends_combo
+        current_data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("(无依赖)", "")
+        for pd in self._pity_defs:
+            name = pd.get('name', '')
+            if name:
+                combo.addItem(name, name)
+        idx = combo.findData(current_data)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    # ── P56：QFormLayout 整行显隐 + selected_card 下拉填充 ──
+
+    def _set_form_row_visible(self, widget, visible: bool):
+        """隐藏/显示 QFormLayout 中一整行（标签 + 控件）。"""
+        widget.setVisible(visible)
+        label = self._pity_detail_form.labelForField(widget)
+        if label:
+            label.setVisible(visible)
+
+    def _populate_selected_card_combo(self):
+        """从池子 epitomizable_cards 填充初始定轨下拉框。无配置时仅显示「不定轨」。"""
+        combo = self.pity_selected_card_combo
+        current_data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("(不定轨)", "")
+        if self._store:
+            for pool in self._store.pools:
+                for cid in getattr(pool, 'epitomizable_cards', []):
+                    combo.addItem(cid, cid)
+        idx = combo.findData(current_data)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    # ── CRUD 操作 ──
 
     def _add_pity(self):
         idx = len(self._pity_defs) + 1
         name = f"pity_{idx}"
-        while any(pd['name'] == name for pd in self._pity_defs):
+        while any(pd.get('name') == name for pd in self._pity_defs):
             idx += 1
             name = f"pity_{idx}"
+        # P55 新格式
         new_def = {
             'name': name,
-            'btype': 'soft',
-            'params': {'start': '80', 'end': '90', 'func': 'linear'},
-            'target_distribution': {},
-            'reset_condition': 'featured_ssr',
-            'pools': '*',
+            'btype': 'soft_interval',
+            'scope': 'ssr',
+            'target_featured': False,
+            'deltas': None,
+            'threshold': None,
             'counter_init': 0,
+            'guaranteed_init': False,
+            'fate_points_init': 0,
+            'selected_card_init': None,
+            'soft_start': 80,
+            'soft_end': 90,
+            'soft_increment': None,
+            'reset': '',
+            'pools': '*',
+            'deactivate_on_early_hit': False,
+            'depends_on': None,
         }
         self._pity_defs.append(new_def)
         self.pity_list.addItem(name)
         self.pity_list.setCurrentRow(self.pity_list.count() - 1)
+        self._refresh_depends_combo()  # P56：新增后刷新引用列表
         self._update_preview()
 
     def _remove_pity(self):
@@ -1078,37 +1399,194 @@ class ConfigPanel(QWidget):
         self._pity_defs.pop(row)
         self.pity_list.takeItem(row)
         self._pity_detail_group.setEnabled(False)
+        self._refresh_depends_combo()  # P56：删除后刷新引用列表
         if self._pity_defs and self.pity_list.count() > 0:
             self.pity_list.setCurrentRow(min(row, self.pity_list.count() - 1))
         self._update_preview()
 
     def _on_pity_selected(self, row):
+        # 切换前先保存当前编辑（仿照 _on_card_selected 模式）
+        self._flush_pity_current_detail()
         if row < 0 or row >= len(self._pity_defs):
+            self._current_pity_row = -1
             self._pity_detail_group.setEnabled(False)
             return
+        self._current_pity_row = row
         self._pity_detail_group.setEnabled(True)
         pd = self._pity_defs[row]
-        self.pity_name_edit.setText(pd['name'])
-        btype = pd['btype']
-        self.pity_type_combo.setCurrentIndex(0 if btype == 'soft' else 1)
-        params = pd.get('params', {})
-        if btype == 'soft':
-            self.pity_start_spin.setValue(int(params.get('start', '74')))
-            self.pity_end_spin.setValue(int(params.get('end', '90')))
-            func = params.get('func', 'linear')
-            func_idx = self.pity_func_combo.findText(func)
-            if func_idx >= 0:
-                self.pity_func_combo.setCurrentIndex(func_idx)
-        elif btype == 'hard':
-            self.pity_start_spin.setValue(int(params.get('threshold', '90')))
-        reset = pd.get('reset_condition', 'any_ssr')
-        reset_idx = self.pity_reset_combo.findText(reset)
-        if reset_idx >= 0:
-            self.pity_reset_combo.setCurrentIndex(reset_idx)
-        self.pity_pools_edit.setText(pd.get('pools', '*'))
+
+        # 阻断信号避免级联触发
+        self.pity_name_edit.blockSignals(True)
+        self.pity_type_combo.blockSignals(True)
+        self.pity_scope_combo.blockSignals(True)
+
+        self.pity_name_edit.setText(pd.get('name', ''))
+
+        # 类型
+        btype = pd.get('btype', 'soft_interval')
+        type_idx = next((i for i, (t, _) in enumerate(self._PITY_TYPES) if t == btype), 0)
+        self.pity_type_combo.setCurrentIndex(type_idx)
+
+        # scope
+        scope = pd.get('scope', 'ssr')
+        scope_idx = self.pity_scope_combo.findText(scope)
+        if scope_idx >= 0:
+            self.pity_scope_combo.setCurrentIndex(scope_idx)
+
+        # target_featured
+        self.pity_target_featured_cb.setChecked(pd.get('target_featured', False))
+
+        # 动态参数
+        self._build_param_widgets(btype)
+        self._populate_dynamic_values(pd, btype)
+
+        # deltas 表格（仅 soft_step 显示并填充）
+        is_soft_step = (btype == 'soft_step')
+        self._show_deltas_table(is_soft_step)
+        if is_soft_step:
+            self._populate_deltas_table(pd.get('deltas'))
+
+        # 池子 / 初始值
+        pools = pd.get('pools', '*')
+        if isinstance(pools, (tuple, list)):
+            pools = ','.join(pools)
+        self.pity_pools_edit.setText(pools if pools != '*' else '')
         self.pity_init_spin.setValue(pd.get('counter_init', 0))
-        self._populate_pity_target_table(pd.get('target_distribution', {}))
-        self._on_pity_type_changed(self.pity_type_combo.currentIndex())
+
+        # 生命周期
+        self.pity_deactivate_cb.setChecked(pd.get('deactivate_on_early_hit', False))
+        self._refresh_depends_combo()
+        depends_val = pd.get('depends_on') or ''
+        idx = self.pity_depends_combo.findData(depends_val)
+        if idx >= 0:
+            self.pity_depends_combo.setCurrentIndex(idx)
+
+        # ── P56：初始状态 ──
+        self.pity_guaranteed_init_cb.setChecked(pd.get('guaranteed_init', False))
+        self.pity_fate_points_spin.setValue(pd.get('fate_points_init', 0))
+        sc = pd.get('selected_card_init') or ''
+        idx = self.pity_selected_card_combo.findData(sc)
+        if idx >= 0:
+            self.pity_selected_card_combo.setCurrentIndex(idx)
+
+        self.pity_name_edit.blockSignals(False)
+        self.pity_type_combo.blockSignals(False)
+        self.pity_scope_combo.blockSignals(False)
+
+        self._on_pity_type_changed(type_idx)
+
+    # Registry 参数名 → PityDef 标准字段名映射
+    _PARAM_TO_FIELD = {'start': 'soft_start', 'end': 'soft_end', 'increment': 'soft_increment'}
+
+    def _populate_dynamic_values(self, pd: dict, btype: str):
+        """将 pd 的字段值填入动态控件。"""
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+        for pname, w in self._pity_dynamic_widgets.items():
+            pmeta = params_meta.get(pname, {})
+            ptype = pmeta.get('type', 'str')
+            val = pd.get(pname)
+            # 若 registry 参数名不存在，尝试标准 PityDef 字段名
+            if val is None:
+                canonical = self._PARAM_TO_FIELD.get(pname)
+                if canonical:
+                    val = pd.get(canonical)
+            if val is None:
+                val = pmeta.get('default', 0 if ptype in ('int', 'float') else '')
+            if isinstance(w, QSpinBox):
+                w.setValue(int(val) if val else 0)
+            elif isinstance(w, QDoubleSpinBox):
+                w.setValue(float(val) if val else 0)
+            elif isinstance(w, QComboBox):
+                idx = w.findText(str(val)) if val else -1
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+            elif isinstance(w, QCheckBox):
+                w.setChecked(bool(val))
+            elif isinstance(w, QLineEdit):
+                w.setText(str(val) if val else '')
+
+    def _flush_pity_current_detail(self):
+        """从右侧控件读取当前值 → 实时写回 self._pity_defs[idx]"""
+        row = self._current_pity_row
+        if row < 0 or row >= len(self._pity_defs):
+            return
+        pd = self._pity_defs[row]
+        pd['name'] = self.pity_name_edit.text().strip() or f"pity_{row+1}"
+
+        # btype
+        bt_idx = self.pity_type_combo.currentIndex()
+        pd['btype'] = self._PITY_TYPES[bt_idx][0] if 0 <= bt_idx < len(self._PITY_TYPES) else 'soft_interval'
+
+        # scope
+        pd['scope'] = self.pity_scope_combo.currentText()
+
+        # target_featured
+        pd['target_featured'] = self.pity_target_featured_cb.isChecked()
+
+        # 动态参数 → pd 字段
+        btype = pd['btype']
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+        for pname, w in self._pity_dynamic_widgets.items():
+            pmeta = params_meta.get(pname, {})
+            ptype = pmeta.get('type', 'str')
+            try:
+                if isinstance(w, QComboBox):
+                    pd[pname] = w.currentText()
+                elif ptype == 'int':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = int(raw) if str(raw).strip() else 0
+                elif ptype == 'float':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = float(raw) if str(raw).strip() else 0.0
+                elif ptype == 'bool':
+                    pd[pname] = w.isChecked() if hasattr(w, 'isChecked') else False
+                else:
+                    pd[pname] = w.text() if hasattr(w, 'text') else str(w.value())
+            except (ValueError, TypeError):
+                pd[pname] = pmeta.get('default', 0 if ptype in ('int', 'float') else '')
+
+        # deltas（仅 soft_step 类型保存）
+        if btype == 'soft_step':
+            deltas = self._read_deltas_table()
+            if deltas:
+                pd['deltas'] = deltas
+            else:
+                pd['deltas'] = None
+
+        # 语法糖参数映射（registry 控件名 → PityDef 标准字段）
+        if btype in ('soft_interval',):
+            pd['soft_start'] = pd.get('start')
+            pd['soft_end'] = pd.get('end')
+        elif btype in ('soft_additive', 'rotating_soft',
+                        'rotating_cr_soft', 'targeted_soft'):
+            pd['soft_start'] = pd.get('start')
+            pd['soft_increment'] = pd.get('increment')
+
+        # 池子 / 初始值
+        pools_text = self.pity_pools_edit.text().strip()
+        pd['pools'] = tuple(pools_text.split(',')) if pools_text else ('*',)
+        pd['counter_init'] = self.pity_init_spin.value()
+
+        # 生命周期
+        pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
+        depends = self.pity_depends_combo.currentData()
+        pd['depends_on'] = depends if depends else None
+
+        # ── P56：初始状态 ──
+        pd['guaranteed_init'] = self.pity_guaranteed_init_cb.isChecked()
+        pd['fate_points_init'] = self.pity_fate_points_spin.value()
+        sc = self.pity_selected_card_combo.currentData()
+        pd['selected_card_init'] = sc if sc else None
+
+        # ── P56：cr_state_probs 表格（仅 rotating_cr 家族保存） ──
+        if btype in ('rotating_cr', 'rotating_cr_soft'):
+            cr_probs = self._read_cr_probs_table()
+            pd['cr_state_probs'] = cr_probs if cr_probs else None
+
+        self.pity_list.item(row).setText(pd['name'])
+        self._update_preview()
 
     def _apply_pity_edit(self):
         row = self.pity_list.currentRow()
@@ -1116,79 +1594,124 @@ class ConfigPanel(QWidget):
             return
         pd = self._pity_defs[row]
         pd['name'] = self.pity_name_edit.text().strip() or f"pity_{row+1}"
-        pd['btype'] = self.pity_type_combo.currentText()
-        if pd['btype'] == 'soft':
-            pd['params'] = {
-                'start': str(self.pity_start_spin.value()),
-                'end': str(self.pity_end_spin.value()),
-                'func': self.pity_func_combo.currentText(),
-            }
-        elif pd['btype'] == 'hard':
-            pd['params'] = {
-                'threshold': str(self.pity_start_spin.value()),
-            }
-        pd['target_distribution'] = self._read_pity_target_table()
-        pd['reset_condition'] = self.pity_reset_combo.currentText()
-        pd['pools'] = self.pity_pools_edit.text().strip() or '*'
+
+        # btype
+        bt_idx = self.pity_type_combo.currentIndex()
+        pd['btype'] = self._PITY_TYPES[bt_idx][0] if 0 <= bt_idx < len(self._PITY_TYPES) else 'soft_interval'
+
+        # scope
+        pd['scope'] = self.pity_scope_combo.currentText()
+
+        # target_featured
+        pd['target_featured'] = self.pity_target_featured_cb.isChecked()
+
+        # 动态参数 → pd 字段
+        btype = pd['btype']
+        entry = BEHAVIOR_REGISTRY.get(btype, {})
+        params_meta = entry.get('params', {})
+        for pname, w in self._pity_dynamic_widgets.items():
+            pmeta = params_meta.get(pname, {})
+            ptype = pmeta.get('type', 'str')
+            try:
+                if isinstance(w, QComboBox):
+                    pd[pname] = w.currentText()
+                elif ptype == 'int':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = int(raw) if str(raw).strip() else 0
+                elif ptype == 'float':
+                    raw = w.value() if hasattr(w, 'value') else w.text()
+                    pd[pname] = float(raw) if str(raw).strip() else 0.0
+                elif ptype == 'bool':
+                    pd[pname] = w.isChecked() if hasattr(w, 'isChecked') else False
+                else:
+                    pd[pname] = w.text() if hasattr(w, 'text') else str(w.value())
+            except (ValueError, TypeError):
+                pd[pname] = pmeta.get('default', 0 if ptype in ('int', 'float') else '')
+
+        # deltas（仅 soft_step 类型保存）
+        if btype == 'soft_step':
+            deltas = self._read_deltas_table()
+            if deltas:
+                pd['deltas'] = deltas
+            else:
+                pd['deltas'] = None
+
+        # 语法糖参数映射（registry 控件名 → PityDef 标准字段）
+        # soft_interval               → start + end       (interval 模式)
+        # soft_additive + P56 _soft   → start + increment (additive 模式)
+        if btype in ('soft_interval',):
+            pd['soft_start'] = pd.get('start')
+            pd['soft_end'] = pd.get('end')
+        elif btype in ('soft_additive', 'rotating_soft',
+                        'rotating_cr_soft', 'targeted_soft'):
+            pd['soft_start'] = pd.get('start')
+            pd['soft_increment'] = pd.get('increment')
+
+        # 池子 / 初始值
+        pools_text = self.pity_pools_edit.text().strip()
+        pd['pools'] = tuple(pools_text.split(',')) if pools_text else ('*',)
         pd['counter_init'] = self.pity_init_spin.value()
+
+        # 生命周期
+        pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
+        depends = self.pity_depends_combo.currentData()
+        pd['depends_on'] = depends if depends else None
+
+        # ── P56：初始状态 ──
+        pd['guaranteed_init'] = self.pity_guaranteed_init_cb.isChecked()
+        pd['fate_points_init'] = self.pity_fate_points_spin.value()
+        sc = self.pity_selected_card_combo.currentData()
+        pd['selected_card_init'] = sc if sc else None
+
+        # ── P56：cr_state_probs 表格（仅 rotating_cr 家族保存） ──
+        if btype in ('rotating_cr', 'rotating_cr_soft'):
+            cr_probs = self._read_cr_probs_table()
+            pd['cr_state_probs'] = cr_probs if cr_probs else None
+
         self.pity_list.item(row).setText(pd['name'])
         self._update_preview()
 
     def _on_pity_type_changed(self, idx):
-        is_soft = self.pity_type_combo.currentText() == 'soft'
-        self.pity_end_spin.setVisible(is_soft)
-        self._pity_end_label.setVisible(is_soft)
-        self.pity_func_combo.setVisible(is_soft)
-        self._pity_func_label.setVisible(is_soft)
-        if is_soft:
-            self._pity_start_label.setText("起始抽数:")
-        else:
-            self._pity_start_label.setText("阈值:")
+        if idx < 0 or idx >= len(self._PITY_TYPES):
+            return
+        btype = self._PITY_TYPES[idx][0]
+        is_soft_step = (btype == 'soft_step')
+        is_counter = btype in ('soft_interval', 'soft_additive', 'soft_step', 'hard')
+        is_cr = btype in ('rotating_cr', 'rotating_cr_soft')
 
-    def _populate_pity_target_table(self, target_dist):
-        self.pity_target_table.setRowCount(len(target_dist))
-        keys = ["limited_ssr", "standard_ssr", "ssr", "sr", "r"]
-        for i, (cid, weight) in enumerate(target_dist.items()):
-            combo = QComboBox()
-            combo.addItems(keys)
-            cidx = combo.findText(cid)
-            if cidx >= 0:
-                combo.setCurrentIndex(cidx)
-            self.pity_target_table.setCellWidget(i, 0, combo)
-            spin = QSpinBox()
-            spin.setRange(1, 100)
-            spin.setValue(int(weight))
-            self.pity_target_table.setCellWidget(i, 1, spin)
+        # deltas 表格显隐
+        self._show_deltas_table(is_soft_step)
 
-    def _read_pity_target_table(self):
-        result = {}
-        for i in range(self.pity_target_table.rowCount()):
-            combo = self.pity_target_table.cellWidget(i, 0)
-            spin = self.pity_target_table.cellWidget(i, 1)
-            if combo and spin:
-                key = combo.currentText()
-                weight = spin.value()
-                if key:
-                    result[key] = weight
-        return result
+        # P56：cr_state_probs 表格显隐
+        self._pity_cr_probs_group.setVisible(is_cr)
 
-    def _add_pity_target(self):
-        row = self.pity_target_table.rowCount()
-        self.pity_target_table.insertRow(row)
-        keys = ["limited_ssr", "standard_ssr", "ssr", "sr", "r"]
-        combo = QComboBox()
-        combo.addItems(keys)
-        self.pity_target_table.setCellWidget(row, 0, combo)
-        spin = QSpinBox()
-        spin.setRange(1, 100)
-        spin.setValue(50)
-        self.pity_target_table.setCellWidget(row, 1, spin)
+        # 动态参数重建——先 flush 保存当前值，再销毁旧控件
+        self._flush_pity_current_detail()
+        self._build_param_widgets(btype)
+        # 重建后重新填充当前选中条目的值（否则只剩默认值）
+        row = self.pity_list.currentRow()
+        if 0 <= row < len(self._pity_defs):
+            self._populate_dynamic_values(self._pity_defs[row], btype)
+            # 填充 cr_state_probs 表格
+            if is_cr:
+                self._populate_cr_probs_table(self._pity_defs[row].get('cr_state_probs'))
 
-    def _remove_pity_target(self):
-        rows = sorted([r.row() for r in self.pity_target_table.selectionModel().selectedRows()], reverse=True)
-        for row in rows:
-            self.pity_target_table.removeRow(row)
-        self._update_preview()
+        # 联动校验：hard+非ssr 禁用 target_featured
+        is_hard = (btype == 'hard')
+        is_ssr_scope = self.pity_scope_combo.currentText() == 'ssr'
+        self.pity_target_featured_cb.setEnabled(not (is_hard and not is_ssr_scope))
+
+        # deactivate_on_early_hit 对 counter 驱动型均可用（soft/hard 均可）
+        self.pity_deactivate_cb.setEnabled(is_counter)
+
+        # ── P56：初始状态控件整行显隐（标签 + 控件） ──
+        is_rotating = btype in ('rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft')
+        is_targeted = btype in ('targeted', 'targeted_soft')
+        self._set_form_row_visible(self.pity_guaranteed_init_cb, is_rotating)
+        self._set_form_row_visible(self.pity_fate_points_spin, is_targeted)
+        self._set_form_row_visible(self.pity_selected_card_combo, is_targeted)
+        if is_targeted:
+            self._populate_selected_card_combo()
 
     def _setup_strategy_tab(self, parent):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY
@@ -1635,127 +2158,531 @@ class ConfigPanel(QWidget):
         self.day_overrides_table.cellChanged.connect(self._update_preview)
 
     def _setup_card_def_tab(self, parent):
-        layout = QVBoxLayout(parent)
+        # ── 实例变量 ──
+        self._card_defs: list = []           # List[dict] —— 内部数据
+        self._current_card_idx: int = -1     # 当前选中索引
+        self._card_id_counter: int = 0       # P65：_add_card() 递增计数器——在 set_card_defs 中初始化
 
+        outer = QVBoxLayout(parent)
+
+        # ═══ 筛选栏 ═══
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("筛选:"))
 
         self.card_rarity_filter = QComboBox()
-        self.card_rarity_filter.addItems(["全部", "SSR", "SR", "R", "无"])
-        self.card_rarity_filter.currentIndexChanged.connect(self._filter_card_defs)
+        self.card_rarity_filter.addItem("全部")
+        self.card_rarity_filter.currentIndexChanged.connect(self._filter_card_list)
         filter_layout.addWidget(self.card_rarity_filter)
 
         self.card_search = QLineEdit()
-        self.card_search.setPlaceholderText("搜索卡ID或名称...")
-        self.card_search.textChanged.connect(self._search_card_defs)
+        self.card_search.setPlaceholderText("搜索卡ID、名称或标签...")
+        self.card_search.textChanged.connect(self._filter_card_list)
         filter_layout.addWidget(self.card_search)
 
-        layout.addLayout(filter_layout)
+        outer.addLayout(filter_layout)
 
-        self.card_def_table = QTableWidget()
-        self.card_def_table.setColumnCount(5)
-        self.card_def_table.setHorizontalHeaderLabels(["卡ID", "名称", "稀有度", "所属池子", "初始持有"])
-        header = self.card_def_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.card_def_table.setColumnWidth(2, 80)
-        self.card_def_table.setColumnWidth(4, 80)
-        self.card_def_table.verticalHeader().setVisible(False)
-        self.card_def_table.setAlternatingRowColors(True)
-        self.card_def_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.card_def_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.card_def_table.setMinimumHeight(200)
-        self.card_def_table.cellChanged.connect(self._on_card_def_changed)
-        layout.addWidget(self.card_def_table)
+        # ═══ 水平两栏 ═══
+        main_layout = QHBoxLayout()
 
-        btn_layout = QHBoxLayout()
+        # ── 左栏：卡片列表 ──
+        left_layout = QVBoxLayout()
+        self._card_list = QListWidget()
+        self._card_list.currentRowChanged.connect(self._on_card_selected)
+        left_layout.addWidget(self._card_list)
+
+        card_btn_layout = QHBoxLayout()
         add_btn = QPushButton("添加")
-        add_btn.clicked.connect(self._add_card_def)
+        add_btn.clicked.connect(self._add_card)
         remove_btn = QPushButton("移除选中")
-        remove_btn.clicked.connect(self._remove_card_def)
+        remove_btn.clicked.connect(self._remove_card)
         auto_btn = QPushButton("自动生成")
         auto_btn.clicked.connect(self._auto_generate_card_defs)
-        btn_layout.addWidget(add_btn)
-        btn_layout.addWidget(remove_btn)
-        btn_layout.addWidget(auto_btn)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        card_btn_layout.addWidget(add_btn)
+        card_btn_layout.addWidget(remove_btn)
+        card_btn_layout.addWidget(auto_btn)
+        card_btn_layout.addStretch()
+        left_layout.addLayout(card_btn_layout)
 
-        self.card_defs = []
+        main_layout.addLayout(left_layout, 1)
 
-    def _add_card_def(self):
-        row = self.card_def_table.rowCount()
-        self.card_def_table.insertRow(row)
-        self.card_def_table.setItem(row, 0, QTableWidgetItem(""))
-        self.card_def_table.setItem(row, 1, QTableWidgetItem(""))
-        rarity_combo = QComboBox()
-        rarity_combo.addItems(["SSR", "SR", "R", "无"])
-        self.card_def_table.setCellWidget(row, 2, rarity_combo)
-        pools_item = QTableWidgetItem("")
-        pools_item.setFlags(pools_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.card_def_table.setItem(row, 3, pools_item)
-        init_spin = QSpinBox()
-        init_spin.setRange(0, 9999)
-        init_spin.setValue(0)
-        self.card_def_table.setCellWidget(row, 4, init_spin)
+        # ── 右栏：详情面板 ──
+        self._card_detail_group = QGroupBox("卡片详情")
+        self._card_detail_group.setEnabled(False)
+        detail_form = QFormLayout(self._card_detail_group)
 
-    def _remove_card_def(self):
-        rows = sorted([r.row() for r in self.card_def_table.selectionModel().selectedRows()], reverse=True)
-        for row in rows:
-            self.card_def_table.removeRow(row)
+        self._card_id_edit = QLineEdit()
+        self._card_id_edit.textChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("card_id:", self._card_id_edit)
+
+        self._card_name_edit = QLineEdit()
+        self._card_name_edit.textChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("名称:", self._card_name_edit)
+
+        self._card_rarity_combo = QComboBox()
+        self._card_rarity_combo.currentIndexChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("稀有度:", self._card_rarity_combo)
+
+        self._card_init_spin = QSpinBox()
+        self._card_init_spin.setRange(0, 9999)
+        self._card_init_spin.valueChanged.connect(lambda: self._on_detail_changed())
+        detail_form.addRow("初始持有:", self._card_init_spin)
+
+        # ── 单值标签表 ──
+        tags_group = QGroupBox("标签")
+        tags_layout = QVBoxLayout(tags_group)
+        self._card_tags_table = QTableWidget()
+        self._card_tags_table.setColumnCount(2)
+        self._card_tags_table.setHorizontalHeaderLabels(["Key", "Value"])
+        t_header = self._card_tags_table.horizontalHeader()
+        t_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        t_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._card_tags_table.verticalHeader().setVisible(False)
+        self._card_tags_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._card_tags_table.cellChanged.connect(self._on_tag_cell_changed)
+        tags_layout.addWidget(self._card_tags_table)
+
+        tags_btn = QHBoxLayout()
+        tags_btn.addWidget(QPushButton("添加", clicked=self._add_tag_row))
+        tags_btn.addWidget(QPushButton("移除选中", clicked=self._remove_tag_row))
+        tags_btn.addStretch()
+        tags_layout.addLayout(tags_btn)
+
+        detail_form.addRow(tags_group)
+
+        # ── 多值标签表 ──
+        lt_group = QGroupBox("多值标签")
+        lt_layout = QVBoxLayout(lt_group)
+        self._card_list_tags_table = QTableWidget()
+        self._card_list_tags_table.setColumnCount(2)
+        self._card_list_tags_table.setHorizontalHeaderLabels(["Key", "Value"])
+        lt_header = self._card_list_tags_table.horizontalHeader()
+        lt_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        lt_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._card_list_tags_table.verticalHeader().setVisible(False)
+        self._card_list_tags_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        lt_layout.addWidget(self._card_list_tags_table)
+
+        lt_btn = QHBoxLayout()
+        lt_btn.addWidget(QPushButton("添加", clicked=self._add_list_tag_row))
+        lt_btn.addWidget(QPushButton("移除选中", clicked=self._remove_list_tag_row))
+        lt_btn.addStretch()
+        lt_layout.addLayout(lt_btn)
+
+        detail_form.addRow(lt_group)
+
+        # ── 所属池子（只读） ──
+        self._card_pools_label = QLabel("(自动推导)")
+        self._card_pools_label.setWordWrap(True)
+        detail_form.addRow("所属池子:", self._card_pools_label)
+
+        main_layout.addWidget(self._card_detail_group, 2)
+        outer.addLayout(main_layout)
+
+    def _on_detail_changed(self):
+        """详情面板控件变动 → 实时回写当前卡片"""
+        if self._current_card_idx >= 0:
+            self._flush_current_detail()
+            self._update_preview()
+
+    # ══════════════════════════════════════════════════════════════════
+    # 卡片列表操作方法
+    # ══════════════════════════════════════════════════════════════════
+
+    def _add_card(self):
+        """创建空卡片 → 追加到列表 → 自动选中"""
+        self._card_id_counter += 1
+        new_card = {
+            'card_id': f'card_{self._card_id_counter}',
+            'name': '',
+            'rarity': 'R',
+            'pools': [],
+            'initial_count': 0,
+            'tags': {},
+            'list_tags': {},
+        }
+        self._card_defs.append(new_card)
+        self._card_list.addItem(f"{new_card['card_id']}")
+        self._card_list.setCurrentRow(self._card_list.count() - 1)
         self._update_preview()
 
+    def _remove_card(self):
+        """移除选中卡片"""
+        row = self._card_list.currentRow()
+        if row < 0:
+            return
+        self._card_defs.pop(row)
+        self._card_list.takeItem(row)
+        self._card_detail_group.setEnabled(False)
+        self._current_card_idx = -1
+        if self._card_defs and self._card_list.count() > 0:
+            self._card_list.setCurrentRow(min(row, self._card_list.count() - 1))
+        self._update_preview()
+
+    # ══════════════════════════════════════════════════════════════════
+    # 详情面板数据交换
+    # ══════════════════════════════════════════════════════════════════
+
+    def _on_card_selected(self, row: int):
+        """左侧列表切换 → 保存当前编辑 → 填充新卡片"""
+        self._flush_current_detail()
+        if row < 0 or row >= len(self._card_defs):
+            self._card_detail_group.setEnabled(False)
+            self._current_card_idx = -1
+            return
+        self._current_card_idx = row
+        self._card_detail_group.setEnabled(True)
+        self._populate_card_detail(self._card_defs[row])
+
+    def _flush_current_detail(self):
+        """从右侧控件读取当前值 → 写回 self._card_defs[idx]"""
+        if self._current_card_idx < 0 or self._current_card_idx >= len(self._card_defs):
+            return
+        card = self._card_defs[self._current_card_idx]
+        card.setdefault('tags', {})
+        card.setdefault('list_tags', {})
+        card['card_id'] = self._card_id_edit.text().strip()
+        card['name'] = self._card_name_edit.text().strip()
+        card['rarity'] = self._card_rarity_combo.currentText()
+        card['initial_count'] = self._card_init_spin.value()
+        card['tags'] = self._read_tags_from_table()
+        card['list_tags'] = self._read_list_tags_from_table()
+        # P65：跨表冲突检测
+        self._validate_cross_table_keys(card['tags'], card['list_tags'])
+        # 更新左侧列表显示
+        new_label = f"{card['card_id']} ({card['name']})" if card['name'] else card['card_id']
+        self._card_list.item(self._current_card_idx).setText(new_label)
+
+    def _validate_cross_table_keys(self, tags: dict, list_tags: dict) -> bool:
+        """检查单值标签表和多值标签表是否有同名 Key。返回是否有冲突"""
+        overlap = set(tags.keys()) & set(list_tags.keys())
+        overlap.discard('')
+        if overlap:
+            QMessageBox.warning(self, "标签冲突",
+                f"以下 Key 同时出现在单值标签和多值标签表中：{', '.join(sorted(overlap))}\n"
+                f"将以单值标签表为准，多值表中对应的 Key 将被忽略。")
+            for k in overlap:
+                list_tags.pop(k, None)
+            return True
+        return False
+
+    def _populate_card_detail(self, card: dict):
+        """将单张卡的数据填入右侧控件（阻断信号——避免逐字段触发 _flush_current_detail 串扰）"""
+        widgets = [self._card_id_edit, self._card_name_edit,
+                    self._card_rarity_combo, self._card_init_spin]
+        for w in widgets:
+            w.blockSignals(True)
+
+        self._card_id_edit.setText(card.get('card_id', ''))
+        self._card_name_edit.setText(card.get('name', ''))
+        rarity_val = card.get('rarity', 'R')
+        idx = self._card_rarity_combo.findText(rarity_val, Qt.MatchFlag.MatchFixedString)
+        if idx < 0:
+            idx = self._card_rarity_combo.findText(rarity_val.upper(), Qt.MatchFlag.MatchFixedString)
+        self._card_rarity_combo.setCurrentIndex(idx if idx >= 0 else 2)
+        self._card_init_spin.setValue(card.get('initial_count', 0))
+
+        for w in widgets:
+            w.blockSignals(False)
+
+        self._populate_tags_table(card.get('tags', {}))
+        self._populate_list_tags_table(card.get('list_tags', {}))
+        pools_map = self._compute_pools_map()
+        pools = pools_map.get(card.get('card_id', ''), [])
+        self._card_pools_label.setText(','.join(pools) if pools else '(未关联任何池子)')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 标签表操作
+    # ══════════════════════════════════════════════════════════════════
+
+    def _populate_tags_table(self, tags: dict):
+        """填充单值标签表——card_type 首行（QComboBox）+ 其余行"""
+        self._card_tags_table.blockSignals(True)
+        self._card_tags_table.setRowCount(0)
+        row = 0
+
+        # card_type 系统行
+        self._card_tags_table.insertRow(0)
+        key_item = QTableWidgetItem("card_type")
+        key_item.setFlags(key_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self._card_tags_table.setItem(0, 0, key_item)
+        ct_combo = QComboBox()
+        ct_combo.setEditable(True)
+        ct_combo.addItems(['', 'character', 'weapon'])
+        ct_combo.setCurrentText(tags.get('card_type', ''))
+        self._card_tags_table.setCellWidget(0, 1, ct_combo)
+        row = 1
+
+        # 其余自定义标签
+        for k, v in tags.items():
+            if k == 'card_type':
+                continue
+            self._card_tags_table.insertRow(row)
+            self._card_tags_table.setItem(row, 0, QTableWidgetItem(k))
+            self._card_tags_table.setItem(row, 1, QTableWidgetItem(v))
+            row += 1
+
+        self._card_tags_table.blockSignals(False)
+
+    def _populate_list_tags_table(self, list_tags: dict):
+        """展开 Dict[str, List[str]] → 每值一行"""
+        self._card_list_tags_table.blockSignals(True)
+        self._card_list_tags_table.setRowCount(0)
+        row = 0
+        for k, values in list_tags.items():
+            for v in values:
+                self._card_list_tags_table.insertRow(row)
+                self._card_list_tags_table.setItem(row, 0, QTableWidgetItem(k))
+                self._card_list_tags_table.setItem(row, 1, QTableWidgetItem(v))
+                row += 1
+        self._card_list_tags_table.blockSignals(False)
+
+    def _read_tags_from_table(self) -> dict:
+        """遍历单值表 → Dict[str, str]"""
+        result = {}
+        for i in range(self._card_tags_table.rowCount()):
+            key_item = self._card_tags_table.item(i, 0)
+            if not key_item:
+                continue
+            key = key_item.text().strip()
+            if not key:
+                continue
+            widget = self._card_tags_table.cellWidget(i, 1)
+            if isinstance(widget, QComboBox):
+                value = widget.currentText().strip()
+            else:
+                val_item = self._card_tags_table.item(i, 1)
+                value = val_item.text().strip() if val_item else ''
+            if value:
+                result[key] = value
+        return result
+
+    def _read_list_tags_from_table(self) -> dict:
+        """遍历多值表 → Dict[str, List[str]]"""
+        result: dict = {}
+        for i in range(self._card_list_tags_table.rowCount()):
+            key_item = self._card_list_tags_table.item(i, 0)
+            val_item = self._card_list_tags_table.item(i, 1)
+            if not key_item or not val_item:
+                continue
+            key = key_item.text().strip()
+            val = val_item.text().strip()
+            if not key or not val:
+                continue
+            result.setdefault(key, []).append(val)
+        return result
+
+    def _add_tag_row(self):
+        """单值标签表：添加空行"""
+        row = self._card_tags_table.rowCount()
+        self._card_tags_table.insertRow(row)
+        self._card_tags_table.setItem(row, 0, QTableWidgetItem(''))
+        self._card_tags_table.setItem(row, 1, QTableWidgetItem(''))
+
+    def _remove_tag_row(self):
+        """单值标签表：移除选中行——跳过 card_type 行"""
+        rows = sorted([r.row() for r in self._card_tags_table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            key_item = self._card_tags_table.item(row, 0)
+            if key_item and key_item.text().strip() == 'card_type':
+                continue
+            self._card_tags_table.removeRow(row)
+
+    def _add_list_tag_row(self):
+        """多值标签表：添加空行"""
+        row = self._card_list_tags_table.rowCount()
+        self._card_list_tags_table.insertRow(row)
+        self._card_list_tags_table.setItem(row, 0, QTableWidgetItem(''))
+        self._card_list_tags_table.setItem(row, 1, QTableWidgetItem(''))
+
+    def _remove_list_tag_row(self):
+        """多值标签表：移除选中行"""
+        rows = sorted([r.row() for r in self._card_list_tags_table.selectionModel().selectedRows()], reverse=True)
+        for row in rows:
+            self._card_list_tags_table.removeRow(row)
+
+    def _on_tag_cell_changed(self, row: int, col: int):
+        """单值标签表 Key 列编辑完成 → 校验唯一性"""
+        if col != 0:
+            return
+        item = self._card_tags_table.item(row, 0)
+        if not item:
+            return
+        key = item.text().strip()
+        if not key:
+            return
+        if key == 'card_type':
+            QMessageBox.warning(self, "系统保留",
+                f"'{key}' 是系统标签，不可自定义。")
+            item.setText('')
+            return
+        for i in range(self._card_tags_table.rowCount()):
+            if i != row:
+                other = self._card_tags_table.item(i, 0)
+                if other and other.text().strip() == key:
+                    QMessageBox.warning(self, "重复标签",
+                        f"标签 Key '{key}' 已存在。如需修改，请直接编辑现有行。")
+                    item.setText('')
+                    return
+
+    # ══════════════════════════════════════════════════════════════════
+    # 筛选与搜索
+    # ══════════════════════════════════════════════════════════════════
+
+    def _filter_card_list(self):
+        """稀有度筛选 + 文本搜索 → clear + rebuild 列表"""
+        filter_rarity = self.card_rarity_filter.currentText()
+        search_text = self.card_search.text().strip().lower()
+
+        saved_idx = self._current_card_idx
+        self._card_list.blockSignals(True)
+        self._card_list.clear()
+
+        for card in self._card_defs:
+            cid = card.get('card_id', '')
+            # 过滤 _no_card 内部占位条目
+            if cid == '_no_card':
+                continue
+            # 稀有度筛选（大小写不敏感——rarity_rank 大写，卡片数据小写）
+            if filter_rarity != "全部":
+                if card.get('rarity', '').upper() != filter_rarity.upper():
+                    continue
+            # 文本搜索
+            if search_text:
+                name = card.get('name', '').lower()
+                tags_match = any(search_text in str(v).lower() for v in card.get('tags', {}).values())
+                lt_match = any(
+                    search_text in str(v).lower()
+                    for vs in card.get('list_tags', {}).values()
+                    for v in vs
+                )
+                if not (search_text in cid.lower() or search_text in name or tags_match or lt_match):
+                    continue
+            # 通过筛选
+            label = f"{cid} ({card.get('name', '')})" if card.get('name') else cid
+            self._card_list.addItem(label)
+
+        self._card_list.blockSignals(False)
+
+        # 恢复选中
+        if saved_idx >= 0 and saved_idx < len(self._card_defs):
+            # 在可见列表中定位原卡片
+            for i in range(self._card_list.count()):
+                item_text = self._card_list.item(i).text()
+                cid = self._card_defs[saved_idx].get('card_id', '')
+                if item_text.startswith(cid):
+                    self._card_list.setCurrentRow(i)
+                    break
+
+    # ══════════════════════════════════════════════════════════════════
+    # 兼容旧 API：get_card_defs / set_card_defs
+    # ══════════════════════════════════════════════════════════════════
+
+    def get_card_defs(self):
+        """读取所有卡片定义（先刷新当前编辑）"""
+        self._flush_current_detail()
+        return [dict(c) for c in self._card_defs]
+
+    def set_card_defs(self, defs):
+        """批量设置卡片定义 → 重建列表"""
+        self._card_defs = [dict(d) for d in defs]
+        # 确保每条有 tags/list_tags 键
+        for c in self._card_defs:
+            c.setdefault('tags', {})
+            c.setdefault('list_tags', {})
+        # P65：从已有 card_N ID 初始化计数器，避免冲突
+        max_n = 0
+        for c in self._card_defs:
+            cid = c.get('card_id', '')
+            if cid.startswith('card_') and cid.split('_')[-1].isdigit():
+                max_n = max(max_n, int(cid.split('_')[-1]))
+        self._card_id_counter = max_n
+        self._rebuild_card_list()
+
+    def _rebuild_card_list(self):
+        """根据 self._card_defs 重建 QListWidget"""
+        self._card_list.clear()
+        for c in self._card_defs:
+            cid = c.get('card_id', '')
+            name = c.get('name', '')
+            label = f"{cid} ({name})" if name else cid
+            self._card_list.addItem(label)
+        self._filter_card_list()
+
+    def _populate_card_rarity_filter(self):
+        """从 rarity_rank 动态填充稀有度下拉（筛选栏 + 详情面板共用）。
+
+        store 未就绪或 rarity_rank 为空时回退到默认 SSR/SR/R/无。
+        """
+        ranks = self._store.rarity_rank if self._store else {}
+        rarities = sorted(ranks.keys(), key=lambda r: ranks.get(r, 99)) if ranks else ["SSR", "SR", "R", "无"]
+        for combo in [self.card_rarity_filter, self._card_rarity_combo]:
+            if combo is None:
+                continue
+            combo.blockSignals(True)
+            combo.clear()
+            if combo is self.card_rarity_filter:
+                combo.addItem("全部")
+            combo.addItems(rarities)
+            combo.blockSignals(False)
+
     def _auto_generate_card_defs(self):
-        defs_map = {}
+        """从池子分布补充缺失的卡牌——合并模式，不覆盖已有卡片。
+
+        1. 扫描所有池子的分布，收集 (card_id, rarity, pool_id) 三元组
+        2. 已有卡片：仅更新 pools 列表
+        3. 新卡片：追加到末尾，只填 card_id + rarity + pools，名称和 tag 留空
+        4. 排序：已有卡片保持原位，新卡片追加在末尾
+        """
+        # 阻断串位：松开当前选中，详情面板灰掉
+        self._current_card_idx = -1
+        self._card_detail_group.setEnabled(False)
+
+        # ── 从池子分布收集卡片 ──
+        pool_cards: dict[str, dict] = {}  # card_id → {rarity, pools}
         for i in range(self.pool_table.rowCount()):
             pool_id_item = self.pool_table.item(i, 1)
-            pool_name_item = self.pool_table.item(i, 2)
-            if pool_id_item and pool_id_item.text():
-                pid = pool_id_item.text()
-                pname = pool_name_item.text() if pool_name_item else pid
-                dist = self._pool_distributions.get(pid)
-                if dist:
-                    for d in dist:
-                        cid = d.get('card_id', '')
-                        if cid == '_no_card':
-                            key = f"_no_card_{pid}"
-                            defs_map[key] = {
-                                'card_id': '_no_card',
-                                'name': '空抽(仅资源)',
-                                'rarity': '无',
-                                'pools': [pid],
-                            }
-                        elif cid:
-                            rarity = d.get('rarity', 'R')
-                            label_map = {'SSR': 'SSR', 'SR': 'SR', 'R': 'R', '无': '无'}
-                            label = label_map.get(rarity, rarity)
-                            if cid in defs_map:
-                                if pid not in defs_map[cid]['pools']:
-                                    defs_map[cid]['pools'].append(pid)
-                            else:
-                                defs_map[cid] = {
-                                    'card_id': cid,
-                                    'name': f"{pname} {label}" if cid.startswith(pid) else cid,
-                                    'rarity': rarity,
-                                    'pools': [pid],
-                                }
+            if not pool_id_item or not pool_id_item.text():
+                continue
+            pid = pool_id_item.text()
+            dist = self._pool_distributions.get(pid)
+            if not dist:
+                continue
+            for d in dist:
+                cid = d.get('card_id', '')
+                if not cid or cid == '_no_card':
+                    continue
+                if cid not in pool_cards:
+                    pool_cards[cid] = {
+                        'rarity': d.get('rarity', 'R'),
+                        'pools': [pid],
+                    }
                 else:
-                    for suffix, rarity, label in [('_ssr', 'SSR', 'SSR'), ('_sr', 'SR', 'SR'), ('_r', 'R', 'R')]:
-                        cid = f"{pid}{suffix}"
-                        if cid in defs_map:
-                            if pid not in defs_map[cid]['pools']:
-                                defs_map[cid]['pools'].append(pid)
-                        else:
-                            defs_map[cid] = {
-                                'card_id': cid,
-                                'name': f"{pname} {label}",
-                                'rarity': rarity,
-                                'pools': [pid],
-                            }
-        self.set_card_defs(list(defs_map.values()))
+                    if pid not in pool_cards[cid]['pools']:
+                        pool_cards[cid]['pools'].append(pid)
+
+        # ── 合并：已有卡片保留数据和位置 ──
+        merged = []
+        for c in self._card_defs:
+            cid = c.get('card_id', '')
+            if cid in pool_cards:
+                # 已有卡片：更新 pools
+                c['pools'] = pool_cards[cid]['pools']
+                del pool_cards[cid]
+            merged.append(c)
+
+        # ── 追加：池子中新增的卡片 ──
+        for cid, info in pool_cards.items():
+            merged.append({
+                'card_id': cid,
+                'name': '',
+                'rarity': info['rarity'],
+                'pools': info['pools'],
+                'initial_count': 0,
+                'tags': {},
+                'list_tags': {},
+            })
+
+        self.set_card_defs(merged)
         self._update_preview()
 
     def _compute_pools_map(self):
@@ -1767,54 +2694,6 @@ class ConfigPanel(QWidget):
                 if cid and cid != '_no_card':
                     result.setdefault(cid, []).append(pid)
         return result
-
-    def get_card_defs(self):
-        pools_map = self._compute_pools_map()
-        defs = []
-        for i in range(self.card_def_table.rowCount()):
-            card_id_item = self.card_def_table.item(i, 0)
-            name_item = self.card_def_table.item(i, 1)
-            rarity_widget = self.card_def_table.cellWidget(i, 2)
-            init_widget = self.card_def_table.cellWidget(i, 4)
-            card_id = card_id_item.text().strip() if card_id_item else ''
-            name = name_item.text().strip() if name_item else ''
-            rarity = rarity_widget.currentText() if rarity_widget else 'R'
-            initial_count = init_widget.value() if init_widget else 0
-            defs.append({
-                'card_id': card_id,
-                'name': name,
-                'rarity': rarity,
-                'pools': pools_map.get(card_id, []),
-                'initial_count': initial_count,
-            })
-        return defs
-
-    def set_card_defs(self, defs):
-        self.card_defs = list(defs)
-        pools_map = self._compute_pools_map()
-        self.card_def_table.blockSignals(True)
-        self.card_def_table.setRowCount(len(defs))
-        rarity_options = ["SSR", "SR", "R", "无"]
-        rarity_map = {o.lower(): i for i, o in enumerate(rarity_options)}
-        for i, d in enumerate(defs):
-            self.card_def_table.setItem(i, 0, QTableWidgetItem(d.get('card_id', '')))
-            self.card_def_table.setItem(i, 1, QTableWidgetItem(d.get('name', '')))
-            rarity_combo = QComboBox()
-            rarity_combo.addItems(rarity_options)
-            rarity = d.get('rarity', 'R').lower()
-            idx = rarity_map.get(rarity, 2)
-            rarity_combo.setCurrentIndex(idx)
-            self.card_def_table.setCellWidget(i, 2, rarity_combo)
-            cid = d.get('card_id', '')
-            pools_text = ','.join(pools_map.get(cid, []))
-            pools_item = QTableWidgetItem(pools_text)
-            pools_item.setFlags(pools_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.card_def_table.setItem(i, 3, pools_item)
-            init_spin = QSpinBox()
-            init_spin.setRange(0, 9999)
-            init_spin.setValue(d.get('initial_count', 0))
-            self.card_def_table.setCellWidget(i, 4, init_spin)
-        self.card_def_table.blockSignals(False)
 
     def _setup_preview(self, parent):
         group = QGroupBox("配置预览")
@@ -2085,11 +2964,23 @@ class ConfigPanel(QWidget):
             type_counts[pt] = type_counts.get(pt, 0) + 1
         type_lines = '\n'.join(f'  - {t}: {c}' for t, c in sorted(type_counts.items()))
 
-        counter_init = config['pity']['counter_init']
-        if isinstance(counter_init, dict):
-            counter_str = ', '.join(f'{k}={v}' for k, v in sorted(counter_init.items()))
-        else:
-            counter_str = str(counter_init)
+        # P55：pity 预览——遍历 pities 列表
+        pity_lines = []
+        for pdef in config['pity'].get('pities', []):
+            btype = pdef.get('type', '?')
+            scope = pdef.get('scope', '?')
+            line = f"  {pdef['name']}: {btype}({scope})"
+            if pdef.get('deltas'):
+                total_n = sum(n for n, _ in pdef['deltas'])
+                line += f" deltas={total_n}抽"
+            if pdef.get('threshold'):
+                line += f" threshold={pdef['threshold']}"
+            if pdef.get('target_featured'):
+                line += " featured"
+            if pdef.get('counter_init'):
+                line += f" init={pdef['counter_init']}"
+            pity_lines.append(line)
+        pity_str = '\n'.join(pity_lines) if pity_lines else '  无'
 
         resource_defs = config.get('resource_defs', [])
         gain_rules = config.get('resource_gain_rules', [])
@@ -2116,9 +3007,8 @@ class ConfigPanel(QWidget):
 
 总时长: {max((p['start_day'] + p['duration']) for p in config['pools']) if config['pools'] else 0} 天
 
-保底类型: {config['pity']['type']}
-保底范围: {config['pity']['start']} - {config['pity']['end']}
-初始计数器: {counter_str}
+保底 ({len(config['pity'].get('pities', []))} 条):
+{pity_str}
 
 资源类型: {len(resource_defs)} 种
 初始资源: {init_res_str}
@@ -2248,6 +3138,7 @@ class ConfigPanel(QWidget):
                 'cost': p.cost,
                 'note': '',
                 'batch_size': getattr(p, 'batch_size', 1),
+                'epitomizable_cards': getattr(p, 'epitomizable_cards', []),
                 'distribution': [{'card_id': d.card_id, 'probability': d.probability,
                                   'rarity': d.rarity, 'featured': d.featured,
                                   'resources_gained': d.resources_gained,
@@ -2257,16 +3148,16 @@ class ConfigPanel(QWidget):
                                  for d in p.distribution] if p.distribution else None,
             })
 
-        pity_type = 'soft'
-        pity_start = 80
-        pity_end = 90
+        # P55：pity 输出扁平化格式
+        pity_summary = {}
         if store.pity.pities:
             first = store.pity.pities[0]
-            pity_type = first.btype
-            pity_start = int(first.params.get('start', first.params.get('threshold', '80')))
-            pity_end = int(first.params.get('end', '90'))
-
-        counter_init = dict(store.pity.counter_init)
+            pity_summary['type'] = first.btype
+            if first.deltas is not None:
+                total_n = sum(n for n, _ in first.deltas)
+                pity_summary['deltas_total'] = total_n
+            elif first.threshold is not None:
+                pity_summary['threshold'] = first.threshold
 
         [{'resource_id': rid, 'amount': amt}
                              for rid, amt in store.initial_resources.items() if amt > 0]
@@ -2288,7 +3179,9 @@ class ConfigPanel(QWidget):
                         for tc in store.target_cards]
 
         card_defs = [{'card_id': cd.card_id, 'name': cd.name, 'rarity': cd.rarity, 'pools': cd.pools,
-                      'initial_count': getattr(cd, 'initial_count', 0)}
+                      'initial_count': getattr(cd, 'initial_count', 0),
+                      'tags': getattr(cd, 'tags', {}),
+                      'list_tags': getattr(cd, 'list_tags', {})}
                      for cd in store.card_defs]
 
         resource_defs = [{'resource_id': rid, 'display_name': name,
@@ -2304,18 +3197,34 @@ class ConfigPanel(QWidget):
             'pools': pools,
             'pity': {
                 'enabled': store.pity.enabled,
-                'type': pity_type,
-                'start': pity_start,
-                'end': pity_end,
-                'counter_init': counter_init,
-                'counter_group': _pity_counter_group(store.pity),
-                'ssr_rate': 0.006,
-                'pities': [{'name': pd['name'], 'type': pd['btype'],
-                            'params': pd['params'],
-                            'target_distribution': dict(pd['target_distribution']),
-                            'reset': pd['reset_condition'],
-                            'pools': pd['pools']}
-                           for pd in self._pity_defs],
+                'pities': [{
+                    'name': pd.get('name', ''),
+                    'type': pd.get('btype', 'soft_interval'),
+                    'scope': pd.get('scope', 'ssr'),
+                    'target_featured': pd.get('target_featured', False),
+                    'deltas': pd.get('deltas'),
+                    'threshold': pd.get('threshold'),
+                    'counter_init': pd.get('counter_init', 0),
+                    'start': pd.get('soft_start'),
+                    'end': pd.get('soft_end'),
+                    'increment': pd.get('soft_increment'),
+                    'reset': pd.get('reset', ''),
+                    'pools': pd.get('pools', '*'),
+                    'guaranteed_init': pd.get('guaranteed_init', False),
+                    'fate_points_init': pd.get('fate_points_init', 0),
+                    'selected_card_init': pd.get('selected_card_init'),
+                    'soft_deltas': pd.get('soft_deltas'),
+                    'cr_counter_threshold': pd.get('cr_counter_threshold'),
+                    'cr_base_rate': pd.get('cr_base_rate'),
+                    'cr_state_probs': pd.get('cr_state_probs'),
+                    'fate_threshold': pd.get('fate_threshold'),
+                    'switch_allowed': pd.get('switch_allowed'),
+                    'switch_resets_progress': pd.get('switch_resets_progress'),
+                    'lifecycle': {
+                        'deactivate_on_early_hit': pd.get('deactivate_on_early_hit', False),
+                        'depends_on': pd.get('depends_on'),
+                    } if (pd.get('deactivate_on_early_hit') or pd.get('depends_on')) else {},
+                } for pd in self._pity_defs],
             },
             'strategy': {
                 'type': store.strategy_type,
@@ -2386,6 +3295,7 @@ class ConfigPanel(QWidget):
                 bindings=bindings,
                 distribution=distribution,
                 batch_size=p.get('batch_size', 1),
+                epitomizable_cards=p.get('epitomizable_cards', []),
             ))
 
         pity = config.get('pity', {})
@@ -2400,25 +3310,59 @@ class ConfigPanel(QWidget):
         for pd in pities_data:
             pities.append(PityDef(
                 name=pd.get('name', 'pity'),
-                btype=pd.get('type', 'soft'),
-                params=pd.get('params', {}),
-                target_distribution=pd.get('target_distribution', {}),
-                reset_condition=pd.get('reset', 'any_ssr'),
-                pools=pd.get('pools', '*'),
+                btype=pd.get('type', 'soft_interval'),
+                scope=pd.get('scope', 'ssr'),
+                target_featured=pd.get('target_featured', False),
+                deltas=pd.get('deltas'),
+                threshold=pd.get('threshold'),
+                counter_init=pd.get('counter_init', 0),
+                guaranteed_init=pd.get('guaranteed_init', False),
+                fate_points_init=pd.get('fate_points_init', 0),
+                soft_start=pd.get('start'),
+                soft_end=pd.get('end'),
+                soft_increment=pd.get('increment'),
+                soft_deltas=pd.get('soft_deltas'),
+                cr_counter_threshold=pd.get('cr_counter_threshold'),
+                cr_base_rate=pd.get('cr_base_rate'),
+                cr_state_probs=pd.get('cr_state_probs'),
+                fate_threshold=pd.get('fate_threshold'),
+                switch_allowed=pd.get('switch_allowed'),
+                switch_resets_progress=pd.get('switch_resets_progress'),
+                reset=pd.get('reset', ''),
+                pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), (list, tuple)) else (pd.get('pools', '*'),),
+                deactivate_on_early_hit=(pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
+                depends_on=(pd.get('lifecycle') or {}).get('depends_on'),
             ))
+            # 同步到 _pity_defs UI 内部格式
             self._pity_defs.append({
                 'name': pd.get('name', 'pity'),
-                'btype': pd.get('type', 'soft'),
-                'params': pd.get('params', {}),
-                'target_distribution': pd.get('target_distribution', {}),
-                'reset_condition': pd.get('reset', 'any_ssr'),
+                'btype': pd.get('type', 'soft_interval'),
+                'scope': pd.get('scope', 'ssr'),
+                'target_featured': pd.get('target_featured', False),
+                'deltas': pd.get('deltas'),
+                'threshold': pd.get('threshold'),
+                'counter_init': pd.get('counter_init', 0),
+                'soft_start': pd.get('start'),
+                'soft_end': pd.get('end'),
+                'soft_increment': pd.get('increment'),
+                'reset': pd.get('reset', ''),
                 'pools': pd.get('pools', '*'),
-                'counter_init': pity.get('counter_init', {}).get(pd.get('name', 'pity'), 0),
+                'guaranteed_init': pd.get('guaranteed_init', False),
+                'fate_points_init': pd.get('fate_points_init', 0),
+                'selected_card_init': pd.get('selected_card_init'),
+                'soft_deltas': pd.get('soft_deltas'),
+                'cr_counter_threshold': pd.get('cr_counter_threshold'),
+                'cr_base_rate': pd.get('cr_base_rate'),
+                'cr_state_probs': pd.get('cr_state_probs'),
+                'fate_threshold': pd.get('fate_threshold'),
+                'switch_allowed': pd.get('switch_allowed'),
+                'switch_resets_progress': pd.get('switch_resets_progress'),
+                'deactivate_on_early_hit': (pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
+                'depends_on': (pd.get('lifecycle') or {}).get('depends_on'),
             })
         store.pity = PityConfig(
             enabled=pity.get('enabled', True),
             pities=pities,
-            counter_init=pity.get('counter_init', {}),
         )
 
         strategy = config.get('strategy', {})
@@ -2458,6 +3402,9 @@ class ConfigPanel(QWidget):
                 name=cd.get('name', ''),
                 rarity=cd.get('rarity', 'R'),
                 pools=cd.get('pools', []),
+                initial_count=cd.get('initial_count', 0),
+                tags=cd.get('tags', {}),
+                list_tags=cd.get('list_tags', {}),
             ))
 
         for rd in config.get('resource_defs', []):
@@ -2498,6 +3445,10 @@ class ConfigPanel(QWidget):
         import datetime as _dt
         store.sim_start_date = config.get('sim_start_date') or _dt.date.today().isoformat()
 
+        # P60：统一填充 featured_card_ids
+        for pool in store.pools:
+            pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
+
         self.refresh_from_store()
 
     def _sync_card_defs_from_pools(self):
@@ -2522,12 +3473,14 @@ class ConfigPanel(QWidget):
                             pools.append(pid)
                         existing_map[cid]['pools'] = pools
                     else:
+                        base = {'tags': {}, 'list_tags': {}, 'initial_count': 0}
                         if cid == '_no_card':
                             existing_map[cid] = {
                                 'card_id': '_no_card',
                                 'name': '空抽(仅资源)',
                                 'rarity': '无',
                                 'pools': [pid],
+                                **base,
                             }
                         else:
                             existing_map[cid] = {
@@ -2535,6 +3488,7 @@ class ConfigPanel(QWidget):
                                 'name': cid,
                                 'rarity': d.get('rarity', 'R'),
                                 'pools': [pid],
+                                **base,
                             }
             else:
                 for suffix, rarity in [('_ssr', 'SSR'), ('_sr', 'SR'), ('_r', 'R')]:
@@ -2550,6 +3504,9 @@ class ConfigPanel(QWidget):
                             'name': cid,
                             'rarity': rarity,
                             'pools': [pid],
+                            'tags': {},
+                            'list_tags': {},
+                            'initial_count': 0,
                         }
 
         merged = list(existing_map.values())
@@ -2569,31 +3526,8 @@ class ConfigPanel(QWidget):
         if col == 3:
             self._sync_card_defs_from_pools()
 
-    def _on_card_def_changed(self, row, col):
-        self._update_preview()
-
-    def _filter_card_defs(self):
-        filter_rarity = self.card_rarity_filter.currentText()
-        search_text = self.card_search.text().strip().lower()
-        for i in range(self.card_def_table.rowCount()):
-            if filter_rarity == "全部" and not search_text:
-                self.card_def_table.setRowHidden(i, False)
-                continue
-            rarity_widget = self.card_def_table.cellWidget(i, 2)
-            rarity = rarity_widget.currentText() if rarity_widget else ''
-            rarity_match = filter_rarity == "全部" or rarity == filter_rarity
-            if not search_text:
-                self.card_def_table.setRowHidden(i, not rarity_match)
-                continue
-            id_item = self.card_def_table.item(i, 0)
-            name_item = self.card_def_table.item(i, 1)
-            id_match = id_item.text().lower().find(search_text) >= 0 if id_item else False
-            name_match = name_item.text().lower().find(search_text) >= 0 if name_item else False
-            text_match = id_match or name_match
-            self.card_def_table.setRowHidden(i, not (rarity_match and text_match))
-
-    def _search_card_defs(self, text):
-        self._filter_card_defs()
+    # _filter_card_defs / _search_card_defs / _on_card_def_changed 已由
+    # P65 的 _filter_card_list 替代——见 _setup_card_def_tab 区域
 
     def _on_resource_def_changed(self, row, col):
         self._refresh_resource_combos()
@@ -2839,6 +3773,10 @@ class ConfigPanel(QWidget):
         from gacha_simulator.core.strategy import strategy_type_to_key
         store = self._store
 
+        # P56：保存旧池子的 epitomizable_cards 映射，避免 apply_to_store 中失丢
+        _old_epitomizable = {p.pool_id: getattr(p, 'epitomizable_cards', [])
+                             for p in store.pools}
+
         store.pools = []
         for i in range(self.pool_table.rowCount()):
             cb = self.pool_table.cellWidget(i, 0)
@@ -2900,21 +3838,39 @@ class ConfigPanel(QWidget):
                 bindings=bindings,
                 distribution=distribution,
                 batch_size=batch_size,
+                epitomizable_cards=_old_epitomizable.get(pid, []),
             ))
 
         store.pity.enabled = self.pity_enabled.isChecked()
         pities = []
         for pd in self._pity_defs:
             pities.append(PityDef(
-                name=pd['name'],
-                btype=pd['btype'],
-                params=dict(pd['params']),
-                target_distribution=dict(pd['target_distribution']),
-                reset_condition=pd['reset_condition'],
-                pools=pd['pools'],
+                name=pd.get('name', ''),
+                btype=pd.get('btype', 'soft_interval'),
+                scope=pd.get('scope', 'ssr'),
+                target_featured=pd.get('target_featured', False),
+                deltas=pd.get('deltas'),
+                threshold=pd.get('threshold'),
+                counter_init=pd.get('counter_init', 0),
+                guaranteed_init=pd.get('guaranteed_init', False),
+                fate_points_init=pd.get('fate_points_init', 0),
+                selected_card_init=pd.get('selected_card_init'),
+                soft_start=pd.get('soft_start'),
+                soft_end=pd.get('soft_end'),
+                soft_increment=pd.get('soft_increment'),
+                soft_deltas=pd.get('deltas') if pd.get('btype') == 'soft_step' else None,
+                cr_counter_threshold=pd.get('cr_counter_threshold'),
+                cr_base_rate=pd.get('cr_base_rate'),
+                cr_state_probs=pd.get('cr_state_probs'),
+                fate_threshold=pd.get('fate_threshold'),
+                switch_allowed=pd.get('switch_allowed'),
+                switch_resets_progress=pd.get('switch_resets_progress'),
+                reset=pd.get('reset', ''),
+                pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), list) else (pd.get('pools', '*'),) if isinstance(pd.get('pools'), str) else pd.get('pools', ('*',)),
+                deactivate_on_early_hit=pd.get('deactivate_on_early_hit', False),
+                depends_on=pd.get('depends_on'),
             ))
         store.pity.pities = pities
-        store.pity.counter_init = {pd['name']: pd.get('counter_init', 0) for pd in self._pity_defs}
 
         store.strategy_type = self.strategy_type.currentText()
         store.strategy_name = strategy_type_to_key(store.strategy_type)
@@ -2939,6 +3895,8 @@ class ConfigPanel(QWidget):
                 rarity=cd.get('rarity', 'R'),
                 pools=cd.get('pools', []),
                 initial_count=cd.get('initial_count', 0),
+                tags=cd.get('tags', {}),
+                list_tags=cd.get('list_tags', {}),
             ))
 
         store.resource_defs = {}
@@ -2973,6 +3931,10 @@ class ConfigPanel(QWidget):
                 miss_cost_weight=w.get('miss_cost_weight', 1.0),
                 card_value=w.get('card_value', 1.0),
             )
+
+        # P60：统一填充 featured_card_ids
+        for pool in store.pools:
+            pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
 
     def refresh_from_store(self):
         if self._store is None:
@@ -3019,14 +3981,35 @@ class ConfigPanel(QWidget):
         self.pity_enabled.setChecked(store.pity.enabled)
         self._pity_defs = []
         for p in store.pity.pities:
+            # P55：扁平化字段
+            pools_val = getattr(p, 'pools', ('*',))
+            if isinstance(pools_val, tuple):
+                pools_val = ','.join(pools_val) if pools_val != ('*',) else '*'
             self._pity_defs.append({
                 'name': p.name,
                 'btype': p.btype,
-                'params': dict(p.params),
-                'target_distribution': dict(p.target_distribution),
-                'reset_condition': p.reset_condition,
-                'pools': p.pools,
-                'counter_init': store.pity.counter_init.get(p.name, 0),
+                'scope': getattr(p, 'scope', 'ssr'),
+                'target_featured': getattr(p, 'target_featured', False),
+                'deltas': getattr(p, 'deltas', None),
+                'threshold': getattr(p, 'threshold', None),
+                'counter_init': getattr(p, 'counter_init', 0),
+                'soft_start': getattr(p, 'soft_start', None),
+                'soft_end': getattr(p, 'soft_end', None),
+                'soft_increment': getattr(p, 'soft_increment', None),
+                'reset': getattr(p, 'reset', ''),
+                'pools': pools_val,
+                'guaranteed_init': getattr(p, 'guaranteed_init', False),
+                'fate_points_init': getattr(p, 'fate_points_init', 0),
+                'selected_card_init': getattr(p, 'selected_card_init', None),
+                'soft_deltas': getattr(p, 'soft_deltas', None),
+                'cr_counter_threshold': getattr(p, 'cr_counter_threshold', None),
+                'cr_base_rate': getattr(p, 'cr_base_rate', None),
+                'cr_state_probs': getattr(p, 'cr_state_probs', None),
+                'fate_threshold': getattr(p, 'fate_threshold', None),
+                'switch_allowed': getattr(p, 'switch_allowed', None),
+                'switch_resets_progress': getattr(p, 'switch_resets_progress', None),
+                'deactivate_on_early_hit': getattr(p, 'deactivate_on_early_hit', False),
+                'depends_on': getattr(p, 'depends_on', None),
             })
         self.pity_list.clear()
         for pd in self._pity_defs:
@@ -3046,9 +4029,13 @@ class ConfigPanel(QWidget):
         self._set_target_cards(target_data)
 
         card_data = [{'card_id': cd.card_id, 'name': cd.name, 'rarity': cd.rarity, 'pools': cd.pools,
-                      'initial_count': getattr(cd, 'initial_count', 0)}
+                      'initial_count': getattr(cd, 'initial_count', 0),
+                      'tags': getattr(cd, 'tags', {}),
+                      'list_tags': getattr(cd, 'list_tags', {})}
                      for cd in store.card_defs]
         self.set_card_defs(card_data)
+        # P65：store 就绪后从 rarity_rank 动态填充稀有度下拉
+        self._populate_card_rarity_filter()
 
         res_defs = [{'resource_id': rid, 'display_name': name,
                      'initial_amount': store.initial_resources.get(rid, 0)}

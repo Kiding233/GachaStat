@@ -37,17 +37,25 @@ gacha_simulator/
 
 ### 策略 (`core/strategy.py`)
 
-`STRATEGY_REGISTRY` 注册 7 种策略（`smart`/`pool_quota`/`pity_reserve`/`stop_on_target`/`target_hunting`/`fixed_count`/`draw_target`），统一接口 `select_action(self, ctx: StrategyContext) -> Action`。`StrategyContext` 封装 `state`/`current_pools`/`target_cards`/`acquired`/`pool_draw_counts`/`total_draws` 等，`get_pity_probabilities()` 惰性计算。工厂：`create_strategy(name, params)`。
+`STRATEGY_REGISTRY` 注册 7 种策略（`smart`/`pool_quota`/`pity_reserve`/`stop_on_target`/`target_hunting`/`fixed_count`/`draw_target`），统一接口 `select_action(self, ctx: StrategyContext) -> Action`。`StrategyContext` 封装 `state`/`current_pools`/`target_cards`/`acquired`/`pool_draw_counts`/`total_draws` 等，`get_pity_probabilities()` 惰性计算。工厂：`create_strategy(name, params)`。**P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。显式传入值覆盖默认值。**P56 新增：** `NonDrawAction`（`type='non_draw'`）——策略可返回非抽卡动作（`switch_epitomized_target` 切换定轨目标 / `cancel_epitomized_path` 取消定轨），由 `gacha_service._apply_non_draw()` 分发执行。
 
 ### 保底 (`core/pity.py`)
 
-`PityEngine`：软保底（`start_at`→`end_at` 概率爬升）、硬保底（`threshold` 100%）。重置条件：`any_ssr`/`featured`/`never`。多保底按顺序叠加。
+**类结构（P55+P56）：** `PityBehavior`（ABC）→ `CounterBasedBehavior`（ABC——`btype` 参数推导 `is_soft`/`is_hard`/`is_event_driven`，`_on_reset()` 钩子，`before_draw`/`after_draw` 生命周期）→ `SoftStepBehavior`（RLE deltas 驱动软保底）/ `HardPityBehavior`（阈值触发 100%）。事件驱动型（P56）：`RotatingBehavior`（纯净大小保底，guaranteed flag 二态翻转）/ `RotatingCRBehavior`（RotatingBehavior 子类，捕获明光——cr_counter + cr_state_probs + cr_base_rate）/ `TargetedBehavior`（定轨——selected_card 锁定 + fate_points 累积 + switch_allowed/switch_resets_progress 切换规则）。`SoftPityMixin` 混入软保底（委托 SoftStepBehavior deltas 引擎）→ `RotatingSoftBehavior` / `RotatingCRSoftBehavior` / `TargetedSoftBehavior`（各 ~5 行增量）。模块级 `_redistribute_scope()` 供 rotating/targeted 家族共用。**`BEHAVIOR_REGISTRY`** 注册 10 种保底类型：4 种 counter 驱动型（`soft_interval`/`soft_additive`/`soft_step`→`SoftStepBehavior`，`hard`→`HardPityBehavior`）+ 6 种事件驱动型（`rotating`→`RotatingBehavior` / `rotating_soft`→`RotatingSoftBehavior` / `rotating_cr`→`RotatingCRBehavior` / `rotating_cr_soft`→`RotatingCRSoftBehavior` / `targeted`→`TargetedBehavior` / `targeted_soft`→`TargetedSoftBehavior`）。`create_behavior(pdef, state)` 工厂——新格式（`PityDef` 扁平字段），含 P56 参数（`cr_counter_threshold`/`cr_base_rate`/`cr_state_probs`/`fate_threshold`/`switch_allowed`/`switch_resets_progress`/`soft_deltas`/`guaranteed_init`/`fate_points_init`）全参数传递。
+
+**`PityEngine`（P55 新签名）：** `PityEngine(pool_specs, pity_defs: List[PityDef], state: PityState, rarity_rank)`——内部通过 `create_behavior()` 构造 behavior 实例，经 `_resolve_order(behaviors, rarity_rank)`（按稀有度层级→type 优先级排序）+ `_validate_behaviors()`（重名校验+scope 重叠 ConfigError）后存入 `_behavior_list`。旧签名 `PityEngine(pool_specs, pity_defs: Dict, behaviors: Dict)` 向后兼容。`PoolPitySpec` 含 `scope_cards`/`featured_cards`/`scope_slots`/`featured_slots`（featured/standard 独立槽位）；`compute_scope_mappings(pool)` 工厂函数预计算。池匹配使用 `fnmatch` 通配符。
+
+**其他设施：** `PityState`——三层嵌套 namespace；`Counter`/`Flag` 遥控器；`DrawInfo`（frozen dataclass）抽卡静态事实；`PityContext` 管道载体；`LifecycleConfig`（frozen——`max_triggers`/`deactivate_on_early_hit`/`depends_on`）；`_build_pity_state_init()`——从 `PityDef` 注入 `counter_init`/`guaranteed_init`/`fate_points_init` 初始状态；`_expand_soft_to_deltas()`——`soft_interval`/`soft_additive` 语法糖 → deltas。
+
+### GachaState (`core/state.py`)
+
+dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id)` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。
 
 ### GDR (`core/gdr.py` + `core/generalized_drop_rate.py`)
 
-`UNIFIED_GDR_REGISTRY` 定义 13 种广义出率指标。两路计算：`compute_from_compact`（O(1)）/ `compute_from_history`（O(T)）。
+`UNIFIED_GDR_REGISTRY` 定义 21 种广义出率指标（含 P62 4 个可达变体）。两路计算：`compute_from_compact`（O(1)）/ `compute_from_history`（O(T)）。**P62 变更：** `GDRDefinition.needs_store: bool = False` 标志位——告知调用方该 GDR 需传入 `store` 方可正确计算（如 `_obtainable` 可达变体）。`filter_target_specs_by_obtainable(target_specs, store, final_time) -> Dict[str, int]` 公共函数——依据池子 `start_day ≤ final_time` 判定目标卡可达性，`store=None` 时保守回退返回原始 `target_specs`。4 个 `_obtainable` 后缀 GDR key（`target_achievement_obtainable` / `target_collection_obtainable` / `all_targets_obtainable` / `weighted_satisfaction_obtainable`）分母仅含模拟期间池子已开放的目标卡，排除不可达卡的虚降/永久惩罚。`compute_gdr_from_compact()` / `compute_gdr_from_cumulative()` / `compute_success_probability()` 均新增 `store=None` 参数并透传至 wrapper；`GDRCalculator.__init__` / `make_gdr_calculator()` 同理。`streaming.py` 累积快照新增 `pool_end_time` 字段供可达过滤使用。
 
-**调用规范（强制）：** 必须用 `make_gdr_calculator(store, target_specs, gdr_key)` 构造 `GDRCalculator`——权重从 `ConfigStore` 自动提取。**禁止绕过直接调** `compute_gdr_from_compact`/`compute_success_probability`（权重易漏传、静默退化 1.0）。例外：`process_trace.py`/`per_pool_analysis.py` 通过 `**kwargs` 透传权重。
+**调用规范（强制）：** 必须用 `make_gdr_calculator(store, target_specs, gdr_key)` 构造 `GDRCalculator`——权重从 `ConfigStore` 自动提取。**禁止绕过直接调** `compute_gdr_from_compact`/`compute_success_probability`（权重易漏传、静默退化 1.0）。例外：`process_trace.py`/`per_pool_analysis.py` 通过 `**kwargs` 透传权重。**P60 变更：** `PityProgressAtT` 读取 `history[t].pity_state`（dict，非 PityState 对象）时，必须通过 `PityState.from_dict()` 反序列化后再使用 `ps.get(name, 'counter', 0)`——禁止直接对 dict 调用 3 参数 `get()`（TypeError）。
 
 ### 过程分析 (`core/process_trace.py` + `core/process_analysis.py`)
 
@@ -59,7 +67,7 @@ gacha_simulator/
 
 ### 停止条件 · 并行模拟 · GUI · 配置
 
-`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。
+`STOP_CONDITION_REGISTRY` 注册 6 种条件 → `create_stop_condition()`。并行模拟用 `Pool(initializer=_wk_init)`，11 个全局变量注入子进程。GUI 用 QThread+Worker 模式，Plotly 图表通过 `ChartWebView` 渲染。配置文件 TOML 格式 → `config_toml.py` 读写（单一 `config.toml`）。**P55 变更：** `PityDef` 扁平化为 23 个独立类型字段（`scope`/`target_featured`/`deltas`/`threshold`/`counter_init`/`guaranteed_init`/`fate_points_init`/`soft_start`/`soft_end`/`soft_increment`/`reset`/`pools`/`max_triggers`/`deactivate_on_early_hit`/`depends_on` 等），旧 `params` dict 已移除；`PityConfig.counter_init` 移至每个 `PityDef.counter_init`。`_is_legacy_format()` + `_migrate_legacy_pity()` 自动迁移旧格式 TOML；`_pitydef_to_toml()` round-trip 写回；`_expand_soft_to_deltas()` 展开语法糖参数。`create_behavior()` 完整传递 lifecycle/reset/target_featured。`rarity_rank` 从 `ConfigStore.[rarities].ranks` 解析（小写归一化），传递至 PityEngine 和 `_resolve_order`。
 
 ### 并行模拟入口（强制）
 
@@ -75,6 +83,8 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 | 新策略 | `core/strategy.py` + `STRATEGY_REGISTRY` 注册 |
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
+| 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |
+| 新卡片维度 | `CardDefEntry.tags`（单值）/`CardDefEntry.list_tags`（多值）——TOML 中 `[card.tags]` 加一行即可，无需改代码（P65） |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
 | 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |
 | 新随机占优检验 | `core/comparison_analyzer.py` → `dd_bootstrap_test_v2()` + `compute_dominance_matrix_v2()` → `compute_dominance_matrix()` 派发器（当前：v2=PySDTest Donald-Hsu 2016 选择性重中心化 / v1=等式中心化 Bootstrap） |

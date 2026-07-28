@@ -1,13 +1,21 @@
 from .result_types import CompactResult
 from .collector import SimulationCollector, InfoVectorCollector, CompactCollector
 from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, compute_bonus_resources
-from .action import Action, DrawAction, WaitAction
+from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
 from .info_vector import InfoVector
 from .pity import (
-    PityBehavior, SoftPityBehavior, HardPityBehavior,
+    PityBehavior, SoftStepBehavior,
+    CounterBasedBehavior, HardPityBehavior,
     PityDefParsed, PoolPitySpec,
     PityState, PityEngine,
+    DrawInfo, PityContext, Counter, Flag, LifecycleConfig,
+    BEHAVIOR_REGISTRY, create_behavior,
+    compute_scope_mappings,
+    RotatingBehavior, RotatingSoftBehavior,
+    RotatingCRBehavior, RotatingCRSoftBehavior,
+    TargetedBehavior, TargetedSoftBehavior,
+    SoftPityMixin, _redistribute_scope,
 )
 from .strategy import (
     Strategy, StrategyContext,
@@ -87,12 +95,20 @@ __all__ = [
     'CompactResult',
     'SimulationCollector', 'InfoVectorCollector', 'CompactCollector',
     'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string', 'compute_bonus_resources',
-    'Action', 'DrawAction', 'WaitAction',
+    'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
     'InfoVector',
-    'PityBehavior', 'SoftPityBehavior', 'HardPityBehavior',
+    'PityBehavior', 'SoftStepBehavior',
+    'CounterBasedBehavior', 'HardPityBehavior',
     'PityDefParsed', 'PoolPitySpec',
     'PityState', 'PityEngine',
+    'DrawInfo', 'PityContext', 'Counter', 'Flag', 'LifecycleConfig',
+    'BEHAVIOR_REGISTRY', 'create_behavior',
+    'compute_scope_mappings',
+    'RotatingBehavior', 'RotatingSoftBehavior',
+    'RotatingCRBehavior', 'RotatingCRSoftBehavior',
+    'TargetedBehavior', 'TargetedSoftBehavior',
+    'SoftPityMixin', '_redistribute_scope',
     'Strategy', 'StrategyContext',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'CompositeStrategy',

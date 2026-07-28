@@ -216,8 +216,8 @@ class PlotlyRenderer:
             hoverlabel=dict(font_size=12),
             dragmode="pan",
         )
-        fig.update_yaxes(title_text=top_spec.ylabel, row=1, col=1, fixedrange=True)
-        fig.update_yaxes(title_text=bottom_spec.ylabel, row=2, col=1, fixedrange=True)
+        fig.update_yaxes(title_text=top_spec.ylabel, row=1, col=1, fixedrange=False)
+        fig.update_yaxes(title_text=bottom_spec.ylabel, row=2, col=1, fixedrange=False)
         fig.update_xaxes(title_text=bottom_spec.xlabel, row=2, col=1)
 
         return fig
@@ -439,7 +439,7 @@ class PlotlyRenderer:
             fig.update_yaxes(
                 range=[0, global_ymax],
                 title_text=label, title_font=dict(size=11, color="#333"),
-                row=row, col=1, fixedrange=True,
+                row=row, col=1, fixedrange=False,
             )
 
         s.layout_hints["margin"] = dict(l=120, r=20, t=50, b=20)
@@ -693,7 +693,7 @@ class PlotlyRenderer:
             layout_updates["yaxis_title"] = spec.ylabel
         fig.update_layout(**layout_updates)
         # 限制垂直拖动：y 轴固定范围，仅允许横向平移
-        fig.update_yaxes(fixedrange=True)
+        fig.update_yaxes(fixedrange=False)
         figsize = spec.layout_hints.get("figsize")
         if figsize:
             fig.update_layout(width=figsize[0], height=figsize[1])

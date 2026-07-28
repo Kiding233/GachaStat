@@ -14,7 +14,9 @@ def _make_store_with_3_pools():
         PoolEntry(pool_id='pool_3', name='池3', start_day=42, end_day=63),
     ]
     store.pity = PityConfig(enabled=True, pities=[
-        PityDef(name='soft_pity', btype='soft', params={'start': '74', 'end': '90'}),
+        PityDef(name='soft_pity', btype='soft_interval', scope='ssr',
+                soft_start=74, soft_end=90, counter_init=0,
+                deltas=((74, 0.0), (16, 6.25))),
     ])
     store.gain_rules = [
         GainRule(rule_type='every_n_days', param='1', gains={'draw_resource': 100}),
@@ -84,7 +86,9 @@ def test_truncate_sets_pity_counter_init():
         initial_resources={'draw_resource': 5000},
         pity_counter_init={'soft_pity': 30},
     )
-    assert truncated.pity.counter_init == {'soft_pity': 30}
+    # P55：counter_init 已从 PityConfig 移至每个 PityDef
+    counter_inits = {p.name: p.counter_init for p in truncated.pity.pities}
+    assert counter_inits['soft_pity'] == 30
 
 
 def test_truncate_offsets_day_overrides():

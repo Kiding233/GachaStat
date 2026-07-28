@@ -1,11 +1,12 @@
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 import time
 import uuid
 from ..core import (
-    GachaState, Pool, DrawAction, WaitAction,
+    GachaState, Pool, DrawAction, WaitAction, NonDrawAction,
     InfoVector, Strategy, StrategyContext, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
     SimulationCollector, InfoVectorCollector, CompactCollector,
 )
+from ..core.action import NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from ..core.pity import PityEngine, PityState
 from ..core.pool import NO_CARD_ID as _NO_CARD_ID, compute_bonus_resources
 
@@ -13,7 +14,7 @@ from ..core.pool import NO_CARD_ID as _NO_CARD_ID, compute_bonus_resources
 class SimulationStats:
     __slots__ = ('total_actions', 'total_draws', 'total_waits',
                  'total_resources_consumed', 'total_resources_gained',
-                 'card_counts', 'acquired_counts', 'pool_draw_counts', 'pity_triggers',
+                 'card_counts', 'pool_draw_counts', 'pity_triggers',             # ← P60：移除 acquired_counts
                  'last_draw_card_id', 'last_action_time',
                  'last_draw_pity_triggered')
 
@@ -24,7 +25,6 @@ class SimulationStats:
         self.total_resources_consumed = {}
         self.total_resources_gained = {}
         self.card_counts = {}
-        self.acquired_counts = {}
         self.pool_draw_counts = {}
         self.pity_triggers = 0
         self.last_draw_card_id = None
@@ -39,9 +39,6 @@ class SimulationStats:
         self.last_draw_pity_triggered = pity_triggered
         cc = self.card_counts
         cc[card_id] = cc.get(card_id, 0) + 1
-        if card_id != _NO_CARD_ID:
-            ac = self.acquired_counts
-            ac[card_id] = ac.get(card_id, 0) + 1
         pc = self.pool_draw_counts
         pc[pool_id] = pc.get(pool_id, 0) + 1
 
@@ -80,6 +77,95 @@ class GachaService:
         self.card_defs = card_defs or []
         self.session_id = str(uuid.uuid4())
         self._pools_list = list(self.pools.values())
+
+    # ── P55：概率聚合（AUDIT-BREAK-8） ──
+
+
+    def _apply_non_draw(self, action, pools, pity_engine, pity_state):
+        """P56：执行 NonDrawAction——定轨切换/取消。"""
+        from ..core.pity import TargetedBehavior
+        if action.action_id not in NON_DRAW_ACTION_REGISTRY:
+            raise InvalidActionError(f"未注册的 NonDrawAction action_id: '{action.action_id}'")
+        pool_id = action.params.get('pool_id')
+        if not pool_id:
+            raise InvalidActionError("NonDrawAction 缺少 'pool_id'")
+        pool = pools.get(pool_id)
+        if pool is None:
+            raise InvalidActionError(f"NonDrawAction 引用了不存在的池子 '{pool_id}'")
+        targeted_name = None
+        for pname, bh in pity_engine.get_behaviors_for_pool(pool_id):
+            if isinstance(bh, TargetedBehavior):
+                targeted_name = pname
+                break
+        if targeted_name is None:
+            raise InvalidActionError(f"池子 '{pool_id}' 未配置 targeted 保底")
+        if action.action_id == 'switch_epitomized_target':
+            card_id = action.params.get('card_id')
+            if not card_id:
+                raise InvalidActionError("switch_epitomized_target 缺少 'card_id'")
+            epi_cards = getattr(pool, 'epitomizable_cards', [])
+            if epi_cards and card_id not in epi_cards:
+                raise InvalidActionError(f"卡牌 '{card_id}' 不在 epitomizable_cards 中")
+            pity_def = pity_engine.get_pity_def(targeted_name)
+            if pity_def and not getattr(pity_def, 'switch_allowed', True):
+                raise InvalidActionError(f"保底 '{targeted_name}' 不允许切换目标")
+            if pity_def and getattr(pity_def, 'switch_resets_progress', True):
+                pity_state.set(targeted_name, "fate_points", 0)
+            pity_state.set(targeted_name, "selected_card", card_id)
+        elif action.action_id == 'cancel_epitomized_path':
+            pity_state.set(targeted_name, "selected_card", None)
+            pity_state.set(targeted_name, "lost_rotating", False)
+            pity_state.set(targeted_name, "losses", 0)
+
+    def _aggregate_probs_by_rarity(self, pool_id: str, pool, pity_spec) -> Dict[str, float]:
+        """将 {card_id: prob} 聚合为槽位级别概率。
+
+        P55 feature-slot 分离：若 PoolPitySpec.featured_cards 存在，
+        则将 featured 卡牌的概率拆入独立槽位（如 'ssr_featured'），
+        而非与 standard 卡牌共享同一 'ssr' 槽位。
+        """
+        result: Dict[str, float] = {}
+        rarity_cache: Dict[str, Optional[str]] = {}
+
+        # 预构建 card_id → rarity 映射（仅 standard 卡——featured 单独处理）
+        featured_ids: set = set()
+        if pity_spec and pity_spec.featured_cards:
+            for rarity, cards in pity_spec.featured_cards.items():
+                for cid in cards:
+                    featured_ids.add(cid)
+        if pity_spec and pity_spec.scope_cards:
+            for rarity, cards in pity_spec.scope_cards.items():
+                for cid in cards:
+                    if cid not in featured_ids:
+                        rarity_cache[cid] = rarity
+
+        for rwd, prob in pool.rewards:
+            cid = rwd.id
+            if cid in featured_ids:
+                # featured → 独立槽位
+                rarity = self._infer_rarity_from_spec(cid, pity_spec) or 'ssr'
+                slot = f'{rarity}_featured'
+            else:
+                rarity = rarity_cache.get(cid)
+                if rarity is None and pity_spec:
+                    rarity = self._infer_rarity_from_spec(cid, pity_spec)
+                if rarity:
+                    slot = rarity.lower()
+                else:
+                    continue
+            result[slot] = result.get(slot, 0.0) + prob
+
+        return result
+
+    @staticmethod
+    def _infer_rarity_from_spec(card_id: str, pity_spec) -> Optional[str]:
+        """从 PoolPitySpec 推断卡牌稀有度（大小写归一化）。"""
+        cid = card_id.lower()
+        if pity_spec.ssr_ids and cid in {c.lower() for c in pity_spec.ssr_ids}:
+            return 'ssr'
+        if pity_spec.featured_ids and cid in {c.lower() for c in pity_spec.featured_ids}:
+            return 'ssr'
+        return None
 
     def run_simulation(
         self,
@@ -149,7 +235,6 @@ class GachaService:
                 stop_condition=_stop,
                 _pity_engine=_pity_engine,
                 _pity_state=pity_state,
-                acquired=dict(stats.acquired_counts),
                 pool_draw_counts=dict(stats.pool_draw_counts),
                 total_draws=stats.total_draws,
                 last_draw_pity_triggered=stats.last_draw_pity_triggered,
@@ -179,55 +264,75 @@ class GachaService:
                         break
 
                     probabilities = {r.id: p for r, p in pool.rewards}
-                    original_probs = probabilities.copy() if _pity_engine else None
                     if _pity_engine:
-                        # 不使用 ctx._pity_cache——批次中保底状态逐发变化，第 2 发起缓存已过期
-                        probabilities = _pity_engine.before_draw(
-                            pool.id, pity_state, probabilities
+                        # P55：按稀有度聚合概率（AUDIT-BREAK-8）
+                        pity_spec = _pity_engine.get_spec(pool.id)
+                        rarity_probs = self._aggregate_probs_by_rarity(
+                            pool.id, pool, pity_spec
+                        ) if pity_spec else probabilities
+                        # 使用聚合后的概率传给 engine
+                        adjusted_rarity = _pity_engine.before_draw(
+                            pool.id, pity_state, rarity_probs
                         )
+                        # 从聚合概率还原为卡牌级别概率
+                        if rarity_probs is not probabilities:
+                            scale_factors = {}
+                            for slot, new_total in adjusted_rarity.items():
+                                old_total = rarity_probs.get(slot, 0)
+                                if old_total > 0 and new_total != old_total:
+                                    scale_factors[slot] = new_total / old_total
+                            # 应用缩放因子到原始卡牌概率——区分 featured/standard 槽位
+                            pity_spec = pity_spec or _pity_engine.get_spec(pool.id)
+                            featured_ids = set()
+                            if pity_spec and pity_spec.featured_cards:
+                                for cards in pity_spec.featured_cards.values():
+                                    featured_ids.update(cards)
+                            for rwd_id in probabilities:
+                                if rwd_id in featured_ids:
+                                    slot = f'{self._infer_rarity_from_spec(rwd_id, pity_spec) or "ssr"}_featured'
+                                else:
+                                    rarity = self._infer_rarity_from_spec(rwd_id, pity_spec)
+                                    slot = rarity.lower() if rarity else None
+                                if slot and slot in scale_factors:
+                                    probabilities[rwd_id] *= scale_factors[slot]
+                        pool._apply_probabilities(probabilities)
+                    else:
                         pool._apply_probabilities(probabilities)
 
                     reward = pool.draw()
 
+                    # P55：pity_triggered 检测——基于 after_draw 的实际触发结果
+                    # （使用 featured_ids 判定——等价于 CounterBasedBehavior._should_reset）
                     pity_triggered = False
                     triggered_pity_name = None
-                    if original_probs is not None:
-                        for card_id, orig_prob in original_probs.items():
-                            new_prob = probabilities.get(card_id, 0)
-                            if new_prob > orig_prob * 1.01:
-                                pity_triggered = True
-                                break
 
-                    if _pity_engine and pity_triggered:
+                    if _pity_engine:
+                        _pity_engine.after_draw(pool.id, pity_state, reward.id)
+                        # 保底触发判定：本次抽到的卡满足重置条件（featured SSR）
                         spec = _pity_engine.get_spec(pool.id)
-                        if spec:
-                            triggered_names = []
-                            for pname in spec.pity_names:
-                                behavior = _pity_engine.behaviors.get(pname)
-                                if behavior is None:
-                                    continue
-                                cv = pity_state.get(pname)
-                                if behavior.is_active(cv):
-                                    triggered_names.append(pname)
-                            triggered_pity_name = ','.join(triggered_names) if triggered_names else None
+                        if spec and reward.id in spec.featured_ids and spec.pity_names:
+                            pity_triggered = True
+                            triggered_pity_name = ','.join(spec.pity_names)
 
+                    # 池级保底计数器最大值（供 collector 记录）
                     pool_spec = _pity_engine.get_spec(pool.id) if _pity_engine else None
                     pool_counter_max = 0
                     if pool_spec:
                         for pname in pool_spec.pity_names:
-                            cv = pity_state.get(pname)
+                            cv = _pity_engine.get_counter(pname) if _pity_engine else pity_state.get(pname, 'counter', 0)
                             pool_counter_max = max(pool_counter_max, cv)
 
-                    if _pity_engine:
-                        _pity_engine.after_draw(pool.id, pity_state, reward.id)
-
                     stats.on_draw(reward.id, pool.id, pity_triggered)
+                    # P60：卡片计入 state.acquired（一等公民）——替代旧 stats.acquired_counts
+                    if reward.id != _NO_CARD_ID:
+                        state.add_card(reward.id)
+
                     if pity_triggered:
                         stats.pity_triggers += 1
 
                     rg = dict(reward.resources_gained or {})
                     if reward.first_time_bonus or reward.nth_time_bonus or reward.excess_bonus:
-                        ac_new = stats.acquired_counts.get(reward.id, 0)
+                        ac_new = state.get_card_count(reward.id)          # ← P60：从 state 读取
                         init = _initial_counts.get(reward.id, 0)
                         total_before = init + ac_new - 1
                         total_after = init + ac_new
@@ -259,6 +364,9 @@ class GachaService:
                         real_time=real_time, pity_state=pity_state,
                         combined_gained=combined_gained,
                     )
+
+            elif _isinstance(action, NonDrawAction):
+                self._apply_non_draw(action, _pools, _pity_engine, pity_state)
 
             elif _isinstance(action, _WaitAction):
                 rt_before = real_time

@@ -23,6 +23,7 @@ class _FakePool:
 class _FakeState:
     def __init__(self, resources, real_time=0):
         self._resources = resources.copy()
+        self.acquired = {}                           # ← P60：@property 访问 state.acquired
         self.real_time = real_time
 
     def can_afford(self, cost):
@@ -79,7 +80,6 @@ def test_strategy_draws_from_any_pool_when_pool_id_empty():
         stop_condition=None,
         _pity_engine=None,
         _pity_state=None,
-        acquired={},
         pool_draw_counts={},
         total_draws=0,
         last_draw_pity_triggered=False,
@@ -109,7 +109,6 @@ def test_strategy_draws_from_specific_pool_when_pool_id_set():
         stop_condition=None,
         _pity_engine=None,
         _pity_state=None,
-        acquired={},
         pool_draw_counts={},
         total_draws=0,
         last_draw_pity_triggered=False,
@@ -138,7 +137,6 @@ def test_strategy_waits_when_cannot_afford():
         stop_condition=None,
         _pity_engine=None,
         _pity_state=None,
-        acquired={},
         pool_draw_counts={},
         total_draws=0,
         last_draw_pity_triggered=False,

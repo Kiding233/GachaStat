@@ -64,7 +64,7 @@ class AboutDialog(QDialog):
         <h4>核心功能</h4>
         <ul>
             <li><b>灵活的模拟引擎</b>：支持多池、多保底、多策略的抽卡模拟</li>
-            <li><b>保底机制</b>：软保底（线性/指数/阶梯提升）、硬保底、多保底并行</li>
+            <li><b>保底机制</b>：区间软保底 / 累加软保底 / 分段软保底 (RLE deltas) / 硬保底；featured/standard 槽位分离；多保底管道排序</li>
             <li><b>策略系统</b>：6 种策略（按需追卡、指定池配额、保底预留、目标即停、指定池追卡、固定次数）</li>
             <li><b>停止条件系统</b>：6 种停止条件（所有池结束、固定次数、资源阈值、目标达成、抽到指定卡、时间限制）</li>
             <li><b>广义出率（GDR）</b>：17 种可配置的广义出率指标</li>
@@ -135,7 +135,7 @@ class AboutDialog(QDialog):
         <h3>配置文件指南</h3>
         <p>所有配置集中在单一 <code>config.toml</code> 文件中，使用标准 TOML 格式。</p>
 
-        <h4>[[cards]] — 卡牌定义</h4>
+        <h4>[[card]] — 卡牌定义</h4>
         <pre>[[cards]]
 id = "刻晴"
 name = "刻晴"
@@ -179,19 +179,23 @@ target_cards = ["刻晴"]</pre>
         <p><b>绑定键</b>：ssr, ssr_alt, ssr_alt1, ssr_alt2, featured, offrate, sr, r, rerun_of, exchange_card</p>
         <p>可选字段：<code>rerun_of</code>（复刻，引用另一池子的分布）、<code>exchange_card_id</code>（兑换池，100% 出指定卡）。</p>
 
-        <h4>[[pity]] — 保底规则</h4>
+        <h4>[[pity]] — 保底规则（P55 新格式）</h4>
         <pre>[[pity]]
 name = "ssr_soft"
-type = "soft"
-start = 74
+type = "soft_interval"   # soft_interval | soft_additive | soft_step | hard
+scope = "ssr"
+start = 80
 end = 90
-func = "linear"
-threshold = 180
-reset = "any_ssr"
-pools = ["*"]
-target = { ssr = 1.0 }
-counter_init = 0</pre>
-        <p>软保底参数：<code>start</code>（起始抽数）/ <code>end</code>（终止抽数）/ <code>func</code>（linear|exp|step）。硬保底参数：<code>threshold</code>（100% 触发抽数）。<code>reset</code> 值：any_ssr|featured_ssr|never。</p>
+target_featured = true
+reset = "featured"        # featured | ssr | (scope 值)
+pools = ["pool_c*"]       # 支持 fnmatch 通配符
+counter_init = 0
+
+# 生命周期（可选）
+[lifecycle]
+deactivate_on_early_hit = false
+depends_on = ""</pre>
+        <p>软保底 type：<code>soft_interval</code>（区间递增，start→end 线性）/ <code>soft_additive</code>（累加递增，每抽+increment%）/ <code>soft_step</code>（RLE deltas 自定义分段）。硬保底：<code>type="hard"</code> + <code>threshold</code>。事件驱动型（rotating/targeted 等）由 P56 交付。</p>
 
         <h4>[[targets]] — 目标卡</h4>
         <pre>[[targets]]

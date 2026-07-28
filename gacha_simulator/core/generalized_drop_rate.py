@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, TYPE_CHECKING
 
+from .pity import PityState
+
 if TYPE_CHECKING:
     from .info_vector import InfoVector
 
@@ -67,7 +69,10 @@ class PityProgressAtT(GeneralizedDropRate):
         if t >= len(history):
             return 0
         pity_state = history[t].pity_state
-        count = pity_state.get(self.counter_name, 0)
+        # P60：history[t].pity_state 是 PityState.to_dict() 的返回值（dict），
+        # 必须反序列化后使用 3 参数 get() API。from_dict 自动升级旧格式。
+        ps = PityState.from_dict(pity_state)
+        count = ps.get(self.counter_name, 'counter', 0)
         return min(count / self.threshold, 1.0)
 
 

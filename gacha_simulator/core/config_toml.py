@@ -7,6 +7,7 @@ S2c: _expand_template_with_bindings
 """
 
 import math
+import warnings
 from typing import Dict, List, Optional, Tuple
 
 try:
@@ -17,6 +18,7 @@ except ModuleNotFoundError:
 from .config_store import (
     CardDefEntry,
     CardWeightEntry,
+    ConfigError,
     ConfigStore,
     DayOverride,
     GainRule,
@@ -51,12 +53,15 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     with open(path, 'rb') as f:
         data = tomllib.load(f)
 
-    # 各段构建（顺序无关——ConfigStore 各字段独立）
+    # P60：稀有度层级解析（必须在 _build_pity 之前——§0.1 AUDIT-BREAK-1）
+    store._parse_rarities(data)
+
+    # 各段构建
     _build_resources(data, store)
     _build_cards(data, store)
     _build_gain_rules(data, store)
     _build_day_overrides(data, store)
-    _build_pity(data, store)
+    _build_pity(data, store)        # 依赖 rarity_rank 完成 scope 校验
     _build_targets(data, store)
     _build_weights(data, store)
 
@@ -101,30 +106,31 @@ def save_toml(store: ConfigStore, path: str) -> None:
             for d in store.day_overrides
         ]
 
-    # cards
-    data['cards'] = [
-        {'id': c.card_id, 'name': c.name, 'rarity': c.rarity}
-        for c in store.card_defs
-    ]
+    # cards（P65：段名 [[card]]，字段 card_id）
+    data['card'] = []
+    for c in store.card_defs:
+        entry = {
+            'card_id': c.card_id,
+            'name': c.name,
+            'rarity': c.rarity,
+            'initial_count': c.initial_count,
+        }
+        if c.tags:
+            filtered = {k: v for k, v in c.tags.items() if v}
+            if filtered:
+                entry['tags'] = filtered
+        if c.list_tags:
+            lt = {k: v for k, v in c.list_tags.items() if v}
+            if lt:
+                entry['list_tags'] = lt
+        data['card'].append(entry)
 
     # templates + pools
     _save_templates_and_pools(store, data)
 
-    # pity
+    # pity（P55 扁平化格式）
     if store.pity.enabled and store.pity.pities:
-        data['pity'] = [
-            {
-                'name': p.name, 'type': p.btype,
-                'start': int(p.params.get('start', 0)),
-                'end': int(p.params.get('end', 0)),
-                'func': p.params.get('func', 'linear'),
-                'threshold': int(p.params.get('threshold', 0)),
-                'reset': p.reset_condition, 'pools': p.pools,
-                'target': dict(p.target_distribution),
-                'counter_init': 0,
-            }
-            for p in store.pity.pities
-        ]
+        data['pity'] = [_pitydef_to_toml(p) for p in store.pity.pities]
 
     # targets
     if store.target_cards:
@@ -141,6 +147,17 @@ def save_toml(store: ConfigStore, path: str) -> None:
              'miss_cost': cw.miss_cost_weight, 'card_value': cw.card_value}
             for cid, cw in store.card_weights.items()
         ]
+
+    # rarities —— P60 新增：往返对称（load_toml 已解析 → 写入保证不丢失）
+    if store.rarity_rank:
+        # rarity_rank 是 name→rank 的反向映射（如 {"SSR": 0, "SR": 1, "R": 2}）
+        # 逆转为 ranks 分组格式：[[names_at_rank_0], [names_at_rank_1], ...]
+        # dict 分桶替代 range 预分配——消除极端 rank 值的 O(max_rank) 膨胀
+        buckets = {}
+        for name, rank_idx in store.rarity_rank.items():
+            buckets.setdefault(rank_idx, []).append(name)
+        ranks = [buckets[r] for r in sorted(buckets)]
+        data['rarities'] = {'ranks': ranks}
 
     header = (
         '# ============================================================\n'
@@ -185,6 +202,11 @@ def _save_templates_and_pools(store: ConfigStore, data: dict) -> None:
             'bindings': {k: v for k, v in pool.bindings.items() if k != 'type'},
             'target_cards': [cid for cid, _ in pool.target_specs],
         }
+
+        # P56：epitomizable_cards——仅非空时写入以保持 TOML 简洁
+        epitomizable = getattr(pool, 'epitomizable_cards', None)
+        if epitomizable:
+            pool_dict['epitomizable_cards'] = list(epitomizable)
 
         # rerun_of / exchange_card_id 可选
         if pool.rerun_of:
@@ -336,13 +358,93 @@ def _expand_template_with_bindings(
 # ══════════════════════════════════════════════════════════════════
 
 
+def _check_card_format(data: dict) -> None:
+    """P65：防御性检测——阻断旧格式卡片段，避免静默数据丢失。
+
+    检测旧段名 [[cards]]（复数）和旧字段名 id（应为 card_id）。
+    仅旧格式 → ConfigError 提示手动升级。
+    新旧并存 → ConfigError 报告歧义。
+    """
+    has_old = 'cards' in data
+    has_new = 'card' in data
+
+    if has_old and not has_new:
+        raise ConfigError(
+            "检测到旧格式卡片段 [[cards]]。\n"
+            "P65 已将卡片段升级为 [[card]] + card_id 字段。\n"
+            "请手动升级 config.toml：\n"
+            "  1. [[cards]] → [[card]]\n"
+            "  2. id → card_id\n"
+            "  3. rarity 保留在顶层\n"
+            "  4. 其他维度按需移入 [card.tags] 和 [card.list_tags]"
+        )
+    if has_old and has_new:
+        raise ConfigError(
+            "config.toml 中同时存在 [[cards]]（旧格式）和 [[card]]（新格式）段。\n"
+            "请移除 [[cards]] 段，仅保留 [[card]] 段。"
+        )
+
+    # 字段级检测：[[card]] 段中条目含 id 但缺 card_id
+    for i, c in enumerate(data.get('card', [])):
+        if 'id' in c and 'card_id' not in c:
+            raise ConfigError(
+                f"[[card]] 第 {i+1} 个条目使用了旧字段名 'id'，应为 'card_id'。\n"
+                f"请将所有卡片条目中的 id 改为 card_id。"
+            )
+        # ISSUE-014: id 和 card_id 同时存在——歧义场景
+        if 'id' in c and 'card_id' in c:
+            raise ConfigError(
+                f"[[card]] 第 {i+1} 个条目同时包含 'id'（旧字段名，值={c['id']}）和 "
+                f"'card_id'（新字段名，值={c['card_id']}）。"
+                f"请删除 'id' 字段，仅保留 'card_id'。"
+            )
+
+
+def _warn_cross_table_keys(tags: dict, list_tags: dict, card_id: str) -> None:
+    """TOML 加载时检测跨表同名 key——[card.tags] 和 [card.list_tags] 中重复的 key。
+
+    检测逻辑：set(tags.keys()) & set(list_tags.keys())，排除空字符串。
+    以单值 tags 为准（多值表中冲突 key 不删除，由用户裁决）。
+    """
+    overlap = set(tags.keys()) & set(list_tags.keys())
+    overlap.discard('')
+    if overlap:
+        warnings.warn(
+            f"卡片 '{card_id}' 的 [card.tags] 和 [card.list_tags] 中存在同名 key："
+            f"{', '.join(sorted(overlap))}。将以单值标签为准。"
+        )
+
+
 def _build_cards(data: dict, store: ConfigStore) -> None:
-    """[[cards]] → store.card_defs"""
-    for c in data.get('cards', []):
+    """[[card]] → store.card_defs（P65：新格式）"""
+    _check_card_format(data)
+    for c in data.get('card', []):
+        # ── 顶层字段 ──
+        card_id = c['card_id']
+        name = c.get('name', card_id)
+        rarity = c.get('rarity', 'r')
+        ic = c.get('initial_count', 0)
+
+        # ── 标签 ──
+        tags = dict(c.get('tags', {}))
+        list_tags: Dict[str, List[str]] = {}
+        raw_lt = c.get('list_tags', {})
+        for k, v in raw_lt.items():
+            if isinstance(v, list):
+                list_tags[k] = [str(x) for x in v]
+            else:
+                list_tags[k] = [str(v)]
+
+        # P65：跨表同名 key 检测
+        _warn_cross_table_keys(tags, list_tags, card_id)
+
         store.card_defs.append(CardDefEntry(
-            card_id=c['id'],
-            name=c.get('name', c['id']),
-            rarity=c.get('rarity', 'r'),
+            card_id=card_id,
+            name=name,
+            rarity=rarity,
+            initial_count=ic,
+            tags=tags,
+            list_tags=list_tags,
         ))
 
 
@@ -375,29 +477,349 @@ def _build_day_overrides(data: dict, store: ConfigStore) -> None:
 
 
 def _build_pity(data: dict, store: ConfigStore) -> None:
-    """[[pity]] → store.pity"""
+    """[[pity]] → store.pity（P55 扁平化 PityDef 格式）。"""
     pity_list = data.get('pity', [])
     if not pity_list:
         store.pity = PityConfig(enabled=True)
         return
 
+    # P55 阶段十B：旧格式自动迁移
+    if _is_legacy_format(pity_list):
+        pity_list = _migrate_legacy_pity(pity_list)
+        store._migrated_from_legacy = True
+
+    # 稀有度 rank map（小写归一化——ISSUE-023/§0.2）
+    rarity_rank_map = {k.lower(): v for k, v in store.rarity_rank.items()}
+
     pities = []
+    names_seen: set = set()
     for p in pity_list:
+        name = p.get('name', '').strip()
+        # ISSUE-037: name 非空校验（TOML 层第一道防线）
+        if not name:
+            raise ConfigError("[[pity]] 条目缺少 'name' 字段或 name 为空字符串")
+        if name in names_seen:
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 重复——每个保底行为必须有唯一的 name"
+            )
+        names_seen.add(name)
+
+        btype = p.get('type', 'soft_interval')
+        scope = p.get('scope', 'ssr').lower()
+
+        # scope 注册校验（AUDIT-BREAK-1/2 修复）
+        if rarity_rank_map and scope not in rarity_rank_map:
+            from .pity import logger as pity_logger
+            pity_logger.warning(
+                f"PityDef '{name}' scope='{scope}' 未在 [rarities] 中注册——"
+                f"保底行为将分配给未知稀有度层级。"
+            )
+
+        # 解析 deltas / 语法糖参数
+        deltas = None
+        soft_start = p.get('start')
+        soft_end = p.get('end')
+        soft_increment = p.get('increment')
+
+        # ISSUE-034：start >= end 前置校验——在静默修正前报错
+        if btype == 'soft_interval' and soft_start is not None and soft_end is not None:
+            if soft_start >= soft_end:
+                raise ConfigError(
+                    f"保底 '{name}'：soft_start ({soft_start}) 必须小于 "
+                    f"soft_end ({soft_end})"
+                )
+
+        if 'deltas' in p:
+            deltas = _parse_deltas_value(p['deltas'])
+        elif btype in ('soft_interval', 'soft_additive') and soft_start is not None:
+            # 语法糖展开：soft_interval / soft_additive → deltas
+            deltas = _expand_soft_to_deltas(btype, soft_start, soft_end,
+                                            soft_increment, p.get('func', 'linear'))
+
+        # 生命周期参数
+        lifecycle_raw = p.get('lifecycle', {})
+        deactivate_on_early_hit = lifecycle_raw.get('deactivate_on_early_hit', False)
+        depends_on = lifecycle_raw.get('depends_on')
+
+        # P56：deactivate_on_early_hit 仅 counter 驱动型支持
+        # 事件驱动型（rotating/targeted）没有「阈值前提前命中」的概念
+        _EVENT_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
+                                   'rotating_cr_soft', 'targeted', 'targeted_soft'})
+        if deactivate_on_early_hit and btype in _EVENT_TYPES:
+            raise ConfigError(
+                f"保底 '{name}'：deactivate_on_early_hit=true 不适用于"
+                f"事件驱动型保底（type='{btype}'）。"
+            )
+
+        # 构造扁平化 PityDef
         pities.append(PityDef(
-            name=p['name'],
-            btype=p.get('type', 'soft'),
-            params={
-                'start': str(p.get('start', 0)),
-                'end': str(p.get('end', 0)),
-                'func': p.get('func', 'linear'),
-                'threshold': str(p.get('threshold', 0)),
-            },
-            target_distribution=dict(p.get('target', {})),
-            reset_condition=p.get('reset', 'any_ssr'),
-            pools=p.get('pools', '*'),
+            name=name,
+            btype=btype,
+            scope=scope,
+            target_featured=p.get('target_featured', False),
+            deltas=deltas,
+            threshold=p.get('threshold'),
+            counter_init=p.get('counter_init', 0),
+            guaranteed_init=p.get('guaranteed_init', False),
+            fate_points_init=p.get('fate_points_init', 0),
+            selected_card_init=p.get('selected_card_init'),
+            soft_start=soft_start,
+            soft_end=soft_end,
+            soft_increment=soft_increment,
+            soft_deltas=_parse_deltas_value(p['deltas']) if 'deltas' in p else None,
+            cr_counter_threshold=p.get('cr_counter_threshold'),
+            cr_base_rate=p.get('cr_base_rate'),
+            cr_state_probs=_parse_state_probs(p.get('cr_state_probs')),
+            fate_threshold=p.get('fate_threshold'),
+            switch_allowed=p.get('switch_allowed', True),
+            switch_resets_progress=p.get('switch_resets_progress', True),
+            pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), list) else (p.get('pools', '*'),),
+            deactivate_on_early_hit=deactivate_on_early_hit,
+            depends_on=depends_on,
+            reset=p.get('reset', ''),
         ))
 
     store.pity = PityConfig(enabled=True, pities=pities)
+
+
+def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linear') -> tuple:
+    """将 soft_interval / soft_additive 语法糖展开为 deltas。
+
+    soft_interval: [[start, 0.0], [end-start, 100/(end-start)%]]
+      例：start=73, end=90 → ((73, 0.0), (17, 5.88235...))
+    soft_additive: [[start, 0.0], [1, increment], [1, increment], ...]
+      注：每抽递增 i% → 简化为 ((start, 0.0), (1, increment), (1, increment), ...)
+      但为了 RLE 效率，将连续相同 increment 合并为一段。
+      实际：((start, 0.0), (∞, increment)) 但 ∞ 不现实——
+      改为 ((start, 0.0), (remaining, increment))，remaining 取到 100% 为止。
+    """
+    if btype == 'soft_interval':
+        s = int(start) if start else 0
+        e = int(end) if end else 90
+        if e <= s:
+            e = s + 1
+        n_steps = e - s
+        inc = 100.0 / n_steps
+        return ((s, 0.0), (n_steps, round(inc, 6)))
+
+    if btype == 'soft_additive':
+        s = int(start) if start is not None else 0
+        inc = float(increment) if increment is not None else 6.0
+        # 计算达到 100% 所需的抽数（封顶）
+        if inc > 0:
+            n_steps = int(100.0 / inc) + 1
+        else:
+            n_steps = 1
+        return ((s, 0.0), (n_steps, inc))
+
+    # func 参数在 P55 后不再支持——仅 linear
+    return ()
+
+
+def _parse_deltas_value(value) -> Optional[tuple]:
+    """解析 deltas 值 → tuple[tuple[int, float], ...] 或 None。"""
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)):
+        result = []
+        for seg in value:
+            if isinstance(seg, (tuple, list)) and len(seg) >= 2:
+                result.append((int(seg[0]), float(seg[1])))
+        return tuple(result) if result else None
+    return None
+
+
+def _parse_state_probs(value) -> Optional[tuple]:
+    """解析 cr_state_probs → tuple[float, ...] 或 None。"""
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)):
+        return tuple(float(v) for v in value)
+    return None
+
+
+def _deltas_to_soft_interval(deltas: tuple) -> tuple:
+    """deltas → (soft_start, soft_end) 反向还原。
+
+    仅当 deltas 符合 soft_interval 模式时可用：
+    ((N, 0.0), (M, inc)) 其中 inc 为常数。
+    返回 ((start, end),) 或 None（若无法还原）。
+
+    例：((73, 0.0), (17, 5.882353)) → (73, 90)
+    """
+    if not deltas or len(deltas) != 2:
+        return None
+    n1, inc1 = deltas[0]
+    n2, inc2 = deltas[1]
+    if inc1 != 0.0:
+        return None  # 首段增量非零——非 soft_interval 模式
+    return (n1, n1 + n2)
+
+
+def _pitydef_to_toml(p) -> dict:
+    """P55：PityDef → TOML dict（round-trip 可逆）。"""
+    entry = {'name': p.name, 'type': p.btype, 'scope': p.scope}
+
+    # 核心参数
+    if p.threshold is not None:
+        entry['threshold'] = p.threshold
+    if p.target_featured:
+        entry['target_featured'] = True
+    if p.reset:
+        entry['reset'] = p.reset
+    if p.pools and p.pools != ('*',):
+        entry['pools'] = list(p.pools)
+
+    # 语法糖参数（优先写出直观形式，否则写出 deltas）
+    if p.btype == 'soft_interval' and p.soft_start is not None and p.soft_end is not None:
+        entry['start'] = p.soft_start
+        entry['end'] = p.soft_end
+    elif p.btype == 'soft_additive' and p.soft_start is not None and p.soft_increment is not None:
+        entry['start'] = p.soft_start
+        entry['increment'] = p.soft_increment
+    elif p.deltas is not None:
+        entry['deltas'] = [list(seg) for seg in p.deltas]
+
+    # 初始状态
+    if p.counter_init:
+        entry['counter_init'] = p.counter_init
+    if p.guaranteed_init:
+        entry['guaranteed_init'] = True
+    if p.fate_points_init:
+        entry['fate_points_init'] = p.fate_points_init
+    if p.selected_card_init:
+        entry['selected_card_init'] = p.selected_card_init
+
+    # 事件驱动型参数
+    if p.cr_counter_threshold is not None:
+        entry['cr_counter_threshold'] = p.cr_counter_threshold
+    if p.cr_base_rate is not None:
+        entry['cr_base_rate'] = p.cr_base_rate
+    if p.cr_state_probs is not None:
+        entry['cr_state_probs'] = list(p.cr_state_probs)
+    if p.fate_threshold is not None:
+        entry['fate_threshold'] = p.fate_threshold
+    if not p.switch_allowed:
+        entry['switch_allowed'] = False
+    if not p.switch_resets_progress:
+        entry['switch_resets_progress'] = False
+
+    # 生命周期
+    lifecycle = {}
+    if p.deactivate_on_early_hit:
+        lifecycle['deactivate_on_early_hit'] = True
+    if p.depends_on:
+        lifecycle['depends_on'] = p.depends_on
+    if lifecycle:
+        entry['lifecycle'] = lifecycle
+
+    return entry
+
+
+# ══════════════════════════════════════════════════════════════════
+# P55 阶段十B：旧格式自动迁移
+# ══════════════════════════════════════════════════════════════════
+
+# 旧格式特征字段——这些字段在新格式中不存在（被扁平化替代）
+_LEGACY_PITY_KEYS = frozenset({'start', 'end', 'func', 'reset', 'target',
+                               'counter_init_top'})
+
+
+def _is_legacy_format(pity_list: list) -> bool:
+    """检测 [[pity]] 节是否使用旧格式。
+
+    旧格式特征：条目含 'start'/'end'/'func' 等语法糖字段（非新格式的 'scope'/'deltas'）。
+    """
+    if not pity_list:
+        return False
+    for p in pity_list:
+        keys = set(p.keys())
+        if 'start' in keys and 'scope' not in keys:
+            return True
+        if 'func' in keys:
+            return True
+    return False
+
+
+def _migrate_legacy_pity(pity_list: list) -> list:
+    """将旧格式 [[pity]] 条目迁移为新格式。
+
+    旧格式示例：
+      {name='p1', type='soft', start=74, end=90, func='linear', reset='any_ssr'}
+    新格式示例：
+      {name='p1', type='soft_interval', scope='ssr', start=74, end=90,
+       deltas=((74,0.0),(16,6.25))}
+
+    func='exp'/'step' 不支持——抛出 ConfigError。
+    """
+    if not pity_list:
+        return pity_list
+
+    new_pities = []
+    for p in pity_list:
+        btype = p.get('type', 'soft')
+        name = p.get('name', 'pity')
+
+        # 映射旧 type → 新 btype
+        if btype == 'soft':
+            btype = 'soft_interval'
+
+        entry = {'name': name, 'type': btype, 'scope': 'ssr'}
+
+        # func 检查——仅 linear 支持
+        func = p.get('func', 'linear')
+        if func not in ('linear', '', None):
+            raise ConfigError(
+                f"Pity '{name}': func='{func}' 在 P55 后不再支持——"
+                f"仅 linear 可用。如需自定义爬升曲线，请使用 soft_step + deltas。"
+            )
+
+        # start/end → soft_interval 参数
+        start = p.get('start')
+        end_val = p.get('end')
+        if start is not None:
+            entry['start'] = int(start)
+        if end_val is not None:
+            entry['end'] = int(end_val)
+
+        # increment → soft_additive 参数
+        increment = p.get('increment')
+        if increment is not None:
+            entry['increment'] = float(increment)
+
+        # threshold → hard 参数
+        threshold = p.get('threshold')
+        if threshold is not None:
+            entry['threshold'] = int(threshold)
+
+        # reset 条件
+        reset = p.get('reset')
+        if reset and reset != 'any_ssr':
+            entry['reset'] = reset
+
+        # target_distribution → target_featured
+        target = p.get('target', {})
+        if target:
+            entry['target_featured'] = True
+
+        # pools
+        pools = p.get('pools', '*')
+        if pools != '*':
+            entry['pools'] = [pools] if isinstance(pools, str) else list(pools)
+
+        # counter_init（旧格式中可能在顶层）
+        ci = p.get('counter_init', 0)
+        if ci:
+            entry['counter_init'] = int(ci)
+
+        # deltas（如果旧格式直接有 deltas）
+        deltas = p.get('deltas')
+        if deltas is not None:
+            entry['deltas'] = deltas
+
+        new_pities.append(entry)
+
+    return new_pities
 
 
 def _build_targets(data: dict, store: ConfigStore) -> None:
@@ -486,6 +908,20 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
             (cid, 1) for cid in p.get('target_cards', [])
         ]
 
+        # P56：解析 epitomizable_cards——校验 card_id 在 distribution 中存在
+        epitomizable_raw = p.get('epitomizable_cards', [])
+        epitomizable_cards = []
+        if epitomizable_raw:
+            dist_card_ids = {d.card_id for d in distribution}
+            for cid in epitomizable_raw:
+                if cid not in dist_card_ids:
+                    raise ConfigError(
+                        f"池子 '{p['id']}' 的 epitomizable_cards 中包含 "
+                        f"未在 distribution 中出现的卡牌 '{cid}'——"
+                        f"请检查卡牌 ID 拼写或将该卡加入池子分布"
+                    )
+                epitomizable_cards.append(cid)
+
         pool_entry = PoolEntry(
             pool_id=p['id'],
             name=p.get('name', p['id']),
@@ -500,6 +936,7 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
             rerun_of=p.get('rerun_of'),
             exchange_card_id=p.get('exchange_card_id'),
             distribution=distribution,
+            epitomizable_cards=epitomizable_cards,
         )
         store.pools.append(pool_entry)
 
@@ -510,6 +947,10 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
             source = pool_index.get(pool.rerun_of)
             if source:
                 pool.distribution = list(source.distribution)
+
+    # P60：统一填充 featured_card_ids——覆盖所有 pool（含复刻池，其 distribution 在第二步才赋值）
+    for pool in store.pools:
+        pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
 
 
 def _backfill_card_pools(store: ConfigStore) -> None:

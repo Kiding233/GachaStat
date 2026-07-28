@@ -82,10 +82,10 @@ def test_get_available_pools():
 
 
 def test_clone():
-    state = GachaState(resources={'a': 1}, pity_counters={'p1': 5}, real_time=100)
+    state = GachaState(resources={'a': 1}, acquired={'card_a': 5}, real_time=100)
     clone = state.clone()
     assert clone.resources == {'a': 1}
-    assert clone.pity_counters == {'p1': 5}
+    assert clone.acquired == {'card_a': 5}
     assert clone.real_time == 100
     clone.resources['a'] = 999
     assert state.resources['a'] == 1

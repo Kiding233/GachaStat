@@ -122,7 +122,7 @@ def test_strategy_can_afford_batch_uses_pool_batch_size():
     ctx = StrategyContext(
         state=state, current_pools=[pool], all_pools=[pool],
         future_schedules=[], stop_condition=NoopStop(),
-        target_cards=TargetCardSet([tc]), acquired={},
+        target_cards=TargetCardSet([tc]),
         pool_draw_counts={'test_b10': 0}, total_draws=0,
         ssr_ids=set(),
     )

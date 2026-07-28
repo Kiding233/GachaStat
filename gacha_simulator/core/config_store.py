@@ -5,6 +5,10 @@ from typing import Dict, List, Optional, Any
 from .strategy import strategy_type_to_key, STRATEGY_REGISTRY
 
 
+class ConfigError(ValueError):
+    """配置解析或校验错误。"""
+
+
 @dataclass
 class PoolDistEntry:
     card_id: str
@@ -33,23 +37,55 @@ class PoolEntry:
     exchange_card_id: Optional[str] = None
     distribution: List[PoolDistEntry] = field(default_factory=list)
     batch_size: int = 1
+    featured_card_ids: List[str] = field(default_factory=list)
+    epitomizable_cards: List[str] = field(default_factory=list)      # ← P56
 
 
 @dataclass
 class PityDef:
+    """P55 扁平化：23 个独立类型字段（原 PityDefParsed 6 字段 + param 分裂）。
+
+    旧字段（params/target_distribution/reset_condition）已移除。
+    counter_init 从 PityConfig 全局移至每条 PityDef。
+    """
     name: str
     btype: str = 'soft'
-    params: Dict[str, str] = field(default_factory=dict)
-    target_distribution: Dict[str, float] = field(default_factory=dict)
-    reset_condition: str = 'any_ssr'
-    pools: str = '*'
+    # ── 核心参数（按 btype 选填） ──
+    scope: str = 'ssr'
+    target_featured: bool = False
+    deltas: Optional[tuple] = None             # soft_step 专用——RLE 分段
+    threshold: Optional[int] = None            # hard 专用
+    # ── 初始状态 ──
+    counter_init: int = 0
+    guaranteed_init: bool = False              # rotating 家族大保底初始状态
+    fate_points_init: int = 0                  # targeted 家族命定值初始值
+    selected_card_init: Optional[str] = None   # P56：targeted 家族初始定轨卡片 ID
+    # ── 语法糖参数（解析后展开为 deltas） ──
+    soft_start: Optional[int] = None           # soft_interval / soft_additive
+    soft_end: Optional[int] = None             # soft_interval
+    soft_increment: Optional[float] = None     # soft_additive
+    soft_deltas: Optional[tuple] = None        # 展开前的原始 deltas
+    # ── 事件驱动型参数（P56） ──
+    cr_counter_threshold: Optional[int] = None
+    cr_base_rate: Optional[float] = None
+    cr_state_probs: Optional[tuple] = None
+    fate_threshold: Optional[int] = None
+    switch_allowed: bool = True
+    switch_resets_progress: bool = True
+    # ── 池子绑定 ──
+    pools: tuple = ('*',)
+    # ── 生命周期 ──
+    deactivate_on_early_hit: bool = False
+    depends_on: Optional[str] = None
+    # ── 重置条件 ──
+    reset: str = ''                            # '' → scope fallback
 
 
 @dataclass
 class PityConfig:
     enabled: bool = True
     pities: List[PityDef] = field(default_factory=list)
-    counter_init: Dict[str, int] = field(default_factory=dict)
+    # P55：counter_init 已移至每个 PityDef.counter_init
 
 
 @dataclass
@@ -79,6 +115,8 @@ class CardDefEntry:
     rarity: str = 'r'
     pools: List[str] = field(default_factory=list)
     initial_count: int = 0
+    tags: Dict[str, str] = field(default_factory=dict)               # P65：单值标签
+    list_tags: Dict[str, List[str]] = field(default_factory=dict)     # P65：多值标签
 
 
 @dataclass
@@ -110,6 +148,8 @@ class ConfigStore:
     max_workers: int = 4
     seed: int = 42
     _distribution_templates: List[dict] = field(default_factory=list)
+    rarity_rank: Dict[str, int] = field(default_factory=dict)       # ← P60：稀有度 → 层级（0=最高）
+    _migrated_from_legacy: bool = False                              # ← P55：旧格式迁移标记
 
     def __post_init__(self):
         if self.strategy_type:
@@ -141,6 +181,8 @@ class ConfigStore:
         self.max_workers = 4
         self.seed = 42
         self._distribution_templates.clear()
+        self.rarity_rank.clear()                                      # ← P60
+        self._migrated_from_legacy = False                            # ← P55
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────
     # 从 card_weights 提取，供 make_gdr_calculator() 使用。
@@ -160,3 +202,18 @@ class ConfigStore:
     def card_value_weights(self):
         """Dict[str, float]: 每张卡的卡牌价值权重"""
         return {cid: cw.card_value for cid, cw in self.card_weights.items()}
+
+    # ── P60 新增：推导属性 + 稀有度解析 ──
+
+    def _parse_rarities(self, data: dict) -> None:
+        """从 TOML [rarities].ranks 生成 rarity_rank 映射。
+        同一 rank 数组内为平级；rank 0 = 最高。
+        默认值：[["SSR"], ["SR"], ["R"]]。
+        """
+        ranks = data.get("rarities", {}).get("ranks", [["SSR"], ["SR"], ["R"]])
+        for rank_idx, tier in enumerate(ranks):
+            for rarity_name in tier:
+                self.rarity_rank[rarity_name.upper()] = rank_idx
+        # 内部格式不变式校验——确保 rank 值连续无空洞
+        assert max(self.rarity_rank.values(), default=-1) + 1 == len(set(self.rarity_rank.values())), \
+            f"rarity_rank 值不连续：{self.rarity_rank}"

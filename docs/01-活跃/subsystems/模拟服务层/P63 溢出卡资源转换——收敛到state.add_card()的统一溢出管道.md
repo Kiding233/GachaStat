@@ -1,4 +1,4 @@
-<!-- META: P63 | module:模拟服务层 | status:designing | last:2026-07-28 | depends:P60✅ | review:R2-fixed(GATE-1-变更粒度,GATE-5-回滚路径,GATE-6-测试策略) -->
+<!-- META: P63 | module:模拟服务层 | status:designing | last:2026-07-28 | depends:P60✅ | review:R2-fixed(GATE-1-变更粒度,GATE-5-回滚路径,GATE-6-测试策略) + AUDIT-BREAK-1(TYPE BREAK:add_card返回类型int→dict) + AUDIT-BREAK-2(NULL BREAK:GUI键名.lower()往返验证) -->
 <!-- ref: docs/05-参考资料/外部研究/gacha-acquisition-reward-framework.md (v2) -->
 
 # P63 溢出卡资源转换——收敛到 state.add_card() 的统一溢出管道
@@ -295,14 +295,14 @@ def add_card(self, card_id: str, path: str = "unknown",
 3. 若 `overflow_bands` 非空：计算 `total_holding = initial_counts.get(card_id, 0) + acquired[card_id]`，定位分段表区间，返回区间产出
 4. 否则返回 `{}`
 
-不传 `overflow_bands` 时行为与现在完全一致（纯计数，返回 `{}`）。
+不传 `overflow_bands` 时行为与现在完全一致（纯计数，返回 `{}`）。<!-- REVIEW-R1-FIX: AUDIT-BREAK-1 —— TYPE BREAK 确认：返回类型从 `int` 变为 `dict`，不传参时返回 `{}` 而非 `1`；E6d 负责适配 `test_p60_gacha_state.py:8` 断言 -->
 
 **`clone()` 同步修改：**<!-- REVIEW-R1-FIX: ISSUE-105 -->
 `clone()` 方法增加 `acquired_by_path` 的深拷贝——`{cid: dict(paths) for cid, paths in self.acquired_by_path.items()}`。`clone()` 是运行时语义（策略分支评估等场景需复制状态后模拟），非序列化语义——`acquired_by_path` 虽不参与 JSON 序列化（§七风险表），但在策略评估等 clone 分支场景下必须正确传递，否则 path 记录在分支上丢失，违反「记录获得路径」核心目标（第二节第 3 条）。
 
 **约束：** 当 `overflow_bands` 不为 None 时，调用方**必须**传入 `initial_counts`——分段表以 `total_holding = initial_counts[card_id] + acquired[card_id]` 定位区间。不传 `initial_counts` 时，「初始持有 2 张卡 X，模拟中第一次抽到 X」会被错误地当作「第 1 次获得」而定位到 `[1,1]` 段，错误触发 `first_time_bonus`。`gacha_service` 和 milestone 集成点始终传入 `_initial_counts`，不受影响。<!-- REVIEW-R1-FIX: ISSUE-002 -->
 
-**防御性校验：** `add_card()` 内部使用显式 `if overflow_bands is not None and initial_counts is None: raise ValueError(...)`——**不使用 `assert`**。`assert` 语义为内部不变式，`initial_counts` 属调用方外部输入；Python `-O`（optimize）标志会剥离所有 `assert` 语句，届时错误调用将静默产生错误的溢出资源计算结果。
+**防御性校验：** `add_card()` 内部使用显式 `if overflow_bands is not None and initial_counts is None: raise ValueError(...)`——**不使用 `assert`**。`assert` 语义为内部不变式，`initial_counts` 属调用方外部输入；Python `-O`（optimize）标志会剥离所有 `assert` 语句，届时错误调用将静默产生错误的溢出资源计算结果。<!-- REVIEW-R1-FIX: AUDIT-BREAK-1 —— 防御性校验使用显式 `if` 而非 `assert`，Python -O 下不剥离 -->
 
 ### 3.5 构建 `card_overflow_map` + 简化 gacha_service
 
@@ -437,7 +437,7 @@ rg.update(milestone_rg)
 
 **交互**：三组产出编辑器为键值对子表（资源名 / 数值，2 列 `QTableWidget`），复用卡片标签表模式。变更通过 `_on_detail_changed()` 信号实时写回 `ConfigStore.rarity_defaults`（P56 自动应用模式）。无「保存」按钮——改了即生效。
 
-<!-- REVIEW-R1-FIX: ISSUE-111 -->**键名规范化（关键）：** GUI 写入/读取 `ConfigStore.rarity_defaults` 时，稀有度名必须转为 `.lower()`（如表格行展示 `"SSR"` → 写入时转为 `"ssr"`）。原因：§3.5 中 `_build_card_overflow_map()` 通过 `card_def.rarity.lower()` 查找溢出规则——若 GUI 直接用大写键名写入 `rarity_defaults["SSR"]`，运行时 `rarity_defaults.get("ssr")` 查找返回 `None`，导致该稀有度所有卡片静默回退到无溢出规则。实施时写入侧做 `rarity_name.lower()` 转换，读取侧同样 `.lower()` 查找，与 §3.3④ 中「解析时统一 `.lower()` 归一化存储」保持全程一致。
+<!-- REVIEW-R1-FIX: ISSUE-111 --><!-- REVIEW-R1-FIX: AUDIT-BREAK-2 —— NULL BREAK：写入/读取两侧 .lower() 不一致 → 静默不生效，必须在实现和 E8 中强制验证 -->**键名规范化（关键——NULL BREAK 防御）：** GUI 写入/读取 `ConfigStore.rarity_defaults` 时，稀有度名必须转为 `.lower()`（如表格行展示 `"SSR"` → 写入时转为 `"ssr"`）。原因：§3.5 中 `_build_card_overflow_map()` 通过 `card_def.rarity.lower()` 查找溢出规则——若 GUI 直接用大写键名写入 `rarity_defaults["SSR"]`，运行时 `rarity_defaults.get("ssr")` 查找返回 `None`，导致该稀有度所有卡片静默回退到无溢出规则。实施时写入侧做 `rarity_name.lower()` 转换，读取侧同样 `.lower()` 查找，与 §3.3④ 中「解析时统一 `.lower()` 归一化存储」保持全程一致。**E8 集成测试必须覆盖：** GUI 表格中展示 `"SSR"`（大写），写入 → 确认 `ConfigStore.rarity_defaults` 中键为 `"ssr"`（小写）→ `_build_card_overflow_map()` 能正确匹配 `card.rarity.lower()=="ssr"` → 溢出规则生效。此为该链路最脆弱环节——任何一端遗漏 `.lower()` 即导致静默故障。
 
 **不暴露在 GUI 中**：卡片级 `[card.overflow]` 覆盖、`nth_time_bonus`（第 N 次特殊奖励）、高级 `[[card.overflow_bands]]` 三段表——均通过 TOML 手写。
 
@@ -451,18 +451,18 @@ rg.update(milestone_rg)
 | E1 | `CardDefEntry` 新增 `overflow_bands: Optional[List[OverflowBand]]` 字段；`ConfigStore` 新增 `rarity_defaults` + `card_overflow_map` 字段；`ConfigStore.clear()` 增加 `rarity_defaults.clear()` + `card_overflow_map.clear()`（参照 `rarity_rank.clear()` 第 184 行先例——防止 `load_toml(store=existing_store)` 残留旧值） | `core/config_store.py` | ~25 |<!-- REVIEW-R1-FIX: ISSUE-103 -->
 | E2 | `_build_cards()` 解析 `[card.overflow]` 语法糖 → 展开为 bands；解析 `[[card.overflow_bands]]` 数组；解析 `[rarity_defaults]` 段（解析时统一 `.lower()` 归一化键名——与 `rarity_rank` 的 `.upper()` 方向互补：`.lower()` 用于 TOML 段查找，`.upper()` 用于展示排序，两者独立正确但方向相反，跨映射查找时不可混用归一化方向）<!-- REVIEW-R1-FIX: ISSUE-010,ISSUE-011,ISSUE-114 -->；新增 `_build_card_overflow_map(store)` 辅助函数——在 `load_toml()` 中 `_backfill_card_pools(store)` 之后调用<!-- REVIEW-R1-FIX: ISSUE-010 --> | `core/config_toml.py` | ~40 |
 | E2a | `save_toml()` 卡片序列化循环增加 `overflow_bands` 写出；`save_toml()` 新增 `[rarity_defaults]` 段序列化（遍历 `store.rarity_defaults`，按稀有度键名写出 `overflow_bands` 数组——与解析语法对称，参照 `rarities.ranks` 双向实现第 151-160 行）；溢出段写出格式策略：**统一写 bands 数组**（与内部表示一致、round-trip 无损） | `core/config_toml.py` | ~30 |<!-- REVIEW-R1-FIX: ISSUE-006,ISSUE-012,ISSUE-104,ISSUE-108 -->
-| E3 | `GachaState.add_card()` 签名扩展——接受 path + overflow_bands + initial_counts；新增 `acquired_by_path` 字段；`GachaState.clone()` 增加 `acquired_by_path` 深拷贝（`{cid: dict(paths) for cid, paths in self.acquired_by_path.items()}`）——clone 是运行时语义（策略分支评估），非序列化语义，丢失 path 记录违反核心目标（第二节第 3 条） | `core/state.py` | ~30 |<!-- REVIEW-R1-FIX: ISSUE-105 -->
+| E3 | `GachaState.add_card()` 签名扩展——接受 path + overflow_bands + initial_counts；新增 `acquired_by_path` 字段；`GachaState.clone()` 增加 `acquired_by_path` 深拷贝（`{cid: dict(paths) for cid, paths in self.acquired_by_path.items()}`）——clone 是运行时语义（策略分支评估），非序列化语义，丢失 path 记录违反核心目标（第二节第 3 条）。**TYPE BREAK（阻塞）：** `add_card()` 返回类型从 `int` 变为 `Dict[str, float]`——不传 `overflow_bands` 时返回 `{}`（空 dict）而非旧版的 `1`（int）。`tests/test_p60_gacha_state.py:8` 的 `assert state.add_card('diluc') == 1` 将抛出 AssertionError（期望 int 得 {}）；生产代码 `gacha_service.py:328` 丢弃返回值故不受影响。E6d 负责修复此测试断言。 | `core/state.py` | ~30 |<!-- REVIEW-R1-FIX: ISSUE-105 --><!-- REVIEW-R1-FIX: AUDIT-BREAK-1 -->
 | E4 | TOML 分布管道修复——`_build_pools()` + `_expand_template_with_bindings()` 读取 `resources_gained`；`_distribution_matches_template()` 判等新增 `resources_gained` 比较（防止模板引用写回丢失字段）；`_save_templates_and_pools()` 内联分布写路径（第 225-233 行）增加条件写入 `resources_gained`——若 `d.resources_gained` 非空则写出，与 E4 读修复形成双向对称<!-- REVIEW-R1-FIX: ISSUE-003,ISSUE-106 --> | `core/config_toml.py` | ~25 |
 | E5 | `GachaService` 改造——抽卡循环改为 `state.add_card()`；同步移除 `gacha_service.py` 第 11 行 import 中的 `compute_bonus_resources`（仅保留 `NO_CARD_ID as _NO_CARD_ID`——函数仍存在于 pool.py 不会被删除，移除导入不会导致 ImportError；但不移除会导致 ruff F401「imported but unused」阻断 E5 commit）<!-- REVIEW-R1-FIX: ISSUE-110 -->；构造器新增 `card_overflow_map` 参数；`SimulationEnv` 新增 `card_overflow_map` 字段（默认值 `{}`——保证 `from_dict()` 路径兼容性，`worst_impact.py` 等不使用 ConfigStore 的调用方不受影响）；`SimulationEnvBuilder.from_config_store()` 从 `ConfigStore.card_overflow_map` 注入 `SimulationEnv`<!-- REVIEW-R1-FIX: ISSUE-112 -->；`SimulationEnvBuilder.from_dict()` 增加 `card_overflow_map=config.get('card_overflow_map', {})` 透传；`_run_single()` 将 `env.card_overflow_map` 传递给 `GachaService` 构造器 | `service/gacha_service.py` + `service/batch_simulator.py` | ~45 |<!-- REVIEW-R1-FIX: ISSUE-004,ISSUE-107,ISSUE-110 -->
 | E6a | 废弃 `compute_bonus_resources()`——删除函数体 + 从 `core/__init__.py` 移除导出 | `core/pool.py` + `core/__init__.py` | ~15 |<!-- REVIEW-R1-FIX: GATE-1-变更粒度——E6 拆分为 E6a/E6b/E6c/E6d 四个子阶段 -->
 | E6b | `Reward` 移除 `first_time_bonus`/`nth_time_bonus`/`excess_bonus` 三个字段 + `PoolDistEntry` 移除三个字段 + `batch_simulator.py` 构造 `Reward` 时不再传这三个字段（4 文件联动——E6a 删除函数后此三字段立即成为无引用死字段，不得在 commit 间停留） | `core/pool.py` + `core/config_store.py` + `service/batch_simulator.py` | ~20 |<!-- REVIEW-R1-FIX: GATE-1 -->
 | E6c | `config_panel.py` 适配——两处 `PoolDistEntry` 构造移除三个 bonus 参数（`apply_to_store` + `_save_current_as_new_template`）+ `_refresh_from_store_impl` 移除 bonus 读取 + `DistributionDialog` 清理（移除「额外资源」列、`bonus_edit` 控件、`_bonus_to_text()`/`_parse_bonus_text()` 模块级函数） | `gui/config_panel.py` | ~25 |<!-- REVIEW-R1-FIX: GATE-1 + ISSUE-100,ISSUE-102 -->
-| E6d | 测试迁移——`test_pool_bonus.py` 12 个旧测试（实际 11 例）迁移为 `match_overflow_bands` 测试 + `test_p60_gacha_state.py` 断言适配（`add_card` 返回从 `int` 改为 `dict`；新增带 `overflow_bands` 的溢出资源返回测试） | `tests/core/test_pool_bonus.py` + `tests/test_p60_gacha_state.py` | ~30 |<!-- REVIEW-R1-FIX: GATE-1 + ISSUE-101 -->
+| E6d | 测试迁移——`test_pool_bonus.py` 12 个旧测试（实际 11 例）迁移为 `match_overflow_bands` 测试 + `test_p60_gacha_state.py` 断言适配：`test_add_card_increments` 中 `assert state.add_card("diluc") == 1`（期望 int）改为 `assert state.add_card("diluc") == {}`（期望空 dict——TYPE BREAK 修复）；`test_add_card_acquired_by_path` 中 `add_card` 返回值断言同样从 int 改为 dict；新增带 `overflow_bands` 的溢出资源返回测试。若 P60 测试中还有其他直接对 `add_card` 返回值做整数比较的断言（如 `test_clone_copies_acquired`），一并适配为 dict 断言。 | `tests/core/test_pool_bonus.py` + `tests/test_p60_gacha_state.py` | ~30 |<!-- REVIEW-R1-FIX: GATE-1 + ISSUE-101 --><!-- REVIEW-R1-FIX: AUDIT-BREAK-1 -->
 | E7 | TOML 配置示例——卡片条目添加 `[card.overflow]` + `[rarity_defaults]` 配置 | `config/config.toml` | ~20 |
 | E7a-1 | GUI「满突溢出」标签页骨架——标签页注册到配置面板左侧（第 7 个 Tab）+ 表格布局（稀有度列 × 四组产出编辑器列）+ 稀有度列表从 `[rarities].ranks` 动态解析（展平 `[["SSR"],["SR"],["R"]]` → `["SSR","SR","R"]`） | `gui/config_panel.py` | ~60 |<!-- REVIEW-R1-FIX: GATE-1-变更粒度——E7a 拆分为 E7a-1/E7a-2/E7a-3 三个子阶段 -->
-| E7a-2 | GUI 数据绑定——读取 `ConfigStore.rarity_defaults` → 表格填充（每行渲染四组键值对子表）；`_on_detail_changed()` 信号实时写回 `ConfigStore.rarity_defaults`（P56 自动应用模式）；写入/读取时稀有度键名做 `.lower()` 规范化（§3.9 键名规范化）<!-- REVIEW-R1-FIX: GATE-1 + ISSUE-111 --> | `gui/config_panel.py` | ~50 |
+| E7a-2 | GUI 数据绑定——读取 `ConfigStore.rarity_defaults` → 表格填充（每行渲染四组键值对子表）；`_on_detail_changed()` 信号实时写回 `ConfigStore.rarity_defaults`（P56 自动应用模式）；写入/读取时稀有度键名做 `.lower()` 规范化（§3.9 键名规范化）。**NULL BREAK 风险（潜伏）：** 写入侧必须用 `rarity_name.lower()` 存入——若 GUI 直接用大写键 `rarity_defaults["SSR"]` 而 E2 `_build_card_overflow_map` 用 `card.rarity.lower()`（=`"ssr"`）查找，`rarity_defaults.get("ssr")` 返回 `None` → 该稀有度所有卡片溢出规则静默不生效（不崩溃但功能损坏）。`_on_detail_changed()` 信号机制在 P56 已确认可用，无新信号断裂。E8 集成测试必须覆盖写入/读取两侧 `.lower()` 一致性。 | `gui/config_panel.py` | ~50 |<!-- REVIEW-R1-FIX: GATE-1 + ISSUE-111 --><!-- REVIEW-R1-FIX: AUDIT-BREAK-2 -->
 | E7a-3 | 分段表展开逻辑——四种组合映射（首次+满突前+满突后 / 满突张数+满突前+满突后 / 仅有满突前→恒真单段 / 全空→无溢出规则）+ 空状态处理（未配置稀有度行显示「—」占位符） | `gui/config_panel.py` | ~45 |<!-- REVIEW-R1-FIX: GATE-1 -->
-| E8 | 集成测试——分段表匹配、语法糖展开、优先级查找、端到端验证 + GUI 冒烟 | `tests/` | ~60 |
+| E8 | 集成测试——分段表匹配、语法糖展开、优先级查找、**键名规范化往返（GUI 写入大写键 → store 存储小写键 → `_build_card_overflow_map` 小写键查找 → 溢出规则正确生效——验证写入/读取两侧 `.lower()` 一致，防止 NULL BREAK 静默故障）**、端到端验证 + GUI 冒烟 | `tests/` | ~60 |<!-- REVIEW-R1-FIX: AUDIT-BREAK-2 -->
 | **总计** | 13 个阶段（E0/E1/E2/E2a/E3/E4/E5 + E6a/E6b/E6c/E6d + E7 + E7a-1/E7a-2/E7a-3 + E8） | | **~560** |<!-- REVIEW-R1-FIX: GATE-1-变更粒度——E6 从 ~70 扩至 ~90（+~20），E7a 保持 ~155 不变，总计 ~540→~560 -->
 
 **子阶段顺序与并行性**（<!-- REVIEW-R1-FIX: GATE-1-变更粒度 -->）：
@@ -756,6 +756,7 @@ P60（已完成 ✅）
 | GUI-4 | 非法输入防御——非数值 | 产出编辑器中输入 `gem: abc` | 拒绝写入，保持旧值 |
 | GUI-5 | 关闭/切换 Tab 不丢失 | 编辑后切换到「权重配置」Tab → 切回「满突溢出」 | 数据完整保留（实时写回 store 而非「应用」按钮后写回） |
 | GUI-6 | 稀有度列表动态解析 | 配置 `[rarities].ranks = [["UR"], ["SSR"], ["SR"]]` | 表格显示 UR / SSR / SR 三行（非默认 SSR/SR/R） |
+| GUI-7 | **键名 `.lower()` 往返**（AUDIT-BREAK-2 防御） | GUI 表格展示 `"SSR"` 行 → 编辑 `first_time={gem:10}` → 检查 `ConfigStore.rarity_defaults` 键名 | 键名为 `"ssr"`（小写）——写入侧 `rarity_name.lower()` 生效；`_build_card_overflow_map()` 以 `card.rarity.lower()` 查找 `"ssr"` 正确命中；若为 `"SSR"`（大写）则立即失败——证明 NULL BREAK 防御有效 |<!-- REVIEW-R1-FIX: AUDIT-BREAK-2 -->
 
 ### F. 全局
 

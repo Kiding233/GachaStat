@@ -2,7 +2,7 @@
 
 # P61 池子可用性联动机制——Banner生命周期与复合池
 
-> 日期：2026-07-30 | 状态：设计中（原方案重写）
+> 日期：2026-07-30 | 状态：设计中（原方案重写，UI/配置设计已补全）
 > 触发：step池拆分建模（每步抽N次后解锁下一步）与终末地30抽取送抽池（强制插入、一次性、不计保底）需要池间可用性联动，当前仅支持基于时间窗口的单池独立可用性。
 > 原方案归档：[P61 池子可用性联动机制——step链与送抽插入（规则引擎版）](../../../03-归档/P61 池子可用性联动机制——step链与送抽插入（规则引擎版）.md)（2026-06-20，已归档）
 
@@ -432,20 +432,176 @@ class BannerStats:
 
 GDR 计算以 Banner 为单位——`banner_id` 替代 `pool_id` 作为统计维度。
 
-### 3.9 实施阶段
+### 3.9 ConfigStore 数据模型
+
+```python
+# core/config_store.py —— 新增
+
+@dataclass
+class BannerSourceEntry:
+    """Banner 内部抽取源——从 TOML [[banner.source]] 解析"""
+    id: str                              # "main" | "free_10pull" | "step2"
+    cost: Optional[str] = None           # TOML 字符串，后续 parse_cost_string
+    batch_size: int = 1
+    one_shot: bool = False
+    excludes_all_pity: bool = False
+    blocks_parent: bool = False
+    max_draws: Optional[int] = None
+    rewards: List[dict] = field(default_factory=list)
+
+
+@dataclass
+class LifecycleRuleEntry:
+    """声明式转换规则——从 TOML [[banner.lifecycle]] 解析"""
+    condition: str                       # "source_draws" | "banner_draws"
+                                         # | "card_obtained" | "source_exhausted"
+    source: Optional[str] = None         # 条件关联的 source id
+    at: int = 0                          # 阈值
+    action: str                          # "activate_source" | "deactivate_source"
+                                         # | "block_source" | "unblock_source"
+                                         # | "exhaust_banner"
+    target: Optional[str] = None         # action 的目标 source id
+
+
+@dataclass
+class BannerEntry:
+    """单个 Banner 定义——从 TOML [[banner]] 解析"""
+    id: str
+    name: str
+    cost: Optional[str] = None
+    batch_size: int = 1
+    pity_groups: List[str] = field(default_factory=list)
+    max_draws: Optional[int] = None
+    available_from: Optional[float] = None
+    available_until: Optional[float] = None
+    sources: List[BannerSourceEntry] = field(default_factory=list)
+    lifecycle: List[LifecycleRuleEntry] = field(default_factory=list)
+
+
+@dataclass
+class BannerConfig:
+    """Banner 配置容器"""
+    banners: List[BannerEntry] = field(default_factory=list)
+```
+
+`ConfigStore` 新增字段：
+
+```python
+banner: BannerConfig = field(default_factory=BannerConfig)
+```
+
+### 3.10 ConfigPanel UI 设计
+
+独立「卡池管理」Tab，位于现有「卡池」Tab 之后、P58「累抽奖励」Tab 之前。与 P58 的 UI 模式统一——左列表右详情 + 底部按钮。
+
+#### 3.10.1 整体布局
+
+```
+┌─ 卡池管理 (Banner) ───────────────────────────────────────────────┐
+│                                                                      │
+│ ┌────────────────┐ ┌─ Banner 详情 ────────────────────────────────┐ │
+│ │ endfield_limited│ │                                              │ │
+│ │ step_up         │ │ 名称: [终末地限定寻访                  ]     │ │
+│ │ genshin_beginner│ │ ID:   endfield_limited                       │ │
+│ │                │ │ 默认成本: [orundum:600                 ]     │ │
+│ │                │ │ 默认批次: [10                          ] 连  │ │
+│ │                │ │ 保底组:   [endfield_limited_all         ]     │ │
+│ │                │ │ 最大抽数: [     ] (空=无限制)                 │ │
+│ │                │ │ 时间窗口: [2026-01-22] ~ [2026-02-12]        │ │
+│ │                │ │                                              │ │
+│ │                │ │ ── 抽取源（内联表格） ──────────────────     │ │
+│ │                │ │ ┌──────┬──────────┬────┬──────┬────┬────┐   │ │
+│ │                │ │ │ ID   │ 成本      │批次 │一次性│不计 │阻塞 │   │ │
+│ │                │ │ │      │          │    │      │保底 │主源 │   │ │
+│ │                │ │ ├──────┼──────────┼────┼──────┼────┼────┤   │ │
+│ │                │ │ │ main │orundum:..│ 10 │  ☐   │ ☐   │ —  │   │ │
+│ │                │ │ │ free │free_tick │ 10 │  ☑   │ ☑   │ ☑  │   │ │
+│ │                │ │ └──────┴──────────┴────┴──────┴────┴────┘   │ │
+│ │                │ │              [添加] [移除选中]                 │ │
+│ │                │ │                                              │ │
+│ │                │ │ ── 生命周期规则（内联表格） ────────────     │ │
+│ │                │ │ ┌──────────────┬──────┬────┬──────────┬────┐ │ │
+│ │                │ │ │ 条件          │ 关联源 │阈值 │ 动作      │目标│ │ │
+│ │                │ │ ├──────────────┼──────┼────┼──────────┼────┤ │ │
+│ │                │ │ │source_draws ▼│ main │ 30 │activate_ ▼│free│ │ │
+│ │                │ │ │source_exhaus▼│ free │ —  │unblock_s ▼│main│ │ │
+│ │                │ │ └──────────────┴──────┴────┴──────────┴────┘ │ │
+│ │                │ │              [添加] [移除选中]                 │ │
+│ └────────────────┘ └─────────────────────────────────────────────┘ │
+│                    [添加] [移除选中] [复制选中]                      │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+#### 3.10.2 控件映射
+
+**Banner 基础字段（QFormLayout）：**
+
+| 字段 | 控件 | 说明 |
+|------|------|------|
+| `name` | `QLineEdit` | Banner 显示名称 |
+| `id` | `QLabel`（只读） | 创建后不可修改 |
+| `cost` | `QLineEdit` | TOML 格式字符串，如 `orundum:600` |
+| `batch_size` | `QSpinBox` | 1–100 |
+| `pity_groups` | `QLineEdit` | 逗号分隔的保底组名 |
+| `max_draws` | `QSpinBox` | 0=无限制 |
+| `available_from` / `available_until` | `QDateTimeEdit` | 时间窗口 |
+
+**抽取源表格（QTableWidget 内联编辑）：**
+
+| 列 | 控件 | 说明 |
+|----|------|------|
+| ID | `QTableWidgetItem`（文本） | source 标识符（如 "main"、"free_10pull"） |
+| 成本 | `QTableWidgetItem`（文本） | TOML 字符串；空=继承 Banner 默认成本 |
+| 批次 | `QSpinBox` 委托 | 1–100；空=继承 Banner 默认值 |
+| 一次性 | `QCheckBox` 委托 | `one_shot`——勾选后抽取1次即耗尽 |
+| 不计保底 | `QCheckBox` 委托 | `excludes_all_pity`——勾选后旁路保底引擎 |
+| 阻塞主源 | `QCheckBox` 委托 | `blocks_parent`——仅当此列 ID ≠ "main" 时可用 |
+
+**生命周期表格（QTableWidget 内联编辑）：**
+
+| 列 | 控件 | 说明 |
+|----|------|------|
+| 条件 | `QComboBox` 委托 | `source_draws` / `banner_draws` / `card_obtained` / `source_exhausted` |
+| 关联源 | `QComboBox` 委托 | 从已有 source ID 列表动态填充；条件为 `banner_draws` 时置灰 |
+| 阈值 | `QSpinBox` 委托 | 条件为 `source_exhausted` 时置灰 |
+| 动作 | `QComboBox` 委托 | `activate_source` / `deactivate_source` / `block_source` / `unblock_source` / `exhaust_banner` |
+| 目标 | `QComboBox` 委托 | 从已有 source ID 列表动态填充；动作为 `exhaust_banner` 时置灰 |
+
+**按钮统一为 `[添加] [移除选中]`**——无「Banner」「源」「规则」等修饰词，上下文自明（在抽取源区域就是添加源，在生命周期区域就是添加规则）。底部全局按钮为 `[添加] [移除选中] [复制选中]`。
+
+#### 3.10.3 与 P58 UI 的关系
+
+| | P58 累抽奖励 Tab | P61 卡池管理 Tab |
+|------|------|------|
+| 模式 | 总闸 + 左列表右详情 + 底部按钮 | 左列表右详情 + 底部按钮（无总闸） |
+| 左列表 | 累抽条目 | Banner 条目 |
+| 右详情 | 基础字段 + 奖励三区域 | 基础字段 + 抽取源表格 + 生命周期表格 |
+| 底部按钮 | [添加] [移除选中] | [添加] [移除选中] [复制选中] |
+| 总闸 | `QCheckBox("启用累抽奖励")` | **无**——Banner 模式不可关闭，`[[pool]]` 总是自动包装 |
+
+#### 3.10.4 现有方法适配
+
+仿 P58 M7c 模式——在 `config_panel.py` 的三个现有方法中追加 Banner 数据流：
+
+- **`apply_to_store()`**：遍历 `self._banner_defs` → 转换为 `BannerEntry`/`BannerSourceEntry`/`LifecycleRuleEntry` → 写入 `store.banner.banners`
+- **`set_config()`**：从 `store.banner.banners` 反序列化 → 回填 `self._banner_defs` + 刷新 `banner_list`（`QListWidget`）
+- **`get_config()`**：返回字典追加 `'banner': {...}` 键，供 `_do_update_preview()` 合成 Banner 摘要段
+
+### 3.11 实施阶段
 
 | 阶段 | 内容 | 文件 | 预估 |
 |------|------|------|:---:|
 | Ph0 | `core/notifier.py` —— subscribe / emit / priority | 新建 | ~30行 |
 | Ph1 | `core/banner.py` —— Banner + BannerSource + TransitionRule + TransitionPreview + Lifecycle 引擎 | 新建 | ~250行 |
 | Ph2 | `service/gacha_service.py` —— `current_pools` → `current_banners`，集成 Banner.draw() + Notifier | 修改 | ~40行变更 |
-| Ph3 | `config/config_toml.py` —— `[[banner]]` 段解析 + `[[pool]]` 自动包装 | 修改 | ~50行 |
-| Ph4 | `core/strategy.py` —— `StrategyContext` 新增 `banners` 字段（保留 `current_pools` 向后兼容）| 修改 | ~5行 |
-| Ph5 | `service/batch_simulator.py` —— `from_config_store` 支持 Banner 构建 | 修改 | ~20行 |
-| Ph6 | 统计层适配 —— GDR / 过程分析 / 流式分析以 Banner 为聚合单位 | 修改 | ~30行 |
-| Ph7 | `tests/test_banner.py` —— 覆盖 lifecycle 全部规则 + 送抽 + step + 新手池 + 向后兼容 | 新建 | ~200行 |
-
-无 GUI 变更。不触及 `core/pity.py`、`core/state.py`、`core/pool.py`。
+| Ph3 | `core/config_store.py` —— `BannerEntry` / `BannerSourceEntry` / `LifecycleRuleEntry` / `BannerConfig` dataclass + `ConfigStore` 新增 `banner` 字段 | 修改 | ~50行 |
+| Ph4 | `config/config_toml.py` —— `_build_banners()` 解析 `[[banner]]` 段 + `_wrap_pools_as_banners()` 自动包装 | 修改 | ~60行 |
+| Ph5 | `core/strategy.py` —— `StrategyContext` 新增 `banners` 字段（保留 `current_pools` 向后兼容）| 修改 | ~5行 |
+| Ph6 | `service/batch_simulator.py` —— `SimulationEnv` 新增 `banner_defs` 字段 + `SimulationEnvBuilder` 构建 Banner | 修改 | ~25行 |
+| Ph7 | 统计层适配 —— GDR / 过程分析 / 流式分析以 Banner 为聚合单位 | 修改 | ~30行 |
+| Ph8 | `gui/config_panel.py` ——「卡池管理」Tab 骨架：左列表 + 右详情 + Banner 基础字段 + 抽取源表格 + 生命周期表格（~200行）| 修改 | ~200行 |
+| Ph8b | `gui/config_panel.py` —— `apply_to_store()`/`set_config()`/`get_config()` Banner 适配 + `_setup_ui()` 注册 Tab | 修改 | ~35行 |
+| Ph9 | `tests/test_banner.py` —— 覆盖 lifecycle 全部规则 + 送抽 + step + 新手池 + 向后兼容 | 新建 | ~200行 |
 
 ## 四、波及范围
 
@@ -453,18 +609,22 @@ GDR 计算以 Banner 为单位——`banner_id` 替代 `pool_id` 作为统计维
 |------|---------|:---:|
 | `core/notifier.py` | **新建** | ~30行 |
 | `core/banner.py` | **新建** | ~250行 |
+| `core/config_store.py` | 新增 `BannerEntry` / `BannerSourceEntry` / `LifecycleRuleEntry` / `BannerConfig` + `ConfigStore.banner` 字段 | ~50行 |
 | `core/pool.py` | **不改** | 0 |
 | `core/strategy.py` | `StrategyContext` 新增 `banners` + `all_banners` 字段 | +5行 |
 | `service/gacha_service.py` | `current_pools` → `current_banners` + Notifier 集成 | ~40行变更 |
-| `service/batch_simulator.py` | `from_config_store` → Banner 构建 | +20行 |
-| `config/config_toml.py` | `[[banner]]` + `[[banner.source]]` + `[[banner.lifecycle]]` 解析 | +50行 |
-| `core/gdr.py` | `compute_gdr_from_compact` → 以 banner 为聚合单位（或保留 pool 单位，banner 映射在统计层做） | ~15行 |
+| `service/batch_simulator.py` | `SimulationEnv` 新增 `banner_defs` + `SimulationEnvBuilder` 构建 Banner | ~25行 |
+| `config/config_toml.py` | `_build_banners()` + `_wrap_pools_as_banners()` + `[[banner]]` / `[[banner.source]]` / `[[banner.lifecycle]]` 解析 | ~60行 |
+| `gui/config_panel.py` | 「卡池管理」Tab：左列表右详情 + 抽取源表格 + 生命周期表格 + `apply_to_store`/`set_config`/`get_config` 适配 + Tab 注册 | ~235行 |
+| `core/gdr.py` | `compute_gdr_from_compact` → 以 banner 为聚合单位 | ~15行 |
 | `core/streaming.py` | 聚合提取器支持 banner 维度 | ~15行 |
 | `tests/test_banner.py` | **新建** | ~200行 |
 
-**不触及：** `core/pity.py`、`core/state.py`、`core/overflow.py`、所有 GUI 文件、所有策略文件（仅 `StrategyContext` 字段新增，策略可选择是否使用）。
+**不触及：** `core/pity.py`、`core/state.py`、`core/overflow.py`。现有策略文件（`strategies/builtin/*.py`）仅 `StrategyContext` 字段新增，策略无需修改。
 
 ## 五、与 P58 的关系
+
+### 5.1 架构解耦
 
 ```
                 Notifier（基础设施，P61 Ph0 交付）
@@ -474,8 +634,50 @@ GDR 计算以 Banner 为单位——`banner_id` 替代 `pool_id` 作为统计维
 
 - P61 不 import P58 的任何符号
 - P58 不 import P61 的任何符号
-- P58 审计期间的任何接口变更不影响 P61
-- Notifier 是唯一共享点——接口极其稳定（`emit(event_type, **data)`）
+- P58 审计已完毕——接口已锁定（`MilestoneEngine.after_draw(pool_id)`）
+- Notifier 是唯一共享点
+
+### 5.2 P58 接入 Notifier 的改动
+
+P58 当前在 `gacha_service.py` 的模拟循环中直接 inline 调用（M4，第 422-453 行）：
+
+```python
+# P58 当前写法
+if _milestone_engine:
+    for entry in _milestone_engine.after_draw(pool.id):
+        # ... 消费 bonus ...
+```
+
+引入 Notifier 后，P58 只需将同一段逻辑**原封不动**移入一个订阅函数：
+
+```python
+# P58 模块中 —— 逻辑完全不变
+def _on_after_draw(banner_id, pool_id, reward_id, state, collector, ...):
+    if _milestone_engine:
+        for entry in _milestone_engine.after_draw(pool_id):
+            # ... 消费 bonus（与 M4 代码完全相同）...
+
+# gacha_service.py 中 —— 原来的 inline 代码块替换为一行 emit
+notifier.emit("after_draw", banner_id=banner.id, pool_id=source.id, ...)
+```
+
+**P58 改动量：约 15 行**（把 inline 代码块包进一个订阅函数 + 一行 `subscribe`）。P58 审计完成后的其余全部代码不受影响。
+
+### 5.3 `[[milestone]].pools` → `[[milestone]].banner`
+
+P58 的 `[[milestone]].pools` 字段用于过滤作用池子。Banner 模式后，milestone 应引用 `banner` 而非独立 `pool`：
+
+```toml
+# 旧写法（P58 当前）
+[[milestone]]
+pools = ["endfield_limited"]
+
+# Banner 模式后——语义更准确
+[[milestone]]
+banner = "endfield_limited"       # 精确指向一个 Banner
+```
+
+此项改动属于 P58 范畴（`MilestoneDef.pools` → `banner`），不阻塞 P61。P58 可保留 `pools` 向后兼容，新增 `banner` 字段作为推荐用法。
 
 ## 六、风险
 
@@ -489,6 +691,7 @@ GDR 计算以 Banner 为单位——`banner_id` 替代 `pool_id` 作为统计维
 
 ## 七、验收标准
 
+**引擎与集成：**
 - [ ] 不写 `[[banner]]` 时，现有 `[[pool]]` 行为完全不变（向后兼容）
 - [ ] Step 链：3个 source 的阶梯池按 `source_draws` 阈值自动切换
 - [ ] 送抽插入：main 源30抽后自动激活 free_10pull 源 + 阻塞 main 源；free_10pull 耗尽后自动恢复
@@ -496,6 +699,30 @@ GDR 计算以 Banner 为单位——`banner_id` 替代 `pool_id` 作为统计维
 - [ ] 新手池：`max_draws` 达到后 exhaust；`card_obtained` 条件满足时提前 exhaust
 - [ ] 一次性 source：`one_shot=true` 的 source 消耗后标记 exhausted，不可再抽
 - [ ] `banner.pending_transitions` 正确暴露「还差X抽触发Y」
-- [ ] Notifier 优先级生效：P58（资源注入）先于 P61（生命周期检查）
+- [ ] Notifier 优先级生效：P58（资源注入，priority=0）先于 P61（生命周期检查，priority=1）
 - [ ] `StrategyContext` 同时提供 `banners` 和 `current_pools`，现有策略不作任何修改即可运行
+- [ ] P58 经 Notifier 订阅后，原 inline 调用逻辑移至订阅函数，其余代码零改动
+
+**ConfigStore：**
+- [ ] `BannerEntry` / `BannerSourceEntry` / `LifecycleRuleEntry` / `BannerConfig` dataclass 正确定义
+- [ ] `ConfigStore.banner` 字段可用，`ConfigStore.clear()` 重置 `self.banner = BannerConfig()`
+
+**TOML：**
+- [ ] `[[banner]]` / `[[banner.source]]` / `[[banner.lifecycle]]` TOML 段解析正确
+- [ ] `[[pool]]` 自动包装为单 source Banner（无 `[[banner]]` 段时）
+- [ ] Banner TOML round-trip 保真——GUI 编辑 → 保存 → 重载后字段不丢失
+
+**UI（ConfigPanel「卡池管理」Tab）：**
+- [ ] 左侧 Banner 列表 + 右侧 Banner 详情（基础字段 QFormLayout）
+- [ ] 抽取源表格（QTableWidget 内联编辑）——6 列（ID/成本/批次/一次性/不计保底/阻塞主源）
+- [ ] 生命周期表格（QTableWidget 内联编辑）——5 列（条件/关联源/阈值/动作/目标），下拉委托正确填充
+- [ ] 底部按钮 `[添加] [移除选中] [复制选中]`——无修饰词，上下文自明
+- [ ] 无「启用 Banner 模式」总闸——Banner 模式不可关闭
+- [ ] `apply_to_store()` 将 Banner UI 数据写回 `store.banner.banners`
+- [ ] `set_config()` 从 `store.banner.banners` 回填 Banner UI
+- [ ] `get_config()` 返回字典含 `'banner'` 键
+- [ ] Tab 在 `_setup_ui()` 中正确注册（位于「卡池」之后、「累抽奖励」之前）
+
+**测试：**
 - [ ] `test_banner.py` 覆盖全部 lifecycle 规则 + 集成 + 向后兼容
+- [ ] pytest 全量通过

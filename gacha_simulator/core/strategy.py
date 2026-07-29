@@ -153,7 +153,18 @@ from gacha_simulator.strategies.builtin.draw_target import DrawTargetStrategy  #
 
 
 class CompositeStrategy(Strategy):
+    """[DEPRECATED] 请使用 PriorityChainStrategy 替代。
+
+    P69 阶段 3：CompositeStrategy 保留但内部委托给 PriorityChainStrategy，
+    并在实例化时发出 DeprecationWarning。
+    """
+
     def __init__(self, strategies: List[Strategy], mode: str = 'first_valid'):
+        import warnings
+        warnings.warn(
+            "CompositeStrategy 已废弃，请使用 PriorityChainStrategy 替代",
+            DeprecationWarning, stacklevel=2,
+        )
         if mode not in ('first_valid',):
             raise ValueError(
                 f"CompositeStrategy mode must be 'first_valid', got '{mode}'"
@@ -172,6 +183,93 @@ class CompositeStrategy(Strategy):
                 return action
         from .action import WaitAction
         return WaitAction(duration=0)
+
+
+# ── 复合策略 Building Block（P69 阶段 3） ─────────────────────────
+# 纯 Python API——不进入 TOML 序列化，不进入 GUI。
+# 供 coding agent 在插件策略中作为子策略组合使用。
+
+
+class DrawSegmentStrategy(Strategy):
+    """按累计抽数分段委托——不同抽数区间使用不同策略。
+
+    segments: List[tuple[int, Optional[int], Strategy]]
+        三元组 (start, end, strategy):
+        - start: 起始抽数（含）
+        - end: 结束抽数（不含），None 表示到模拟结束
+        - strategy: 该区间使用的策略实例
+    """
+
+    _strategy_key = None  # 哨兵——非注册策略，无 key
+
+    def __init__(self, segments: List[tuple]):
+        self.segments = segments
+
+    @classmethod
+    def description(cls) -> str:
+        return f"分段策略（{0}段）"
+
+    def select_action(self, ctx: StrategyContext) -> Action:
+        for start, end, strategy in self.segments:
+            if ctx.total_draws >= start and (end is None or ctx.total_draws < end):
+                return strategy.select_action(ctx)
+        from .action import WaitAction
+        return WaitAction(duration=0)
+
+
+class PriorityChainStrategy(Strategy):
+    """优先级降级链——依次尝试子策略，返回第一个有效 Action。
+
+    strategies: List[Strategy]
+        按优先级排列的策略列表。每个策略依次调用 select_action()，
+        第一个返回非 None 且非 WaitAction(duration=0) 的结果被采纳。
+        若全部返回 WaitAction(0)，则返回最后一个。
+    """
+
+    _strategy_key = None  # 哨兵——非注册策略，无 key
+
+    def __init__(self, strategies: List[Strategy]):
+        self.strategies = strategies
+
+    @classmethod
+    def description(cls) -> str:
+        return f"优先级降级链（{0}个子策略）"
+
+    def select_action(self, ctx: StrategyContext) -> Action:
+        for strategy in self.strategies:
+            action = strategy.select_action(ctx)
+            if action is not None:
+                return action
+        from .action import WaitAction
+        return WaitAction(duration=0)
+
+
+class ConditionalStrategy(Strategy):
+    """条件分支策略——根据 lambda 选择子策略。
+
+    condition: Callable[[StrategyContext], bool]
+        条件函数，接收 ctx 返回 True/False。
+    true_s: Strategy
+        条件为 True 时使用的策略。
+    false_s: Strategy
+        条件为 False 时使用的策略。
+    """
+
+    _strategy_key = None  # 哨兵——非注册策略，无 key
+
+    def __init__(self, condition, true_s: Strategy, false_s: Strategy):
+        self.condition = condition
+        self.true_s = true_s
+        self.false_s = false_s
+
+    @classmethod
+    def description(cls) -> str:
+        return "条件分支策略"
+
+    def select_action(self, ctx: StrategyContext) -> Action:
+        if self.condition(ctx):
+            return self.true_s.select_action(ctx)
+        return self.false_s.select_action(ctx)
 
 
 # ── 策略工厂（数据驱动） ──────────────────────────────────────────

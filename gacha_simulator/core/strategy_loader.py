@@ -77,6 +77,10 @@ def load_plugin_strategies(plugin_dir: Optional[str] = None) -> int:
                 )
                 continue
 
+            # 回填 plugin_path——@register_strategy 装饰器在模块导入时
+            # 已创建 StrategyMeta，但 plugin_path 仅 loader 知晓，需后置更新。
+            # 否则 GUI 插件管理面板将 plugin_path=None 误判为「内置策略」。
+            meta.plugin_path = filepath
             loaded_count += 1
             logger.info("插件加载成功: %s (%s)", plugin_key, filepath)
 

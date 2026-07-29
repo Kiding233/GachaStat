@@ -37,11 +37,13 @@ class ComparabilityFingerprint:
     num_simulations: int
     pool_ids: Tuple[str, ...]            # 池子 ID 列表（有序）
     created_at: str                      # ISO 时间戳
+    strategy_key: str = ''               # P69 ISSUE-002：策略注册 key
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             'config_hash': self.config_hash,
             'strategy_name': self.strategy_name,
+            'strategy_key': self.strategy_key,
             'target_cards': dict(self.target_cards),
             'initial_resources': dict(self.initial_resources),
             'stop_condition': self.stop_condition,
@@ -57,6 +59,7 @@ class ComparabilityFingerprint:
         return cls(
             config_hash=d.get('config_hash', ''),
             strategy_name=d.get('strategy_name', ''),
+            strategy_key=d.get('strategy_key', ''),
             target_cards={str(k): int(v) for k, v in d.get('target_cards', {}).items()},
             initial_resources={str(k): float(v) for k, v in d.get('initial_resources', {}).items()},
             stop_condition=d.get('stop_condition', ''),
@@ -77,6 +80,7 @@ class StoredDataset:
     strategy_name: str
     num_simulations: int
     notes: str = ''
+    strategy_key: str = ''               # P69 ISSUE-002：策略注册 key
 
     # 原始模拟数据（dict 格式，来自 result_bundle）
     aggregate_data: List[Dict[str, Any]] = field(default_factory=list)
@@ -104,6 +108,7 @@ class StoredDataset:
             'fingerprint': self.fingerprint.to_dict(),
             'created_at': self.created_at,
             'strategy_name': self.strategy_name,
+            'strategy_key': self.strategy_key,
             'num_simulations': self.num_simulations,
             'notes': self.notes,
             'aggregate_data': self.aggregate_data,
@@ -131,6 +136,7 @@ class StoredDataset:
             fingerprint=ComparabilityFingerprint.from_dict(d.get('fingerprint', {})),
             created_at=d.get('created_at', ''),
             strategy_name=d.get('strategy_name', ''),
+            strategy_key=d.get('strategy_key', ''),
             num_simulations=int(d.get('num_simulations', 0)),
             notes=d.get('notes', ''),
             aggregate_data=d.get('aggregate_data', []),
@@ -162,7 +168,8 @@ class ComparabilityDiff:
     def only_strategy_differs(self) -> bool:
         """仅策略不同的纯策略比较"""
         diff_dims = {k for k, v in self.dimensions.items() if v != 'same'}
-        return diff_dims == {'strategy_name'}
+        # P69 ISSUE-812：差异维度限定在 strategy_name 或 strategy_key 中
+        return bool(diff_dims) and diff_dims <= {'strategy_name', 'strategy_key'}
 
     def all_same(self) -> bool:
         """所有维度相同"""
@@ -173,7 +180,11 @@ class ComparabilityDiff:
             return '所有维度相同'
         if self.only_strategy_differs():
             return '策略比较——同一环境下策略的选择差异。同种子可配对比较。'
-        strategy_diff = self.dimensions.get('strategy_name', 'same') != 'same'
+        # P69 ISSUE-813：同时检查 strategy_name 和 strategy_key 维度
+        strategy_diff = (
+            self.dimensions.get('strategy_name', 'same') != 'same'
+            or self.dimensions.get('strategy_key', 'same') != 'same'
+        )
         config_diff = any(
             self.dimensions.get(d, 'same') != 'same'
             for d in ['config_hash', 'target_cards', 'initial_resources', 'stop_condition', 'pool_ids']
@@ -348,7 +359,7 @@ class ResultStore:
                 name_b, fp_b = fps[j]
                 pair_key = f"{name_a} vs {name_b}"
                 dims[pair_key] = {}
-                for attr in ['strategy_name', 'config_hash', 'stop_condition',
+                for attr in ['strategy_name', 'strategy_key', 'config_hash', 'stop_condition',
                              'seed_start', 'seed_end', 'num_simulations']:
                     a = getattr(fp_a, attr)
                     b = getattr(fp_b, attr)

@@ -439,6 +439,7 @@ class MainWindow(QMainWindow):
         fingerprint = ComparabilityFingerprint(
             config_hash=config_hash,
             strategy_name=strategy_name,
+            strategy_key=strategy_name,
             target_cards=target_specs_for_fp,
             initial_resources=initial_resources,
             stop_condition='all_pools_end',
@@ -459,6 +460,7 @@ class MainWindow(QMainWindow):
             fingerprint=fingerprint,
             created_at=fingerprint.created_at,
             strategy_name=strategy_name,
+            strategy_key=strategy_name,
             num_simulations=fingerprint.num_simulations,
             aggregate_data=aggregate_data,
             target_specs=target_specs_for_fp,

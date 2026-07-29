@@ -423,6 +423,10 @@ class GachaService:
             result.final_time = real_time
             result.pool_types = {pid: p.pool_type for pid, p in self.pools.items()}
             result.strategy_name = type(self.strategy).__name__
+            result.strategy_key = getattr(
+                type(self.strategy), '_strategy_key',
+                type(self.strategy).__name__
+            )  # P69 ISSUE-007：策略注册 key，复合策略类回退为类名
             result.generated_at = time.time()
             return result
 

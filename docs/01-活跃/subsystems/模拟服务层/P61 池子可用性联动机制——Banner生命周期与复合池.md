@@ -124,7 +124,6 @@ class Banner:
     lifecycle: Dict[str, List[TransitionRule]]  # phase → rules
     cost: Optional[PoolCost] = None             # 默认成本（source 可覆盖）
     batch_size: int = 1
-    pity_groups: List[str] = field(default_factory=list)
     max_draws: Optional[int] = None
     available_from: Optional[float] = None
     available_until: Optional[float] = None
@@ -308,8 +307,6 @@ id = "endfield_limited"
 name = "终末地限定寻访"
 cost = { orundum = 600 }
 batch_size = 10
-pity_groups = ["endfield_limited_all"]
-
 [[banner.source]]
 id = "free_10pull"
 cost = { free_ticket = 1 }
@@ -470,7 +467,6 @@ class BannerEntry:
     name: str
     cost: Optional[str] = None
     batch_size: int = 1
-    pity_groups: List[str] = field(default_factory=list)
     max_draws: Optional[int] = None
     available_from: Optional[float] = None
     available_until: Optional[float] = None
@@ -505,9 +501,8 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 │ │ genshin_beginner│ │ ID:   endfield_limited                       │ │
 │ │                │ │ 默认成本: [orundum:600                 ]     │ │
 │ │                │ │ 默认批次: [10                          ] 连  │ │
-│ │                │ │ 保底组:   [endfield_limited_all         ]     │ │
 │ │                │ │ 最大抽数: [     ] (空=无限制)                 │ │
-│ │                │ │ 时间窗口: [2026-01-22] ~ [2026-02-12]        │ │
+│ │                │ │ 时间窗口: [0.0] ~ [21.0]（模拟内天数）         │ │
 │ │                │ │                                              │ │
 │ │                │ │ ── 抽取源（内联表格） ──────────────────     │ │
 │ │                │ │ ┌──────┬──────────┬────┬──────┬────┬────┐   │ │
@@ -542,9 +537,8 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 | `id` | `QLabel`（只读） | 创建后不可修改 |
 | `cost` | `QLineEdit` | TOML 格式字符串，如 `orundum:600` |
 | `batch_size` | `QSpinBox` | 1–100 |
-| `pity_groups` | `QLineEdit` | 逗号分隔的保底组名 |
 | `max_draws` | `QSpinBox` | 0=无限制 |
-| `available_from` / `available_until` | `QDateTimeEdit` | 时间窗口 |
+| `available_from` / `available_until` | `QDoubleSpinBox` | 模拟内相对天数（float）——与现有 `Pool` 一致 |
 
 **抽取源表格（QTableWidget 内联编辑）：**
 

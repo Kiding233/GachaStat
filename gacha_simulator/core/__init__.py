@@ -29,6 +29,7 @@ from .param_descriptor import (
     FloatParam, IntParam, BoolParam, StrParam, StringListParam, PoolIntMapParam,
 )
 from .strategy_loader import load_plugin_strategies
+from .strategy_context_builder import build_strategy_context
 from .stop_condition import (
     StopCondition, FixedActionCountCondition, ResourceThresholdCondition,
     TargetAcquiredCondition, TimeLimitCondition, CompositeStopCondition,
@@ -121,7 +122,7 @@ __all__ = [
     'CompositeStrategy',
     'STRATEGY_REGISTRY', 'create_strategy', 'strategy_type_to_key', 'strategy_key_to_type',
     'FloatParam', 'IntParam', 'BoolParam', 'StrParam', 'StringListParam', 'PoolIntMapParam',
-    'load_plugin_strategies',
+    'load_plugin_strategies', 'build_strategy_context',
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',
     'AllPoolsEndCondition', 'LastDrawCardCondition',

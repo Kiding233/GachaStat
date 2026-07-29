@@ -3,7 +3,8 @@ import time
 import uuid
 from ..core import (
     GachaState, Pool, DrawAction, WaitAction, NonDrawAction,
-    InfoVector, Strategy, StrategyContext, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
+    InfoVector, Strategy, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
+    build_strategy_context,
     SimulationCollector, InfoVectorCollector, CompactCollector,
 )
 from ..core.action import NON_DRAW_ACTION_REGISTRY, InvalidActionError
@@ -224,23 +225,21 @@ class GachaService:
                            if (p.available_from is None or real_time >= p.available_from)
                            and (p.available_until is None or real_time <= p.available_until)]
 
-            future_schedules = []
-            if _schedule_mgr and _lookahead:
-                future_schedules = _schedule_mgr.get_future_schedules(real_time, _lookahead)
-
-            ctx = StrategyContext(
+            ctx = build_strategy_context(
                 state=state,
                 current_pools=current_pools,
                 all_pools=pools_list,
-                future_schedules=future_schedules,
+                real_time=real_time,
                 target_cards=_target_cards,
                 stop_condition=_stop,
-                _pity_engine=_pity_engine,
-                _pity_state=pity_state,
+                pity_engine=_pity_engine,
+                pity_state=pity_state,
                 pool_draw_counts=dict(stats.pool_draw_counts),
                 total_draws=stats.total_draws,
                 last_draw_pity_triggered=stats.last_draw_pity_triggered,
                 ssr_ids=self.ssr_ids,
+                schedule_mgr=_schedule_mgr,
+                lookahead=_lookahead,
             )
 
             action = _strategy.select_action(ctx)

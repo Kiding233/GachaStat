@@ -103,6 +103,13 @@ class StrategyContext:
     def acquired(self) -> Dict[str, int]:
         """卡牌持有量单一真相源。"""
         return self.state.acquired
+    # P69 阶段 2：上下文契约完善——所有新字段提供默认值，现有策略不经修改即可运行
+    future_resource_gains: Dict[str, float] = field(default_factory=dict)
+    """未来资源收入聚合——按资源ID聚合 schedule 中尚未到达的条目（day > real_time）。"""
+    inter_pool_pity_links: Dict[str, List[str]] = field(default_factory=dict)
+    """跨池保底继承关系——key=池子ID, value=与该池共享保底计数器的池子ID列表。"""
+    time_discount: float = 1.0
+    """时间偏好因子——1.0=无折扣，<1.0=偏好早期收益，>1.0=偏好后期收益。"""
     last_draw_pity_triggered: bool = False
     ssr_ids: Set[str] = field(default_factory=set)
     _pity_cache: Dict[str, Dict[str, float]] = field(default_factory=dict, repr=False)

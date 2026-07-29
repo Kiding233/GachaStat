@@ -96,6 +96,17 @@ class TestStringListParam:
         p = StringListParam('ids', 'ID列表')
         assert p.validate(['a', 'b']) == ['a', 'b']
 
+    def test_validate_empty_list_roundtrip(self):
+        """PD-06: 空列表在序列化往返中保持为空列表（str 表示 → 解析）。"""
+        p = StringListParam('ids', 'ID列表')
+        # 模拟 TOML/JSON 序列化往返——str 表示再解析回 list
+        empty_cases = ['', ' ', ',', ' , ']
+        for case in empty_cases:
+            result = p.validate(case)
+            assert result == [], f"输入 {case!r} 应返回 []，实际: {result}"
+        # 直接传空列表也应保持空列表
+        assert p.validate([]) == []
+
 
 class TestPoolIntMapParam:
     def test_validate_empty_dict_passes(self):

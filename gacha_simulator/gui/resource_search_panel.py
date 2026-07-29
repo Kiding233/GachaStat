@@ -104,7 +104,7 @@ class ResourceSearchWorker(QThread):
             num_simulations=self.num_simulations,
             max_workers=self.max_workers,
             seed=0,
-            strategy_name=self.config_store.strategy_name,
+            strategy_name=self.config_store.strategy_key,
             strategy_params=self.config_store.strategy_params,
         )
         from gacha_simulator.core.gdr import make_gdr_calculator

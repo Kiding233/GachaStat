@@ -451,7 +451,7 @@ class RetreatSearchPanel(QWidget):
 
             from gacha_simulator.core.retreat_search import RetreatSearchEngine
 
-            strategy_key = self._store.strategy_name if self._store else 'smart'
+            strategy_key = self._store.strategy_key if self._store else 'smart'
             strategy_params = dict(self._store.strategy_params) if self._store else {}
 
             def _progress_callback(msg, pct):

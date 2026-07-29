@@ -66,6 +66,9 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     _build_targets(data, store)
     _build_weights(data, store)
 
+    # P69：策略段
+    _build_strategy(data, store)
+
     # 分布模板 → 池子（需先构建模板索引，再展开池子）
     templates = _build_distribution_templates(data)
     store._distribution_templates = templates
@@ -147,6 +150,31 @@ def save_toml(store: ConfigStore, path: str) -> None:
     # pity（P55 扁平化格式）
     if store.pity.enabled and store.pity.pities:
         data['pity'] = [_pitydef_to_toml(p) for p in store.pity.pities]
+
+    # strategy（P69：key + params 格式）
+    if store.strategy_key:
+        strategy_entry: dict = {'key': store.strategy_key}
+        # 仅写入与默认值不同的参数
+        from .strategy import STRATEGY_REGISTRY
+        meta = STRATEGY_REGISTRY.get(store.strategy_key)
+        if meta and meta.params and store.strategy_params:
+            non_default = {}
+            for pdesc in meta.params:
+                user_val = store.strategy_params.get(pdesc.key)
+                if user_val is not None and user_val != pdesc.default:
+                    non_default[pdesc.key] = user_val
+            if non_default:
+                strategy_entry['params'] = non_default
+        data['strategy'] = strategy_entry
+
+    # plugins（P69 阶段 4d：持久化禁用状态）
+    from .strategy import STRATEGY_REGISTRY as _sr
+    disabled_keys = [
+        key for key, m in _sr.items()
+        if m.disabled and not m.internal
+    ]
+    if disabled_keys:
+        data['plugins'] = {'disabled': disabled_keys}
 
     # targets
     if store.target_cards:
@@ -930,6 +958,43 @@ def _build_targets(data: dict, store: ConfigStore) -> None:
             quantity=t.get('quantity', 1),
             pool_ids=list(t.get('pool_ids', [])),
         ))
+
+
+def _build_strategy(data: dict, store: ConfigStore) -> None:
+    """[strategy] → store.strategy_key + store.strategy_params（P69：key + params 格式）。
+
+    旧 TOML type + name 格式自动检测并迁移到 key 格式。
+    key 不存在时回退 'smart'。
+    """
+    strat = data.get('strategy', {})
+    if not strat:
+        return
+
+    # 新格式：key + params
+    if 'key' in strat:
+        store.strategy_key = str(strat['key'])
+        store.strategy_params = dict(strat.get('params', {}))
+        return
+
+    # 旧格式兼容：type(显示名) + name(key) —— 自动迁移
+    if 'name' in strat:
+        store.strategy_key = str(strat['name'])
+        store.strategy_params = dict(strat.get('params', {}))
+        return
+
+
+def _build_plugins(data: dict, store: ConfigStore) -> None:
+    """[plugins] → 设置 StrategyMeta.disabled = True（P69 阶段 4d）。"""
+    plugins = data.get('plugins', {})
+    disabled_list = plugins.get('disabled', [])
+    if not disabled_list:
+        return
+
+    from .strategy import STRATEGY_REGISTRY
+    for key in disabled_list:
+        meta = STRATEGY_REGISTRY.get(key)
+        if meta is not None and not meta.internal:
+            meta.disabled = True
 
 
 def _build_weights(data: dict, store: ConfigStore) -> None:

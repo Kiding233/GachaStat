@@ -5,9 +5,17 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional, Dict, Set, TYPE_CHECKING
 import logging
 
-from .action import Action
+from .action import Action, DrawAction, WaitAction
 from .schedule import PoolSchedule
 from .target_card import TargetCardSet
+from .param_descriptor import (     # noqa: E402 — 装饰器参数需运行时类型
+    BoolParam,
+    FloatParam,
+    IntParam,
+    PoolIntMapParam,
+    StringListParam,
+    StrParam,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +24,66 @@ if TYPE_CHECKING:
     from .pool import Pool
     from .stop_condition import StopCondition
     from .pity import PityEngine, PityState
+    from .param_descriptor import ParamDescriptor
+
+
+# ── 策略注册表元数据 ──────────────────────────────────────────────
+
+
+@dataclass
+class StrategyMeta:
+    """策略注册表条目——类定义即注册，消除分离维护。"""
+
+    key: str
+    display_name: str
+    description: str
+    cls: Optional[type] = None
+    params: List['ParamDescriptor'] = field(default_factory=list)
+    internal: bool = False          # 内置隐藏策略——不出现于任何 GUI 列表
+    disabled: bool = False          # 用户手动禁用的插件
+    plugin_path: Optional[str] = None
+    _invalid_state: Optional[str] = None  # 加载失败的插件占位
+
+
+# 全局策略注册表——模块级别，装饰器副作用填充
+STRATEGY_REGISTRY: Dict[str, StrategyMeta] = {}
+
+
+def register_strategy(
+    key: str,
+    display_name: str,
+    *,
+    params: Optional[List['ParamDescriptor']] = None,
+    internal: bool = False,
+):
+    """装饰器——将策略类注册到 STRATEGY_REGISTRY。
+
+    副作用：
+    1. 向 STRATEGY_REGISTRY 写入 StrategyMeta
+    2. 向被装饰类注入 _strategy_key 类属性
+
+    用法:
+        @register_strategy('smart', '按需追卡')
+        class SmartStrategy(Strategy): ...
+
+        @register_strategy('pity_reserve', '保底预留',
+            params=[FloatParam('pity_threshold_pct', '保底概率阈值(%)', default=80.0)])
+        class PityReserveStrategy(Strategy): ...
+    """
+    def decorator(cls):
+        meta = StrategyMeta(
+            key=key,
+            display_name=display_name,
+            description=cls.description(),
+            cls=cls,
+            params=params or [],
+            internal=internal,
+        )
+        STRATEGY_REGISTRY[key] = meta
+        cls._strategy_key = key
+        return cls
+
+    return decorator
 
 
 @dataclass
@@ -71,6 +139,7 @@ class Strategy(ABC):
         pass
 
 
+@register_strategy('smart', '按需追卡')
 class SmartStrategy(Strategy):
     lookahead = None
 
@@ -131,6 +200,8 @@ class SmartStrategy(Strategy):
         return WaitAction(duration=wait_time)
 
 
+@register_strategy('pool_quota', '指定池配额',
+    params=[PoolIntMapParam('pool_quotas', '各池配额', default={})])
 class PoolQuotaStrategy(Strategy):
     lookahead = None
 
@@ -185,6 +256,8 @@ class PoolQuotaStrategy(Strategy):
         return WaitAction(duration=wait_time)
 
 
+@register_strategy('pity_reserve', '保底预留',
+    params=[FloatParam('pity_threshold_pct', '保底概率阈值(%)', default=80.0, min_val=0.0, max_val=100.0)])
 class PityReserveStrategy(Strategy):
     lookahead = None
 
@@ -235,6 +308,11 @@ class PityReserveStrategy(Strategy):
         return WaitAction(duration=wait_time)
 
 
+@register_strategy('stop_on_target', '目标即停',
+    params=[
+        BoolParam('stop_on_featured', '抽到up即停', default=True),
+        BoolParam('stop_on_any_target', '抽到任意目标即停', default=False),
+    ])
 class StopOnTargetStrategy(Strategy):
     lookahead = None
 
@@ -283,6 +361,8 @@ class StopOnTargetStrategy(Strategy):
         return WaitAction(duration=wait_time)
 
 
+@register_strategy('fixed_count', '固定次数',
+    params=[IntParam('count', '抽卡次数', default=100, min_val=1)])
 class FixedCountStrategy(Strategy):
     def __init__(self, count: int):
         self.count = count
@@ -300,6 +380,8 @@ class FixedCountStrategy(Strategy):
         return DrawAction(pool_id=ctx.current_pools[0].id)
 
 
+@register_strategy('target_hunting', '指定池追卡',
+    params=[StringListParam('target_pool_ids', '目标池ID列表', default=[])])
 class TargetHuntingStrategy(Strategy):
     def __init__(self, target_pool_ids: List[str]):
         self.target_pool_ids = target_pool_ids
@@ -317,6 +399,7 @@ class TargetHuntingStrategy(Strategy):
         return WaitAction(duration=3600)
 
 
+@register_strategy('no_draw', '不抽卡基线', internal=True)
 class NoDrawStrategy(Strategy):
     """不抽卡策略：始终等待，一次都不抽。用于计算不抽卡基线资源水平。"""
 
@@ -329,6 +412,40 @@ class NoDrawStrategy(Strategy):
         wait_time = 86400
         for pool in ctx.current_pools:
             if hasattr(pool, 'available_until') and pool.available_until and pool.available_until > ctx.state.real_time:
+                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
+        if wait_time <= 0:
+            wait_time = 3600
+        return WaitAction(duration=wait_time)
+
+
+@register_strategy('draw_target', '目标池抽卡',
+    params=[
+        StringListParam('target_card_ids', '目标卡ID列表', default=[]),
+        StrParam('pool_id', '目标池ID', default=''),
+    ],
+    internal=True)
+class DrawTargetStrategy(Strategy):
+    """最差影响分析专用：从目标池抽卡。"""
+
+    lookahead = None
+
+    def __init__(self, target_card_ids: Optional[List[str]] = None, pool_id: str = ''):
+        self.target_card_ids: Set[str] = set(target_card_ids or [])
+        self.pool_id = pool_id
+
+    @classmethod
+    def description(cls) -> str:
+        return "最差影响分析：从目标池抽卡"
+
+    def select_action(self, ctx: StrategyContext):
+        for pool in ctx.current_pools:
+            if (not self.pool_id or pool.id == self.pool_id) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
+                return DrawAction(pool_id=pool.id)
+
+        wait_time = 86400
+        for pool in ctx.current_pools:
+            if (pool.available_until is not None
+                    and pool.available_until > ctx.state.real_time):
                 wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
         if wait_time <= 0:
             wait_time = 3600
@@ -357,152 +474,137 @@ class CompositeStrategy(Strategy):
         return WaitAction(duration=0)
 
 
-STRATEGY_REGISTRY = {
-    'smart': {
-        'display_name': '按需追卡',
-        'description': '优先兑换→按目标追卡→等待下一个池',
-        'class': SmartStrategy,
-        'params': {},
-    },
-    'pool_quota': {
-        'display_name': '指定池配额',
-        'description': '在指定池子抽指定数量后切换',
-        'class': PoolQuotaStrategy,
-        'params': {
-            'pool_quotas': {
-                'type': 'pool_int_map',
-                'display_name': '各池配额',
-                'default': {},
-            },
-        },
-    },
-    'pity_reserve': {
-        'display_name': '保底预留',
-        'description': '只在大保底概率≥阈值时才抽卡',
-        'class': PityReserveStrategy,
-        'params': {
-            'pity_threshold_pct': {
-                'type': 'float',
-                'display_name': '保底概率阈值(%)',
-                'default': 80.0,
-                'min': 0.0,
-                'max': 100.0,
-            },
-        },
-    },
-    'stop_on_target': {
-        'display_name': '目标即停',
-        'description': '抽到当期up/目标卡就停止',
-        'class': StopOnTargetStrategy,
-        'params': {
-            'stop_on_featured': {
-                'type': 'bool',
-                'display_name': '抽到up即停',
-                'default': True,
-            },
-            'stop_on_any_target': {
-                'type': 'bool',
-                'display_name': '抽到任意目标即停',
-                'default': False,
-            },
-        },
-    },
-    'target_hunting': {
-        'display_name': '指定池追卡',
-        'description': '只从指定池子抽卡',
-        'class': TargetHuntingStrategy,
-        'params': {
-            'target_pool_ids': {
-                'type': 'string_list',
-                'display_name': '目标池ID列表',
-                'default': [],
-            },
-        },
-    },
-    'fixed_count': {
-        'display_name': '固定次数',
-        'description': '抽指定次数后停止',
-        'class': FixedCountStrategy,
-        'params': {
-            'count': {
-                'type': 'int',
-                'display_name': '抽卡次数',
-                'default': 100,
-                'min': 1,
-            },
-        },
-    },
-    'no_draw': {
-        'display_name': '不抽卡基线',
-        'description': '不抽卡：始终等待，用于计算基线资源水平',
-        'class': NoDrawStrategy,
-        'params': {},
-        'internal': True,
-    },
-    'draw_target': {
-        'display_name': '目标池抽卡',
-        'description': '最差影响分析专用：从目标池抽卡',
-        'class': None,
-        'params': {
-            'target_card_ids': {
-                'type': 'string_list',
-                'display_name': '目标卡ID列表',
-                'default': [],
-            },
-            'pool_id': {
-                'type': 'str',
-                'display_name': '目标池ID',
-                'default': '',
-            },
-        },
-        'internal': True,
-    },
-}
+# ── 策略工厂（数据驱动） ──────────────────────────────────────────
 
 
-def create_strategy(strategy_name: str, params: Optional[Dict[str, Any]] = None) -> Strategy:
-    entry = STRATEGY_REGISTRY.get(strategy_name)
-    if entry is None:
-        raise ValueError(f"Unknown strategy: {strategy_name}")
-    if entry.get('internal') and entry.get('class') is None:
-        raise ValueError(f"Cannot create internal strategy '{strategy_name}': no instantiable class")
-    cls = entry['class']
-    p = params or {}
-    if strategy_name == 'smart':
-        return cls()
-    elif strategy_name == 'pool_quota':
-        return cls(pool_quotas=p.get('pool_quotas', {}))
-    elif strategy_name == 'pity_reserve':
-        return cls(pity_threshold_pct=p.get('pity_threshold_pct', 80.0))
-    elif strategy_name == 'stop_on_target':
-        return cls(
-            stop_on_featured=p.get('stop_on_featured', True),
-            stop_on_any_target=p.get('stop_on_any_target', False),
+def create_strategy(key: str, params: Optional[Dict[str, Any]] = None) -> Strategy:
+    """数据驱动工厂——查 StrategyMeta → 守卫 → 合并默认值 → 校验 → 实例化。
+
+    Args:
+        key: 策略 key（如 'smart'、'pity_reserve'、'plugin/my_adaptive'）。
+        params: 用户传入的参数 dict，覆盖 ParamDescriptor.default。
+
+    Returns:
+        策略实例。
+
+    Raises:
+        ValueError: key 不存在、插件加载失败、参数校验失败。
+    """
+    # 1. 查注册表
+    meta = STRATEGY_REGISTRY.get(key)
+    if meta is None:
+        raise ValueError(f"Unknown strategy: {key}")
+
+    # 2. _invalid_state 守卫——插件加载失败
+    if meta._invalid_state is not None:
+        raise ValueError(
+            f"Cannot create strategy '{key}': plugin failed to load — "
+            f"{meta._invalid_state}"
         )
-    elif strategy_name == 'target_hunting':
-        return cls(target_pool_ids=p.get('target_pool_ids', []))
-    elif strategy_name == 'fixed_count':
-        return cls(count=p.get('count', 100))
-    elif strategy_name == 'draw_target':
-        assert cls is not None, "draw_target class not registered (cls=None)"
-        return cls(
-            target_card_ids=set(p.get('target_card_ids', [])),
-            pool_id=p.get('pool_id', ''),
+
+    # 3. internal + cls=None 守卫
+    if meta.internal and meta.cls is None:
+        raise ValueError(
+            f"Cannot create internal strategy '{key}': no instantiable class"
         )
-    return cls()
+
+    cls = meta.cls
+    if cls is None:
+        raise ValueError(
+            f"STRATEGY_REGISTRY['{key}'].cls is None — "
+            f"strategy cannot be instantiated"
+        )
+
+    user_params = params or {}
+
+    # 4. 合并默认值 + 校验
+    resolved: Dict[str, Any] = {}
+    for pdesc in meta.params:
+        raw = user_params.get(pdesc.key, pdesc.default)
+        resolved[pdesc.key] = pdesc.validate(raw)
+
+    # 5. 实例化
+    return cls(**resolved)
 
 
 def strategy_type_to_key(display_name: str) -> str:
+    """显示名 → key：遍历注册表反向查找 StrategyMeta.display_name。"""
     for key, entry in STRATEGY_REGISTRY.items():
-        if entry['display_name'] == display_name:
+        if entry.display_name == display_name:
             return key
     logger.warning(
-        "Unknown strategy_type '%s', falling back to 'smart'",
+        "Unknown strategy display_name '%s', falling back to 'smart'",
         display_name,
     )
     return 'smart'
 
 
 def strategy_key_to_type(key: str) -> str:
+    """key → 显示名：查 StrategyMeta.display_name。"""
     entry = STRATEGY_REGISTRY.get(key)
-    return entry['display_name'] if entry else '按需追卡'
+    return entry.display_name if entry else '按需追卡'
+
+
+# ── 注册表自检 ────────────────────────────────────────────────────
+
+
+def _validate_registry() -> None:
+    """STRATEGY_REGISTRY 自检——模块导入时自动执行。
+
+    验证内容：
+    (a) 每个非 internal、_invalid_state 为空的 entry，cls 非 None。
+    (b) 每个非 internal、_invalid_state 为空的 entry，cls 为 Strategy 子类。
+    (c) 每个 entry.params 中所有 ParamDescriptor.key 无重复。
+    (d) 所有 entry.key 唯一。
+    (e) internal 与 disabled 正交——不存在同时为 True 的条目。
+
+    失败行为：
+    - (a)/(b) 违反 → TypeError（cls 类型不满足约束）。
+    - (c)/(d)/(e) 违反 → AssertionError（注册表数据不一致）。
+    - 抛出异常会阻止模块导入，在应用启动阶段立即暴露问题。
+    """
+    all_keys: set = set()
+    for key, meta in STRATEGY_REGISTRY.items():
+        # (d) key 唯一性
+        assert key not in all_keys, f"STRATEGY_REGISTRY key 重复: {key!r}"
+        all_keys.add(key)
+
+        # (e) internal 与 disabled 正交
+        assert not (meta.internal and meta.disabled), (
+            f"STRATEGY_REGISTRY['{key}']: internal 与 disabled 不能同时为 True——"
+            f"internal 策略永不对外暴露，disabled 语义不适用"
+        )
+
+        # (a) cls 非 None 检查
+        if meta.cls is None:
+            if not meta.internal and meta._invalid_state is None:
+                raise TypeError(
+                    f"STRATEGY_REGISTRY['{key}'].cls 为 None——"
+                    f"非 internal 且无 _invalid_state 的策略必须提供可实例化的类"
+                )
+            continue  # cls=None 且合法，跳过后续 cls 检查
+
+        # (b) cls 类型检查
+        if not isinstance(meta.cls, type):
+            raise TypeError(
+                f"STRATEGY_REGISTRY['{key}'].cls={meta.cls!r}——必须为类（type）"
+            )
+        if not meta.internal and meta._invalid_state is None:
+            if not issubclass(meta.cls, Strategy):
+                raise TypeError(
+                    f"STRATEGY_REGISTRY['{key}'].cls={meta.cls.__name__}——"
+                    f"必须为 Strategy 子类"
+                )
+
+        # (c) params 参数名无重复
+        if meta.params:
+            param_keys = [p.key for p in meta.params]
+            if len(param_keys) != len(set(param_keys)):
+                from collections import Counter
+                dupes = [k for k, v in Counter(param_keys).items() if v > 1]
+                raise AssertionError(
+                    f"STRATEGY_REGISTRY['{key}'].params 存在重复 key: {dupes}"
+                )
+
+
+_validate_registry()

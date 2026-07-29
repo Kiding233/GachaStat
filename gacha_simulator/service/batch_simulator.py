@@ -64,7 +64,7 @@ class SimulationEnv:
     pool_end_times: Dict[str, float] = dc_field(default_factory=dict)
     gdr_context: Any = None
     daily_income: float = 0.0
-    strategy_name: str = 'smart'
+    strategy_key: str = 'smart'
     strategy_params: Dict[str, Any] = dc_field(default_factory=dict)
     stop_condition: Any = None
     return_compact: bool = True
@@ -213,7 +213,7 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
 
     random.seed(seed)
 
-    strategy = create_strategy(env.strategy_name, env.strategy_params)
+    strategy = create_strategy(env.strategy_key, env.strategy_params)
     if env.stop_condition is not None:
         stop_cond = env.stop_condition
     else:
@@ -276,7 +276,7 @@ def run_batch_parallel(
     max_workers: int,
     seed: int = 0,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-    strategy_name: str = '',
+    strategy_key: str = '',
     strategy_params: Optional[dict] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> 'BatchResult':
@@ -284,10 +284,10 @@ def run_batch_parallel(
 
     env: 模拟环境（池、保底、资源等静态配置）。
     target_specs / initial_resources: 每次模拟的动态参数。
-    strategy_name / strategy_params: 可为空，为空时使用 env 中的默认值。
+    strategy_key / strategy_params: 可为空，为空时使用 env 中的默认值。
     """
-    if strategy_name:
-        env.strategy_name = strategy_name
+    if strategy_key:
+        env.strategy_key = strategy_key
     if strategy_params is not None:
         env.strategy_params = strategy_params
 
@@ -704,7 +704,7 @@ class SimulationEnvBuilder:
             resource_gain_per_day=gain_per_day,
         )
 
-        strategy_name = getattr(config_store, 'strategy_name', 'smart') or 'smart'
+        strategy_key = getattr(config_store, 'strategy_key', 'smart') or 'smart'
         strategy_params = dict(getattr(config_store, 'strategy_params', {}) or {})
 
         return SimulationEnv(
@@ -721,7 +721,7 @@ class SimulationEnvBuilder:
             all_drawable_ids=all_drawable_ids,
             pool_end_times=pool_end_times,
             gdr_context=gdr_context,
-            strategy_name=strategy_name,
+            strategy_key=strategy_key,
             strategy_params=strategy_params,
             card_overflow_map=dict(getattr(config_store, 'card_overflow_map', {})),
         )
@@ -739,7 +739,7 @@ class SimulationEnvBuilder:
             card_defs=config['card_defs'],
             initial_resources=config.get('initial_resources', {}),
             ssr_ids=config.get('ssr_ids', set()),
-            strategy_name=config.get('strategy_name', 'smart'),
+            strategy_key=config.get('strategy_key', 'smart'),
             strategy_params=config.get('strategy_params', {}),
             stop_condition=config.get('stop_condition'),
             card_overflow_map=config.get('card_overflow_map', {}),

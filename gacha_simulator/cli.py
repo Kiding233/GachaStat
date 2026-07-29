@@ -82,7 +82,7 @@ def main():
 
     # 策略覆盖逻辑
     if args.strategy:
-        strategy_name = args.strategy  # CLI 参数优先
+        strategy_key = args.strategy  # CLI 参数优先
         if args.strategy_params:
             try:
                 strategy_params = json.loads(args.strategy_params)
@@ -92,7 +92,7 @@ def main():
         else:
             strategy_params = store.strategy_params  # 回退 TOML 配置
     else:
-        strategy_name = getattr(store, 'strategy_name', 'smart') or 'smart'
+        strategy_key = getattr(store, 'strategy_key', 'smart') or 'smart'
         strategy_params = store.strategy_params
 
     env = SimulationEnvBuilder.from_config_store(store)
@@ -136,7 +136,7 @@ def main():
         max_workers=args.workers,
         seed=args.seed,
         progress_callback=_cli_progress if not args.no_progress else None,
-        strategy_name=strategy_name,
+        strategy_key=strategy_key,
         strategy_params=strategy_params,
     )
     print()  # progress line 换行

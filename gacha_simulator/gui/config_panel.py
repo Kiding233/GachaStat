@@ -1646,8 +1646,8 @@ class ConfigPanel(QWidget):
         strategy_layout = QFormLayout()
         self.strategy_type = QComboBox()
         self._strategy_display_names = [
-            entry['display_name'] for entry in STRATEGY_REGISTRY.values()
-            if not entry.get('internal')
+            entry.display_name for entry in STRATEGY_REGISTRY.values()
+            if not entry.internal and not entry.disabled
         ]
         self.strategy_type.addItems(self._strategy_display_names)
         strategy_layout.addRow("策略类型:", self.strategy_type)
@@ -1729,6 +1729,10 @@ class ConfigPanel(QWidget):
     def _on_strategy_type_changed(self, idx):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key
 
+        from gacha_simulator.core.param_descriptor import (
+            BoolParam, FloatParam, IntParam, PoolIntMapParam, StringListParam,
+        )
+
         while self._strategy_params_layout.rowCount() > 0:
             self._strategy_params_layout.removeRow(0)
         self._strategy_param_widgets = {}
@@ -1736,45 +1740,52 @@ class ConfigPanel(QWidget):
         display_name = self.strategy_type.currentText()
         key = strategy_type_to_key(display_name)
         entry = STRATEGY_REGISTRY.get(key)
-        if not entry or not entry.get('params'):
+        if not entry or not entry.params:
             self._strategy_params_group.setVisible(False)
             if hasattr(self, 'preview_text'):
                 self._update_preview()
             return
 
         self._strategy_params_group.setVisible(True)
-        for param_key, param_def in entry['params'].items():
-            ptype = param_def.get('type', 'str')
-            display = param_def.get('display_name', param_key)
-            default = param_def.get('default')
+        for pdesc in entry.params:
+            param_key = pdesc.key
+            display = pdesc.display_name
+            default = pdesc.default
 
-            if ptype == 'int':
+            # 确定 ptype 字符串（兼容 _get_strategy_params_from_widgets 的字符串分派）
+            if isinstance(pdesc, IntParam):
+                ptype = 'int'
                 widget = QSpinBox()
-                widget.setRange(param_def.get('min', 0), param_def.get('max', 99999))
+                widget.setRange(pdesc.min_val, pdesc.max_val)
                 widget.setValue(int(default) if default is not None else 0)
                 self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'float':
+            elif isinstance(pdesc, FloatParam):
+                ptype = 'float'
                 widget = QDoubleSpinBox()
-                widget.setRange(param_def.get('min', 0.0), param_def.get('max', 99999.0))
+                widget.setRange(pdesc.min_val, pdesc.max_val)
                 widget.setDecimals(2)
                 widget.setSingleStep(0.1)
                 widget.setValue(float(default) if default is not None else 0.0)
                 self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'bool':
+            elif isinstance(pdesc, BoolParam):
+                ptype = 'bool'
                 widget = QCheckBox()
                 widget.setChecked(bool(default) if default is not None else False)
                 self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'string_list':
+            elif isinstance(pdesc, StringListParam):
+                ptype = 'string_list'
                 widget = QLineEdit()
                 widget.setText(','.join(str(v) for v in default) if default else '')
                 widget.setPlaceholderText("逗号分隔")
                 self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'pool_int_map':
+            elif isinstance(pdesc, PoolIntMapParam):
+                ptype = 'pool_int_map'
                 widget = QLineEdit()
                 widget.setText(','.join(f'{k}:{v}' for k, v in default.items()) if default else '')
                 widget.setPlaceholderText("pool_id:数量,...")
                 self._strategy_params_layout.addRow(f"{display}:", widget)
             else:
+                ptype = 'str'
                 widget = QLineEdit()
                 widget.setText(str(default) if default is not None else '')
                 self._strategy_params_layout.addRow(f"{display}:", widget)
@@ -3369,11 +3380,10 @@ class ConfigPanel(QWidget):
                     } if (pd.get('deactivate_on_early_hit') or pd.get('depends_on')) else {},
                 } for pd in self._pity_defs],
             },
+            'auto_wait': store.auto_wait,
             'strategy': {
-                'type': store.strategy_type,
-                'name': store.strategy_name,
+                'key': store.strategy_key,
                 'params': dict(store.strategy_params),
-                'auto_wait': store.auto_wait,
             },
             'stop_condition': {
                 'type': store.stop_condition_type,
@@ -3506,16 +3516,16 @@ class ConfigPanel(QWidget):
         )
 
         strategy = config.get('strategy', {})
-        strategy_type_raw = strategy.get('type', '按需追卡')
-        from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key, strategy_key_to_type
-        if strategy_type_raw in STRATEGY_REGISTRY:
-            strategy_type_resolved = strategy_key_to_type(strategy_type_raw)
+        # P69：新格式 {key, params}，兼容旧格式 {type, name, params}
+        if 'key' in strategy:
+            store.strategy_key = str(strategy['key'])
+        elif 'name' in strategy:
+            store.strategy_key = str(strategy['name'])
         else:
-            strategy_type_resolved = strategy_type_raw
-        store.strategy_type = strategy_type_resolved
-        store.strategy_name = strategy.get('name', None) or strategy_type_to_key(strategy_type_resolved)
+            store.strategy_key = 'smart'
         store.strategy_params = strategy.get('params', {})
-        store.auto_wait = strategy.get('auto_wait', True)
+        # auto_wait：优先从顶层读取（P69 新位置），回退到旧 strategy 子 dict
+        store.auto_wait = config.get('auto_wait', strategy.get('auto_wait', True))
 
         stop_cond = config.get('stop_condition', {})
         stop_type_raw = stop_cond.get('type', '所有池结束')
@@ -4009,8 +4019,8 @@ class ConfigPanel(QWidget):
             ))
         store.pity.pities = pities
 
-        store.strategy_type = self.strategy_type.currentText()
-        store.strategy_name = strategy_type_to_key(store.strategy_type)
+        display_name = self.strategy_type.currentText()
+        store.strategy_key = strategy_type_to_key(display_name)
         store.strategy_params = self._get_strategy_params_from_widgets()
         store.stop_condition_type = self.stop_condition_type.currentText()
         store.stop_condition_params = {}
@@ -4151,7 +4161,10 @@ class ConfigPanel(QWidget):
         if self._pity_defs:
             self.pity_list.setCurrentRow(0)
 
-        strategy_idx = self._strategy_display_names.index(store.strategy_type) if store.strategy_type in self._strategy_display_names else 0
+        # P69：通过 strategy_key 反向查找 display_name
+        from gacha_simulator.core.strategy import STRATEGY_REGISTRY as _sr
+        display_name = _sr[store.strategy_key].display_name if store.strategy_key in _sr else '按需追卡'
+        strategy_idx = self._strategy_display_names.index(display_name) if display_name in self._strategy_display_names else 0
         self.strategy_type.setCurrentIndex(strategy_idx)
         self._set_strategy_params_to_widgets(store.strategy_params)
         stop_idx = self._stop_condition_display_names.index(store.stop_condition_type) if store.stop_condition_type in self._stop_condition_display_names else 0

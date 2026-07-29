@@ -90,7 +90,7 @@ class StrategyWorker(QThread):
             current_specs[card_id] = self.target_qty
 
             from gacha_simulator.service.batch_simulator import run_batch_parallel
-            _skey = self.config_store.strategy_name
+            _skey = self.config_store.strategy_key
             _sparams = self.config_store.strategy_params
             histories = run_batch_parallel(
                 env=self._sim_env,
@@ -146,7 +146,7 @@ class StrategyWorker(QThread):
         self.progress.emit("后退法: 初始完整集合模拟", 5)
 
         from gacha_simulator.service.batch_simulator import run_batch_parallel
-        _skey = self.config_store.strategy_name
+        _skey = self.config_store.strategy_key
         _sparams = self.config_store.strategy_params
         initial_histories = run_batch_parallel(
             env=self._sim_env,
@@ -195,7 +195,7 @@ class StrategyWorker(QThread):
             del temp_specs[card_id]
 
             from gacha_simulator.service.batch_simulator import run_batch_parallel
-            _skey = self.config_store.strategy_name
+            _skey = self.config_store.strategy_key
             _sparams = self.config_store.strategy_params
             histories = run_batch_parallel(
                 env=self._sim_env,

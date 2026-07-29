@@ -64,7 +64,7 @@ class SimulationThread(QThread):
             # P0: 不再通过 collector 在主进程冗余累积——worker 内已并行提取
             env.return_compact = False
 
-            strategy_key = config_store.strategy_name
+            strategy_key = config_store.strategy_key
 
             self.status_update.emit(f"正在启动 {max_workers} 个工作进程…")
 

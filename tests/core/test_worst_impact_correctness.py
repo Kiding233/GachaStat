@@ -2,8 +2,7 @@
 
 不依赖概率的确定性测试：逐个验证策略行为、停止条件、完整流程。
 """
-from gacha_simulator.core.worst_impact import DrawTargetStrategy
-from gacha_simulator.core.strategy import StrategyContext, create_strategy
+from gacha_simulator.core.strategy import DrawTargetStrategy, StrategyContext, create_strategy
 from gacha_simulator.core.action import DrawAction, WaitAction
 from gacha_simulator.core.stop_condition import ConsecutivePoolTargetCondition
 
@@ -66,7 +65,7 @@ class _FakeState:
 
 def test_strategy_draws_from_any_pool_when_pool_id_empty():
     """pool_id='' 时，从当前任意可用池子抽卡"""
-    strategy = DrawTargetStrategy(target_card_ids=set(), pool_id='')
+    strategy = DrawTargetStrategy(target_card_ids=[], pool_id='')
 
     pool_a = _FakePool('pool_a', {'draw_resource': 160})
     state = _FakeState({'draw_resource': 1000})
@@ -94,7 +93,7 @@ def test_strategy_draws_from_any_pool_when_pool_id_empty():
 
 def test_strategy_draws_from_specific_pool_when_pool_id_set():
     """pool_id 指定时，只从指定池子抽卡"""
-    strategy = DrawTargetStrategy(target_card_ids=set(), pool_id='pool_b')
+    strategy = DrawTargetStrategy(target_card_ids=[], pool_id='pool_b')
 
     pool_a = _FakePool('pool_a', {'draw_resource': 160})
     pool_b = _FakePool('pool_b', {'draw_resource': 160})
@@ -123,7 +122,7 @@ def test_strategy_draws_from_specific_pool_when_pool_id_set():
 
 def test_strategy_waits_when_cannot_afford():
     """资源不够时返回 WaitAction"""
-    strategy = DrawTargetStrategy(target_card_ids=set(), pool_id='')
+    strategy = DrawTargetStrategy(target_card_ids=[], pool_id='')
 
     pool_a = _FakePool('pool_a', {'draw_resource': 160})
     state = _FakeState({'draw_resource': 100})  # 不够

@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
 from .overflow import OverflowBand
-from .strategy import strategy_type_to_key, STRATEGY_REGISTRY
 
 
 class ConfigError(ValueError):
@@ -135,9 +134,9 @@ class ConfigStore:
     day_overrides: List[DayOverride] = field(default_factory=list)
     initial_resources: Dict[str, float] = field(default_factory=dict)
     target_cards: List[TargetCardEntry] = field(default_factory=list)
-    strategy_type: str = '按需追卡'
-    strategy_name: str = 'smart'
+    strategy_key: str = 'smart'
     strategy_params: Dict[str, Any] = field(default_factory=dict)
+    _unknown_strategy_raw: Optional[Dict[str, Any]] = None  # 未知 key 降级保留
     stop_condition_type: str = '所有池结束'
     stop_condition_params: Dict[str, Any] = field(default_factory=dict)
     auto_wait: bool = True
@@ -153,13 +152,9 @@ class ConfigStore:
     _migrated_from_legacy: bool = False                              # ← P55：旧格式迁移标记
 
     def __post_init__(self):
-        if self.strategy_type:
-            if self.strategy_type in STRATEGY_REGISTRY:
-                self.strategy_name = self.strategy_type
-            else:
-                resolved = strategy_type_to_key(self.strategy_type)
-                if resolved != self.strategy_name:
-                    self.strategy_name = resolved
+        # P69：strategy_type 字段已删除，strategy_name → strategy_key。
+        # 旧 type→key 映射逻辑不再需要——TOML [strategy] 段直接使用 key。
+        pass
 
     def clear(self):
         self.card_defs.clear()
@@ -170,9 +165,9 @@ class ConfigStore:
         self.day_overrides.clear()
         self.initial_resources.clear()
         self.target_cards.clear()
-        self.strategy_type = '按需追卡'
-        self.strategy_name = 'smart'
+        self.strategy_key = 'smart'
         self.strategy_params.clear()
+        self._unknown_strategy_raw = None
         self.stop_condition_type = '所有池结束'
         self.stop_condition_params.clear()
         self.auto_wait = True

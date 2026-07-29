@@ -9,9 +9,7 @@ from .pity import (
     PityEngine, PoolPitySpec, PityState,
     compute_scope_mappings,
 )
-from .action import DrawAction, WaitAction
 from .stop_condition import ConsecutivePoolTargetCondition
-from .strategy import Strategy, StrategyContext, STRATEGY_REGISTRY
 from .schedule import PoolSchedule, PoolScheduleManager
 
 import fnmatch
@@ -67,35 +65,6 @@ class WorstImpactResult:
             if self.get_p_ge(k) >= threshold:
                 return k
         return 0
-
-
-class DrawTargetStrategy(Strategy):
-    lookahead = None
-
-    def __init__(self, target_card_ids: Set[str], pool_id: str):
-        self.target_card_ids = target_card_ids
-        self.pool_id = pool_id
-
-    @classmethod
-    def description(cls) -> str:
-        return "最差影响分析：从目标池抽卡"
-
-    def select_action(self, ctx: StrategyContext):
-        for pool in ctx.current_pools:
-            if (not self.pool_id or pool.id == self.pool_id) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
-                return DrawAction(pool_id=pool.id)
-
-        wait_time = 86400
-        for pool in ctx.current_pools:
-            if (pool.available_until is not None
-                    and pool.available_until > ctx.state.real_time):
-                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
-        if wait_time <= 0:
-            wait_time = 3600
-        return WaitAction(duration=wait_time)
-
-
-STRATEGY_REGISTRY['draw_target']['class'] = DrawTargetStrategy
 
 
 class WorstImpactAnalyzer:
@@ -177,7 +146,7 @@ class WorstImpactAnalyzer:
             progress_callback=lambda done, total: progress_callback(
                 f"模拟中: {done}/{total}", int(done / total * 100)
             ) if progress_callback else None,
-            strategy_name='draw_target',
+            strategy_key='draw_target',
             strategy_params={'pool_id': ''},
             on_result=collector.on_result,
         )

@@ -1726,6 +1726,31 @@ class ConfigPanel(QWidget):
 
         parent.addWidget(group)
 
+    def _rebuild_strategy_dropdown(self):
+        """公开方法——重建策略下拉框（供插件管理面板启用/禁用后调用）。"""
+        from gacha_simulator.core.strategy import STRATEGY_REGISTRY as _sr
+        current_key = None
+        if self.strategy_type.currentIndex() >= 0:
+            from gacha_simulator.core.strategy import strategy_type_to_key
+            current_key = strategy_type_to_key(self.strategy_type.currentText())
+
+        self._strategy_display_names = [
+            entry.display_name for entry in _sr.values()
+            if not entry.internal and not entry.disabled
+        ]
+        self.strategy_type.blockSignals(True)
+        self.strategy_type.clear()
+        self.strategy_type.addItems(self._strategy_display_names)
+        if current_key:
+            from gacha_simulator.core.strategy import STRATEGY_REGISTRY
+            meta = STRATEGY_REGISTRY.get(current_key)
+            if meta and not meta.disabled and meta.display_name in self._strategy_display_names:
+                self.strategy_type.setCurrentIndex(
+                    self._strategy_display_names.index(meta.display_name))
+            else:
+                self.strategy_type.setCurrentIndex(0)
+        self.strategy_type.blockSignals(False)
+
     def _on_strategy_type_changed(self, idx):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key
 

@@ -164,6 +164,13 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
+        tools_menu = menubar.addMenu("工具")
+
+        plugin_manager_action = QAction("插件管理", self)
+        plugin_manager_action.setObjectName("action_plugin_manager")
+        plugin_manager_action.triggered.connect(self._open_plugin_manager)
+        tools_menu.addAction(plugin_manager_action)
+
         help_menu = menubar.addMenu("帮助")
 
         about_action = QAction("关于", self)
@@ -207,6 +214,18 @@ class MainWindow(QMainWindow):
     def _load_default_config(self):
         try:
             load_toml(_DEFAULT_CONFIG_FILE, self._store)
+            # P69：加载插件策略 + 应用 TOML [plugins].disabled 列表
+            from gacha_simulator.core.strategy_loader import load_plugin_strategies
+            load_plugin_strategies()
+            # 插件加载完毕后，应用禁用列表
+            try:
+                import tomllib
+            except ModuleNotFoundError:
+                import tomli as tomllib
+            with open(_DEFAULT_CONFIG_FILE, 'rb') as _f:
+                _raw = tomllib.load(_f)
+            from gacha_simulator.core.config_toml import _build_plugins
+            _build_plugins(_raw, self._store)
             self.config_panel.refresh_from_store()
             self.analysis_panel.set_store(self._store)
             self.plan_search_panel.set_store(self._store)
@@ -539,6 +558,22 @@ class MainWindow(QMainWindow):
         self.comparison_analysis_panel.set_datasets(names)
         self.status_bar.showMessage(f"正在比较 {len(names)} 个数据集")
 
+
+    def _open_plugin_manager(self):
+        """打开插件管理对话框（模态）。"""
+        from gacha_simulator.gui.plugin_manager_panel import PluginManagerDialog
+        dlg = PluginManagerDialog(self)
+        dlg.finished.connect(self._on_plugin_manager_closed)
+        dlg.exec()
+
+    def _on_plugin_manager_closed(self, has_changes: bool):
+        """插件管理对话框关闭后——若有变更，保存 TOML 以持久化禁用状态。"""
+        if has_changes and self._store:
+            from gacha_simulator.paths import get_config_dir
+            import os
+            path = os.path.join(get_config_dir(), 'config.toml')
+            from gacha_simulator.core.config_toml import save_toml
+            save_toml(self._store, path)
 
     def show_about(self):
         from .about_dialog import AboutDialog

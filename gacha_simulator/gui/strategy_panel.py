@@ -99,7 +99,7 @@ class StrategyWorker(QThread):
                 num_simulations=self.num_simulations,
                 max_workers=self.max_workers,
                 seed=0,
-                strategy_name=_skey,
+                strategy_key=_skey,
                 strategy_params=_sparams,
             )
             from gacha_simulator.core.gdr import compute_success_probability
@@ -155,7 +155,7 @@ class StrategyWorker(QThread):
             num_simulations=self.num_simulations,
             max_workers=self.max_workers,
             seed=0,
-            strategy_name=_skey,
+            strategy_key=_skey,
             strategy_params=_sparams,
         )
         from gacha_simulator.core.gdr import compute_success_probability
@@ -204,7 +204,7 @@ class StrategyWorker(QThread):
                 num_simulations=self.num_simulations,
                 max_workers=self.max_workers,
                 seed=0,
-                strategy_name=_skey,
+                strategy_key=_skey,
                 strategy_params=_sparams,
             )
             from gacha_simulator.core.gdr import compute_success_probability

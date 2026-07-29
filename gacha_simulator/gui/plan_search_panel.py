@@ -1243,7 +1243,7 @@ class PlanSearchPanel(QWidget):
             self._on_gdr_changed(self.gdr_combo.currentIndex())
 
         # 更新策略标签
-        strategy_name = getattr(store, 'strategy_name', 'smart') or 'smart'
+        strategy_name = getattr(store, 'strategy_key', 'smart') or 'smart'
         from gacha_simulator.core.strategy import strategy_key_to_type
         self.strategy_label.setText(strategy_key_to_type(strategy_name))
 

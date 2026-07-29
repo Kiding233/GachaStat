@@ -371,7 +371,7 @@ class MainWindow(QMainWindow):
         )
 
         # —— 自动存入 ResultStore ——
-        strategy_name = getattr(self._store, 'strategy_name', '') or 'unknown'
+        strategy_name = getattr(self._store, 'strategy_key', '') or 'unknown'
         seed_start = getattr(self.gacha_panel, '_last_seed', 0)
 
         # 自动命名：策略名 + 两位递增编号，如 smart_01, target_hunting_03

@@ -86,7 +86,7 @@ class SimulationThread(QThread):
                 max_workers=max_workers,
                 seed=seed,
                 progress_callback=_batched_progress,
-                strategy_name=strategy_key,
+                strategy_key=strategy_key,
                 strategy_params=config_store.strategy_params,
             )
 
@@ -103,7 +103,7 @@ class SimulationThread(QThread):
                     num_simulations=1,
                     max_workers=1,
                     seed=seed,
-                    strategy_name='no_draw',
+                    strategy_key='no_draw',
                 )
                 if no_draw_results and no_draw_results[0]:
                     no_draw_resources = no_draw_results[0].get('final_resources', {})

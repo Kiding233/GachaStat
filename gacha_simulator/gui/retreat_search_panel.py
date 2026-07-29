@@ -467,7 +467,7 @@ class RetreatSearchPanel(QWidget):
                 gdr_threshold=self.gdr_threshold_spin.value(),
                 num_simulations=self.sim_spin.value(),
                 max_workers=self.worker_spin.value(),
-                strategy_name=strategy_key,
+                strategy_key=strategy_key,
                 strategy_params=strategy_params,
                 progress_callback=_progress_callback,
             )

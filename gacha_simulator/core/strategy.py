@@ -155,8 +155,7 @@ from gacha_simulator.strategies.builtin.draw_target import DrawTargetStrategy  #
 class CompositeStrategy(Strategy):
     """[DEPRECATED] 请使用 PriorityChainStrategy 替代。
 
-    P69 阶段 3：CompositeStrategy 保留但内部委托给 PriorityChainStrategy，
-    并在实例化时发出 DeprecationWarning。
+    P69 阶段 3：内部委托给 PriorityChainStrategy，实例化时发出 DeprecationWarning。
     """
 
     def __init__(self, strategies: List[Strategy], mode: str = 'first_valid'):
@@ -171,18 +170,14 @@ class CompositeStrategy(Strategy):
             )
         self.strategies = strategies
         self.mode = mode
+        self._delegate = PriorityChainStrategy(strategies)
 
     @classmethod
     def description(cls) -> str:
         return "组合多个策略"
 
     def select_action(self, ctx: StrategyContext) -> Action:
-        for strategy in self.strategies:
-            action = strategy.select_action(ctx)
-            if self.mode == 'first_valid' and action is not None:
-                return action
-        from .action import WaitAction
-        return WaitAction(duration=0)
+        return self._delegate.select_action(ctx)
 
 
 # ── 复合策略 Building Block（P69 阶段 3） ─────────────────────────
@@ -207,7 +202,7 @@ class DrawSegmentStrategy(Strategy):
 
     @classmethod
     def description(cls) -> str:
-        return f"分段策略（{0}段）"
+        return "分段策略——按累计抽数委托不同子策略"
 
     def select_action(self, ctx: StrategyContext) -> Action:
         for start, end, strategy in self.segments:
@@ -233,7 +228,7 @@ class PriorityChainStrategy(Strategy):
 
     @classmethod
     def description(cls) -> str:
-        return f"优先级降级链（{0}个子策略）"
+        return "优先级降级链——依次尝试子策略，返回首个有效决策"
 
     def select_action(self, ctx: StrategyContext) -> Action:
         for strategy in self.strategies:

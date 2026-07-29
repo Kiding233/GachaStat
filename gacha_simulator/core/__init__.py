@@ -149,7 +149,6 @@ __all__ = [
     'VulnerabilityInterval', 'PityStatSnapshot', 'PoolVulnerabilityResult', 'VulnerabilityAnalysisResult',
     'compute_vulnerability_analysis', 'plot_vulnerability', 'plot_vulnerability_ridge',
     'WorstImpactAnalyzer', 'WorstImpactResult', 'ConditionalResourceDistribution',
-    'DrawTargetStrategy',
     'StreamingAnalyzer', 'StreamingSuccessCounter', 'SharedResultCollector', 'DrawSequenceExtractor', 'extract_aggregate', 'extract_process', 'WorkerLocalExtractor', 'merge_extraction_packets',
     'PoolEvent', 'SampleTrace', 'infer_events', 'compute_pool_gdr_cumulative', 'compute_pool_gdr_single_pool',
     'compute_aa', 'compute_bb', 'compute_ab', 'compute_ba',

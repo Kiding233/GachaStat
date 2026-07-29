@@ -1,5 +1,4 @@
 """P60 块 2：PityState 序列化往返 + 旧格式自动升级。"""
-import pytest
 from gacha_simulator.core.pity import PityState
 
 

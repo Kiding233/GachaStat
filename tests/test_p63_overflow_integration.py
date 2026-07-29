@@ -16,7 +16,6 @@ from gacha_simulator.core.state import GachaState
 from gacha_simulator.core.overflow import (
     OverflowBand,
     match_overflow_bands,
-    expand_sugar_to_bands,
 )
 from gacha_simulator.core.config_store import (
     CardDefEntry,
@@ -190,7 +189,6 @@ def test_key_norm_mixed_case_card_rarity():
 def test_config_roundtrip_rarity_defaults():
     """稀有度默认配置 load→save→load 往返无损"""
     # 使用实际 config.toml 但通过 load_toml 验证 round-trip
-    import sys
     config_path = os.path.join(
         os.path.dirname(__file__), '..', 'gacha_simulator', 'config', 'config.toml'
     )

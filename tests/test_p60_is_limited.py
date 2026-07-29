@@ -3,7 +3,6 @@
 is_limited() 方法已被 P65 卡片标签系统（CardDefEntry.tags/list_tags）替代，
 对应的 7 个 is_limited 测试随方法一起移除。
 """
-import pytest
 from gacha_simulator.core.config_store import ConfigStore
 
 

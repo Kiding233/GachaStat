@@ -9,9 +9,8 @@
 import pytest
 from gacha_simulator.core.pity import (
     PityState, PityEngine, DrawInfo, PityContext,
-    TargetedBehavior, RotatingBehavior, HardPityBehavior,
-    _redistribute_scope, compute_scope_mappings,
-    PoolPitySpec, BEHAVIOR_REGISTRY,
+    TargetedBehavior, compute_scope_mappings,
+    PoolPitySpec,
 )
 from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pool import Pool, Reward

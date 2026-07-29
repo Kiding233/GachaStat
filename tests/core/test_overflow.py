@@ -3,7 +3,6 @@
 替代旧 test_pool_bonus.py（compute_bonus_resources 已废弃）。
 """
 
-import pytest
 from gacha_simulator.core.overflow import (
     OverflowBand,
     match_overflow_bands,

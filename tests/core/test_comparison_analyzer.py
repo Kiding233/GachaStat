@@ -52,8 +52,6 @@ class TestDDBootstrapV2:
         rng = np.random.default_rng(42)
         a = rng.normal(70, 10, size=300)
         b = rng.normal(80, 10, size=300)
-        # B 均值 > A 均值，H₀ = B 占优 A，预期不拒绝 → p 大
-        result_ba = dd_bootstrap_test_v2(b, a, orders=[1], n_bootstrap=200)
         # A 占优 B 的 H₀ 应被拒绝 → p 小
         result_ab = dd_bootstrap_test_v2(a, b, orders=[1], n_bootstrap=200)
         # A 不占优 B (a_b_p 小), B 可能占优 A (b_a_p 大)

@@ -6,7 +6,6 @@
 
 """
 
-import pytest
 from gacha_simulator.core.pity import (
     PityState, DrawInfo, PityContext,
     HardPityBehavior,

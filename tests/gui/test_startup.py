@@ -16,13 +16,12 @@ from multiprocessing import freeze_support
 freeze_support()
 
 # ═══ 步骤 2：Qt 初始化（等价 main.py:25-27,34-35） ═══
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
-from gacha_simulator._version import __version__
+from gacha_simulator._version import __version__  # noqa: E402
 
 
 @pytest.fixture(scope="module")

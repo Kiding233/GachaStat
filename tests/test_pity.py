@@ -2,10 +2,9 @@
 import pytest
 from gacha_simulator.core.pity import (
     HardPityBehavior,
-    PityDefParsed, PoolPitySpec, PityState, PityEngine,
-    Counter, Flag, DrawInfo, PityContext,
-    CounterBasedBehavior, SoftStepBehavior, LifecycleConfig,
-    create_behavior, BEHAVIOR_REGISTRY, compute_scope_mappings,
+    PoolPitySpec, PityState, PityEngine,
+    DrawInfo, PityContext,
+    SoftStepBehavior, create_behavior,
 )
 
 
@@ -172,7 +171,7 @@ class TestPityEngineReset:
             deltas=deltas, reset=reset, pools=('*',),
         )
         state = PityState()
-        bh = create_behavior(pdef, state)
+        create_behavior(pdef, state)  # 验证行为可创建（不直接使用返回值）
         spec = PoolPitySpec(
             pity_names=['test_pity'],
             ssr_ids={'ssr_card', 'featured_card'},

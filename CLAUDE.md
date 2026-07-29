@@ -35,9 +35,19 @@ gacha_simulator/
 
 ## 二、架构约束
 
-### 策略 (`core/strategy.py`)
+### 策略 (`core/strategy.py` + `strategies/builtin/*.py`)
 
-`STRATEGY_REGISTRY` 注册 7 种策略（`smart`/`pool_quota`/`pity_reserve`/`stop_on_target`/`target_hunting`/`fixed_count`/`draw_target`），统一接口 `select_action(self, ctx: StrategyContext) -> Action`。`StrategyContext` 封装 `state`/`current_pools`/`target_cards`/`acquired`/`pool_draw_counts`/`total_draws` 等，`get_pity_probabilities()` 惰性计算。工厂：`create_strategy(name, params)`。**P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。显式传入值覆盖默认值。**P56 新增：** `NonDrawAction`（`type='non_draw'`）——策略可返回非抽卡动作（`switch_epitomized_target` 切换定轨目标 / `cancel_epitomized_path` 取消定轨），由 `gacha_service._apply_non_draw()` 分发执行。
+**P69 架构：** `STRATEGY_REGISTRY: Dict[str, StrategyMeta]`——`@register_strategy(key, display_name, *, params, internal)` 装饰器副作用自动注册。`StrategyMeta` dataclass 封装 `key`/`display_name`/`description`/`cls`/`params: List[ParamDescriptor]`/`internal`/`disabled`/`plugin_path`/`_invalid_state`。`create_strategy(key, params)` 数据驱动工厂——查 meta → `_invalid_state` 守卫 → 合并默认值 → `ParamDescriptor.validate()` → `cls(**resolved)`。`_validate_registry()` 模块导入时自动执行（5 项检查）。`strategy_type_to_key()` / `strategy_key_to_type()` 保留。
+
+**ParamDescriptor 类族**（`core/param_descriptor.py`，零 Qt 依赖）：`FloatParam`/`IntParam`/`BoolParam`/`StrParam`/`StringListParam`/`PoolIntMapParam`——纯数据类，`validate()` 方法类型+范围校验。GUI 控件创建在 `gui/param_renderer.py`（未实现时由 `config_panel._on_strategy_type_changed` 直接实例化）。
+
+**策略组织：** 8 个内置策略拆分至 `strategies/builtin/*.py`，与插件策略统一目录结构。框架核心（`Strategy` ABC / `StrategyContext` / `StrategyMeta` / `register_strategy` / `create_strategy`）保留在 `core/strategy.py`。`StrategyContext` 含新字段 `future_resource_gains`/`inter_pool_pity_links`/`time_discount`（均带默认值），由 `core/strategy_context_builder.py` 的 `build_strategy_context()` 集中构造。
+
+**插件系统**（`core/strategy_loader.py`）：`load_plugin_strategies(plugin_dir)` 扫描 `strategies/*.py`，importlib 动态加载，装饰器自动注册。加载失败注册 `_invalid_state` 占位。`reload_plugin_strategy()` / `disable_plugin_strategy()` / `enable_plugin_strategy()` 热重载。GUI 插件管理面板（`gui/plugin_manager_panel.py`）提供启用/禁用/重新扫描。禁用状态持久化到 TOML `[plugins].disabled`。
+
+**复合策略**（`core/strategy.py`，代码级 building block——不进入 TOML/GUI）：`DrawSegmentStrategy`（按抽数分段）/ `PriorityChainStrategy`（优先级降级链）/ `ConditionalStrategy`（lambda 条件分支）。三者均设 `_strategy_key = None` 哨兵。旧 `CompositeStrategy` 保留并发出 `DeprecationWarning`。
+
+**P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。**P56 新增：** `NonDrawAction`（`type='non_draw'`）——策略可返回非抽卡动作（`switch_epitomized_target` 切换定轨目标 / `cancel_epitomized_path` 取消定轨），由 `gacha_service._apply_non_draw()` 分发执行。
 
 ### 保底 (`core/pity.py`)
 
@@ -85,7 +95,7 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 |------|------|
 | 新 GDR | `core/gdr.py` + `UNIFIED_GDR_REGISTRY` 注册 `GDRDefinition` |
 | 新溢出规则 | `core/overflow.py` → `CardDefEntry.overflow_bands` / `[rarity_defaults]` TOML 段 / GUI「满突溢出」标签页 |
-| 新策略 | `core/strategy.py` + `STRATEGY_REGISTRY` 注册 |
+| 新策略 | `strategies/builtin/` 或 `strategies/` 插件目录 —— `@register_strategy` 装饰器 + `Strategy` ABC |
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |

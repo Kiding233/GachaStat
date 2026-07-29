@@ -243,6 +243,17 @@ class MainWindow(QMainWindow):
         if path:
             try:
                 load_toml(path, self._store)
+                # P69：导入配置后重新扫描插件 + 应用禁用列表
+                from gacha_simulator.core.strategy_loader import load_plugin_strategies
+                load_plugin_strategies()
+                try:
+                    import tomllib
+                except ModuleNotFoundError:
+                    import tomli as tomllib
+                with open(path, 'rb') as _f:
+                    _raw = tomllib.load(_f)
+                from gacha_simulator.core.config_toml import _build_plugins
+                _build_plugins(_raw, self._store)
                 self.config_panel.refresh_from_store()
                 self.analysis_panel.set_store(self._store)
                 self.plan_search_panel.set_store(self._store)

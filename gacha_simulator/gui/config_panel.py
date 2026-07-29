@@ -1753,10 +1753,7 @@ class ConfigPanel(QWidget):
 
     def _on_strategy_type_changed(self, idx):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key
-
-        from gacha_simulator.core.param_descriptor import (
-            BoolParam, FloatParam, IntParam, PoolIntMapParam, StringListParam,
-        )
+        from gacha_simulator.gui.param_renderer import render_param_widgets
 
         while self._strategy_params_layout.rowCount() > 0:
             self._strategy_params_layout.removeRow(0)
@@ -1772,100 +1769,27 @@ class ConfigPanel(QWidget):
             return
 
         self._strategy_params_group.setVisible(True)
-        for pdesc in entry.params:
-            param_key = pdesc.key
-            display = pdesc.display_name
-            default = pdesc.default
-
-            # 确定 ptype 字符串（兼容 _get_strategy_params_from_widgets 的字符串分派）
-            if isinstance(pdesc, IntParam):
-                ptype = 'int'
-                widget = QSpinBox()
-                widget.setRange(pdesc.min_val, pdesc.max_val)
-                widget.setValue(int(default) if default is not None else 0)
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif isinstance(pdesc, FloatParam):
-                ptype = 'float'
-                widget = QDoubleSpinBox()
-                widget.setRange(pdesc.min_val, pdesc.max_val)
-                widget.setDecimals(2)
-                widget.setSingleStep(0.1)
-                widget.setValue(float(default) if default is not None else 0.0)
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif isinstance(pdesc, BoolParam):
-                ptype = 'bool'
-                widget = QCheckBox()
-                widget.setChecked(bool(default) if default is not None else False)
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif isinstance(pdesc, StringListParam):
-                ptype = 'string_list'
-                widget = QLineEdit()
-                widget.setText(','.join(str(v) for v in default) if default else '')
-                widget.setPlaceholderText("逗号分隔")
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif isinstance(pdesc, PoolIntMapParam):
-                ptype = 'pool_int_map'
-                widget = QLineEdit()
-                widget.setText(','.join(f'{k}:{v}' for k, v in default.items()) if default else '')
-                widget.setPlaceholderText("pool_id:数量,...")
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            else:
-                ptype = 'str'
-                widget = QLineEdit()
-                widget.setText(str(default) if default is not None else '')
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-
-            self._strategy_param_widgets[param_key] = (ptype, widget)
+        render_param_widgets(
+            entry.params, self._strategy_params_layout,
+            self._strategy_param_widgets, parent=self,
+        )
 
         if hasattr(self, 'preview_text'):
             self._update_preview()
 
     def _get_strategy_params_from_widgets(self):
-        params = {}
-        for param_key, (ptype, widget) in self._strategy_param_widgets.items():
-            if ptype == 'int':
-                params[param_key] = widget.value()
-            elif ptype == 'float':
-                params[param_key] = widget.value()
-            elif ptype == 'bool':
-                params[param_key] = widget.isChecked()
-            elif ptype == 'string_list':
-                text = widget.text().strip()
-                params[param_key] = [s.strip() for s in text.split(',') if s.strip()] if text else []
-            elif ptype == 'pool_int_map':
-                text = widget.text().strip()
-                result = {}
-                if text:
-                    for part in text.split(','):
-                        part = part.strip()
-                        if ':' in part:
-                            k, v = part.split(':', 1)
-                            try:
-                                result[k.strip()] = int(v.strip())
-                            except ValueError:
-                                pass
-                params[param_key] = result
-            else:
-                params[param_key] = widget.text().strip()
-        return params
+        from gacha_simulator.gui.param_renderer import collect_params_from_widgets
+        return collect_params_from_widgets(self._strategy_param_widgets)
 
     def _set_strategy_params_to_widgets(self, params):
-        for param_key, (ptype, widget) in self._strategy_param_widgets.items():
-            value = params.get(param_key)
-            if value is None:
-                continue
-            if ptype == 'int':
-                widget.setValue(int(value))
-            elif ptype == 'float':
-                widget.setValue(float(value))
-            elif ptype == 'bool':
-                widget.setChecked(bool(value))
-            elif ptype == 'string_list':
-                widget.setText(','.join(str(v) for v in value) if isinstance(value, list) else str(value))
-            elif ptype == 'pool_int_map':
-                widget.setText(','.join(f'{k}:{v}' for k, v in value.items()) if isinstance(value, dict) else str(value))
-            else:
-                widget.setText(str(value))
+        from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key
+        from gacha_simulator.gui.param_renderer import set_params_to_widgets
+
+        display_name = self.strategy_type.currentText()
+        key = strategy_type_to_key(display_name)
+        entry = STRATEGY_REGISTRY.get(key)
+        if entry:
+            set_params_to_widgets(entry.params, self._strategy_param_widgets, params)
 
     def _setup_weight_config(self, parent):
         info_label = QLabel("配置每张卡的权重，用于加权满意度和总出卡价值等广义出率的计算。\n"
@@ -4186,8 +4110,31 @@ class ConfigPanel(QWidget):
         if self._pity_defs:
             self.pity_list.setCurrentRow(0)
 
-        # P69：通过 strategy_key 反向查找 display_name
+        # P69：通过 strategy_key 反向查找 display_name + _invalid_state 守卫
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY as _sr
+        meta = _sr.get(store.strategy_key)
+        if meta is not None and meta._invalid_state is not None:
+            # 插件加载失败——弹出警告并回退为 'smart'
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "策略插件加载失败",
+                f"策略 '{store.strategy_key}' 的插件加载失败：\n{meta._invalid_state}\n\n"
+                f"已自动回退为 'smart'。原始参数已保留，修复插件后可手动恢复。"
+            )
+            store._unknown_strategy_raw = {
+                'key': store.strategy_key,
+                'params': dict(store.strategy_params),
+            }
+            store.strategy_key = 'smart'
+            store.strategy_params = {}
+            # 持久化回退结果，避免每次启动都弹警告
+            from gacha_simulator.paths import get_config_dir
+            import os
+            config_path = os.path.join(get_config_dir(), 'config.toml')
+            from gacha_simulator.core.config_toml import save_toml
+            save_toml(store, config_path)
+
         display_name = _sr[store.strategy_key].display_name if store.strategy_key in _sr else '按需追卡'
         strategy_idx = self._strategy_display_names.index(display_name) if display_name in self._strategy_display_names else 0
         self.strategy_type.setCurrentIndex(strategy_idx)

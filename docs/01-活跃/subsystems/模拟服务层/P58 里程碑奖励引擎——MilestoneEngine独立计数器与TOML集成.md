@@ -4,7 +4,7 @@
 
 > 日期：2026-06-19 | 更新：2026-07-29 | 状态：设计中（P63 已实施，接口已收敛）
 > **2026-06-20 架构决策：** milestone 不作为保底 type 实现——独立 `MilestoneEngine` + `[[milestone]]` TOML 段。理由：milestone 不操作概率、不参与 PityEngine 管道、语义与「保底」（运气保护）正交。独立方案代码量不增反减（~97 vs ~110 行），且零侵入 PityEngine / BEHAVIOR_REGISTRY。
-> **2026-07-29 UI 审查修正：** ConfigPanel 右侧仅为全局 `preview_text` QLabel——无独立 TOML 预览区。Tab 命名「累抽奖励」（玩家社区有机术语，NGA/贴吧通用，语义精准：累计抽取→赠送）。P58 信号连接复用已有 `_update_preview()` 全局方法，仅在 `_do_update_preview()` 追加累抽摘要段。
+> **2026-07-29 UI 审查修正：** ConfigPanel 右侧仅为全局 `preview_text` QLabel——无独立 TOML 预览区。Tab 命名「累抽奖励」（玩家社区有机术语，NGA/贴吧通用，语义精准：累计抽取→赠送）。P58 信号连接复用已有 `_update_preview()` 全局方法，仅在 `_do_update_preview()` 追加累抽摘要段。UI 整体方案确认：与保底编辑器统一模式（总闸→左列表右详情→底部按钮），随机卡采用摘要行+弹窗编辑（`RandomCardPoolDialog`，四列勾选/卡/稀有度/权重），权重为每卡独立列。
 
 ---
 
@@ -632,42 +632,148 @@ if store.milestone.enabled and store.milestone.milestones:
 
 ### 3.8 UI 设计
 
-#### 3.8.1 布局方案
+#### 3.8.1 整体布局
 
-在 `left_tabs` 中新增独立 Tab「累抽奖励」——位于「保底机制」Tab 之后。
+与保底编辑器统一模式——顶部总闸开关 → 水平左列表右详情 → 底部按钮栏。在 `left_tabs` 中新增独立 Tab「累抽奖励」——位于「保底机制」Tab 之后。
 
-理由：
-- `[[milestone]]` 与 `[[pity]]` 是平级的顶级配置段
-- 独立 Tab 语义自解释——「累抽」是玩家社区有机术语（累计抽取→赠送），玩家一眼理解
-- 不与 P55/P56 的保底 UI 改造冲突
+```
+┌─ 累抽奖励 ───────────────────────────────────────────────────────┐
+│ ☑ 启用累抽奖励                                ← 全局总闸，持久化   │
+│                                                                    │
+│ ┌────────────────┐ ┌─ 累抽详情 ─────────────────────────────────┐ │
+│ │ onmyoji_40     │ │ 名称:  [onmyoji_40_gift              ]     │ │
+│ │ naruto_frag    │ │ 触发阈值: [40                      ] 抽    │ │
+│ │ ak_300_gift    │ │ ☐ 可重复触发                               │ │
+│ │                │ │ 最大触发: [1                       ] 次    │ │
+│ │                │ │ 适用池子: [onmyoji_limited          ]      │ │
+│ │                │ │                                            │ │
+│ │                │ │ ── 奖励配置（可同时填写多区域） ──          │ │
+│ │                │ │                                            │ │
+│ │                │ │ 固定卡牌（可多选）:                          │ │
+│ │                │ │ ┌──────────────────────────────────────┐   │ │
+│ │                │ │ │ [SSR] ☐ 茨木童子 (ssr_ibaraki)        │   │ │
+│ │                │ │ │ [SR ] ☐ 姑获鸟   (sr_ubume)          │   │ │
+│ │                │ │ │ [R  ] ☐ 河童     (r_kappa)           │   │ │
+│ │                │ │ └──────────────────────────────────────┘   │ │
+│ │                │ │                                            │ │
+│ │                │ │ 资源:                                      │ │
+│ │                │ │ ┌──────────────────┬──────┐               │ │
+│ │                │ │ │ 资源              │ 数量  │               │ │
+│ │                │ │ │ coin             │ 500  │               │ │
+│ │                │ │ │ fragment_s       │ 5    │               │ │
+│ │                │ │ └──────────────────┴──────┘               │ │
+│ │                │ │ [添加] [移除选中]                                │ │
+│ │                │ │                                            │ │
+│ │                │ │ 随机卡:  [池1: SSR茨木/SSR酒吞,抽1张] [编辑]│ │
+│ │                │ │          [池2: SP天剣×2,抽1张]     [编辑]│ │
+│ │                │ │          [添加] [移除选中]                  │ │
+│ └────────────────┘ └───────────────────────────────────────────┘ │
+│              [添加] [移除选中]                                    │
+└──────────────────────────────────────────────────────────────────┘
+```
 
-**预览机制（2026-07-29 修正）：** ConfigPanel 右侧 `right_widget` 内仅有一个全局 `QGroupBox("配置预览")` + monospace `QLabel`（`preview_text`）。所有 Tab 共享此预览区——`_do_update_preview()` 遍历各配置段统一拼接摘要文本。P58 的 6 条信号连接（`milestone_enabled.stateChanged` / `ml_name_edit.textChanged` / ... → `self._update_preview()`）触发的是 ConfigPanel 已有的 500ms 去抖全局预览方法，无需在里程碑 Tab 内创建独立的 TOML 预览区。唯一需追加的是 `_do_update_preview()` 中的 milestone 摘要段（~10 行）。
+**与保底编辑器对照：**
+
+| | 保底编辑器 | 累抽编辑器 |
+|---|----------|----------|
+| 总开关 | `QCheckBox("启用保底")` | `QCheckBox("启用累抽奖励")` |
+| 左列表 | `QListWidget` 保底条目 | `QListWidget` 累抽条目 |
+| 右详情 | `QGroupBox("保底详情")` | `QGroupBox("累抽详情")` |
+| 详情布局 | `QFormLayout` 逐行 | `QFormLayout` 逐行 + 奖励三区域 |
+| 底部按钮 | 添加/移除选中 | 同 |
+| 自动写入 | `_flush_pity_current_detail` 实时写回 | `_flush_milestone_current_detail` 同模式 |
+| 卡片选择 | 无（保底不选卡） | `QListWidget` 多选 + 稀有度着色 |
+| 资源表 | 无 | `QTableWidget` 资源×数量 |
+| 随机卡 | 无 | 摘要行 + 弹窗编辑 |
 
 #### 3.8.2 控件映射
 
 | 字段 | 控件 | 说明 |
 |------|------|------|
+| `enabled` | `QCheckBox` | 全局总闸——`False` → 不构造 `MilestoneEngine`，与 `PityConfig.enabled` 语义一致。运行时标志，不持久化到 TOML |
 | `name` | `QLineEdit` | 唯一标识 |
 | `threshold` | `QSpinBox` | 触发阈值（1–9999） |
-| `repeat` | `QCheckBox` | 勾选=周期重复(every:N)，不勾=一次性(at:N) |
+| `repeat` | `QCheckBox("可重复触发")` | 不勾选=`at:N`一发即停，勾选=`every:N`触发后重置继续 |
 | `max_triggers` | `QSpinBox` | 0=无限，≥1=触发 N 次后停用 |
-| `pools` | `QLineEdit` | `*` = 全部池子，或逗号分隔的池子 ID 列表 |
-| `bonus_reward.cards` | `QListWidget`（多选） | 从 `store.card_defs` 填充，可多选 |
-| `bonus_reward.resources` | `QTableWidget`（资源+数量） | 从 `store.resource_defs` 填充，每行一个资源 + 数量 |
-| `bonus_reward.random_cards` | `QTableWidget`（候选池+权重+抽取数） | 每个候选池一行：候选卡多选 + 权重 + count |
+| `pools` | `QLineEdit` | 空=全部池子，或逗号分隔的 fnmatch 表达式 |
+| `bonus_reward.cards` | `QListWidget`（多选） | 每行显示 `[稀有度] 名称 (card_id)`，稀有度着色 |
+| `bonus_reward.resources` | `QTableWidget`（资源×数量） | 从 `store.resource_defs` 填充 |
+| `bonus_reward.random_cards` | 摘要行 + 弹窗 | 主面板仅显示摘要行（`[池名: 卡列表, 抽N张]`），点击 `[编辑]` 弹出 `QDialog` |
 
-#### 3.8.3 布局逻辑
+#### 3.8.3 随机卡弹窗 (`RandomCardPoolDialog`)
 
-`cards` / `resources` / `random_cards` 三个区域**始终并行显示**——无 type 切换。用户可同时配置三种奖励，留空的区域不生效。
+**交互：** 主面板的随机卡区显示每个候选池的摘要行 + `[编辑]` 按钮 + `[+ 添加]` 按钮。点击 `[编辑]` 弹出 `QDialog`，包含四列表格 + 抽取张数。
 
-#### 3.8.4 代码结构
+```
+┌─ 编辑随机卡池 ─────────────────────────────────┐
+│                                                  │
+│ ┌────┬──────────┬────────┬──────┐               │
+│ │ 勾选│ 卡        │ 稀有度  │ 权重  │               │
+│ ├────┼──────────┼────────┼──────┤               │
+│ │ ☑  │ 茨木童子   │ SSR    │ 1.0  │               │
+│ │ ☑  │ 酒吞童子   │ SSR    │ 1.0  │               │
+│ │ ☐  │ 大天狗     │ SSR    │ 1.0  │               │
+│ │ ☐  │ 辉夜姬     │ SSR    │ 1.0  │               │
+│ │ ☑  │ 天剣絆主   │ SP     │ 2.0  │               │
+│ │ ☐  │ 姑获鸟     │ SR     │ 1.0  │               │
+│ └────┴──────────┴────────┴──────┘               │
+│                                                  │
+│ 抽取张数: [1                            ]       │
+│                                                  │
+│ 提示: 仅勾选的卡参与抽取，权重越大中选概率越高      │
+│                                                  │
+│                        [确定] [取消]              │
+└──────────────────────────────────────────────────┘
+```
+
+**四列说明：**
+
+| 列 | 控件 | 说明 |
+|----|------|------|
+| 勾选 | `QCheckBox` | 仅勾选的卡参与抽取；未勾选的权重忽略 |
+| 卡 | `QTableWidgetItem`（只读） | 显示 `名称 (card_id)` |
+| 稀有度 | `QTableWidgetItem`（只读） | 稀有度着色（SSR金/SR紫/R蓝） |
+| 权重 | `QDoubleSpinBox` | ≥0，默认 1.0；0=永不出现 |
+
+**数据来源：** 表格从 `self._store.card_defs` 填充全部可用卡。打开弹窗时回填已有勾选状态和权重值。
+
+**「+ 添加」按钮：** 在 `self._milestone_random_pools` 列表中追加新池，默认无勾选卡、权重全部 1.0、抽取数 1。
+
+#### 3.8.4 预览机制
+
+ConfigPanel 右侧 `right_widget` 内仅有一个全局 `QGroupBox("配置预览")` + monospace `QLabel`（`preview_text`）。所有 Tab 共享此预览区——`_do_update_preview()` 遍历各配置段统一拼接摘要文本。
+
+P58 的 7 条信号连接（`milestone_enabled.stateChanged` / `ml_name_edit.textChanged` / `ml_threshold_spin.valueChanged` / `ml_repeat_check.stateChanged` / `ml_max_triggers_spin.valueChanged` / `ml_pools_edit.textChanged` / 随机卡摘要变更 → `self._update_preview()`）触发的是 ConfigPanel 已有的 500ms 去抖全局预览方法。唯一需追加的是 `_do_update_preview()` 中的累抽摘要段：
+
+```python
+# _do_update_preview() 中追加 ~15 行
+ml_cfg = config.get('milestone', {})
+if ml_cfg.get('enabled', True) and ml_cfg.get('milestones'):
+    lines = []
+    for md in ml_cfg['milestones']:
+        mode = f"every={md['threshold']}" if md.get('repeat') else f"at={md['threshold']}"
+        br = md.get('bonus_reward', {})
+        parts = []
+        if br.get('cards'):
+            parts.append(f"{len(br['cards'])}张固定卡")
+        if br.get('resources'):
+            parts.append(f"{len(br['resources'])}项资源")
+        if br.get('random_cards'):
+            parts.append(f"{len(br['random_cards'])}个随机池")
+        lines.append(f"  {md['name']}: {mode} → {', '.join(parts) or '无奖励'}")
+    preview += "\n累抽奖励:\n" + '\n'.join(lines)
+```
+
+#### 3.8.5 代码结构
 
 ```python
 def _setup_milestone_config(self, parent):
-    """[[milestone]] 配置 UI"""
+    """[[milestone]] 配置 UI——与 _setup_pity_config() 统一模式"""
     self._milestone_defs = []
+    self._milestone_random_pools = {}   # milestone_name → [{candidates, weights, count}]
+    self._selected_random_pool_idx = 0  # 当前选中编辑的候选池索引
 
-    # ── 启用开关 ──
+    # ── 全局总闸 ──
     self.milestone_enabled = QCheckBox("启用累抽奖励")
     self.milestone_enabled.setChecked(True)
     parent.addWidget(self.milestone_enabled)
@@ -675,16 +781,15 @@ def _setup_milestone_config(self, parent):
     # ── 主布局：左列表 + 右详情 ──
     main_layout = QHBoxLayout()
 
-    # 左侧——里程碑列表 + 按钮
+    # 左侧——累抽列表 + 按钮
     left_layout = QVBoxLayout()
     self.milestone_list = QListWidget()
     self.milestone_list.currentRowChanged.connect(self._on_milestone_selected)
     left_layout.addWidget(self.milestone_list)
 
     btn_layout = QHBoxLayout()
-    for text, slot in [("添加里程碑", self._add_milestone),
-                       ("移除里程碑", self._remove_milestone),
-                       ("应用修改", self._apply_milestone_edit)]:
+    for text, slot in [("添加", self._add_milestone),
+                       ("移除选中", self._remove_milestone)]:
         btn = QPushButton(text)
         btn.clicked.connect(slot)
         btn_layout.addWidget(btn)
@@ -692,12 +797,12 @@ def _setup_milestone_config(self, parent):
     main_layout.addLayout(left_layout, 1)
 
     # 右侧——详情面板
-    detail_group = QGroupBox("里程碑详情")
+    detail_group = QGroupBox("累抽详情")
     detail_group.setEnabled(False)
     self._milestone_detail_group = detail_group
     detail_form = QFormLayout(detail_group)
 
-    # 基础字段
+    # 基础字段——所有信号实时写回数据（_flush_milestone_current_detail），无需"应用修改"按钮
     self.ml_name_edit = QLineEdit()
     detail_form.addRow("名称:", self.ml_name_edit)
 
@@ -706,7 +811,7 @@ def _setup_milestone_config(self, parent):
     self.ml_threshold_spin.setValue(40)
     detail_form.addRow("触发阈值(抽):", self.ml_threshold_spin)
 
-    self.ml_repeat_check = QCheckBox("周期重复（every=N）")
+    self.ml_repeat_check = QCheckBox("可重复触发")
     detail_form.addRow("触发模式:", self.ml_repeat_check)
 
     self.ml_max_triggers_spin = QSpinBox()
@@ -716,62 +821,49 @@ def _setup_milestone_config(self, parent):
     detail_form.addRow("最大触发次数:", self.ml_max_triggers_spin)
 
     self.ml_pools_edit = QLineEdit()
-    self.ml_pools_edit.setText("*")
-    self.ml_pools_edit.setToolTip("* = 所有池子，或逗号分隔的池子 ID 列表")
+    self.ml_pools_edit.setPlaceholderText("留空 = 全部池子，或逗号分隔的池子 ID")
     detail_form.addRow("适用池子:", self.ml_pools_edit)
 
-    # ── bonus_reward 子面板 —— 三区域并行，无 type 切换 ──
+    # ── 奖励配置（三区域并行） ──
     detail_form.addRow(QLabel(""))  # 分隔
-    detail_form.addRow("── 奖励配置（可同时填写多个区域） ──", QLabel(""))
+    detail_form.addRow("── 奖励配置（可同时填写多区域） ──", QLabel(""))
 
-    # ── 固定卡牌 ──
-    detail_form.addRow("固定赠送卡牌:", QLabel("（可多选）"))
+    # 固定卡牌
     self.ml_cards_list = QListWidget()
     self.ml_cards_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
     self.ml_cards_list.setMaximumHeight(100)
-    detail_form.addRow(self.ml_cards_list)
+    detail_form.addRow("固定赠送卡牌:", self.ml_cards_list)
 
-    # ── 资源 ──
-    detail_form.addRow("赠送资源:", QLabel("（资源 → 数量）"))
+    # 资源
     self.ml_resources_table = QTableWidget()
     self.ml_resources_table.setColumnCount(2)
     self.ml_resources_table.setHorizontalHeaderLabels(["资源", "数量"])
-    header = self.ml_resources_table.horizontalHeader()
-    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-    self.ml_resources_table.setColumnWidth(1, 80)
+    self.ml_resources_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     self.ml_resources_table.setMaximumHeight(120)
-    detail_form.addRow(self.ml_resources_table)
+    detail_form.addRow("赠送资源:", self.ml_resources_table)
 
     res_btn_layout = QHBoxLayout()
-    add_res_btn = QPushButton("添加资源")
+    add_res_btn = QPushButton("添加")
     add_res_btn.clicked.connect(self._add_milestone_resource)
-    remove_res_btn = QPushButton("移除资源")
+    remove_res_btn = QPushButton("移除选中")
     remove_res_btn.clicked.connect(self._remove_milestone_resource)
     res_btn_layout.addWidget(add_res_btn)
     res_btn_layout.addWidget(remove_res_btn)
     res_btn_layout.addStretch()
     detail_form.addRow(res_btn_layout)
 
-    # ── 随机卡牌 ──
-    detail_form.addRow("随机卡牌池:", QLabel("（候选卡 + 权重 + 抽取张数）"))
-    self.ml_random_table = QTableWidget()
-    self.ml_random_table.setColumnCount(3)
-    self.ml_random_table.setHorizontalHeaderLabels(["候选卡", "权重", "抽取数"])
-    rheader = self.ml_random_table.horizontalHeader()
-    rheader.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    rheader.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-    rheader.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-    self.ml_random_table.setColumnWidth(1, 60)
-    self.ml_random_table.setColumnWidth(2, 60)
-    self.ml_random_table.setMaximumHeight(120)
-    detail_form.addRow(self.ml_random_table)
+    # 随机卡——摘要行 + 弹窗编辑
+    self.ml_random_summary = QLabel("（无）")
+    detail_form.addRow("随机卡:", self.ml_random_summary)
 
     rand_btn_layout = QHBoxLayout()
-    add_rand_btn = QPushButton("添加候选")
-    add_rand_btn.clicked.connect(self._add_milestone_random_card)
-    remove_rand_btn = QPushButton("移除候选")
-    remove_rand_btn.clicked.connect(self._remove_milestone_random_card)
+    edit_rand_btn = QPushButton("编辑")
+    edit_rand_btn.clicked.connect(self._edit_milestone_random_pool)
+    add_rand_btn = QPushButton("添加")
+    add_rand_btn.clicked.connect(self._add_milestone_random_pool)
+    remove_rand_btn = QPushButton("移除选中")
+    remove_rand_btn.clicked.connect(self._remove_milestone_random_pool)
+    rand_btn_layout.addWidget(edit_rand_btn)
     rand_btn_layout.addWidget(add_rand_btn)
     rand_btn_layout.addWidget(remove_rand_btn)
     rand_btn_layout.addStretch()
@@ -780,14 +872,219 @@ def _setup_milestone_config(self, parent):
     main_layout.addWidget(detail_group, 2)
     parent.addLayout(main_layout)
 
-    # ── 预览信号 ──
+    # ── 自动写入 + 预览信号（仿 _flush_pity_current_detail 模式） ──
+    # 所有控件变更 → 实时写回 self._milestone_defs[row] → 触发预览
+    for w in [self.ml_name_edit, self.ml_pools_edit]:
+        w.textChanged.connect(self._flush_milestone_current_detail)
+    for w in [self.ml_threshold_spin, self.ml_max_triggers_spin]:
+        w.valueChanged.connect(self._flush_milestone_current_detail)
+    self.ml_repeat_check.stateChanged.connect(self._flush_milestone_current_detail)
     self.milestone_enabled.stateChanged.connect(self._update_preview)
-    self.ml_name_edit.textChanged.connect(self._update_preview)
-    self.ml_threshold_spin.valueChanged.connect(self._update_preview)
-    self.ml_repeat_check.stateChanged.connect(self._update_preview)
-    self.ml_max_triggers_spin.valueChanged.connect(self._update_preview)
-    self.ml_pools_edit.textChanged.connect(self._update_preview)
+
+def _populate_milestone_cards_list(self):
+    """从 store.card_defs 填充固定卡牌 QListWidget——每行 [稀有度] 名称 (card_id)。"""
+    self.ml_cards_list.clear()
+    if not self._store:
+        return
+    for cid, entry in self._store.card_defs.items():
+        rarity = getattr(entry, 'rarity', '?').upper()
+        display = f"[{rarity}] {entry.name} ({cid})"
+        item = QListWidgetItem(display)
+        item.setData(Qt.ItemDataRole.UserRole, cid)
+        # 稀有度着色
+        color_map = {'SSR': QColor(255, 215, 0), 'SR': QColor(160, 80, 220), 'R': QColor(100, 149, 237)}
+        item.setForeground(color_map.get(rarity, QColor(0, 0, 0)))
+        self.ml_cards_list.addItem(item)
+
+def _on_milestone_selected(self, row):
+    """选中左侧累抽条目 → 刷新右侧详情面板。"""
+    # 先刷回当前编辑
+    self._flush_milestone_current_detail()
+    if row < 0 or row >= len(self._milestone_defs):
+        self._milestone_detail_group.setEnabled(False)
+        return
+    md = self._milestone_defs[row]
+    self._milestone_detail_group.setEnabled(True)
+
+    # 基础字段
+    self.ml_name_edit.setText(md.get('name', ''))
+    self.ml_threshold_spin.setValue(md.get('threshold', 40))
+    self.ml_repeat_check.setChecked(md.get('repeat', False))
+    self.ml_max_triggers_spin.setValue(md.get('max_triggers', 0))
+    self.ml_pools_edit.setText(','.join(md.get('pools', [])) if isinstance(md.get('pools'), list) else md.get('pools', ''))
+
+    # 奖励：固定卡牌
+    card_ids = set(md.get('bonus_reward', {}).get('cards', []))
+    for i in range(self.ml_cards_list.count()):
+        item = self.ml_cards_list.item(i)
+        cid = item.data(Qt.ItemDataRole.UserRole)
+        item.setSelected(cid in card_ids)
+
+    # 奖励：资源
+    resources = md.get('bonus_reward', {}).get('resources', {})
+    self.ml_resources_table.setRowCount(len(resources))
+    for i, (res_id, amount) in enumerate(resources.items()):
+        self.ml_resources_table.setItem(i, 0, QTableWidgetItem(res_id))
+        amt_item = QTableWidgetItem()
+        amt_item.setData(Qt.ItemDataRole.EditRole, amount)
+        self.ml_resources_table.setItem(i, 1, amt_item)
+
+    # 奖励：随机卡摘要
+    self._milestone_random_pools[md['name']] = md.get('bonus_reward', {}).get('random_cards', [])
+    self._update_milestone_random_summary()
+
+def _flush_milestone_current_detail(self):
+    """从右侧控件读取当前值 → 实时写回 self._milestone_defs[row]。"""
+    row = self.milestone_list.currentRow()
+    if row < 0 or row >= len(self._milestone_defs):
+        return
+    md = self._milestone_defs[row]
+
+    md['name'] = new_name = self.ml_name_edit.text().strip() or f"milestone_{row+1}"
+    # 更名时迁移 _milestone_random_pools 键——防止随机卡池静默丢失
+    old_name = self.milestone_list.item(row).text()
+    if old_name != new_name and old_name in self._milestone_random_pools:
+        self._milestone_random_pools[new_name] = self._milestone_random_pools.pop(old_name)
+    md['threshold'] = self.ml_threshold_spin.value()
+    md['repeat'] = self.ml_repeat_check.isChecked()
+    md['max_triggers'] = self.ml_max_triggers_spin.value()
+    pools_text = self.ml_pools_edit.text().strip()
+    md['pools'] = [p.strip() for p in pools_text.split(',') if p.strip()] if pools_text else []
+
+    # 固定卡牌
+    cards = []
+    for i in range(self.ml_cards_list.count()):
+        item = self.ml_cards_list.item(i)
+        if item.isSelected():
+            cards.append(item.data(Qt.ItemDataRole.UserRole))
+    md.setdefault('bonus_reward', {})['cards'] = cards
+
+    # 资源
+    resources = {}
+    for i in range(self.ml_resources_table.rowCount()):
+        res_item = self.ml_resources_table.item(i, 0)
+        amt_item = self.ml_resources_table.item(i, 1)
+        if res_item and amt_item:
+            rid = res_item.text().strip()
+            if rid:
+                resources[rid] = float(amt_item.data(Qt.ItemDataRole.EditRole) or 0)
+    md.setdefault('bonus_reward', {})['resources'] = resources
+
+    # 随机卡——从 _milestone_random_pools 回写
+    pools = self._milestone_random_pools.get(md['name'], [])
+    if pools:
+        md.setdefault('bonus_reward', {})['random_cards'] = pools
+
+    self.milestone_list.item(row).setText(md['name'])
+    self._update_preview()
+
+def _add_milestone(self):
+    """添加新累抽条目——默认占位，选中后编辑。"""
+    md = {'name': f'milestone_{len(self._milestone_defs)+1}', 'threshold': 40,
+          'repeat': False, 'max_triggers': 0, 'pools': [],
+          'bonus_reward': {'cards': [], 'resources': {}, 'random_cards': []}}
+    self._milestone_defs.append(md)
+    self.milestone_list.addItem(md['name'])
+    self.milestone_list.setCurrentRow(len(self._milestone_defs) - 1)
+
+def _remove_milestone(self):
+    """移除选中的累抽条目。"""
+    row = self.milestone_list.currentRow()
+    if row < 0:
+        return
+    name = self._milestone_defs[row]['name']
+    del self._milestone_defs[row]
+    self._milestone_random_pools.pop(name, None)
+    self.milestone_list.takeItem(row)
+    if row < len(self._milestone_defs):
+        self.milestone_list.setCurrentRow(row)
+    self._update_preview()
+
+# ── 资源子表操作 ──
+
+def _add_milestone_resource(self):
+    row = self.ml_resources_table.rowCount()
+    self.ml_resources_table.insertRow(row)
+    self.ml_resources_table.setItem(row, 0, QTableWidgetItem(''))
+    amt_item = QTableWidgetItem()
+    amt_item.setData(Qt.ItemDataRole.EditRole, 0)
+    self.ml_resources_table.setItem(row, 1, amt_item)
+    self._flush_milestone_current_detail()
+
+def _remove_milestone_resource(self):
+    row = self.ml_resources_table.currentRow()
+    if row >= 0:
+        self.ml_resources_table.removeRow(row)
+        self._flush_milestone_current_detail()
+
+# ── 随机卡池操作 ──
+
+def _add_milestone_random_pool(self):
+    """追加一个空候选池。"""
+    row = self.milestone_list.currentRow()
+    if row < 0:
+        return
+    md = self._milestone_defs[row]
+    pools = self._milestone_random_pools.setdefault(md['name'], [])
+    pools.append({'candidates': [], 'weights': [], 'count': 1})
+    self._update_milestone_random_summary()
+    self._flush_milestone_current_detail()
+
+def _remove_milestone_random_pool(self):
+    """移除当前选中的候选池（基于内部索引，在 _edit 弹窗中维护）。"""
+    # 通过 ml_random_summary 的 tooltip 存储当前选中池索引
+    row = self.milestone_list.currentRow()
+    if row < 0:
+        return
+    md = self._milestone_defs[row]
+    pools = self._milestone_random_pools.get(md['name'], [])
+    idx = getattr(self, '_selected_random_pool_idx', -1)
+    if 0 <= idx < len(pools):
+        pools.pop(idx)
+        self._selected_random_pool_idx = max(0, idx - 1)
+        self._update_milestone_random_summary()
+        self._flush_milestone_current_detail()
+
+def _edit_milestone_random_pool(self):
+    """打开 RandomCardPoolDialog 编辑当前候选池。"""
+    row = self.milestone_list.currentRow()
+    if row < 0:
+        return
+    md = self._milestone_defs[row]
+    pools = self._milestone_random_pools.setdefault(md['name'], [])
+    idx = getattr(self, '_selected_random_pool_idx', 0)
+    if idx >= len(pools):
+        idx = 0
+    dialog = RandomCardPoolDialog(self._store, pools[idx], self)
+    if dialog.exec() == QDialog.DialogCode.Accepted:
+        pools[idx] = dialog.result()
+        self._update_milestone_random_summary()
+        self._flush_milestone_current_detail()
+
+def _update_milestone_random_summary(self):
+    """刷新随机卡摘要 QLabel。"""
+    row = self.milestone_list.currentRow()
+    if row < 0:
+        self.ml_random_summary.setText("（无）")
+        return
+    md = self._milestone_defs[row]
+    pools = self._milestone_random_pools.get(md['name'], [])
+    if not pools:
+        self.ml_random_summary.setText("（无）")
+        return
+    lines = []
+    for i, pool in enumerate(pools):
+        names = [c[:6] for c in pool.get('candidates', [])]
+        w_hint = ''
+        weights = pool.get('weights', [])
+        if weights and not all(w == 1.0 for w in weights):
+            varied = [f"{c[:6]}={w}" for c, w in zip(names, weights) if w != 1.0]
+            w_hint = f" ({', '.join(varied)})" if varied else ''
+        lines.append(f"池{i+1}: {', '.join(names[:3])}{'...' if len(names)>3 else ''}, 抽{pool.get('count',1)}张{w_hint}")
+    self.ml_random_summary.setText('\n'.join(lines))
 ```
+
+`RandomCardPoolDialog` 为独立 `QDialog`（四列勾选/卡/稀有度/权重表格 + 抽取张数 `QSpinBox`），详见图示。
 
 在 `_setup_ui()` 中注册 Tab（紧跟保底机制 Tab 之后）：
 
@@ -817,9 +1114,9 @@ self.left_tabs.addTab(milestone_tab_scroll, "累抽奖励")
 | M4a | `StrategyContext` 新增 `_milestone_engine` 字段 + 3 个查询方法 | `strategy.py` | ~20 |
 | M5 | `collector.on_bonus()` + `CompactResult.bonus_events` + `to_dict()`/`from_dict()` 序列化 + `SharedResultCollector` 同步 | `collector.py` + `result_types.py` | ~25 |
 | M5a | GDR 层合并 `bonus_events`——`_merge_milestone_cards()` + `real_time→draw_index` 映射 | `generalized_drop_rate.py` | ~25 |
-| M7 | 配置面板 UI——独立 Tab「累抽奖励」+ 全局预览联动（复用已有 `_update_preview()`）+ 摘要段追加 | `config_panel.py` | ~100 |
+| M7 | 配置面板 UI——独立 Tab「累抽奖励」+ 全局预览联动 + 信号自动写入(`_flush_milestone_current_detail`) + `RandomCardPoolDialog` 弹窗 | `config_panel.py` | ~150 |
 | M8 | 集成测试（7 个 G20 场景的 TOML 配置 → 模拟 → 验证产出） | `tests/` | ~50 |
-| **总计** | | | **~370** |
+| **总计** | | | **~420** |
 
 > ~~M6（`resources_gained` 解析遗漏修复）已删除——P63 已修复 TOML 管道。~~ M4b 新增——`batch_simulator.py` 的 `SimulationEnv`/`SimulationEnvBuilder` 需传递 `milestone_config`。M5 行数上调以覆盖序列化 + `SharedResultCollector`。
 

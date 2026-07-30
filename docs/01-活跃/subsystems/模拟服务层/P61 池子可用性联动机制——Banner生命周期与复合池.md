@@ -88,7 +88,7 @@ class Pool:
     one_shot: bool = False           # 一次性消耗——抽取1次后即标记 exhausted
     excludes_all_pity: bool = False  # 完全旁路保底引擎
     blocks_parent: bool = False      # 激活时阻塞 id="main" 的池
-    max_draws: Optional[int] = None  # 该 pool 的最大抽取次数
+    max_draws: Optional[int] = None  # 该 pool 的最大抽取次数（由引擎自动执行——pool 抽数达上限后自动标记 exhausted，无需手写 lifecycle 规则）
 
 
 @dataclass
@@ -586,6 +586,7 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 - **右栏顶部**（QFormLayout，始终可见）：Banner 基础字段（5个）
 - **右栏中部**（QTabWidget，**2个子标签页**）：池 / 生命周期
 - **左栏底部**：`[添加] [移除] [复制] [批量创建...]`
+- **[移除] 安全检查**：删除 Banner 前检查「保底机制」Tab 中是否有保底规则通过绑定池勾选了此 Banner 的 Pool，以及「累抽奖励」Tab 中是否有里程碑引用了此 Banner。若存在绑定关系，弹出确认对话框列出引用方，用户确认后自动解除绑定并删除
 
 #### 3.10.3 Banner 基础字段（QFormLayout，始终可见）
 
@@ -623,7 +624,7 @@ Banner 自身不抽卡——成本/批次/奖励都在 Pool 层级各自配置�
 
 | # | 列名 | 控件 | 说明 |
 |---|------|------|------|
-| 1 | 卡ID | `QComboBox`（`setEditable(True)` + `QCompleter` 前缀搜索） | 下拉选项 = 已注册卡牌列表；新增行时为空，强制选择一张卡 |
+| 1 | 卡ID | `QComboBox`（`setEditable(True)` + `QCompleter` 前缀搜索） | 下拉选项 = 已注册卡牌列表，显示格式 `card_id（名称）` 与卡牌定义 Tab 统一；新增行时为空，强制选择一张卡 |
 | 2 | 概率(%) | `QDoubleSpinBox`（`setCellWidget`） | 0.000–100.000，3 位小数；`valueChanged` 实时更新合计 |
 | 3 | 稀有度 | `QLabel`（只读，灰底） | 选中卡ID后从卡牌定义自动解析，不可编辑 |
 | 4 | Featured | `QCheckBox`（`setCellWidget`） | 池子级属性，可编辑 |
@@ -644,13 +645,20 @@ QTableWidget 内联编辑，5 列：
 
 | # | 列名 | 控件 | 说明 |
 |---|------|------|------|
-| 1 | 关联池 | `QComboBox` 委托 | 从已有 pool ID 列表动态填充 |
+| 1 | 关联池 | `QComboBox` 委托 | 从当前 Banner 已有 Pool ID 列表动态填充——用户无法输入不存在的 Pool ID |
 | 2 | 条件 | `QComboBox` 委托 | `pool_draws` / `pool_exhausted` / `card_obtained` / `banner_draws` |
 | 3 | 阈值 | `QSpinBox` 委托 | 条件为 `pool_exhausted` 时禁用（置灰） |
 | 4 | 动作 | `QComboBox` 委托 | `activate_pool` / `deactivate_pool` / `block_pool` / `unblock_pool` / `exhaust_banner` |
-| 5 | 目标 | `QComboBox` 委托 | 从已有 pool ID 列表动态填充；动作为 `exhaust_banner` 时禁用 |
+| 5 | 目标 | `QComboBox` 委托 | 从当前 Banner 已有 Pool ID 列表动态填充；动作为 `exhaust_banner` 时禁用 |
 
 按钮：`[添加] [移除选中]`
+
+**交互细节**：
+- 「关联池」和「目标」的 QComboBox 选项实时取自当前 Banner 的 Pool ID 列表——添加/删除/重命名 Pool 后下拉自动同步，杜绝悬空引用
+- 当条件 = `card_obtained` 时，「阈值」列自动切换为二级匹配控件：
+  - 左侧 `QComboBox`：匹配方式——`card_id`（指定卡牌）/ `rarity`（按稀有度）
+  - 右侧：取值控件——`card_id` 模式为 QComboBox（已注册卡牌列表，`card_id（名称）` 格式）；`rarity` 模式为 QComboBox（SSR/SR/R，从「卡牌定义」Tab 已使用的稀有度动态填充）
+  - 此设计用于终末地新手池「出任意 6★ 即关闭」——条件选 `card_obtained` → 匹配方式选 `rarity` → 取值选 `SSR`
 
 #### 3.10.6 池子模板系统的去留
 
@@ -703,25 +711,27 @@ QTableWidget 内联编辑，5 列：
 
 #### 3.11.2 「绑定池」勾选表格
 
-在保底详情 `QFormLayout` 底部——替代原来的「适用池子」文本框和「生效范围」面板：
+在保底详情 `QFormLayout` 底部——替代原来的「适用池子」文本框和「生效范围」面板。布局顺序保持「定义规则→配置参数→指定作用范围」的逻辑流：
 
 ```
 ┌─ 保底详情 ────────────────────────────────────────────┐
 │ 名称: [ssr_soft         ]   类型: [soft_step ▼]       │
 │ 稀有度: [ssr ▼]   目标: [☑ Featured]                  │
-│ ... (BEHAVIOR_REGISTRY 动态参数) ...                   │
+│                                                       │
+│ ── 参数 ─────────────────────────────────────────     │
+│ ... (BEHAVIOR_REGISTRY 动态参数：deltas / cr_probs)    │
 │                                                       │
 │ ── 绑定池 ───────────────────────────────────────     │
-│ ┌──┬──────────────────┬──────┬──────────┬────────────────────┐  │
-│ │☑│ Banner            │ 类型  │ Pool     │ 说明                │  │
-│ ├──┼──────────────────┼──────┼──────────┼────────────────────┤  │
-│ │☑│ endfield_limited  │ 角色  │ main     │                    │  │
-│ │☐│ endfield_limited  │ 角色  │ free     │ 不计保底, 一次性    │  │
-│ │☑│ standard_banner   │ 常驻  │ main     │                    │  │
-│ │☐│ step_up           │ 阶梯  │ step1    │                    │  │
-│ │☐│ step_up           │ 阶梯  │ step2    │                    │  │
-│ └──┴──────────────────┴──────┴──────────┴────────────────────┘  │
-│              [全选] [全不选]                            │
+│ 筛选: [______________] 🔍     [全选] [全不选]         │
+│ ┌──┬──────────────────┬──────┬──────────┬────────────┐│
+│ │☑│ Banner            │ 类型  │ Pool     │ 说明        ││
+│ ├──┼──────────────────┼──────┼──────────┼────────────┤│
+│ │☑│ endfield_limited  │ 角色  │ main     │            ││
+│ │☐│ endfield_limited  │ 角色  │ free     │不计保底,一次││
+│ │☑│ standard_banner   │ 常驻  │ main     │            ││
+│ │☐│ step_up           │ 阶梯  │ step1    │            ││
+│ │☐│ step_up           │ 阶梯  │ step2    │            ││
+│ └──┴──────────────────┴──────┴──────────┴────────────┘│
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -734,6 +744,7 @@ QTableWidget 内联编辑，5 列：
 | 5 | 说明 | `QTableWidgetItem`（只读） | 合并显示标签：`excludes_all_pity` →「不计保底」/ `one_shot` →「一次性」/ `blocks_parent` →「阻塞主池」；正常池留空 |
 
 **交互细节**：
+- 表格顶部有一行 `QLineEdit` 筛选器——输入关键词后表格仅显示匹配行（匹配 Banner 名 / Pool ID / 类型），方便 Banner 数量多时快速定位目标池
 - 数据来源：遍历 `store.banner.banners` → 展开每个 Banner 的所有 Pool → 每行一个 `{banner_id}.{pool_id}`
 - 「类型」列从 Banner 的 `pool_type` 读取（角色/武器/常驻/新手/混池/阶梯），辅助用户按类别筛选绑定范围
 - 「说明」列自动聚合 Pool 的特殊属性标签——用户无需逐列查看 `one_shot`/`excludes_all_pity`/`blocks_parent`
@@ -886,6 +897,8 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 | 生命周期规则遗漏边界条件（如送抽source激活时主source恰好也被时间窗口过期关闭） | 规则评估顺序：时间窗口（最先，直接 exhaust banner）→ 转换条件 → 可用性汇总。时间过期的 banner 不进入 `active_banners` |
 | `[[banner]]` TOML 解析复杂度——source / lifecycle 嵌套段与现有 `[[pool]]` 格式差异大 | `config_toml.py` 中检测到 `[[banner]]` 段时走新解析路径，`[[pool]]` 段保持现有解析路径不变。两者可共存于同一 TOML |
 | 现有 `Pool` 对象缓存和共享引用（schedule_generator 等）与新 Banner 包装层的兼容 | `_wrap_pools_as_banners()` 包装而非替换——原始 Pool 对象保留在 `self._pools` dict 中，Banner 引用 Pool 而非复制 |
+| 跨 Banner 依赖——如「Banner B 的某个 pool 需等待 Banner A 的 pool 耗尽后才开放」，当前 lifecycle 规则仅在单个 Banner 内部生效 | **已知限制，MVP 不覆盖。** 跨 Banner 事件可通过 Notifier 在后续版本支持——Banner 发射 `pool_exhausted` / `banner_exhausted` 事件，其他 Banner 订阅并据此切换 phase。当前可用 TOML `available_from` 时间窗口近似模拟 |
+| `card_obtained` 条件仅支持精确 `card_id` 匹配——终末地新手池「出任意 6★ 即关闭」需稀有度匹配 | UI 已设计 `card_obtained` 的二级匹配控件（§3.10.5）——`rarity` 模式在引擎层待实施 |
 
 ## 七、验收标准
 
@@ -896,7 +909,8 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 - [ ] 保底旁路：`excludes_all_pity` 的 pool 不触发 `before_draw`/`after_draw`，不影响保底计数器
 - [ ] 新手池：`max_draws` 达到后 exhaust
 - [ ] 一次性 pool：`one_shot=true` 的 pool 消耗后标记 exhausted，不可再抽
-- [ ] **已记录、待实现**：`card_obtained` 条件支持稀有度匹配（如 `rarity = "ssr"`），用于终末地新手池「出任意6★即关闭」机制
+- [ ] Pool `max_draws` 自动耗尽：引擎自动监控 `_pool_draws[id] >= max_draws` → 标记 exhausted——无需在 lifecycle 中手写 `pool_draws → exhaust_pool` 规则
+- [ ] **UI 已设计、引擎待实施**：`card_obtained` 条件支持稀有度匹配（`rarity = "ssr"`），用于终末地新手池「出任意 6★ 即关闭」机制。UI 侧 §3.10.5 已设计二级匹配控件（`card_id` / `rarity` 切换）
 - [ ] `banner.pending_transitions` 正确暴露「还差X抽触发Y」
 - [ ] Notifier 优先级生效：P58（资源注入，priority=0）先于 P61（生命周期检查，priority=1）
 - [ ] `StrategyContext` 同时提供 `banners` 和 `current_pools`，现有策略不作任何修改即可运行

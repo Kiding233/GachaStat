@@ -585,7 +585,7 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 
 | 阶段 | 内容 | 文件 | 预估 |
 |------|------|------|:---:|
-| Ph0 | `core/notifier.py` —— subscribe / emit / priority | 新建 | ~30行 |
+| Ph0 | `core/notifier.py` —— subscribe / emit / priority。**P61 + P58 共享基础设施**——Ph0 交付后两个计划可完全并行 | 新建 | ~30行 |
 | Ph1 | `core/banner.py` —— Banner + BannerSource + TransitionRule + TransitionPreview + Lifecycle 引擎 | 新建 | ~250行 |
 | Ph2 | `service/gacha_service.py` —— `current_pools` → `current_banners`，集成 Banner.draw() + Notifier | 修改 | ~40行变更 |
 | Ph3 | `core/config_store.py` —— `BannerEntry` / `BannerSourceEntry` / `LifecycleRuleEntry` / `BannerConfig` dataclass + `ConfigStore` 新增 `banner` 字段 | 修改 | ~50行 |
@@ -618,20 +618,58 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 
 ## 五、与 P58 的关系
 
-### 5.1 架构解耦
+### 5.1 功能关系——互不依赖
+
+P61 管理「哪些抽取源当前可用」（生命周期），P58 管理「抽到 N 次时额外送什么」（累抽奖励）。两者**功能上互不依赖**——P61 不关心 milestone 送了什么，P58 不关心 source 之间如何切换。
+
+但两者**共享同一个集成点**——`gacha_service.py` 模拟循环中「抽卡后」的位置：
 
 ```
-                Notifier（基础设施，P61 Ph0 交付）
-                ├── P61 订阅 "after_draw" → 检查 lifecycle 转换条件
-                └── P58 订阅 "after_draw" → 检查里程碑触发条件
+gacha_service 模拟循环
+    │
+    ├─ pool.draw()
+    ├─ pity_engine.after_draw()
+    │
+    └─ 【集成点】抽卡完成
+        ├─ P61: 检查 lifecycle 转换条件
+        └─ P58: 检查 milestone 触发条件
 ```
 
-- P61 不 import P58 的任何符号
-- P58 不 import P61 的任何符号
-- P58 审计已完毕——接口已锁定（`MilestoneEngine.after_draw(pool_id)`）
-- Notifier 是唯一共享点
+没有 Notifier 时，两个计划各自在 `gacha_service.py` 中插入自己的 inline 调用——这就制造了**隐式串行依赖**：不是因为功能需要对方先完成，而是因为修改同一行代码。
 
-### 5.2 P58 接入 Notifier 的改动
+### 5.2 解耦方案——Ph0 = 公共平台
+
+`core/notifier.py`（~30 行）是唯一的共享基础设施。它不属于 P61 也不属于 P58，由 P61 Ph0 交付：
+
+```
+Ph0: core/notifier.py + gacha_service 加一行 emit()
+     （P61 负责实施，P58 声明依赖）
+         │
+         ├── P61 Ph1-9: Banner 全套
+         │      订阅 "after_draw" → banner._check_transitions()
+         │
+         └── P58 M1-8: Milestone 全套
+                订阅 "after_draw" → milestone_engine.after_draw()
+                （原来的 inline 代码移入订阅函数，逻辑不变）
+```
+
+**Ph0 之后，P61 和 P58 完全并行**——各自只改自己的文件（`banner.py` / `milestone.py`），`gacha_service.py` 不再需要改动。
+
+### 5.3 实施顺序
+
+```
+第一步：Ph0（core/notifier.py + gacha_service emit）—— ~30 行，半天
+    │
+    ├── P61 Ph1-9（Banner 全套）
+    │       依赖：无。Ph0 交付后即可启。
+    │
+    └── P58 M1-8（Milestone 全套）
+            依赖：无。Ph0 交付后即可启。
+```
+
+**不提取独立 P 编号。** Notifier 太小（30 行），不值得单独成计划。P61 Ph0 交付，P58 的 M4 节声明 `depends: P61-Ph0` 即可。
+
+### 5.4 P58 接入 Notifier 的改动
 
 P58 当前在 `gacha_service.py` 的模拟循环中直接 inline 调用（M4，第 422-453 行）：
 
@@ -657,7 +695,7 @@ notifier.emit("after_draw", banner_id=banner.id, pool_id=source.id, ...)
 
 **P58 改动量：约 15 行**（把 inline 代码块包进一个订阅函数 + 一行 `subscribe`）。P58 审计完成后的其余全部代码不受影响。
 
-### 5.3 `[[milestone]].pools` → `[[milestone]].banner`
+### 5.5 `[[milestone]].pools` → `[[milestone]].banner`
 
 P58 的 `[[milestone]].pools` 字段用于过滤作用池子。Banner 模式后，milestone 应引用 `banner` 而非独立 `pool`：
 

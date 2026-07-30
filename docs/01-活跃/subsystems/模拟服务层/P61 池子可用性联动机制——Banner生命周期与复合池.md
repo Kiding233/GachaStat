@@ -567,6 +567,7 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 │ │ [批量创建...]  │ │ │std_ssr │0.300│ SSR  │ ☐  │xp:100  │   │  │
 │ │               │ │ └──────────────────────────────────┘    │  │
 │ │               │ │  合计:100%  [添加] [移除选中] [缩放至100%] │  │
+│ │               │ │       [从其他池导入...]                    │  │
 │ │               │ │                                         │  │
 │ │               │ │ （「生命周期」子标签页切换后↓↓）           │  │
 │ │               │ │ ┌──────────────────────────────────┐    │  │
@@ -694,11 +695,11 @@ QTableWidget 内联编辑，5 列：
 
 #### 3.11.1 变更总览
 
-| 旧 | 新 | 说明 |
-|----|----|------|
-| `pools` QLineEdit（手写 fnmatch） | 「绑定池」QTableWidget（勾选表格） | 删除手写 pattern，直接勾选 |
-| 生效范围 QGroupBox（只读预览） | 删除——勾选表格本身就是生效范围 | 无需两份UI表达同一信息 |
-| 快速绑定 QDialog（弹窗） | 删除——勾选表格直接在详情面板中 | 无需弹窗 |
+| 旧 | 新 | 说明 | 参见 |
+|----|----|------|------|
+| `pools` QLineEdit（手写 fnmatch） | 「绑定池」QTableWidget（勾选表格） | 删除手写 pattern，直接勾选 | §3.11.2 |
+| 生效范围 QGroupBox（只读预览） | 删除——勾选表格本身就是生效范围 | 无需两份UI表达同一信息 | §3.11.2 |
+| 快速绑定 QDialog（弹窗） | 删除——勾选表格直接在详情面板中 | 无需弹窗 | §3.11.2 |
 
 #### 3.11.2 「绑定池」勾选表格
 
@@ -711,15 +712,15 @@ QTableWidget 内联编辑，5 列：
 │ ... (BEHAVIOR_REGISTRY 动态参数) ...                   │
 │                                                       │
 │ ── 绑定池 ───────────────────────────────────────     │
-│ ┌──┬──────────────────┬──────────┬────────────────┐   │
-│ │☑│ Banner            │ Pool     │ 说明            │   │
-│ ├──┼──────────────────┼──────────┼────────────────┤   │
-│ │☑│ endfield_limited  │ main     │                │   │
-│ │☐│ endfield_limited  │ free     │ (不计保底)      │   │
-│ │☑│ standard_banner   │ main     │                │   │
-│ │☐│ step_up           │ step1    │                │   │
-│ │☐│ step_up           │ step2    │                │   │
-│ └──┴──────────────────┴──────────┴────────────────┘   │
+│ ┌──┬──────────────────┬──────┬──────────┬────────────────────┐  │
+│ │☑│ Banner            │ 类型  │ Pool     │ 说明                │  │
+│ ├──┼──────────────────┼──────┼──────────┼────────────────────┤  │
+│ │☑│ endfield_limited  │ 角色  │ main     │                    │  │
+│ │☐│ endfield_limited  │ 角色  │ free     │ 不计保底, 一次性    │  │
+│ │☑│ standard_banner   │ 常驻  │ main     │                    │  │
+│ │☐│ step_up           │ 阶梯  │ step1    │                    │  │
+│ │☐│ step_up           │ 阶梯  │ step2    │                    │  │
+│ └──┴──────────────────┴──────┴──────────┴────────────────────┘  │
 │              [全选] [全不选]                            │
 └──────────────────────────────────────────────────────┘
 ```
@@ -728,15 +729,18 @@ QTableWidget 内联编辑，5 列：
 |---|------|------|------|
 | 1 | ☑ | `QCheckBox`（`setCellWidget`） | 勾选 = 该保底规则绑定到此 Banner.Pool |
 | 2 | Banner | `QTableWidgetItem`（只读） | Banner 名称 |
-| 3 | Pool | `QTableWidgetItem`（只读） | Pool ID |
-| 4 | 说明 | `QTableWidgetItem`（只读） | `excludes_all_pity=True` 时显示「(不计保底)」；否则为空 |
+| 3 | 类型 | `QTableWidgetItem`（只读） | Banner 的 `pool_type`——辅助按类别筛选（如仅看角色池） |
+| 4 | Pool | `QTableWidgetItem`（只读） | Pool ID |
+| 5 | 说明 | `QTableWidgetItem`（只读） | 合并显示标签：`excludes_all_pity` →「不计保底」/ `one_shot` →「一次性」/ `blocks_parent` →「阻塞主池」；正常池留空 |
 
 **交互细节**：
 - 数据来源：遍历 `store.banner.banners` → 展开每个 Banner 的所有 Pool → 每行一个 `{banner_id}.{pool_id}`
+- 「类型」列从 Banner 的 `pool_type` 读取（角色/武器/常驻/新手/混池/阶梯），辅助用户按类别筛选绑定范围
+- 「说明」列自动聚合 Pool 的特殊属性标签——用户无需逐列查看 `one_shot`/`excludes_all_pity`/`blocks_parent`
 - 加载时：读取 `pools` fnmatch pattern → 对每个 `{banner_id}.{pool_id}` 做 `fnmatch` → 勾选匹配的行
 - 保存时：从所有勾选行反向生成紧凑的 fnmatch pattern（共享前缀自动缩写为 `*`，精确 ID 用逗号分隔）→ 写回 `pools`
 - 「全选」勾选所有行（生成 `*` = 匹配全部）；「全不选」取消所有勾选
-- `excludes_all_pity=True` 的 Pool 在「说明」列标注提示——用户仍然可以勾选（绑定是声明性的），但引擎不应用保底
+- `excludes_all_pity=True` 的 Pool 仍然可以勾选（绑定是声明性的），但引擎不应用保底
 
 #### 3.11.3 引擎匹配逻辑（不变）
 

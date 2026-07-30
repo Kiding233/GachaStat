@@ -515,12 +515,12 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 │ │                │ │              [添加] [移除选中]                 │ │
 │ │                │ │                                              │ │
 │ │                │ │ ── 生命周期规则（内联表格） ────────────     │ │
-│ │                │ │ ┌──────────────┬──────┬────┬──────────┬────┐ │ │
-│ │                │ │ │ 条件          │ 关联源 │阈值 │ 动作      │目标│ │ │
-│ │                │ │ ├──────────────┼──────┼────┼──────────┼────┤ │ │
-│ │                │ │ │source_draws ▼│ main │ 30 │activate_ ▼│free│ │ │
-│ │                │ │ │source_exhaus▼│ free │ —  │unblock_s ▼│main│ │ │
-│ │                │ │ └──────────────┴──────┴────┴──────────┴────┘ │ │
+│ │                │ │ ┌──────┬──────────────┬────┬──────────┬────┐ │ │
+│ │                │ │ │ 关联源│ 条件          │阈值 │ 动作      │目标│ │ │
+│ │                │ │ ├──────┼──────────────┼────┼──────────┼────┤ │ │
+│ │                │ │ │ main │source_draws ▼│ 30 │activate_ ▼│free│ │ │
+│ │                │ │ │ free │source_exhaus▼│ —  │unblock_s ▼│main│ │ │
+│ │                │ │ └──────┴──────────────┴────┴──────────┴────┘ │ │
 │ │                │ │              [添加] [移除选中]                 │ │
 │ └────────────────┘ └─────────────────────────────────────────────┘ │
 │                    [添加] [移除选中] [复制选中]                      │
@@ -555,8 +555,8 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 
 | 列 | 控件 | 说明 |
 |----|------|------|
-| 条件 | `QComboBox` 委托 | `source_draws` / `banner_draws` / `card_obtained` / `source_exhausted` |
-| 关联源 | `QComboBox` 委托 | 从已有 source ID 列表动态填充；条件为 `banner_draws` 时置灰 |
+| 关联源 | `QComboBox` 委托 | 从已有 source ID 列表动态填充；先选源，后续列基于此过滤 |
+| 条件 | `QComboBox` 委托 | `source_draws` / `source_exhausted` / `card_obtained` / `banner_draws` |
 | 阈值 | `QSpinBox` 委托 | 条件为 `source_exhausted` 时置灰 |
 | 动作 | `QComboBox` 委托 | `activate_source` / `deactivate_source` / `block_source` / `unblock_source` / `exhaust_banner` |
 | 目标 | `QComboBox` 委托 | 从已有 source ID 列表动态填充；动作为 `exhaust_banner` 时置灰 |

@@ -1,5 +1,9 @@
 __version__ = "2.4.0"
 
+# 发布状态标志（保险措施）：正式上线 / 真实用户接入后改为 True，此后禁止
+# 一次性迁移与删除兼容机制（见 CLAUDE.md「无历史包袱原则」）。
+RELEASED = False
+
 VERSION_DISPLAY = "v2.4.0"
 
 VERSION_HISTORY = [

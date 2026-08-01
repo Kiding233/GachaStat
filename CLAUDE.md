@@ -35,6 +35,17 @@ gacha_simulator/
 
 ## 二、架构约束
 
+### 无历史包袱原则（发布前生效）【P61 确立】
+
+本项目**尚未上线**：`config.toml` 仅为示例与测试用文件，无真实用户数据、无历史结果文件。因此在 P61 落地及此后未发布阶段，允许：
+- 一次性迁移配置格式（`[[pool]]` → `[[banner]]`），不维护新旧双路径
+- 删除兼容机制（自动包装 / dual-write / 三路匹配 / 双键并存），代码只保留新形态
+- 变更必须配「基线固化 + 等价对照」验证：迁移前用旧配置跑固定种子模拟，固化 CompactResult golden 快照，迁移后同种子重跑逐字段对比，保证行为等价
+
+**保险措施**：发布状态标志见 `gacha_simulator/_version.py` 的 `RELEASED`。**正式上线 / 真实用户接入时，必须把 `RELEASED` 改为 `True`**，此后本原则立即失效：
+- 禁止一次性迁移、删除兼容机制、破坏配置格式；所有变更默认「兼容优先」
+- 每次会话（CLAUDE.md 自动加载）与编写/审查计划时检查 `RELEASED`：`False` 才可继续使用迁移方式，`True` 必须反向决策
+
 ### 策略 (`core/strategy.py` + `strategies/builtin/*.py`)
 
 **P69 架构：** `STRATEGY_REGISTRY: Dict[str, StrategyMeta]`——`@register_strategy(key, display_name, *, params, internal)` 装饰器副作用自动注册。`StrategyMeta` dataclass 封装 `key`/`display_name`/`description`/`cls`/`params: List[ParamDescriptor]`/`internal`/`disabled`/`plugin_path`/`_invalid_state`。`create_strategy(key, params)` 数据驱动工厂——查 meta → `_invalid_state` 守卫 → 合并默认值 → `ParamDescriptor.validate()` → `cls(**resolved)`。`_validate_registry()` 模块导入时自动执行（5 项检查）。`strategy_type_to_key()` / `strategy_key_to_type()` 保留。

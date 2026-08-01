@@ -1,8 +1,8 @@
-<!-- META: P61 | module:模拟服务层 | status:designing | last:2026-08-01 -->
+<!-- META: P61 | module:模拟服务层 | status:designing | last:2026-08-02 -->
 
 # P61 池子可用性联动机制——Banner生命周期与复合池
 
-> 日期：2026-08-01 | 状态：设计中（原方案重写 + 五轮归约：类型/复刻推导化、Lifecycle 统一为 switch_to、方案甲）
+> 日期：2026-08-02 | 状态：设计中（原方案重写 + 五轮归约：类型/复刻推导化、Lifecycle 统一为 switch_to、方案甲；2026-08-02 D1-D4 裁决——one_shot 归约为 max_draws、无历史包袱一次性迁移、store.pools 只读视图、基线固化等价对照）
 > 触发：step池拆分建模（每步抽N次后解锁下一步）与终末地30抽取送抽池（强制插入、一次性、不计保底）需要池间可用性联动，当前仅支持基于时间窗口的单池独立可用性。
 > 原方案归档：[P61 池子可用性联动机制——step链与送抽插入（规则引擎版）](../../../03-归档/P61 池子可用性联动机制——step链与送抽插入（规则引擎版）.md)（2026-06-20，已归档）
 
@@ -52,9 +52,9 @@
 - [x] Step 池链：step1→step2→step3 按抽数阈值自动切换
 - [x] 送抽插入：主池30抽后触发，切换到送抽池，送抽源消耗完毕后切回
 - [x] 新手池关闭：`max_draws` 硬上限 + 可选 `card_obtained` 提前退出
-- [x] 一次性池：`one_shot` pool 抽后永久不可用
+- [x] 一次性池：`max_draws = batch_size` 抽满一次 batch 后永久不可用（DECISION-1 归约）
 - [x] 保底排除：`excludes_all_pity` pool 完全旁路保底引擎
-- [x] 向后兼容：不写 `[[banner]]` 时现有 `[[pool]]` 自动包装为单 pool 的 banner
+- [x] 配置一次性迁移：`[[pool]]` → `[[banner]]`（DECISION-3/4，无历史包袱），解析器只认 `[[banner]]`、无自动包装
 
 ## 三、方案
 
@@ -87,16 +87,13 @@ class Pool:
     cost: PoolCost                   # 抽取成本（必填——每个 Pool 独立确定）
     rewards: List[Tuple[Reward, float]]  # 奖励表（必填——内联，非引用）
     batch_size: int = 1              # 每次抽取连数
-    one_shot: bool = False           # 一次性批次消耗——本池仅支持一次 batch（batch_size 抽，默认 1）
-                                     # 后即标记 exhausted；批次中途不因 one_shot 耗尽而切换/终止，
-                                     # 耗尽判定落在批次边界（REVIEW-R1-FIX: ISSUE-002，见 §3.5 批次语义）
-                                     # ⚠ 待人工裁决（DECISION-1，见 §6.1 裁决门控）：原语义为「抽取1次后即
-                                     # 标记 exhausted」，与旗舰 free_10pull（batch_size=10 + one_shot=true）
-                                     # 直接冲突；本方案定为「一次性批次」以兑现「免费十连=10 抽」语义。
-                                     # 默认选型已定（一次性批次）；若用户在 Ph1 启动前裁决改走旧语义，
-                                     # 需同步调整 §3.5 批次语义 / §3.6 示例 / Ph9 用例 / §七 验收
     excludes_all_pity: bool = False  # 完全旁路保底引擎
     max_draws: Optional[int] = None  # 该 pool 的最大抽取次数（由引擎自动执行——pool 抽数达上限后自动标记 exhausted，无需手写 lifecycle 规则）
+                                     # 一次性批次语义（DECISION-1 归约，2026-08-02 用户确认）：「抽完即关闭的一次性池」
+                                     # = max_draws = batch_size，耗尽判定天然落在批次末抽（_pool_draws >= batch_size），
+                                     # 批次中途不触发（与 §3.5 批次语义一致）。原 one_shot 独立参数已归约删除——
+                                     # 引擎行为与 max_draws=batch_size 完全等价（耗尽公式均 _pool_draws >= batch_size）。
+                                     # GUI「一次性」勾选保留为 sugar，勾选时自动写 max_draws=batch_size（见 §3.10.4 表格）。
 
     # ── 推导属性（从 rewards 计算，非配置字段，见 §3.13.1）──
     #   output       = 'resource' if 全部 reward.id == '_no_card' else 'card'
@@ -130,7 +127,7 @@ class TransitionRule:
     _prev_satisfied: bool = False    # 上次评估时的条件满足状态（引擎维护，非配置字段）
 ```
 
-> **时间单位规范（REVIEW-R1-FIX: ISSUE-001——统一为秒）**：运行时 `Banner.available_from` / `Banner.available_until` 与 `time_window` 条件的阈值（`TransitionRule.at_value` / `LifecycleRuleEntry.at`）一律以**秒**存储/求值——与模拟层 `real_time`、`end_time`、现状 `PoolSchedule.available_from/until`（batch_simulator.py:552-553 的 `start_day * DAY`）同单位。TOML/UI 层的「模拟内相对天数」在**解析边界**（config_toml `_wrap_pools_as_banners` / `_build_banners`）换算 `* DAY`、**保存边界**（`save_toml`）换算 `// DAY`（DAY=86400，沿用 batch_simulator.py:499 / core/resource_gain.py:24 常量，config_toml.py 侧自行定义或引入）。判定链据此对齐：`banner_end_times_sorted` 在 `real_time(秒) >= available_until(秒)` 触发 `on_banner_end`；`time_window` 在 `real_time(秒) >= at_value(秒)` 求值；策略 `wait_time = banner.available_until(秒) - real_time(秒)`；`AllPoolsEndCondition(end_time 秒)` 判定成立。现状 None end_day 兜底为 `(start_day + 21) * DAY` 秒（batch_simulator.py:511-513），计划 §3.13.4 对应 `+ 21 * DAY`（秒），两者等价——计划全文涉及「天数」的判断（§3.2 触发语义 / §3.4 包装 / §3.5 banner_end_times / §3.13.4 eff_end）均以本规范为唯一单位口径。
+> **时间单位规范（REVIEW-R1-FIX: ISSUE-001——统一为秒）**：运行时 `Banner.available_from` / `Banner.available_until` 与 `time_window` 条件的阈值（`TransitionRule.at_value` / `LifecycleRuleEntry.at`）一律以**秒**存储/求值——与模拟层 `real_time`、`end_time`、现状 `PoolSchedule.available_from/until`（batch_simulator.py:552-553 的 `start_day * DAY`）同单位。TOML/UI 层的「模拟内相对天数」在**解析边界**（config_toml `_build_banners`）换算 `* DAY`、**保存边界**（`save_toml`）换算 `// DAY`（DAY=86400，沿用 batch_simulator.py:499 / core/resource_gain.py:24 常量，config_toml.py 侧自行定义或引入）。判定链据此对齐：`banner_end_times_sorted` 在 `real_time(秒) >= available_until(秒)` 触发 `on_banner_end`；`time_window` 在 `real_time(秒) >= at_value(秒)` 求值；策略 `wait_time = banner.available_until(秒) - real_time(秒)`；`AllPoolsEndCondition(end_time 秒)` 判定成立。现状 None end_day 兜底为 `(start_day + 21) * DAY` 秒（batch_simulator.py:511-513），计划 §3.13.4 对应 `+ 21 * DAY`（秒），两者等价——计划全文涉及「天数」的判断（§3.2 触发语义 / §3.4 包装 / §3.5 banner_end_times / §3.13.4 eff_end）均以本规范为唯一单位口径。
 
 
 @dataclass
@@ -214,9 +211,9 @@ class Banner:
         顺序约定（REVIEW-R1-FIX: ISSUE-001——单一触发点）：draw() 内部【不】评估 _check_transitions。
         转换统一由「after_draw 事件 → P61 订阅（priority=1）→ banner._check_transitions()」触发，
         位于 emit 之后、下一抽之前——转换只影响下一抽，不污染本次返回的 pool_id。
-        draw() 内部唯一可能的状态变化：当抽 pool 因 max_draws/one_shot 达到耗尽而标记 exhausted
-        （公式见下方「耗尽判定归属与公式」：`one_shot and _pool_draws[id] >= batch_size` /
-        `_pool_draws[id] >= max_draws`；Banner.max_draws 硬上限自动 exhaust——REVIEW-R1-FIX: ISSUE-302/303）。"""
+        draw() 内部唯一可能的状态变化：当抽 pool 因 max_draws 达到耗尽而标记 exhausted
+        （公式见下方「耗尽判定归属与公式」：`_pool_draws[id] >= max_draws`，一次性池 = max_draws=batch_size；
+        Banner.max_draws 硬上限自动 exhaust——REVIEW-R1-FIX: ISSUE-302/303）。"""
 
     def _check_transitions(self, card_id: Optional[str] = None,
                            real_time: Optional[float] = None):
@@ -239,11 +236,10 @@ class Banner:
     def _exhaust(self): ...
 ```
 
-> **兜底语义（活跃池耗尽，REVIEW-R1-FIX: ISSUE-010）**：单 Banner 内活跃池因 `max_draws` / `one_shot` 触发 exhausted 后，若无 `pool_exhausted` lifecycle 规则接管（允许只配置一个池），Banner **自动 exhaust**（等价 `exhaust_banner` 兜底）——`is_available=False`、策略侧 `is_exhausted=True`、`pending_transitions` 无挂起项，draw() 不再被调用。避免路由到已耗尽池产生未定义行为。该语义进入 `_exhaust()` 实现。
+> **兜底语义（活跃池耗尽，REVIEW-R1-FIX: ISSUE-010）**：单 Banner 内活跃池因 `max_draws` 触发 exhausted 后（一次性池 = max_draws=batch_size），若无 `pool_exhausted` lifecycle 规则接管（允许只配置一个池），Banner **自动 exhaust**（等价 `exhaust_banner` 兜底）——`is_available=False`、策略侧 `is_exhausted=True`、`pending_transitions` 无挂起项，draw() 不再被调用。避免路由到已耗尽池产生未定义行为。该语义进入 `_exhaust()` 实现。
 >
 > **耗尽判定归属与公式（REVIEW-R1-FIX: ISSUE-002，批次边界机制修正——ISSUE-302）**：耗尽判定与标记在 `Banner.draw` 内执行（唯一逐抽粒度入口，`_pool_draws[id]` 每抽自增）：
-> - `one_shot`：`_pool_draws[id] >= batch_size` 时标记 exhausted——判定天然落在批次末抽（一次性批次），批次中途不触发（与 §3.5 批次语义一致）。
-> - `pool.max_draws`（Pool 级）：`_pool_draws[id] >= max_draws` 时标记 exhausted。**判定可能落在批次中途**（max_draws 非 batch_size 倍数，如 max_draws=15 / batch_size=10 时第 15 抽落在第 2 批次中途）——max_draws 是硬上限，标记后**立即生效**：batch 循环在下一抽入口检查 active 池已 exhausted（无 `pool_exhausted` 规则接管时 Banner 自动 exhaust 亦然），`break` 终止本批次剩余抽数，总抽数不被批次惯性突破（§3.5 批次循环新增守卫）。**旧表述「耗尽判定均落在批次边界」修正为**：one_shot 判定点在批次边界；pool.max_draws 判定点可能在批次中途、生效点为下一抽入口（batch 循环 break）。**⚠ 待人工裁决（DECISION-2，见 §6.1 裁决门控）**：批次中途耗尽处置选「立即生效 + batch 循环 break 终止剩余」，未选「继续抽完本批次」——后者会把 max_draws 语义退化为批次边界近似（15/10 时抽满 20）；默认选型已定（立即生效 + break）；若偏好批次原子性优先可改走「继续抽完」，需同步调整 §3.5 批次循环守卫与 Ph9 用例。
+> - `pool.max_draws`（Pool 级）：`_pool_draws[id] >= max_draws` 时标记 exhausted。**判定点与 max_draws 取值相关**：`max_draws = batch_size`（一次性池，DECISION-1 归约后仅此一种表达）时判定天然落在批次末抽（一次性批次，批次中途不触发）；`max_draws` 非 batch_size 倍数（如 max_draws=15 / batch_size=10，第 15 抽落在第 2 批次中途）时判定落在批次中途——max_draws 是硬上限，标记后**立即生效**：batch 循环在下一抽入口检查 active 池已 exhausted（无 `pool_exhausted` 规则接管时 Banner 自动 exhaust 亦然），`break` 终止本批次剩余抽数，总抽数不被批次惯性突破（§3.5 批次循环新增守卫）。**DECISION-2（2026-08-02 用户确认）**：批次中途耗尽处置选「立即生效 + batch 循环 break 终止剩余」，未选「继续抽完本批次」——后者会把 max_draws 语义退化为批次边界近似（15/10 时抽满 20）。
 > - `banner.max_draws`（Banner 级）：`_total_draws >= max_draws` 时 Banner 直接 `_exhaust()`——与 Pool.max_draws 对称的引擎自动执行（ISSUE-303，见 §3.6 新手池示例修正），不评估 lifecycle 规则、与 ISSUE-001 单一触发点不冲突。
 
 ### 3.3 新增文件：`core/notifier.py`
@@ -293,7 +289,7 @@ notifier.subscribe("after_draw", milestone_engine.after_draw, priority=0)
 
 Banner 内的抽取单元就是旧 `Pool`（`core/pool.py`）**同一个类**，原地改造，不另起同名类：
 
-- 旧 `Pool` 原地新增 P61 字段：`one_shot` / `excludes_all_pity` / `max_draws`
+- 旧 `Pool` 原地新增 P61 字段：`excludes_all_pity` / `max_draws`（`one_shot` 已归约为 `max_draws = batch_size`，DECISION-1）
 - 移除死字段：`pool_type`（类型改推导属性，见 §3.13.1）、`is_rerun` / `original_pool_id`（复刻走推导，见 §3.13.2）、`available_from` / `available_until`（时间窗口统一到 Banner 级，见 §3.13.4）
 - 现有字段保留：`id` / `name` / `cost` / `rewards` / `batch_size` / `epitomizable_cards`
 - 推导属性（非配置字段，从 rewards 计算，见 §3.13.1）：`output` / `random` / `is_exchange`（旧策略 `pool.is_exchange` 零改动）
@@ -311,72 +307,21 @@ Banner 内的抽取单元就是旧 `Pool`（`core/pool.py`）**同一个类**，
   - `pool.is_exchange` 判定保留（§3.13.1 推导 property，零改动）；`pool.cost` / `pool.batch_size` 经 `banner.active_pool` 读取（`banner.active_pool.cost` / `.batch_size`）
   - **`pool_quota.py:45-48` 的配额判定（REVIEW-R1-FIX: ISSUE-002）**：`pid = pool.id; drawn = ctx.pool_draw_counts.get(pid, 0)`——逐池统计键全限定化后 `ctx.pool_draw_counts` 键为 `{banner_id}.{pool_id}`，裸 pid 查询**恒 0、配额永不满足、持续抽到资源耗尽**。改为遍历 `ctx.banners` 读 `banner.pool_draws.get(pool_id)`（§3.7 已暴露，pool_id 为 Banner 内裸池 id、非全限定键）判配额
   - **`pity_reserve.py:46` 的保底概率查询（REVIEW-R1-FIX: ISSUE-002）**：`pool_probs = ctx.get_pity_probabilities(pool.id)`——裸 pid 传 PityEngine 查不到全限定 spec（pity.py:1268-1270 `spec = self.pool_specs.get(pool_id)` 为 None 时回退未调整概率），保底阈值判定**静默退化为基础概率**。改为传全限定键 `{banner_id}.{pool_id}`，或 `StrategyContext` 新增 banner 维度查询接口（如 `get_pity_probabilities_for_banner(banner_id, pool_id)`，Ph5 排期）；二者任一须在 Ph9 以 banner 模式等价回归锁定（ISSUE-002）
-  - fixed_count / target_hunting 目前只读 `ctx.current_pools`（无时间字段依赖）——**一并纳入 Ph1a 强制迁移（REVIEW-R1-FIX: ISSUE-003）**，原「可不迁移但须回归验证」取消。原因：`current_pools` 由 `active_banners[*].active_pool` 推导填充时，`[[pool]]` 自动包装模式下所有 Pool 的 `.id` 均为包装写死的 `'main'`——fixed_count.py:27 `DrawAction(pool_id=ctx.current_pools[0].id)` 得 `pool_id='main'`，多 Banner 共存时反查不唯一（§3.5 要点 5 的反查规避依赖 Ph1a 双字段，但这两个策略此前被豁免，自相矛盾）；target_hunting.py:25 `[p for p in ctx.current_pools if p.id in self.target_pool_ids]` 的 `target_pool_ids` 是用户配置的旧裸池 id（如 `'genshin_limited'`），与 `'main'` 永不匹配 → `target_pools` 恒空 → 策略静默只 WaitAction、永不抽卡。迁移内容与 8 策略一致：改读 `ctx.banners` + `DrawAction(banner_id=..., pool_id=...)` 双字段；`target_pool_ids` 参数改匹配 `banner_id`（兼容旧裸池 id 时按 `banner_id` 段匹配）。`current_pools` 保留仅供遗留只读，无内置策略再依赖
+  - fixed_count / target_hunting 目前只读 `ctx.current_pools`（无时间字段依赖）——**一并纳入 Ph1a 强制迁移（REVIEW-R1-FIX: ISSUE-003）**，原「可不迁移但须回归验证」取消。原因：`current_pools` 由 `active_banners[*].active_pool` 推导填充时，Pool 的 `id` 是 Banner 内字典键（如 `'main'`）而非全局唯一标识——fixed_count.py:27 `DrawAction(pool_id=ctx.current_pools[0].id)` 得 `pool_id='main'`，多 Banner 共存时反查不唯一（§3.5 要点 5 的反查规避依赖 Ph1a 双字段，但这两个策略此前被豁免，自相矛盾）；target_hunting.py:25 `[p for p in ctx.current_pools if p.id in self.target_pool_ids]` 的 `target_pool_ids` 是用户配置的旧裸池 id（如 `'genshin_limited'`），与 `'main'` 永不匹配 → `target_pools` 恒空 → 策略静默只 WaitAction、永不抽卡。迁移内容与 8 策略一致：改读 `ctx.banners` + `DrawAction(banner_id=..., pool_id=...)` 双字段；`target_pool_ids` 参数改匹配 `banner_id`（兼容旧裸池 id 时按 `banner_id` 段匹配）。`current_pools` 保留仅供遗留只读，无内置策略再依赖
 - `state.available_pools`（state.py:90）基于 Pool 时间窗口，P61 后由 Banner 可用性取代——**删除 `GachaState.get_available_pools()` 方法**，同步删除 `tests/core/test_state.py:73-82` 的 `test_get_available_pools`（该测试是方法唯一活跃消费者，且构造期传 `available_from`/`available_until` 关键字、随字段退役一并失效）。`core/state.py` 因此从「不触及」移入波及范围（删除一行方法 + 清理 import）（REVIEW-R1-FIX: ISSUE-002）
 
-迁移路径（旧 Pool 直接作为 Banner 的抽取单元，无字段复制）：
+一次性迁移（DECISION-3/4 裁决，2026-08-02）——无自动包装、无双路径：
 
 ```python
-# 向后兼容：现有 [[pool]] 自动包装为 Banner（config_toml 解析时执行，操作 PoolEntry）
-def _wrap_pools_as_banners(entries: List[PoolEntry]) -> List[BannerEntry]:
-    """每个 PoolEntry 包装为单池 Banner——时间窗口从 start_day/end_day 上移到 Banner，
-    并完整透传抽取语义字段，保证「现有 [[pool]] 行为完全不变」验收成立（REVIEW-R1-FIX: ISSUE-007）。
-    透传清单（ISSUE-006 补全）：batch_size / exchange_card_id / epitomizable_cards / enabled /
-    featured 标志（rewards dict 内）——distribution_template / bindings / target_specs 属配置/分析侧
-    字段，不进入 Banner 运行时，由 flattened_pools 视图按 §3.9 重建。
-    调用顺序（ISSUE-006）：必须在 _build_pools 全部步骤【之后】执行——rerun_of 第二步复制
-    distribution（config_toml.py:1110-1115）与 featured_card_ids 统一填充（:1117-1119）完成后，
-    再 _wrap；否则 rerun 池 distribution 为空、featured 丢失。"""
-    banners = []
-    for e in entries:
-        if not e.enabled:
-            # enabled=False 的 [[pool]] 包装前过滤——不生成 Banner（ISSUE-006）：
-            # 等价现状 gdr.py:513 / worst_impact_panel.py:185 / retreat_panel.py:263 /
-            # plan_search_panel.py:1259 的 `if p.enabled` 过滤；banner 模式下不出现即视为禁用
-            continue
-        rewards = [
-            # PoolDistEntry → dict 转换（REVIEW-R1-FIX: ISSUE-304）：e.distribution 元素是 PoolDistEntry
-            # dataclass（config_store.py:13-18，不可下标访问），而 BannerPoolEntry.rewards 标注 List[dict]、
-            # §3.13.1 dict 形式推导 `rewards[0]['probability'] < 100.0` 与 featured 聚合
-            # `{r['card_id'] for r in rewards if r.get('featured')}` 均按 dict 下标访问——必须在包装处统一
-            # 转为 dict（card_id/probability/rarity/featured/resources_gained），否则 Ph6 运行时 TypeError
-            {"card_id": de.card_id,
-             "probability": de.probability,
-             "rarity": de.rarity,
-             "featured": de.featured,
-             "resources_gained": dict(de.resources_gained or {})}
-            for de in e.distribution
-        ]   # featured 信息随 dict.featured 透传（banner 模式 per-reward featured，见 §3.9）
-        if e.exchange_card_id:
-            # 旧 exchange 池语义：is_exchange=bool(exchange_card_id)，产出该卡 100%——
-            # 包装时展开为 100% 单卡分布（对齐 §3.6 的 exchange_card_id 语义）
-            rewards = [{"card_id": e.exchange_card_id, "probability": 100.0}]
-        banner = BannerEntry(
-            id=e.pool_id, name=e.name, enabled=e.enabled,      # ← 透传 enabled（ISSUE-006，供 §3.13.4 可达判定）
-            # available_until=None 兜底（REVIEW-R1-FIX: ISSUE-007）：end_day=None（永久池）时透传
-            # None 而非 float(None) 抛 TypeError——None 语义为「永久开放」，end_time 计算由 Ph6 兜底
-            # （§3.13.4），与现状 batch_simulator.py:511-513 的 None end_day → `(start_day+21)*DAY` 秒兜底等价
-            # 时间单位（ISSUE-001）：start_day/end_day 为 TOML「天数」，解析边界换算 *DAY 为秒——
-            # 与现状 batch_simulator.py:552-553 的 `start_day * DAY` 一致，Banner 运行时 available_from/
-            # available_until 按秒存储（§3.2「时间单位规范」），否则 end_time / real_time 86400 倍错位
-            available_from=float(e.start_day) * DAY,
-            available_until=None if e.end_day is None else float(e.end_day) * DAY,
-            pools=[BannerPoolEntry(
-                id="main", cost=e.cost, rewards=rewards,
-                batch_size=e.batch_size,                     # ← 透传：默认 1，batch 池不退化
-                exchange_card_id=e.exchange_card_id,         # ← 透传：保留快捷方式
-                epitomizable_cards=e.epitomizable_cards,     # ← P56 定轨候选卡透传
-                # featured_card_ids 不设独立字段——由 rewards 的 featured=True 标志聚合：
-                #   PoolPitySpec.featured_ids = {r['card_id'] for r in rewards if r.get('featured')}
-                #   （batch_simulator.py:517 现状读 pe.featured_card_ids，banner 模式改读 rewards
-                #    featured 聚合——保底重置判定数据源，ISSUE-006 / Ph6）
-                #   （REVIEW-R1-FIX: ISSUE-304：rewards 已统一为 dict 表示——正常分支经上方
-                #    PoolDistEntry→dict 转换、exchange 分支为 100% 单卡 dict——此聚合对两种分支均安全，
-                #    无「对 PoolDistEntry 下标访问」的 TypeError）
-            )],
-        )
-        banners.append(banner)
-    return banners
+# config.toml 从 [[pool]] 一次性改写为 [[banner]]（Ph1 前置迁移阶段，见 §3.12）：
+# - 每个旧 [[pool]] → 一个 [[banner]]，pool 字段原样进 [[banner.pool]]（id="main"）
+# - start_day/end_day → banner 级 available_from/until（解析边界 *DAY 换秒，见 §3.13.4）
+# - pool_type / is_rerun / original_pool_id 字段删除（推导化，见 §3.13.1 / §3.13.2）
+# - enabled=False 池迁移时直接不写入 [[banner]]（等价现状消费方 `if p.enabled` 过滤）
+# - exchange 池：exchange_card_id 保留快捷方式（§3.6），不迁移为内联 100% 分布
+# - 等价性由「基线固化 + 等价对照」验证：迁移前旧配置跑固定种子固化 golden 快照，
+#   迁移后同种子重跑逐字段对比（见 §3.12 基线阶段 / §七 验收）
+# 迁移后解析器只认 [[banner]]——`_wrap_pools_as_banners()` 已删除，无自动包装路径。
 ```
 
 **理由**：归约确认 `pool_type` / `is_rerun` / `original_pool_id` 是死代码或伪需求（§3.13）。方案乙（旧类保留 + 另起同名类）会让死字段继续存活，且字段复制制造「两套真相」，与单一真相源目标相悖。
@@ -396,7 +341,7 @@ def _wrap_pools_as_banners(entries: List[PoolEntry]) -> List[BannerEntry]:
 <!-- REVIEW-R2-FIX: AUDIT-BREAK-3 -->
 > 10. **GachaService 构造桥（REVIEW-R1-FIX: GATE-3_依赖顺序，补充）**：`GachaService.__init__` 保持 `pools` 形参，但内部**双型收纳**为运行时 Banner 字典 `self._banners`：元素为 `Pool` → 就地单池包装 `Banner(id=p.id, name=p.name, pools={'main': p})`（键 `{pool_id}.main`，与 §3.4 [[pool]] 兼容包装一致；时间窗口 None 兜底，见 §3.13.4）；元素为 `Banner` → 直接收纳 `{b.id: b}`。任一分支保证原子提交后 `self._banners` 非空——`_run_single`（batch_simulator.py:228 传 `env.pools`）与现有 10 处测试（test_gacha_service.py:32/51/78/101/121、test_batch_service.py:25、test_batch_draw.py:171/212/260/314）直接构造 `GachaService([pool],...)` 均有池可路由。**桥与数据源分离**：Ph6 前 `List[Pool]` 路径的包装 Banner 时间窗口为 None（原子提交→Ph6 间时间窗口语义经 `PoolSchedule`/`end_time` 部分保留，banner 级窗口随 Ph6 从 `store.banner` 恢复）；Ph6 后 `from_config_store` 从 `store.banner` 构建运行时 Banner（多池/lifecycle/时间窗口），`SimulationEnv.pools` 承载 `List[Banner]`、`_run_single` 调用签名不变、`__init__` 直接收纳——任何阶段 `self._banners` 非空。
 > 11. **全限定键推导口径（REVIEW-R1-FIX: ISSUE-021/AUDIT-BREAK-3，消除 `{pid}.{pid}` vs `{pid}.main` 歧义）**：全限定键一律由 **`f"{banner.id}.{pools字典键}"`** 推导——`pools` 字典键（`Banner.pools` 的 key）是唯一口径，**不得**用 `pool.id` 属性。构造桥 `Banner(id=p.id, pools={'main': p})` 中 `p` 的 `.id` 仍是旧 pool id（≠ 'main'），若 `DrawOutcome.pool_id` / `active_pool_id` 取 `pool.id` 会得到 `{旧pid}.{旧pid}`，与兼容模式约定 `{旧pid}.main`（§3.11.3）不一致。故 `Banner.draw` 返回的 `DrawOutcome.pool_id`、`active_pool_id`、`banner.pool_draws` 的键一律为 **pools 字典键**（单池包装下恒 'main'），`draw_pool_key = f"{banner.id}.{draw_pool_key_from_dict}"` 恒为 `{旧pid}.main`。§3.5 伪代码 `draw_pool_key = f"{banner.id}.{draw_pool_id}"` 中 `draw_pool_id` 即此口径（pools 字典键，非 Pool.id）。
-> 12. **原子提交态 pity 键一致性（REVIEW-R1-FIX: ISSUE-021/AUDIT-BREAK-3，阻塞 2）**：Ph2 将 gacha_service 的 PityEngine 查询键（`get_spec`/`before_draw`/`after_draw`）改为全限定 `{banner_id}.{pool_id}`，但 `_build_pity_engine_from_gui`（batch_simulator.py:139-158）构建的 `pool_specs` 键在 **Ph6 前仍是裸 `pool.id`**（from_config_store 构造的 Pool 带旧裸 id）。原子提交态（Ph1-Ph2 落地、Ph6 未落地）下 gacha_service 以 `{旧pid}.main` 查询 → `pool_specs.get` 为 None → `before_draw` 保底调整静默跳过 → **soft pity 静默失效**，与 GATE-3『首提交后 pytest 全量通过』及『现有 `[[pool]]` 行为完全不变』验收直接冲突。处置：**pool_specs 键的全限定化提前并入原子提交**（随 Ph2 或构造桥一起落地）——原子提交态 `_build_pity_engine_from_gui`/`from_config_store` 的 pool_specs 键改为 `{pool.id}.main`（单池包装口径），fnmatch 三路匹配（§3.11.3，ISSUE-005）同步实现；Ph6 起键由 banner 池展开（多池/lifecycle）自然承接，无二次迁移。此改动把原 Ph6 的一部分（pool_specs 键全限定 + 三路 fnmatch）前移进原子单元，Ph6 仅保留「数据源改 store.banner + 多池展开 + featured/ssr/rarity 来源」。
+> 12. **原子提交态 pity 键一致性（REVIEW-R1-FIX: ISSUE-021/AUDIT-BREAK-3，阻塞 2）**：Ph2 将 gacha_service 的 PityEngine 查询键（`get_spec`/`before_draw`/`after_draw`）改为全限定 `{banner_id}.{pool_id}`，但 `_build_pity_engine_from_gui`（batch_simulator.py:139-158）构建的 `pool_specs` 键在 **Ph6 前仍是裸 `pool.id`**（from_config_store 构造的 Pool 带旧裸 id）。原子提交态（Ph1-Ph2 落地、Ph6 未落地）下 gacha_service 以 `{旧pid}.main` 查询 → `pool_specs.get` 为 None → `before_draw` 保底调整静默跳过 → **soft pity 静默失效**，与 GATE-3『首提交后 pytest 全量通过』及『现有 `[[pool]]` 行为完全不变』验收直接冲突。处置：**pool_specs 键的全限定化提前并入原子提交**（随 Ph2 或构造桥一起落地）——原子提交态 `_build_pity_engine_from_gui`/`from_config_store` 的 pool_specs 键改为 `{pool.id}.main`（单池包装口径），全限定键 fnmatch（§3.11.3，ISSUE-005；D4 一次性迁移后仅全限定键，无三路兼容）同步实现；Ph6 起键由 banner 池展开（多池/lifecycle）自然承接，无二次迁移。此改动把原 Ph6 的一部分（pool_specs 键全限定 + 全限定 fnmatch）前移进原子单元，Ph6 仅保留「数据源改 store.banner + 多池展开 + featured/ssr/rarity 来源」。
 
 ```python
 # gacha_service.py 的变更：current_pools → current_banners
@@ -444,7 +389,7 @@ def run_simulation(self, ...):
                     break                          # 本批次中途 active 池耗尽（pool.max_draws 非 batch_size
                                                    # 倍数，如 15/10 的第 15 抽在本抽后标记 exhausted）→
                                                    # 终止本批次剩余抽数——max_draws 硬上限不被批次惯性突破。
-                                                   # free_10pull one_shot 判定在批次末（_pool_draws>=batch_size），
+                                                   # free_10pull max_draws=batch_size 判定在批次末（一次性池），
                                                    # pool_exhausted→switch_to 在下一批次入口生效，不触发此守卫
                 spent = state.spend(pool.cost)     # 每抽对【当前活跃池】单独扣费——switch_to 后
                                                    # 新池成本以本抽为准，不可负担即返回 None
@@ -452,11 +397,11 @@ def run_simulation(self, ...):
                 if spent is None:
                     break                          # 防御性：与现状 L262-265 一致
 
-                # ── one_shot / batch 语义约定（REVIEW-R1-FIX: ISSUE-002）──
-                # one_shot = 「一次性批次」：该池执行一次 batch（batch_size 抽，默认 1）完成后才标记
-                #   exhausted——批次中途【不】因 one_shot 耗尽而切换/终止，本批次抽满 batch_size 才
-                #   耗尽，pool_exhausted → switch_to 在【下一次批次入口】生效。
-                #   这使旗舰 free_10pull（batch_size=10 + one_shot=true）语义确定：一次 10 连消耗
+                # ── 一次性池 / batch 语义约定（DECISION-1 归约，REVIEW-R1-FIX: ISSUE-002）──
+                # 一次性池 = max_draws = batch_size（无独立 one_shot 参数）：该池执行一次 batch
+                #   （batch_size 抽，默认 1）完成后才标记 exhausted——批次中途【不】因耗尽而切换/终止，
+                #   本批次抽满 batch_size 才耗尽，pool_exhausted → switch_to 在【下一次批次入口】生效。
+                #   这使旗舰 free_10pull（batch_size=10 + max_draws=10）语义确定：一次 10 连消耗
                 #   10 张 free_ticket 后切回 main，绝不中途改抽 main 的 orundum。
                 # 其他 lifecycle 规则（pool_draws 阈值等）若批次中途 switch_to：剩余抽数按新池
                 #   成本逐抽继续，不可负担即终止本批次（上面 per-draw 扣费检查兜底）。
@@ -536,16 +481,19 @@ P61 的转换处理器在 **Ph2** 的 gacha_service 装配处订阅：`self._not
 
 ### 3.6 TOML 配置
 
-**标准卡池（向后兼容——不写 `[[banner]]` 时自动包装）：**
+**标准卡池（一次性迁移后的 `[[banner]]` 格式）：**
 
 ```toml
-[[pool]]
+[[banner]]
 id = "genshin_limited"
 name = "角色活动祈愿"
+
+[[banner.pool]]
+id = "main"
 cost = { intertwined = 1 }
-# ... distribution ...
-# → 自动包装为 Banner { id="genshin_limited", pools: { main: {...} } }
+# ... rewards ...
 ```
+（迁移说明：旧 `[[pool]]` 一次性改写为 `[[banner]]` + 嵌套 `[[banner.pool]]`，见 §3.4 / §3.12 迁移阶段；时间窗口字段见 §3.13.4。）
 
 **新手池（max_draws 关闭）：**
 
@@ -597,7 +545,7 @@ featured = true
 id = "free_10pull"
 cost = { free_ticket = 1 }
 batch_size = 10
-one_shot = true
+max_draws = 10               # 一次性池（DECISION-1 归约：max_draws = batch_size）
 excludes_all_pity = true
 
 [[banner.pool.reward]]
@@ -781,7 +729,7 @@ class BannerStats:
 
 GDR 计算以 Banner 为单位——`banner_id` 替代 `pool_id` 作为统计维度。
 
-**统计键命名空间（REVIEW-R1-FIX: ISSUE-002）**：`banner_id` 替代裸 `pool_id` 不只在 GDR 维度——**逐池统计键**（`pool_draw_counts` / `pool_card_counts` / `pool_pity_counts` / `draw_pool_ids` / `pool_types`）统一为全限定 `{banner_id}.{pool_id}`（与 §3.11.3 PityEngine 键空间、§3.9 `flattened_pools` 的 pool_id 一致）。`[[pool]]` 兼容模式退化为 `{旧pool_id}.main`（banner.id=旧 pool_id，内部池固定 'main'）——键格式变化，下游消费端同步迁移（见 §3.13.1 pool_types 键迁移清单）。`BannerStats.pool_breakdown` 同样以全限定键为下钻键。
+**统计键命名空间（REVIEW-R1-FIX: ISSUE-002）**：`banner_id` 替代裸 `pool_id` 不只在 GDR 维度——**逐池统计键**（`pool_draw_counts` / `pool_card_counts` / `pool_pity_counts` / `draw_pool_ids` / `pool_types`）统一为全限定 `{banner_id}.{pool_id}`（与 §3.11.3 PityEngine 键空间、§3.9 `flattened_pools` 的 pool_id 一致）。一次性迁移后全限定键统一为 `{banner_id}.{pool_id}`，无 `{旧pool_id}.main` 退化情形（D4 裁决）；下游消费端同步迁移（见 §3.13.1 pool_types 键迁移清单）。`BannerStats.pool_breakdown` 同样以全限定键为下钻键。
 
 **InfoVector.pool_id 同步全限定（REVIEW-R1-FIX: ISSUE-006）**：全量历史模式 `InfoVectorCollector.on_draw`（collector.py:62）的 `InfoVector.pool_id` 同步为全限定 `{banner_id}.{pool_id}`——`on_draw` 新增可选 `pool_key` 参数（None 时回退 `pool.id` 保持旧契约，与 CompactCollector 一致），`pool_id` 字段取 `pool_key`。否则同一模拟循环在紧凑（默认主流，全限定键）与全量历史（裸 id）两模式下 `draw_pool_ids` / `pool_card_counts` 键分裂，下游混用两模式结果（如 process_trace 消费紧凑全限定键、全量历史路径消费裸 id）时聚合错配。两模式键语义统一后无需消费端分支。
 
@@ -796,14 +744,13 @@ class BannerPoolEntry:
     id: str                              # "main" | "free_10pull" | "step2"
     cost: str                            # TOML 字符串，如 "orundum:600"（必填）
     batch_size: int = 1                  # 每次抽取连数
-    one_shot: bool = False
     excludes_all_pity: bool = False
     max_draws: Optional[int] = None
     exchange_card_id: Optional[str] = None                  # 兑换快捷方式（同旧 [[pool]]，写入后生成 100% 单卡分布）
     epitomizable_cards: List[str] = field(default_factory=list)  # P56 定轨候选卡
     rewards: List[dict] = field(default_factory=list)       # [[banner.pool.reward]] 解析——元素统一为 dict
                                                              # （card_id/probability/rarity/featured/resources_gained）；
-                                                             # [[pool]] 自动包装经 §3.4 PoolDistEntry→dict 转换
+                                                             # 一次性迁移后 rewards 统一 dict 表示（见 §3.4）
                                                              # （REVIEW-R1-FIX: ISSUE-304），与 §3.13.1 dict 推导、
                                                              # featured 聚合、Ph6 Pool 构造兼容
     # output/random 不配置——从 rewards 推导（见 §3.13.1）
@@ -830,7 +777,7 @@ class BannerEntry:
     id: str
     name: str
     enabled: bool = True            # banner 模式 enabled 语义（REVIEW-R1-FIX: ISSUE-006）：
-                                    # [[pool]] 自动包装时透传 PoolEntry.enabled；[[banner]] 默认 True。
+                                    # [[banner]] 的 pool 默认 enabled=True。
                                     # §3.13.4 P62 可达判定 `enabled → available_from` 以此字段为准
     max_draws: Optional[int] = None
     available_from: Optional[float] = None
@@ -851,22 +798,17 @@ class BannerConfig:
 banner: BannerConfig = field(default_factory=BannerConfig)
 ```
 
-**`store.banner` 是运行时唯一数据源。** 旧 `store.pools`（`[[pool]]`）解析时经 `_wrap_pools_as_banners()` 立即包装为 `BannerEntry` 存入 `store.banner.banners`，不再作为运行时消费对象。`store.pools` 字段保留仅供旧代码读取兼容，P61 实施后逐步退役。
+**`store.banner` 是运行时唯一数据源（D3/D4 裁决，2026-08-02）。** 解析器只认 `[[banner]]`，`store.banner.banners` 为唯一存储；无 `_wrap_pools_as_banners` 自动包装（旧 `[[pool]]` 随 config.toml 一次性迁移移除，见 §3.4）。`store.pools` **属性化**为只读展平视图（见下条），不再有「保留供旧代码读取兼容」的字段语义。
 
-**`store.pools` 兼容视图（REVIEW-R1-FIX: ISSUE-007/010）**：`[[banner]]` 配置下 `store.pools` 不会被 `_wrap_pools_as_banners()` 填充（该函数只处理 `[[pool]]`）——若不做兼容，`store.pools` 为空的静默退化会让大量既有消费方拿到空列表而不报错：analysis_panel.py:177/1593/1619（extract_cost_per_draw_by_resource）、gacha_panel.py:283、main_window.py:276/387/431、resource_search_panel.py:276-278、worst_impact_panel.py:185、retreat_panel.py:217/271、cli.py:149、gdr.py:512。方案：`ConfigStore` 新增**只读扁平视图** `flattened_pools`（property：遍历 `store.banner.banners[*].pools[*]` 展平为 `PoolEntry` 列表，`pool_id` 取 `{banner_id}.{pool_id}`，cost/batch_size/rewards 透传；Banner 级 `available_from`/`available_until` 回填为 start_day/end_day）。`[[pool]]` 模式保持原语义。
+**`store.pools` 只读展平视图（D3 裁决）**：`ConfigStore.pools` 由字段改为 **`@property`**，遍历 `store.banner.banners[*].pools[*]` 展平为 `PoolEntry` 列表（`pool_id` 取 `{banner_id}.{pool_id}`，cost/batch_size/rewards 透传；Banner 级 `available_from`/`available_until` 回填为 start_day/end_day）。**读侧消费方零改动**（属性名/结构不变，仍是 `List[PoolEntry]`）：analysis_panel.py:177/1593/1619、gacha_panel.py:283、main_window.py:276/387/431、resource_search_panel.py:276-278、worst_impact_panel.py:185、retreat_panel.py:217/271、cli.py:149、gdr.py:512 照常读 `store.pools`，拿到的是从 banner 展平的结果，不拿空列表。
 
-**`store.pools` 读侧兜底机制（REVIEW-R1-FIX: ISSUE-006，消除『无需逐点改』三向矛盾）**：只读视图不能替 `store.pools` 字段本身取值——读 `store.pools` 的旧消费方拿到的仍是字段，banner 模式下为空列表（成本抽取/统计/模拟目标静默消失，正是要避免的退化）。⚠ 待人工裁决（DECISION-3，见 §6.1 裁决门控）：在「写侧 dual-write」与「消费方逐一改读 flattened_pools（点改清单入 Ph7/Ph8c）」两者间，本方案选**写侧 dual-write**（旧消费方零改动、与 ISSUE-010『store.pools 保持可变字段』相容）；默认选型已定（dual-write）；若倾向严格单一数据源，可改走点改清单。机制定为：Ph4 `_build_banners()` 解析完 `[[banner]]` 后，同步把 `flattened_pools` 的展平结果写回 `store.pools`（Legacy mirror，供旧字段读者拿非空数据）。`store.pools` 仍保持可变字段、不被属性化（见下条）；`flattened_pools` 是规范只读视图，新代码一律读它。写侧并存不互相覆盖（与下条 ISSUE-010 一致）：`config_toml.py:1107` 的 `[[pool]]` 解析 append 仅存在于 `[[pool]]` 模式（此时无 dual-write）；`config_panel.py:3879` 重绑 / `:3385/:3925` append 属旧「卡池配置」Tab 代码，随 Ph8 替换为「卡池管理」Tab 一并处理（写行为经 Ph8c 迁移清单确认）；解析期 dual-write 与编辑期写侧时序不重叠。保存侧按来源区分：`store.banner.banners` 非空 → 写 `[[banner]]`；为空 → 写 `[[pool]]`。§四『消费方零改动』以 dual-write 为成立前提。
-
-**`store.pools` 保持可变字段，不属性化/只读化（REVIEW-R1-FIX: ISSUE-010）**：删去「或将 `pools` 属性化返回展平结果」的未定分支——`store.pools` 存在三处写侧，属性化/只读化会让全部写侧失效：`config_toml.py:1107`（`[[pool]]` 解析 append，Ph4 保留路径）、`config_panel.py:3879`（`store.pools = []` 整体重绑）、`config_panel.py:3385/:3925`（append）。**`flattened_pools` 是唯一的只读视图**；写侧永远写 `store.pools`，读侧经视图兜底。三处写侧列入 Ph4/Ph8c 迁移清单（保留写行为，仅确认与只读视图共存、不互相覆盖）。`_build_banners()`（Ph4）解析完 `[[banner]]` 后立即构建该视图。
+**写侧统一走 `store.banner`（D3 裁决，替代 dual-write）**：`store.pools` 属性化只读后不可写。原写侧全部改走 `store.banner`：`config_toml.py:1107`（`[[pool]]` 解析 append）随一次性迁移删除；`config_panel.py:3879`（整体重绑）、`:3385/:3925`（append）随 Ph8c 改为写 `store.banner`（见 §3.12 Ph8c 迁移清单）。**无 dual-write、无 Legacy mirror、无冗余镜像**——单一数据源，读侧经属性视图兜底。原 ISSUE-010「`store.pools` 保持可变字段」约束随 D3 裁决作废。
 
 **P62 可达过滤数据源（REVIEW-R1-FIX: ISSUE-009）**：`filter_target_specs_by_obtainable`（gdr.py:510-514）当前遍历 `store.pools` 构建 `pool_start[p.pool_id] = p.start_day`——banner 模式（`store.pools` 为空）会把所有目标卡判为不可达，4 个 `_obtainable` GDR 分母退化。改为遍历 `store.banner.banners`（`enabled` 判定 → `banner.available_from`）构建可达映射，与 §3.13.2 复刻时间线排序、§3.13.4 时间窗口上移共用同一数据源（Ph3 实施，文档同步表已登记说明）。
 
 <!-- REVIEW-R2-FIX: AUDIT-BREAK-2 -->
 <!-- REVIEW-R2-FIX: AUDIT-BREAK-4 -->
-**保存侧双路径（REVIEW-R1-FIX: ISSUE-012）**：`save_toml()`（config_toml.py:89、_save_templates_and_pools :248-277）当前只从 `store.pools` 写 `[[pool]]`。P61 后：
-- `store.banner.banners` 非空（含解析自 `[[banner]]` 或 `[[pool]]` 自动包装）→ 保存时写回 `[[banner]]`（含 `[[banner.pool]]` / `[[banner.lifecycle]]`），不再写 `[[pool]]`；
-- `store.banner.banners` 为空（纯旧数据未加载 Banner）→ 保持现状只写 `[[pool]]`，**不写 `[[banner]]` 时现有 `[[pool]]` 行为完全不变**验收成立；
-- 保存前先由 `flattened_pools` 快照，防止 `store.pools` 在 banner 模式已被清空时旧 `[[pool]]` 文件整体丢失；
+**保存侧统一写 `[[banner]]`（REVIEW-R1-FIX: ISSUE-012，D3/D4 后简化）**：`save_toml()`（config_toml.py:89、_save_templates_and_pools :248-277）从 `store.banner.banners` 写 `[[banner]]`（含 `[[banner.pool]]` / `[[banner.lifecycle]]`），**不再写 `[[pool]]`、无双路径分支**。配置迁移（`[[pool]]` → `[[banner]]`）在 Ph1 前置一次性完成（见 §3.12 迁移阶段）；保存前无需 `flattened_pools` 快照（store.pools 只读视图不参与写，无文件丢失风险）。
 - `pool_type` / `rerun_of` 解析残留排期 Ph4 清理：`PoolEntry.pool_type` / `rerun_of` 字段删除；`_build_pools`（config_toml.py:1032/1070-1071/1094/1102）、复刻复制（:1110-1115）、写出（:260-277）同步移除，旧 TOML 中这两个键解析时忽略（不报错）。**字段删除影响清单（读侧+写侧，ISSUE-007）**：`core/retreat_config.py:42-62`（`PoolEntry` 重建同时读 `p.pool_type`/`p.rerun_of` 并以之为关键字构造——Ph1a/Ph4 同步改不传）、`gui/config_panel.py:3241/4059`（读/写 pool_type）、`config_toml.py:1094`（写 pool_type）、**`gui/main_window.py:388`（`pool_type = pe.pool_type or (pe.bindings.get('type', '角色') ...)`——`pe.pool_type` 访问在 Ph4 删字段后 AttributeError，改为 `pe.bindings.get('type', '角色') if pe.bindings else '角色'`，AUDIT-BREAK-4）、`tests/core/test_batch_draw.py:24`（`PoolEntry(... pool_type='角色')` 关键字，Ph4 删字段后 TypeError，AUDIT-BREAK-4）、`tests/service/test_gacha_service.py:142`（`PoolEntry(... pool_type='角色')` 关键字，同 test_batch_draw.py:24，AUDIT-BREAK-2/4）**——随 Ph4 一并清理。
 
 ### 3.10 「卡池管理」Tab 设计
@@ -944,7 +886,7 @@ Banner 自身不抽卡——成本/批次/奖励都在 Pool 层级各自配置�
 | 1 | ID | `QTableWidgetItem`（文本） | pool 标识符，内联编辑。变更时级联更新生命周期引用 |
 | 2 | 成本 | `QLineEdit` 委托 | TOML 格式，如 `orundum:600`。必填 |
 | 3 | 批次 | `QSpinBox` 委托 | 1–100，默认 1 |
-| 4 | 一次性 | `QCheckBox` 委托 | `one_shot` |
+| 4 | 一次性 | `QCheckBox` 委托 | sugar（DECISION-1 归约）：勾选写 `max_draws = batch_size`，非独立字段 |
 | 5 | 不计保底 | `QCheckBox` 委托 | `excludes_all_pity` |
 
 **交互细节**：
@@ -1029,7 +971,7 @@ QTableWidget 内联编辑，5 列：
 - **`set_config()`**：从 `store.banner.banners` 反序列化 → 回填 `self._banner_defs` + 刷新 Banner 列表
 - **`get_config()`**：返回字典追加 `'banner': {...}` 键，供预览面板合成 Banner 摘要
 
-**正向跨 Tab 数据流保留（REVIEW-R1-FIX: ISSUE-016）**：现有 `_sync_card_defs_from_pools()`（config_panel.py:3553-3612，池 rewards → 「卡牌定义」Tab 的 pools 字段）与 `_register_resources_from_pools()`（:3190，cost/资源获取 → 「资源管理」Tab 资源注册）当前从将被删除的 `pool_table` 行读取。P61 替换后这两个正向同步入口**改遍历 `store.banner.banners → pools[*]`**（经 §3.9 `flattened_pools` 视图读取，pool_id 用全限定键）；`_on_pool_cell_changed`（:3614-3626）的成本列资源注册同理改为 Banner Pool 编辑信号驱动。§3.10 替换「卡池配置」Tab 时**不得**牵连这两个方法——它们随 pool_table 删除后，「卡牌定义」的 pools 字段与资源注册将失去数据源（静默失效）。
+**正向跨 Tab 数据流保留（REVIEW-R1-FIX: ISSUE-016）**：现有 `_sync_card_defs_from_pools()`（config_panel.py:3553-3612，池 rewards → 「卡牌定义」Tab 的 pools 字段）与 `_register_resources_from_pools()`（:3190，cost/资源获取 → 「资源管理」Tab 资源注册）当前从将被删除的 `pool_table` 行读取。P61 替换后这两个正向同步入口**改遍历 `store.banner.banners → pools[*]`**（经 §3.9 `store.pools` 只读视图读取，pool_id 用全限定键）；`_on_pool_cell_changed`（:3614-3626）的成本列资源注册同理改为 Banner Pool 编辑信号驱动。§3.10 替换「卡池配置」Tab 时**不得**牵连这两个方法——它们随 pool_table 删除后，「卡牌定义」的 pools 字段与资源注册将失去数据源（静默失效）。
 
 ### 3.11 「保底机制」Tab 增强
 
@@ -1076,28 +1018,28 @@ QTableWidget 内联编辑，5 列：
 | 1 | ☑ | `QCheckBox`（`setCellWidget`） | 勾选 = 该保底规则绑定到此 Banner.Pool |
 | 2 | Banner | `QTableWidgetItem`（只读） | Banner 名称 |
 | 3 | Pool | `QTableWidgetItem`（只读） | Pool ID |
-| 4 | 说明 | `QTableWidgetItem`（只读） | 合并显示标签：`excludes_all_pity` →「不计保底」/ `one_shot` →「一次性」；正常池留空 |
+| 4 | 说明 | `QTableWidgetItem`（只读） | 合并显示标签：`excludes_all_pity` →「不计保底」/ `max_draws == batch_size`（一次性池，DECISION-1 归约）→「一次性」；正常池留空 |
 
 **交互细节**：
 - 表格顶部有一行 `QLineEdit` 筛选器——输入关键词后表格仅显示匹配行（匹配 Banner 名 / Pool ID），方便 Banner 数量多时快速定位目标池
 - 数据来源：遍历 `store.banner.banners` → 展开每个 Banner 的所有 Pool → 每行一个 `{banner_id}.{pool_id}`
-- 「说明」列自动聚合 Pool 的特殊属性标签——用户无需逐列查看 `one_shot`/`excludes_all_pity`
-- 加载时：读取 `pools` fnmatch pattern → 对每个 `{banner_id}.{pool_id}` 做三路匹配（全限定 / `banner_id` 段 / 裸 `pool_id` 段，REVIEW-R1-FIX: ISSUE-004）→ 任一命中即勾选对应行
+- 「说明」列自动聚合 Pool 的特殊属性标签——用户无需逐列查看 `max_draws=batch_size`（一次性池）/`excludes_all_pity`
+- 加载时：读取 `pools` fnmatch pattern → 对每个 `{banner_id}.{pool_id}` 全限定键做 fnmatch（D4 一次性迁移后 PityDef.pools 均为全限定键，无三路兼容）→ 命中即勾选对应行
 - 保存时：从所有勾选行反向生成紧凑的 fnmatch pattern（共享前缀自动缩写为 `*`，精确 ID 用逗号分隔）→ 写回 `pools`
 - 「全选」勾选所有行（生成 `*` = 匹配全部）；「全不选」取消所有勾选
 - `excludes_all_pity=True` 的 Pool 仍然可以勾选（绑定是声明性的），但引擎不应用保底
 
 #### 3.11.3 引擎匹配逻辑与池标识命名空间
 
-TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍历所有 Banner 的所有 Pool，用 `{banner_id}.{pool_id}` 与 pattern 做 `fnmatch`。**兼容匹配规则（REVIEW-R1-FIX: ISSUE-004/005）**：对每个 `{banner_id}.{pool_id}` 键，除全限定 fnmatch 外，再分别对 `banner_id` 段与裸 `pool_id` 段各做一次 fnmatch——三路任一命中即绑定。这是必须的：fnmatch 是全串匹配，`fnmatch('genshin_limited.main', 'genshin_limited')` 为 False，不能只靠全限定匹配兑现旧裸池 id 模式的兼容；同时保留对裸 Pool ID 的匹配（向后兼容未迁移的 `[[pool]]`）。**三路匹配的实现面（ISSUE-005）**：不止 Ph8b UI「绑定池」加载，**运行期 `batch_simulator._build_pity_engine_from_gui`（batch_simulator.py:139-158）的 pool_specs 构建 fnmatch（:139-144 `any(fnmatch.fnmatch(pool.id, ptn) for ptn in pools_ptn)`）同样适用**——现状对裸 `pool.id` 匹配，兼容模式（`[[pool]]` 自动包装，键 `{旧pool_id}.main`）下旧 `PityDef.pools=["genshin_limited"]` 对全串 'genshin_limited.main' fnmatch 为 False、且无 banner_id 段拆分，保底规则在 **spec 构建期即不绑定**、soft pity 静默失效（直接违反「现有 `[[pool]]` 行为完全不变」验收）。Ph6 必须在该处实现三路匹配（拆 banner_id 段 / 裸 pool_id 段各做一次），Ph9 用『旧 `[[pool]]` + 旧 `pools`』用例锁定保底绑定等价。
+TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍历所有 Banner 的所有 Pool，用 `{banner_id}.{pool_id}` 与 pattern 做 `fnmatch`。**匹配规则（D4 一次性迁移后简化，REVIEW-R1-FIX: ISSUE-004/005）**：仅对全限定键 `{banner_id}.{pool_id}` 做全限定 fnmatch（无三路拆分）。旧裸池 id 模式（`pools=["genshin_limited"]`）在 Ph4b 配置迁移时改写为全限定键（`["genshin_limited.main"]`），因此不需要 banner_id 段 / 裸 pool_id 段兼容匹配。**实现面（ISSUE-005）**：`batch_simulator._build_pity_engine_from_gui`（batch_simulator.py:139-158）的 pool_specs 构建 fnmatch（:139-144 `any(fnmatch.fnmatch(pool.id, ptn) for ptn in pools_ptn)`）按全限定键匹配，PityDef.pools 在全限定键空间内 fnmatch（`fnmatch('genshin_limited.main', 'genshin_limited.main')` 为 True）；Ph9 用迁移后用例锁定保底绑定等价。
 
 <!-- REVIEW-R2-FIX: AUDIT-BREAK-3 -->
 **池标识命名空间统一（REVIEW-R1-FIX: ISSUE-010）**：多 Banner 各含同名 `main` / `free_10pull` 时，裸 `pool.id` 无法作为 PityEngine 键（`pool_specs: Dict[str, PoolPitySpec]`，pity.py:1363-1364 按池 id 索引；gacha_service.py:270-276 get_spec/before_draw、L311 after_draw 均以裸 `pool.id` 传参——多 Banner 下直接撞 key、保底串池）。统一规则：
 - **PityEngine 键空间与 fnmatch 全限定格式一致**：`{banner_id}.{pool_id}`（如 `endfield_limited.main`）
-- `gacha_service` 在 `aggregate_probs_by_rarity`（下沉后的 core 层函数，ISSUE-004）/ `before_draw` / `after_draw` / `get_spec` 传参时用全限定键；`batch_simulator` 构建 `pool_specs` 时同用全限定键，且 `_build_pity_engine_from_gui` 的 pdef.pools fnmatch 匹配处实现三路兼容匹配（拆 banner_id 段 / 裸 pool_id 段各做一次，ISSUE-005 / Ph6）
-- `[[pool]]` 单池包装模式下全限定键退化为 `{pool_id}.main`（banner.id = 旧 pool_id）——旧 `pools = ["genshin_limited"]` 经上述**三路兼容匹配**命中 `banner_id` 段（= 旧 pool_id）依旧匹配；旧 `pools = ["main"]` 命中裸 `pool_id` 段（REVIEW-R1-FIX: ISSUE-004，Ph8b 实现 + Ph9 测试锁定『旧 `[[pool]]` + 旧 `pools`』等价行为）
+- `gacha_service` 在 `aggregate_probs_by_rarity`（下沉后的 core 层函数，ISSUE-004）/ `before_draw` / `after_draw` / `get_spec` 传参时用全限定键；`batch_simulator` 构建 `pool_specs` 时同用全限定键，且 `_build_pity_engine_from_gui` 的 pdef.pools fnmatch 匹配处按全限定键 `{banner_id}.{pool_id}` 精确匹配（**D4 一次性迁移后 PityDef.pools 均为全限定键，无三路兼容**，ISSUE-005 / Ph6）
+- **D4 一次性迁移后无包装退化情形**：全限定键统一为 `{banner_id}.{pool_id}`，无 `{pool_id}.main` 自动退化。旧裸 id 的 PityDef.pools（`["genshin_limited"]` / `["main"]`）在配置迁移阶段改写为全限定键（`["genshin_limited.main"]`）（REVIEW-R1-FIX: ISSUE-004，Ph8b 实现 + Ph9 用例锁定迁移后绑定行为）
 - **全限定键推导口径（REVIEW-R1-FIX: ISSUE-021/AUDIT-BREAK-3）**：全限定键 = `f"{banner.id}.{Banner.pools 字典键}"`（单池包装下字典键恒 'main'）——**pools 字典键是唯一口径，不是 `Pool.id` 属性**。构造桥 `Banner(id=p.id, pools={'main': p})` 里 `p.id` 仍为旧 pool id，若取 `pool.id` 会得 `{旧pid}.{旧pid}` 而非约定的 `{旧pid}.main`（AUDIT-BREAK-3 指出的键格式歧义）。`DrawOutcome.pool_id`、`active_pool_id`、`banner.pool_draws` 键、stats/collector/pool_types 键统一为此口径（§3.5 要点 11）
-- **原子提交态 pool_specs 键全限定（REVIEW-R1-FIX: ISSUE-021/AUDIT-BREAK-3，阻塞 2）**：Ph2 查询键已全限定、而 `_build_pity_engine_from_gui` 的 pool_specs 键到 Ph6 才改——原子提交态 `get_spec('{旧pid}.main')` 查裸键引擎为 None、soft pity 静默失效。**pool_specs 键全限定 + fnmatch 三路匹配提前并入原子提交（随 Ph2/构造桥落地，见 §3.5 要点 12）**，Ph6 仅保留数据源改 store.banner 与多池展开
+- **原子提交态 pool_specs 键全限定（REVIEW-R1-FIX: ISSUE-021/AUDIT-BREAK-3，阻塞 2）**：Ph2 查询键已全限定、而 `_build_pity_engine_from_gui` 的 pool_specs 键到 Ph6 才改——原子提交态 `get_spec('{旧pid}.main')` 查裸键引擎为 None、soft pity 静默失效。**pool_specs 键全限定 + 全限定键 fnmatch 提前并入原子提交（随 Ph2/构造桥落地，见 §3.5 要点 12；D4 一次性迁移后仅全限定键匹配，无三路兼容）**，Ph6 仅保留数据源改 store.banner 与多池展开
 - §3.4/Ph1a 策略迁移的 `DrawAction` 因此强制双字段（`banner_id` + `pool_id`），服务层反查按全限定键定位（§3.5 要点 5 / ISSUE-006）
 - `core/pity.py` 本身不改（`Dict[str, PoolPitySpec]` 无类型约束）——键命名空间由调用方（gacha_service / batch_simulator）统一，§四「不触及 core/pity.py」成立
 - **命名空间超出 PityEngine（REVIEW-R1-FIX: ISSUE-002）**：同一 `{banner_id}.{pool_id}` 键空间同时用于 stats/collector/result_types 的逐池统计键（`pool_draw_counts` / `pool_card_counts` / `pool_pity_counts` / `draw_pool_ids` / `pool_types`），保证兼容模式（每个 `[[pool]]` 包装为含 'main' 内部池的 Banner）下多个 'main' 键在统计字典中不串池——否则跨 Banner 统计串池、保底重置归因（pool_card_counts/pool_pity_counts）与 GDR 分母错乱。详见 §3.8
@@ -1107,20 +1049,22 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 | 阶段 | 内容 | 文件 | 预估 |
 |------|------|------|:---:|
 | Ph0 | `core/notifier.py` —— subscribe / emit / priority + **装配契约（REVIEW-R1-FIX: ISSUE-301）**：Notifier 由装配层（batch_simulator `_run_single` 构造 GachaService 处）创建并经新增构造参数注入 `GachaService.__init__`（`notifier=None` 时服务内 fallback 自建，批处理入口必须传共享实例）；装配层在构造服务**前**调用 **P58 装配函数** `register_milestone_engine(notifier, engine)` 注册 priority=0 订阅。**P61 + P58 共享基础设施**——Ph0 交付后两个计划可完全并行 | 新建 | ~30行+装配点 |
-| Ph1 | `core/pool.py` —— 原地改造：加 one_shot/excludes_all_pity/max_draws，删 pool_type/is_rerun/original_pool_id/available_from/available_until（删除清单须对照现状 Pool 字段逐项核实，见下注），output/random/is_exchange 改推导 property + **新增模块级函数 `aggregate_probs_by_rarity` / `infer_rarity_from_spec`（下沉自 GachaService 方法，供 Banner.draw 与 gacha_service 共用，ISSUE-004）**。**与 Ph1a/Ph1b/Ph1c/Ph2/Ph5 同 commit 交付——最小可运行原子单元（REVIEW-R1-FIX: GATE-3，见下方「交付单元」注）**——避免字段已删而策略/构造点/gacha_service 消费点未迁移的中间态 TypeError/AttributeError（现状 gacha_service.py:211-214 `pool_end_times_sorted` / :224-226 `current_pools` 直接读 `p.available_until`/`p.available_from`，字段删除即必然崩溃） | 修改 | ~35行 |
+| Ph1-base | **基线固化（D3/D4 新增，等价性安全网）** —— 在 Ph1 动任何字段前，用**当前旧代码 + 现有 `[[pool]]` 配置**跑固定种子模拟（seed=42，n≥1000），把 CompactResult 序列化固化到 `tests/fixtures/baseline_pool_golden.json`。后续任何删字段/改键/迁移阶段，同种子重跑并逐字段对比该 golden，保证行为等价（CLAUDE.md「无历史包袱原则」要求的基线固化 + 等价对照） | 新增 fixture | ~30行脚本 + fixture |
+| Ph1 | `core/pool.py` —— 原地改造：加 excludes_all_pity/max_draws（one_shot 归约为 max_draws=batch_size，DECISION-1），删 pool_type/is_rerun/original_pool_id/available_from/available_until（删除清单须对照现状 Pool 字段逐项核实，见下注），output/random/is_exchange 改推导 property + **新增模块级函数 `aggregate_probs_by_rarity` / `infer_rarity_from_spec`（下沉自 GachaService 方法，供 Banner.draw 与 gacha_service 共用，ISSUE-004）**。**与 Ph1a/Ph1b/Ph1c/Ph2/Ph5 同 commit 交付——最小可运行原子单元（REVIEW-R1-FIX: GATE-3，见下方「交付单元」注）**——避免字段已删而策略/构造点/gacha_service 消费点未迁移的中间态 TypeError/AttributeError（现状 gacha_service.py:211-214 `pool_end_times_sorted` / :224-226 `current_pools` 直接读 `p.available_until`/`p.available_from`，字段删除即必然崩溃） | 修改 | ~35行 |
 | Ph1a <!-- REVIEW-R2-FIX: AUDIT-BREAK-1 --> | **策略迁移 + Pool 构造点迁移（新增，REVIEW-R1-FIX: ISSUE-001/008）** —— 8 个内置策略从 `pool.is_available_at`/`pool.available_until` 迁移到 `ctx.banners`（§3.4 迁移方案）并改 `DrawAction` 双字段（§3.5 要点 5）；**含 fixed_count / target_hunting（原「可不迁移」取消——current_pools 包装后元素 id 全为 'main'，target_hunting 的 `target_pool_ids` 匹配改 `banner_id`，REVIEW-R1-FIX: ISSUE-003）**；**另含 pool_quota / pity_reserve 两个裸 pool.id 消费点（ISSUE-002）**——pool_quota 的 `ctx.pool_draw_counts.get(pool.id)`（全限定化后恒 0、配额永不满足）改读 `banner.pool_draws`（§3.7）；pity_reserve 的 `ctx.get_pity_probabilities(pool.id)`（查不到全限定 spec、保底阈值退化基础概率）改传全限定键或经 StrategyContext 新增 banner 维度接口（Ph5）；`service/config_service.py:52-60`、`core/worst_impact.py:195-207`、`generator/schedule_generator.py:34-35` 的 `Pool(...)` 关键字构造改删字段后签名（时间窗口移 Banner 级、is_exchange 改 property、available_from/until 不再传）；**`service/config_service.py:25-58` 的 `export_pool_to_config` / `import_pool_from_config` 两个方法为死代码（REVIEW-R1-FIX: ISSUE-020/AUDIT-BREAK-1——全库 grep 无任何调用方，仅定义处命中）：`export_pool_to_config` 读 `p.available_from`/`p.available_until`（:36-37）、`import_pool_from_config` 以将删字段 `available_from`/`available_until`/`is_exchange` 为关键字构造 `Pool(...)`（:52-60），Ph1 删字段后两方法均必然 AttributeError/TypeError。处置：Ph1a **直接删除这两个方法**（死代码，无消费方，删后无影响面）；若保守保留类壳则删除方法体中的字段读写并标注废弃。AUDIT-BREAK-1 另注：Ph1 删字段后原子提交测试断裂属 GATE-3 已覆盖范围，本条仅补死代码清单**；**`service/batch_simulator.py` 的 `from_config_store`（:547-559）同属本清单但原计划漏列（REVIEW-R1-FIX: GATE-3_依赖顺序）——该处同样以将删字段为关键字构造 `Pool(...)`（`available_from=start_day*DAY` / `available_until=end_day*DAY` / `pool_type` / `is_exchange`），Ph1 删字段后首提交即 TypeError；Ph1a 一并删这四个关键字，时间窗口改由 PoolSchedule（:561-565）承载、`end_time` 计算（:568）不变，banner 模式数据源改造仍归 Ph6**；`core/retreat_config.py` 的 `PoolEntry` 重建**写侧**改不传 `pool_type`/`rerun_of`（retreat_config.py:50/54 现以已删字段为关键字构造——既 AttributeError 又 TypeError，ISSUE-007），读侧停止读 `PoolEntry.pool_type`——**与 Ph1 同 commit 交付（REVIEW-R1-FIX: GATE-3，见 §3.12 交付单元注）** | 修改 8 策略 + 6 文件 | ~95行 |
 | Ph1b <!-- REVIEW-R2-FIX: AUDIT-BREAK-2 --> | `core/state.py` —— 删除 `GachaState.get_available_pools()`（REVIEW-R1-FIX: ISSUE-002；REVIEW-R1-FIX: GATE-3——方法体 `pool.is_available_at()` 随 Ph1 删字段即失效，必须与 Ph1 同 commit 交付），清理 `Pool` import 死依赖。**+ 同步删除 `tests/core/test_state.py::test_get_available_pools`（:73-82——构造 Pool 用将删 `available_from`/`available_until` 关键字 + 调已删方法，双断裂；REVIEW-R1-FIX: GATE-6_测试策略——删用例随本阶段并入原子单元，否则首提交后至 Ph9 前 pytest 必红，与 GATE-3『首提交后 pytest 全量通过』自相矛盾）+ 改写 `tests/service/test_gacha_service.py::test_env_builder_from_config_store_smoke`（:164 的 `env.pools[0].pool_type` 断言随 Ph1 删字段失效 → 改断言推导属性 `pool.output`/`pool.random` 或 §3.13.1 `derive_type`，REVIEW-R1-FIX: GATE-3_依赖顺序；**另 :142 的 `PoolEntry(... pool_type='角色')` 关键字——`PoolEntry.pool_type` 字段 Ph4 才删除，但同测试已在 Ph1b 改写范围，一并移除该关键字（At 阶段字段仍存在、移除无害），避免 Ph4 再断一次，AUDIT-BREAK-2/4**）** | 修改 | -13行 + 清理 |
 | Ph1c | `core/banner.py` —— Banner + DrawOutcome + TransitionRule + TransitionPreview + Lifecycle 引擎（不含 Pool，直接引用 core/pool.py 的 Pool）+ **card_obtained rarity 匹配求值**（`match='rarity'` 经 `DrawOutcome.reward.extra_info['rarity']` 判定，ISSUE-306）| 新建 | ~225行 |
-| Ph2 <!-- REVIEW-R2-FIX: AUDIT-BREAK-3 --> | `service/gacha_service.py` —— `current_pools` → `current_banners`（`Dict[str, Banner]`），banner 路由 + **保留逐抽结算管线**（spend/保底/统计/add_card/溢出/collector.on_draw，与现状 L259-365 一致）+ `after_draw` 单抽粒度 emit + **Notifier 装配**（`self._notifier` 创建 + P61 转换订阅 priority=1，ISSUE-001）+ **逐池统计键改全限定 `{banner_id}.{pool_id}`**（stats/collector/pool_types，ISSUE-002）+ **pool_specs 键全限定 + fnmatch 三路匹配（AUDIT-BREAK-3 阻塞 2，原子提交内必须与查询键同口径——`_build_pity_engine_from_gui`/`from_config_store` 的 pool_specs 键改 `{pool.id}.main` 并实现三路匹配，否则原子提交态 `get_spec('{旧pid}.main')` 查裸键引擎为 None、soft pity 静默失效；原 Ph6 的 ISSUE-005 部分前移到原子单元，见 §3.5 要点 12 / §3.11.3）**+ **collector.on_draw 传 `triggered_pity_name`**（取 DrawOutcome，ISSUE-003）+ **池结束快照机制迁移**（`pool_end_times_sorted`/`on_pool_end` → `banner_end_times_sorted`/`on_banner_end`，ISSUE-003）+ `pool_types` 数据源改造（ISSUE-004）+ NonDrawAction 全限定键分支（ISSUE-006）+ **WaitAction 分支等待期 `time_window` 评估**（real_time 推进后对 active_banners 调 `_check_transitions(real_time=...)`，REVIEW-R1-FIX: ISSUE-003）+ **`GachaService.__init__` 构造桥（REVIEW-R1-FIX: GATE-3_依赖顺序，契约见 §3.5 要点 10）——`pools` 双型收纳为运行时 Banner 字典 `self._banners`：元素为 `Pool` → 就地单池包装 `Banner(id=p.id, name=p.name, pools={'main': p})`（时间窗口 None 兜底）；元素为 `Banner` → 直接收纳 `{b.id: b}`——保证 `_run_single`（batch_simulator.py:228 传 `env.pools`）与现有测试直接构造 `GachaService([pool],...)` 后 `self._banners` 非空、`run_simulation` 可路由**——**与 Ph1/Ph1a/Ph1b/Ph1c/Ph5 同 commit 交付（REVIEW-R1-FIX: GATE-3，见 §3.12 交付单元注）**：本阶段无法独立落地——banner 路由需 Banner 类（Ph1c）、`build_strategy_context(banners=)` 需 Ph5、旧 `pool_end_times_sorted`/`current_pools` 字段读取在 Ph1 删字段后即崩、`self._banners` 需构造桥填补 | 修改 | ~120行变更 |
-| Ph3 | `core/config_store.py` —— `BannerEntry` / `BannerPoolEntry` / `LifecycleRuleEntry` / `BannerConfig` dataclass + `ConfigStore` 新增 `banner` 字段 + `flattened_pools` 只读视图（ISSUE-007）| 修改 | ~80行 |
-| Ph4 <!-- REVIEW-R2-FIX: AUDIT-BREAK-4 --> | `core/config_toml.py` —— `_build_banners()` 解析 `[[banner]]` + `[[banner.pool]]` + `[[banner.lifecycle]]` 段 + `_wrap_pools_as_banners()` 自动包装（完整透传 batch_size/exchange_card_id/epitomizable_cards + exchange 100% 展开 + **PoolDistEntry→dict 转换统一 rewards 元素类型**，ISSUE-304，见 §3.4）+ **保存侧双路径写回 `[[banner]]`**（ISSUE-012）+ **pool_type/rerun_of 解析/写出残留清理**（ISSUE-012，含 `PoolEntry.pool_type`/`rerun_of` 字段删除）+ **one_shot = 一次性批次 语义固化**（batch_size 抽完成后才耗尽，REVIEW-R1-FIX: ISSUE-002）+ **max_draws 非 batch_size 倍数批次中途耗尽语义固化**（耗尽标记在 draw 内、batch 循环 break 终止剩余，ISSUE-302）+ **Banner.max_draws 自动执行**（`_total_draws >= max_draws` → 自动 exhaust，新手池示例移除冗余 banner_draws 规则，ISSUE-303）| 修改 | ~125行 |
-| Ph5 | `core/strategy.py` + `core/strategy_context_builder.py` —— `StrategyContext` 新增 `banners`/`all_banners` 字段（保留 `current_pools`/`all_pools` 向后兼容，`current_pools` 由 `active_banners[*].active_pool` 推导填充）；`build_strategy_context()` 新增 `banners`/`all_banners` 参数并透传（ISSUE-005）。**pity_reserve 若选 StrategyContext banner 维度 pity 概率接口方案（`get_pity_probabilities_for_banner(banner_id, pool_id)`，内部按全限定键查询 PityEngine），在此新增接口并透传（ISSUE-002，Ph1a 配合）**。与 P58 M4a 共用此函数签名，各自负责 `banners` / `_milestone_engine` 参数——**提前并入首提交（与 Ph1 同 commit 交付，REVIEW-R1-FIX: GATE-3，见 §3.12 交付单元注）**：`StrategyContext.banners` 字段与 `build_strategy_context` 的 `banners=` 参数是 Ph1a 策略迁移、Ph2 gacha_service 调用的前置依赖，必须随首提交落地，不可推迟到 Ph6 之后 | 修改 | ~16行 |
-| Ph6 <!-- REVIEW-R2-FIX: AUDIT-BREAK-5 --> | `service/batch_simulator.py` —— `SimulationEnv` 新增 `banner_defs` 字段（**带默认值，保证跨进程 pickle 兼容**，ISSUE-011）+ `from_config_store` 改从 `store.banner` 解析（start_day/end_day → Banner.available_from/until **经 `* DAY` 换算为秒**，ISSUE-001；**`available_until=None` 永久池兜底：逐 Banner 有效结束时间 `eff_end = until if until is not None else from + 21 * DAY`、`end_time = max(eff_end)`，与现状 `(start_day + 21) * DAY` 秒等价**——REVIEW-R1-FIX: ISSUE-007/001；删除对 `pe.start_day/end_day/pool_type/exchange_card_id` 的依赖，ISSUE-011）+ **PoolPitySpec 在 banner 模式的 featured/ssr 来源 + 全限定键 `{banner_id}.{pool_id}`**（ISSUE-010/011）——`featured_ids` 由 banner 池 rewards 的 `featured=True` 标志聚合（`{r['card_id'] for r in rewards if r.get('featured')}`，替代 batch_simulator.py:517 的 `pe.featured_card_ids`，ISSUE-006）+ **Pool 构造时从 `rewards[].rarity` 回填 `Reward.extra_info['rarity']`（小写归一化，等价 batch_simulator.py:521-524 现状注入——`match='rarity'` 的 `_check_transitions` 唯一数据源，漏注入则 `extra_info['rarity']` KeyError 或恒空、新手池「出任意 6★ 即关闭」静默失效，ISSUE-007）** + **`_build_pity_engine_from_gui` 的 pool_specs fnmatch（batch_simulator.py:139-158）实现 §3.11.3 三路兼容匹配（对全限定键拆 banner_id 段/裸 pool_id 段各做一次）——兼容模式旧 `pools=["genshin_limited"]`（全串 `genshin_limited.main` fnmatch 为 False）不再在 spec 构建期失绑、soft pity 静默失效，ISSUE-005（**pool_specs 键全限定 + 三路匹配已前移至原子提交随 Ph2 落地，AUDIT-BREAK-3/§3.5 要点 12——Ph6 保留数据源改 store.banner + 多池展开，键自然承接，不重复实现**）** + TargetCard.pool_ids 标识规则（banner 级或全限定，ISSUE-011）+ PoolSchedule 时间源改 Banner 级 + **`env.pools` 运行时消费端迁移（AUDIT-BREAK-5——`SimulationEnv.pools` 改承载 `List[Banner]` 后，以下消费端对元素读裸 Pool 属性必然 AttributeError，原计划未纳入任何阶段）**：① `batch_simulator.py:676` 的 `all_drawable_ids = [r.id for p in pools for r, _ in p.rewards]`——改为遍历 banner 池展开（`b.pools[*].rewards` 或 `flattened_pools` 视图）；② `core/retreat_search.py:407-412` `_get_obtainable_card_ids`（`pool.is_exchange`/`pool.exchange_card_id`/`pool.rewards`）及同文件多处 `if not env.pools`/`for pool in env.pools`——改为按 banner 池展开读（`banner.pools.values()`）；③ `gui/resource_search_panel.py:61` `_extract_cost_per_draw(self._sim_env.pools)` 读 `p.cost`——改为 `banner.active_pool.cost` 或展平读取 | 修改 | ~85行 |
+| Ph2 <!-- REVIEW-R2-FIX: AUDIT-BREAK-3 --> | `service/gacha_service.py` —— `current_pools` → `current_banners`（`Dict[str, Banner]`），banner 路由 + **保留逐抽结算管线**（spend/保底/统计/add_card/溢出/collector.on_draw，与现状 L259-365 一致）+ `after_draw` 单抽粒度 emit + **Notifier 装配**（`self._notifier` 创建 + P61 转换订阅 priority=1，ISSUE-001）+ **逐池统计键改全限定 `{banner_id}.{pool_id}`**（stats/collector/pool_types，ISSUE-002）+ **pool_specs 键全限定 + 全限定键 fnmatch（AUDIT-BREAK-3 阻塞 2，原子提交内必须与查询键同口径——`_build_pity_engine_from_gui`/`from_config_store` 的 pool_specs 键改 `{pool.id}.main` 并按全限定键 fnmatch，D4 一次性迁移后仅全限定键匹配、无三路兼容，否则原子提交态 `get_spec('{旧pid}.main')` 查裸键引擎为 None、soft pity 静默失效；原 Ph6 的 ISSUE-005 部分前移到原子单元，见 §3.5 要点 12 / §3.11.3）**+ **collector.on_draw 传 `triggered_pity_name`**（取 DrawOutcome，ISSUE-003）+ **池结束快照机制迁移**（`pool_end_times_sorted`/`on_pool_end` → `banner_end_times_sorted`/`on_banner_end`，ISSUE-003）+ `pool_types` 数据源改造（ISSUE-004）+ NonDrawAction 全限定键分支（ISSUE-006）+ **WaitAction 分支等待期 `time_window` 评估**（real_time 推进后对 active_banners 调 `_check_transitions(real_time=...)`，REVIEW-R1-FIX: ISSUE-003）+ **`GachaService.__init__` 构造桥（REVIEW-R1-FIX: GATE-3_依赖顺序，契约见 §3.5 要点 10）——`pools` 双型收纳为运行时 Banner 字典 `self._banners`：元素为 `Pool` → 就地单池包装 `Banner(id=p.id, name=p.name, pools={'main': p})`（时间窗口 None 兜底）；元素为 `Banner` → 直接收纳 `{b.id: b}`——保证 `_run_single`（batch_simulator.py:228 传 `env.pools`）与现有测试直接构造 `GachaService([pool],...)` 后 `self._banners` 非空、`run_simulation` 可路由**——**与 Ph1/Ph1a/Ph1b/Ph1c/Ph5 同 commit 交付（REVIEW-R1-FIX: GATE-3，见 §3.12 交付单元注）**：本阶段无法独立落地——banner 路由需 Banner 类（Ph1c）、`build_strategy_context(banners=)` 需 Ph5、旧 `pool_end_times_sorted`/`current_pools` 字段读取在 Ph1 删字段后即崩、`self._banners` 需构造桥填补 | 修改 | ~120行变更 |
+| Ph3 | `core/config_store.py` —— `BannerEntry` / `BannerPoolEntry` / `LifecycleRuleEntry` / `BannerConfig` dataclass + `ConfigStore` 新增 `banner` 字段 + **`store.pools` 属性化为只读展平视图**（D3 裁决，替代 dual-write/flattened_pools 兼容视图）| 修改 | ~80行 |
+| Ph4 <!-- REVIEW-R2-FIX: AUDIT-BREAK-4 --> | `core/config_toml.py` —— `_build_banners()` 直接解析 `[[banner]]` + `[[banner.pool]]` + `[[banner.lifecycle]]` 段（**无 `_wrap_pools_as_banners` 自动包装，D3/D4 裁决；rewards 统一 dict 表示，ISSUE-304，见 §3.4**）+ **保存侧统一写 `[[banner]]`**（ISSUE-012，D3/D4 后简化）+ **pool_type/rerun_of 解析/写出残留清理**（ISSUE-012，含 `PoolEntry.pool_type`/`rerun_of` 字段删除）+ **一次性池语义固化（DECISION-1 归约：max_draws = batch_size 时 batch 抽完成后才耗尽）**（REVIEW-R1-FIX: ISSUE-002）+ **max_draws 非 batch_size 倍数批次中途耗尽语义固化**（耗尽标记在 draw 内、batch 循环 break 终止剩余，ISSUE-302）+ **Banner.max_draws 自动执行**（`_total_draws >= max_draws` → 自动 exhaust，新手池示例移除冗余 banner_draws 规则，ISSUE-303）| 修改 | ~125行 |
+| Ph4b | **配置一次性迁移（D3/D4 新增）** —— Ph4 解析器就绪后，把 `gacha_simulator/config/config.toml` 从 `[[pool]]` 改写为 `[[banner]]`（§3.4 迁移规则：一池一 banner、pool 进 `[[banner.pool]]`、start_day/end_day 上移、pool_type/is_rerun 删除、PityDef.pools 裸 id 改全限定键、one_shot 改 max_draws=batch_size）；改写后用 Ph1-base golden 同种子重跑逐字段对比验证等价，迁移后无任何 `[[pool]]` 段残留 | config.toml + tests | ~1h 手工 + 等价对照 |
+| Ph5 | `core/strategy.py` + `core/strategy_context_builder.py` —— `StrategyContext` 新增 `banners`/`all_banners` 字段，删除 `current_pools`/`all_pools`（D4 一次性迁移后 8 策略全迁移，无兼容需求）；`build_strategy_context()` 新增 `banners`/`all_banners` 参数并透传（ISSUE-005）。**pity_reserve 若选 StrategyContext banner 维度 pity 概率接口方案（`get_pity_probabilities_for_banner(banner_id, pool_id)`，内部按全限定键查询 PityEngine），在此新增接口并透传（ISSUE-002，Ph1a 配合）**。与 P58 M4a 共用此函数签名，各自负责 `banners` / `_milestone_engine` 参数——**提前并入首提交（与 Ph1 同 commit 交付，REVIEW-R1-FIX: GATE-3，见 §3.12 交付单元注）**：`StrategyContext.banners` 字段与 `build_strategy_context` 的 `banners=` 参数是 Ph1a 策略迁移、Ph2 gacha_service 调用的前置依赖，必须随首提交落地，不可推迟到 Ph6 之后 | 修改 | ~16行 |
+| Ph6 <!-- REVIEW-R2-FIX: AUDIT-BREAK-5 --> | `service/batch_simulator.py` —— `SimulationEnv` 新增 `banner_defs` 字段（**带默认值，保证跨进程 pickle 兼容**，ISSUE-011）+ `from_config_store` 改从 `store.banner` 解析（start_day/end_day → Banner.available_from/until **经 `* DAY` 换算为秒**，ISSUE-001；**`available_until=None` 永久池兜底：逐 Banner 有效结束时间 `eff_end = until if until is not None else from + 21 * DAY`、`end_time = max(eff_end)`，与现状 `(start_day + 21) * DAY` 秒等价**——REVIEW-R1-FIX: ISSUE-007/001；删除对 `pe.start_day/end_day/pool_type/exchange_card_id` 的依赖，ISSUE-011）+ **PoolPitySpec 在 banner 模式的 featured/ssr 来源 + 全限定键 `{banner_id}.{pool_id}`**（ISSUE-010/011）——`featured_ids` 由 banner 池 rewards 的 `featured=True` 标志聚合（`{r['card_id'] for r in rewards if r.get('featured')}`，替代 batch_simulator.py:517 的 `pe.featured_card_ids`，ISSUE-006）+ **Pool 构造时从 `rewards[].rarity` 回填 `Reward.extra_info['rarity']`（小写归一化，等价 batch_simulator.py:521-524 现状注入——`match='rarity'` 的 `_check_transitions` 唯一数据源，漏注入则 `extra_info['rarity']` KeyError 或恒空、新手池「出任意 6★ 即关闭」静默失效，ISSUE-007）** + **`_build_pity_engine_from_gui` 的 pool_specs fnmatch（batch_simulator.py:139-158）按全限定键匹配（D4 一次性迁移后 PityDef.pools 均为全限定键、无三路兼容；旧裸 id 已在 Ph4b 配置迁移改写，ISSUE-005；pool_specs 键全限定已前移至原子提交随 Ph2 落地，AUDIT-BREAK-3/§3.5 要点 12——Ph6 保留数据源改 store.banner + 多池展开，键自然承接，不重复实现）** + TargetCard.pool_ids 标识规则（banner 级或全限定，ISSUE-011）+ PoolSchedule 时间源改 Banner 级 + **`env.pools` 运行时消费端迁移（AUDIT-BREAK-5——`SimulationEnv.pools` 改承载 `List[Banner]` 后，以下消费端对元素读裸 Pool 属性必然 AttributeError，原计划未纳入任何阶段）**：① `batch_simulator.py:676` 的 `all_drawable_ids = [r.id for p in pools for r, _ in p.rewards]`——改为遍历 banner 池展开（`b.pools[*].rewards` 或 `store.pools` 只读视图）；② `core/retreat_search.py:407-412` `_get_obtainable_card_ids`（`pool.is_exchange`/`pool.exchange_card_id`/`pool.rewards`）及同文件多处 `if not env.pools`/`for pool in env.pools`——改为按 banner 池展开读（`banner.pools.values()`）；③ `gui/resource_search_panel.py:61` `_extract_cost_per_draw(self._sim_env.pools)` 读 `p.cost`——改为 `banner.active_pool.cost` 或展平读取 | 修改 | ~85行 |
 | Ph7 <!-- REVIEW-R2-FIX: AUDIT-BREAK-6 --> | 统计层适配 —— GDR / 过程分析 / 流式分析以 Banner 为聚合单位 + `CompactResult.pool_types` 由 output/random 推导填充（ISSUE-004）+ **逐池统计键/`pool_types` 键迁移到全限定 `{banner_id}.{pool_id}`**（gdr/process_trace/main_window/data_manager 消费端同步，ISSUE-002）+ `pool_end_resources`/`pool_end_pity_states` 消费端迁移到 banner_end（ISSUE-003，含 `core/vulnerability.py` 逐池分箱消费——REVIEW-R1-FIX: ISSUE-005，**含 `gui/gacha_panel.py:111` 的 `no_draw_results[0].get('pool_end_resources', {})`——字段改名后 `.get` 静默拿空 dict 无异常，须改 `.get('banner_end_resources', {})`，AUDIT-BREAK-6**）+ **可比性指纹/config_hash 纳入 Banner 级配置**（ISSUE-013）| 修改 | ~75行 |
 | Ph8 | `gui/config_panel.py` ——「卡池管理」Tab：左Banner列表 + 右基础字段(4个) + 两子标签页（池/生命周期）+ PoolDistributionDialog 适配 BannerPoolEntry + **正向同步 `_sync_card_defs_from_pools`/`_register_resources_from_pools` 改读 banner 视图**（ISSUE-016）| 修改 | ~230行 |
 | Ph8b | `gui/config_panel.py` ——「保底机制」Tab 增强：删除手写 `pools` 文本框 → 改为「绑定池」勾选表格（~60行；变更总览不含不存在的「生效范围 QGroupBox」「快速绑定 QDialog」，ISSUE-015）| 修改 | ~60行 |
-| Ph8c | `gui/config_panel.py` —— `apply_to_store()`/`set_config()`/`get_config()` Banner 适配 + 移除池子模板 + `_setup_ui()` 注册 Tab + **`store.pools` 写侧确认**（:3879 重绑 / :3385/:3925 append 保持写可变字段，经 `flattened_pools` 只读视图兜底——ISSUE-010） | 修改 | ~55行 |
-| Ph9 | `tests/test_banner.py` —— 覆盖 lifecycle 全部规则 + 送抽 + step + 新手池 + 向后兼容 + **策略迁移回归**（8 策略在 banner 模式跑通，ISSUE-001）+ **pool_quota / pity_reserve 在 banner 模式的等价回归**（配额判定与保底阈值不静默退化——`ctx.pool_draw_counts` 裸键、`get_pity_probabilities` 裸键全限定化后不再恒 0 / 回退基础概率，ISSUE-002）+ **时间窗口单位等价用例**（21 天开池在 `real_time >= 21*DAY` 秒时开放/关闭、`on_banner_end` 在第 21 天而非第 21 秒触发、`AllPoolsEndCondition` 秒判定，ISSUE-001）+ **无抽卡跨 time_window 用例**（等待分支触发 time_window 转换、目标池可达不死锁，ISSUE-003）+ **`_build_pity_engine_from_gui` 旧 `[[pool]]` + 旧 `pools` 保底绑定等价用例**（ISSUE-005）+ **card_obtained rarity 匹配用例**（终末地新手池「出任意 6★ 即关闭」——覆盖 banner 模式 Pool 经 Ph6 rarity 回填的路径，ISSUE-306/007）+ **max_draws 非 batch_size 倍数批次中途耗尽用例**（如 15/10，总抽数恒 15，ISSUE-302）+ **pending_transitions 事件型 remaining=-1 策略守卫用例**（ISSUE-305）| 新建/修改 | ~260行 |
+| Ph8c | `gui/config_panel.py` —— `apply_to_store()`/`set_config()`/`get_config()` Banner 适配 + 移除池子模板 + `_setup_ui()` 注册 Tab + **`store.pools` 写侧迁移到 `store.banner`**（:3879 重绑 / :3385/:3925 append 改为写 `store.banner`，D3 裁决后 store.pools 只读不可写） | 修改 | ~55行 |
+| Ph9 | `tests/test_banner.py` —— 覆盖 lifecycle 全部规则 + 送抽 + step + 新手池 + 配置一次性迁移 + 基线固化等价对照 + **策略迁移回归**（8 策略在 banner 模式跑通，ISSUE-001）+ **pool_quota / pity_reserve 在 banner 模式的等价回归**（配额判定与保底阈值不静默退化——`ctx.pool_draw_counts` 裸键、`get_pity_probabilities` 裸键全限定化后不再恒 0 / 回退基础概率，ISSUE-002）+ **时间窗口单位等价用例**（21 天开池在 `real_time >= 21*DAY` 秒时开放/关闭、`on_banner_end` 在第 21 天而非第 21 秒触发、`AllPoolsEndCondition` 秒判定，ISSUE-001）+ **无抽卡跨 time_window 用例**（等待分支触发 time_window 转换、目标池可达不死锁，ISSUE-003）+ **`_build_pity_engine_from_gui` 全限定键保底绑定用例（迁移后 `pools=["genshin_limited.main"]` 精确命中）**（ISSUE-005）+ **card_obtained rarity 匹配用例**（终末地新手池「出任意 6★ 即关闭」——覆盖 banner 模式 Pool 经 Ph6 rarity 回填的路径，ISSUE-306/007）+ **max_draws 非 batch_size 倍数批次中途耗尽用例**（如 15/10，总抽数恒 15，ISSUE-302）+ **pending_transitions 事件型 remaining=-1 策略守卫用例**（ISSUE-305）| 新建/修改 | ~260行 |
 
 > **实施前置自检（事实验证，Ph1 首步）**：对 `core/pool.py` 的 Pool dataclass 逐字段 diff 计划删除清单。当前（2026-08-01）Pool 字段为 `id/name/cost/rewards/available_from/available_until/is_exchange/is_rerun/original_pool_id/exchange_card_id/pool_type/batch_size/epitomizable_cards`——**无 `blocks_parent` 字段**（该字段来自 2026-06-20 已归档原方案，已修正删除清单）。动手前全局 grep 各待删字段的消费点，避免基于过时清单删错。同样，`config_toml.py` 实际位于 `core/` 目录（`config/` 目录仅含 `config.toml`），Ph4 路径以此为准。（REVIEW-R1-FIX: ISSUE-002）
 
@@ -1128,17 +1072,17 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 <!-- REVIEW-R1-FIX: GATE-3_依赖顺序 -->
 <!-- REVIEW-R1-FIX: GATE-6_测试策略 -->
 <!-- REVIEW-R2-FIX: AUDIT-BREAK-7 -->
-> **交付单元（原子 commit 边界，REVIEW-R1-FIX: GATE-3 / GATE-3_依赖顺序 / GATE-6_测试策略）**：计划的 **L1 阶段序无环**（Ph0→Ph1→Ph1a→Ph1b→Ph1c→Ph2→Ph3→Ph4→Ph5→Ph6→Ph7→Ph8/8b/8c→Ph9），但 **L2 输入/输出类型匹配**存在**多处同类中间态断裂**——最小可独立交付（一次 commit 落地、提交后系统整体可运行 + 现有 `pytest` 全量通过）的原子单元是 **{Ph1, Ph1a, Ph1b, Ph1c, Ph2, Ph5}**，而非原标注的 {Ph1, Ph1a}。断裂与随原子单元同 commit 的论证：
+> **交付单元（原子 commit 边界，REVIEW-R1-FIX: GATE-3 / GATE-3_依赖顺序 / GATE-6_测试策略）**：计划的 **L1 阶段序无环**（Ph0→Ph1-base→Ph1→Ph1a→Ph1b→Ph1c→Ph2→Ph3→Ph4→Ph4b→Ph5→Ph6→Ph7→Ph8/8b/8c→Ph9），但 **L2 输入/输出类型匹配**存在**多处同类中间态断裂**——最小可独立交付（一次 commit 落地、提交后系统整体可运行 + 现有 `pytest` 全量通过）的原子单元是 **{Ph1, Ph1a, Ph1b, Ph1c, Ph2, Ph5}**，而非原标注的 {Ph1, Ph1a}。断裂与随原子单元同 commit 的论证：
 > 1. **Ph1 删除 `Pool.available_from`/`available_until` 后，gacha_service 立即断裂**：`gacha_service.py:211-214`（`pool_end_times_sorted`，读 `p.available_until`）与 `:224-226`（`current_pools` 推导，读 `p.available_from`/`p.available_until`）在 Ph2 完成迁移前 `run_simulation` 必然 AttributeError；`GachaState.get_available_pools()`（state.py:90，方法体 `pool.is_available_at()`）同源失效，须 Ph1b 同步删除。
 > 2. **Ph1a 强制迁移 8 个策略到 `ctx.banners`，依赖 Ph5**：`StrategyContext.banners` 字段与 `build_strategy_context` 的 `banners=` 参数直到 Ph5 才落地——Ph1a 落地后至 Ph5 前策略层直接 AttributeError；Ph2 的 `build_strategy_context(banners=...)` 调用在 Ph5 前亦 TypeError。
 > 3. **Ph2 依赖 Ph1c**：`run_simulation` 的 banner 路由（`banners.get(action.banner_id)` / `banner.draw(...)` / `banner.active_pool` / `banner.is_available`）全部消费 `core/banner.py` 的 `Banner` 类，无 Ph1c 则 Ph2 无对象可路由。
-> 4. **GachaService 构造桥缺失（REVIEW-R1-FIX: GATE-3_依赖顺序）**：`_run_single`（batch_simulator.py:228）与现有 10 处测试直接构造 `GachaService([pool],...)`，计划此前未指定 `GachaService.__init__` 的 `pools → 运行时 Banner` 就地包装——§3.4 `_wrap_pools_as_banners` 只产出配置层 `BannerEntry`、`from_config_store` 直到 Ph6 才改读 `store.banner`，届时 `self._banners` 为空、`run_simulation` 无池可路由；且 `from_config_store`（batch_simulator.py:547-559）本身以将删字段为关键字构造 `Pool(...)`，Ph1 删字段后即 TypeError。随 Ph2 落地 `__init__` 双型构造桥（§3.5 要点 10）、随 Ph1a 迁移 `from_config_store` 构造点（§3.12 Ph1a）。
+> 4. **GachaService 构造桥缺失（REVIEW-R1-FIX: GATE-3_依赖顺序）**：`_run_single`（batch_simulator.py:228）与现有 10 处测试直接构造 `GachaService([pool],...)`，计划此前未指定 `GachaService.__init__` 的 `pools → 运行时 Banner` 就地包装——配置层 `_build_banners` 产出 `BannerEntry`、`from_config_store` 直到 Ph6 才改读 `store.banner`，届时 `self._banners` 为空、`run_simulation` 无池可路由；且 `from_config_store`（batch_simulator.py:547-559）本身以将删字段为关键字构造 `Pool(...)`，Ph1 删字段后即 TypeError。随 Ph2 落地 `__init__` 双型构造桥（§3.5 要点 10）、随 Ph1a 迁移 `from_config_store` 构造点（§3.12 Ph1a）。
 > 5. **test 删用例/断言时序矛盾（REVIEW-R1-FIX: GATE-6_测试策略）**：Ph1b（原子单元内）删 `get_available_pools` 方法，而 `tests/core/test_state.py::test_get_available_pools` 删用例原排 Ph9（单元外）——原子提交后至 Ph9 前该测试调已删方法 + 构造 Pool 用将删字段关键字，pytest 必红，与『首提交后 pytest 全量通过』自相矛盾；`test_env_builder_from_config_store_smoke`（test_gacha_service.py:164）断言 `env.pools[0].pool_type` 同样随 Ph1 删字段失效。两个测试改动随 Ph1b 并入原子单元。**既有测试破坏面不止此两项（REVIEW-R1-FIX: ISSUE-022/AUDIT-BREAK-7，完整清单见本注结论段）**——`test_pool.py`（直测退役的 `is_available_at`）、`test_gacha_service.py._make_pool`（:14-21）与 :68-69、`test_epitomizable_cards.py:189/202-205`、`test_pity_integration.py:97/150` 均以将删字段构造 `Pool(...)`、随 Ph1 断；`test_batch_draw.py:24` 与 `test_gacha_service.py:142` 以 `PoolEntry(pool_type=...)` 构造、随 Ph4 断——全部随原子单元/Ph4 排期，不得留在 Ph9 之后。
 >
-> **结论**：Ph1、Ph1a、Ph1b、Ph1c、Ph2、Ph5 **六阶段一次 commit 落地**（内部仍按表序实施、允许分步调试，但不得单独提交/发布中间态）；首提交后**现有 `pytest` 全量通过**——判据含 `test_state` 删用例与 `test_env_builder_from_config_store_smoke` 改写随原子单元同步落地、`GachaService` 构造桥使 `_run_single` 与直接构造的测试均有 `self._banners` 可用；**既有测试破坏面远大于上述两项（REVIEW-R1-FIX: ISSUE-022/AUDIT-BREAK-7）——以下既有测试以将删字段为关键字构造 `Pool(...)`/`PoolEntry(...)` 或直测将删 API，随 Ph1/Ph4 必断，须全部并入原子单元对应阶段，否则『首提交后 pytest 全量通过』不成立**：① `tests/core/test_pool.py:36-41`（`Pool(available_from=0, available_until=100)` + 直测已退役的 `pool.is_available_at()`，Ph1 删字段+退役方法即双断——用例删除或改断言推导属性）；② `tests/service/test_gacha_service.py:14-21` `_make_pool`（`available_from=0.0, available_until=...` 关键字，被 :32/51/78/101/121 等大量用例共用，Ph1 即断）与 :68-69（`test_initial_count_multiple_cards` 直接 `Pool(... available_from/available_until)`）；③ `tests/core/test_epitomizable_cards.py:189/202-205`（`Pool(pool_type='武器'/'角色', available_from=0, available_until=21)`）；④ `tests/core/test_pity_integration.py:97/150`（`Pool(pool_type='角色')`）；⑤ `tests/core/test_batch_draw.py:24` 与 `tests/service/test_gacha_service.py:142`（`PoolEntry(... pool_type='角色')`，随 Ph4 删 `PoolEntry.pool_type` 断——test_batch_draw 的该处随 Ph4 移除关键字，test_gacha_service 的随 Ph1b 一并移除，AUDIT-BREAK-2/4）。**注**：`tests/core/test_pity_config_toml.py:32/266` 的 `pool_type = "武器"` 是 TOML 配置字符串（旧键解析时忽略、不报错），无需改动；`tests/core/test_schedule.py:5-7` 测的是 `PoolSchedule.is_available_at`（非 `Pool`，PoolSchedule 保留），不受影响；`tests/core/test_process_analysis.py:26` 的 `pool_type='draw'` 是 `PoolEvent` 字段（非 `Pool.pool_type`），不受影响。；Ph9 `test_banner.py` 的 8 策略 banner 模式回归属**新增用例**、在 Ph9 交付，不构成首提交的通过判据。Ph3/Ph4/Ph6/Ph7/Ph8/8b/8c/Ph9 依序独立交付，各自保持可运行态。§六 风险表首行与 §5.3 实施顺序以本注为准。
+> **结论**：Ph1、Ph1a、Ph1b、Ph1c、Ph2、Ph5 **六阶段一次 commit 落地**（内部仍按表序实施、允许分步调试，但不得单独提交/发布中间态）；首提交后**现有 `pytest` 全量通过**——判据含 `test_state` 删用例与 `test_env_builder_from_config_store_smoke` 改写随原子单元同步落地、`GachaService` 构造桥使 `_run_single` 与直接构造的测试均有 `self._banners` 可用；**既有测试破坏面远大于上述两项（REVIEW-R1-FIX: ISSUE-022/AUDIT-BREAK-7）——以下既有测试以将删字段为关键字构造 `Pool(...)`/`PoolEntry(...)` 或直测将删 API，随 Ph1/Ph4 必断，须全部并入原子单元对应阶段，否则『首提交后 pytest 全量通过』不成立**：① `tests/core/test_pool.py:36-41`（`Pool(available_from=0, available_until=100)` + 直测已退役的 `pool.is_available_at()`，Ph1 删字段+退役方法即双断——用例删除或改断言推导属性）；② `tests/service/test_gacha_service.py:14-21` `_make_pool`（`available_from=0.0, available_until=...` 关键字，被 :32/51/78/101/121 等大量用例共用，Ph1 即断）与 :68-69（`test_initial_count_multiple_cards` 直接 `Pool(... available_from/available_until)`）；③ `tests/core/test_epitomizable_cards.py:189/202-205`（`Pool(pool_type='武器'/'角色', available_from=0, available_until=21)`）；④ `tests/core/test_pity_integration.py:97/150`（`Pool(pool_type='角色')`）；⑤ `tests/core/test_batch_draw.py:24` 与 `tests/service/test_gacha_service.py:142`（`PoolEntry(... pool_type='角色')`，随 Ph4 删 `PoolEntry.pool_type` 断——test_batch_draw 的该处随 Ph4 移除关键字，test_gacha_service 的随 Ph1b 一并移除，AUDIT-BREAK-2/4）。**注**：`tests/core/test_pity_config_toml.py:32/266` 的 `pool_type = "武器"` 是 TOML 配置字符串（旧键解析时忽略、不报错），无需改动；`tests/core/test_schedule.py:5-7` 测的是 `PoolSchedule.is_available_at`（非 `Pool`，PoolSchedule 保留），不受影响；`tests/core/test_process_analysis.py:26` 的 `pool_type='draw'` 是 `PoolEvent` 字段（非 `Pool.pool_type`），不受影响。；Ph9 `test_banner.py` 的 8 策略 banner 模式回归属**新增用例**、在 Ph9 交付，不构成首提交的通过判据。Ph1-base（基线固化）在首提交前独立交付（用旧代码 + `[[pool]]` 配置生成 golden fixture，不参与原子单元，其失败不代表代码断裂）；Ph3/Ph4/Ph4b/Ph6/Ph7/Ph8/8b/8c/Ph9 依序独立交付，各自保持可运行态。§六 风险表首行与 §5.3 实施顺序以本注为准。
 
 <!-- REVIEW-R1-FIX: GATE-4 -->
-> **实施前裁决门控（REVIEW-R1-FIX: GATE-4，清单见 §6.1）**：首提交落地前（Ph1 启动前）必须完成 **DECISION-1 / DECISION-2** 两项承重语义裁决（`one_shot` 语义、批次中途耗尽处置）；**DECISION-3** 在 Ph3/Ph4（`store.pools` 兜底机制落地）前、**DECISION-4** 在 Ph7（统计键/指纹迁移）前完成。计划已为每项写入**默认选型**（§6.1）——裁决输入 = 用户确认默认选型或改选备选；未裁决按默认选型实施，但默认与备选的语义差异已在 §6.1 逐项列出，**实施后改判将引发对应阶段返工**（影响面见 §6.1 表）。
+> **实施前裁决门控（REVIEW-R1-FIX: GATE-4，清单见 §6.1）**：四项裁决已于 **2026-08-02 全部完成**（见 §6.1：D1 one_shot 归约 / D2 立即终止 / D3 store.pools 只读视图 / D4 全限定键一次性迁移），门控关闭。原裁决点（`one_shot` 语义、批次中途耗尽处置、store.pools 兜底、统计键格式）均按裁决结果执行，无待决分叉。
 
 ### 3.13 类型与复刻：纯解析归约（设计决策记录）
 
@@ -1194,8 +1138,8 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 
 - 可用性完全由 Banner 级 `available_from` / `available_until` + lifecycle 激活状态决定
 - 旧 Pool 级 `available_from` / `available_until` **退役**（单活跃池模型下冗余，AND 语义无真实需求）
-- `[[pool]]` 自动包装时，`start_day` / `end_day` 上移到 Banner（§3.4 `_wrap_pools_as_banners`）
-- **永久 Banner（`available_until=None`）兜底（REVIEW-R1-FIX: ISSUE-007/001）**：`None` 语义 = 永久开放（运行时无结束窗口）。`from_config_store` 计算 `end_time` 采用**逐 Banner 有效结束时间**：`eff_end = b.available_until if b.available_until is not None else (b.available_from or 0) + 21 * DAY`，`end_time = max(eff_end for b in banners) if banners else 0`——单位为**秒**（ISSUE-001）：`+ 21 * DAY` 与现状 `(start_day + 21) * DAY`（batch_simulator.py:511-513 的 None end_day 兜底，banner.available_from 已是秒）逐池等价；end_time（秒）与 `banner_end_times_sorted` 的 `available_until`（秒）同单位，`AllPoolsEndCondition(end_time)` 以 `real_time(秒) >= end_time` 判定成立、资源收益日程按秒正确计算。期限与永久 Banner 混存时各自兜底、不会把永久池截断到其他池的窗口。`_wrap_pools_as_banners` 对 `e.end_day is None` 透传 None（§3.4），不再 `float(None)` 抛 TypeError
+- 配置一次性迁移时，`start_day` / `end_day` 上移到 Banner（§3.4 / §3.13.4）
+- **永久 Banner（`available_until=None`）兜底（REVIEW-R1-FIX: ISSUE-007/001）**：`None` 语义 = 永久开放（运行时无结束窗口）。`from_config_store` 计算 `end_time` 采用**逐 Banner 有效结束时间**：`eff_end = b.available_until if b.available_until is not None else (b.available_from or 0) + 21 * DAY`，`end_time = max(eff_end for b in banners) if banners else 0`——单位为**秒**（ISSUE-001）：`+ 21 * DAY` 与现状 `(start_day + 21) * DAY`（batch_simulator.py:511-513 的 None end_day 兜底，banner.available_from 已是秒）逐池等价；end_time（秒）与 `banner_end_times_sorted` 的 `available_until`（秒）同单位，`AllPoolsEndCondition(end_time)` 以 `real_time(秒) >= end_time` 判定成立、资源收益日程按秒正确计算。期限与永久 Banner 混存时各自兜底、不会把永久池截断到其他池的窗口。配置迁移时 `end_day is None` 透传 None（§3.4 / §3.13.4），不再 `float(None)` 抛 TypeError
 - 复刻时间线推导按各 Banner `available_from` 排序（§3.13.2 已一致）；复刻 = 新 Banner + 内容导入（「从其他池导入 rewards」按钮），不需要多 schedule 支持
 - **P62 可达过滤对齐（REVIEW-R1-FIX: ISSUE-009/006）**：`filter_target_specs_by_obtainable`（gdr.py:510-514）当前遍历 `store.pools` 构建 `pool_start[p.pool_id] = p.start_day`。banner 模式改为遍历 `store.banner.banners`（`enabled` 判定 → `banner.available_from`——enabled 取 `BannerEntry.enabled` 字段，ISSUE-006），与 §3.13.2 复刻时间线排序、本节约时间窗口上移共用同一数据源——`store.pools` 为空时不再把目标卡整体误判为不可达（4 个 `_obtainable` GDR 分母退化）。`Banner.available_from` 成为可达判定、复刻排序、窗口判定的统一时间真相源
 
@@ -1212,16 +1156,16 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 |------|---------|:---:|
 | `core/notifier.py` | **新建**（subscribe/emit/priority）+ **装配契约（REVIEW-R1-FIX: ISSUE-301）**：Notifier 由装配层创建并经新增构造参数注入 GachaService（`_run_single` 构造点，batch_simulator.py:209）；P58 经装配函数 `register_milestone_engine` 注册、订阅落在与 emit 相同的实例 | ~30行 |
 | `core/banner.py` | **新建** | ~250行 |
-| `core/config_store.py` | 新增 `BannerEntry` / `BannerPoolEntry` / `LifecycleRuleEntry` / `BannerConfig` + `ConfigStore.banner` 字段 + `flattened_pools` 兼容视图（ISSUE-007）| ~80行 |
-| `core/pool.py` | **原地改造**：加 one_shot/excludes_all_pity/max_draws，删 pool_type/is_rerun/original_pool_id/available_from/available_until（无 blocks_parent 字段，见 §3.12 自检注），output/random/is_exchange 改推导 property + 模块级函数 `aggregate_probs_by_rarity`/`infer_rarity_from_spec`（ISSUE-004，供 Banner.draw 与 gacha_service 共用） | ~40行变更 |
+| `core/config_store.py` | 新增 `BannerEntry` / `BannerPoolEntry` / `LifecycleRuleEntry` / `BannerConfig` + `ConfigStore.banner` 字段 + **`store.pools` 属性化为只读展平视图**（D3 裁决）| ~80行 |
+| `core/pool.py` | **原地改造**：加 excludes_all_pity/max_draws（one_shot 归约为 max_draws=batch_size，DECISION-1），删 pool_type/is_rerun/original_pool_id/available_from/available_until（无 blocks_parent 字段，见 §3.12 自检注），output/random/is_exchange 改推导 property + 模块级函数 `aggregate_probs_by_rarity`/`infer_rarity_from_spec`（ISSUE-004，供 Banner.draw 与 gacha_service 共用） | ~40行变更 |
 | `core/state.py` | 删除 `GachaState.get_available_pools()`（ISSUE-002）——从「不触及」移入 | -1行 |
 | `core/strategy.py` | `StrategyContext` 新增 `banners` + `all_banners` 字段 | +5行 |
 | `core/strategy_context_builder.py` | `build_strategy_context()` 新增 `banners`/`all_banners` 参数并透传（ISSUE-005）——从「不触及」移入 | +6行 |
 | `strategies/builtin/*.py`（8 个内置策略） | 从 `pool.is_available_at`/`pool.available_until` 迁移到 `ctx.banners` + `DrawAction` 双字段（ISSUE-001/006）——从「策略无需修改」移入**强制适配**（Ph1a）；含 fixed_count / target_hunting（原「可不迁移」取消——current_pools 元素 id 包装后全为 'main'，target_pool_ids 匹配改 banner_id，REVIEW-R1-FIX: ISSUE-003）；**含 pool_quota（`ctx.pool_draw_counts` 裸键→`banner.pool_draws`）/ pity_reserve（`get_pity_probabilities` 裸键→全限定或 banner 维度接口）两个消费点（ISSUE-002）** | ~95行变更 |
 | `service/gacha_service.py` | `current_pools` → `current_banners` + Notifier 集成 + **Notifier 注入（新增 `notifier=` 构造参数，REVIEW-R1-FIX: ISSUE-301）** + 池结束快照迁移（ISSUE-003）+ `pool_types` 数据源改造（ISSUE-004）+ NonDrawAction 全限定键分支（ISSUE-006）+ **batch 循环耗尽守卫（ISSUE-302）** | ~105行变更 |
-| `service/batch_simulator.py` <!-- REVIEW-R2-FIX: AUDIT-BREAK-5 --> | `SimulationEnv` 新增 `banner_defs`（带默认值）+ `from_config_store` 改读 `store.banner`（start_day/end_day *DAY 换算秒）+ 全限定 pity 键 + `_build_pity_engine_from_gui` 三路兼容匹配（ISSUE-005）+ **banner 模式 Pool 从 `rewards[].rarity` 回填 `extra_info['rarity']`**（ISSUE-007）+ TargetCard.pool_ids 规则（ISSUE-010/011）+ **Notifier 装配点（`_run_single` 创建+注入 GachaService、构造前回调 P58 装配函数，REVIEW-R1-FIX: ISSUE-301）** + **Ph1a 构造点迁移（`from_config_store` :547-559 删 `available_from`/`available_until`/`pool_type`/`is_exchange` 四个关键字，时间窗口改由 PoolSchedule 承载，REVIEW-R1-FIX: GATE-3_依赖顺序）** + **`all_drawable_ids` 构建（:676 读 `p.rewards`）改 banner 池展开（AUDIT-BREAK-5，Ph6）** | ~85行 |
+| `service/batch_simulator.py` <!-- REVIEW-R2-FIX: AUDIT-BREAK-5 --> | `SimulationEnv` 新增 `banner_defs`（带默认值）+ `from_config_store` 改读 `store.banner`（start_day/end_day *DAY 换算秒）+ 全限定 pity 键 + `_build_pity_engine_from_gui` 全限定键匹配（ISSUE-005，D4 一次性迁移后无三路兼容）+ **banner 模式 Pool 从 `rewards[].rarity` 回填 `extra_info['rarity']`**（ISSUE-007）+ TargetCard.pool_ids 规则（ISSUE-010/011）+ **Notifier 装配点（`_run_single` 创建+注入 GachaService、构造前回调 P58 装配函数，REVIEW-R1-FIX: ISSUE-301）** + **Ph1a 构造点迁移（`from_config_store` :547-559 删 `available_from`/`available_until`/`pool_type`/`is_exchange` 四个关键字，时间窗口改由 PoolSchedule 承载，REVIEW-R1-FIX: GATE-3_依赖顺序）** + **`all_drawable_ids` 构建（:676 读 `p.rewards`）改 banner 池展开（AUDIT-BREAK-5，Ph6）** | ~85行 |
 | `service/config_service.py` <!-- REVIEW-R2-FIX: AUDIT-BREAK-1 --> | `Pool(...)` 关键字构造点迁移（ISSUE-008）+ **`export_pool_to_config`（:36-37 读 `p.available_from`/`p.available_until`）与 `import_pool_from_config`（:52-60 以将删字段构造 `Pool(...)`）两方法为死代码（无调用方，AUDIT-BREAK-1）——随 Ph1a 直接删除** | ~15行变更 |
-| `core/config_toml.py` | `_build_banners()` + `_wrap_pools_as_banners()` + `[[banner]]` 解析 + 保存侧双路径写回 + pool_type/rerun_of 残留清理（ISSUE-012）| ~110行 |
+| `core/config_toml.py` | `_build_banners()` 直接解析 `[[banner]]`（无自动包装，D3/D4 裁决）+ 保存侧统一写 `[[banner]]` + 配置一次性迁移 + pool_type/rerun_of 残留清理（ISSUE-012）| ~110行 |
 | `core/worst_impact.py` | `Pool(...)` 关键字构造点迁移（ISSUE-008）| ~10行变更 |
 | `generator/schedule_generator.py` | `PoolSchedule` 构造点迁移（ISSUE-008/011）| ~5行变更 |
 | `core/retreat_config.py` | `PoolEntry` 重建写侧改不传 `pool_type`/`rerun_of`（retreat_config.py:50/54 现以已删字段为关键字构造，ISSUE-007）+ 读侧停止读 `pool_type`（ISSUE-008）| ~4行变更 |
@@ -1234,7 +1178,7 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 | `core/action.py` | `DrawAction` 新增 `banner_id` 字段 + `pool_id` 改 `Optional[str]`（默认 None，省略时服务层按 `banner.active_pool` 路由）（ISSUE-006/004）| +3行 |
 | `gui/config_panel.py` | 「卡池管理」Tab：左列表右详情 + 两子标签页（池/生命周期）+ PoolDistributionDialog 适配 +「保底机制」Tab 增强（绑定池勾选表格替代手写pattern）+ `apply_to_store`/`set_config`/`get_config` 适配 + 移除池子模板 + 正向同步改读 banner 视图（ISSUE-016）+ Tab 注册 | ~380行 |
 | `gui/main_window.py` / `gui/data_manager_panel.py` | `pool_types` 消费 + 可比性指纹 banner 维度（ISSUE-004/013）| ~20行变更 |
-| `gui/analysis_panel.py` / `gacha_panel.py` / `resource_search_panel.py` / `worst_impact_panel.py` / `retreat_panel.py` / `cli.py` <!-- REVIEW-R2-FIX: AUDIT-BREAK-5 --> <!-- REVIEW-R2-FIX: AUDIT-BREAK-6 --> | `store.pools` 消费在 banner 模式经 Ph4 写侧 dual-write（Legacy mirror）保持非空，无需逐点改（ISSUE-007 / REVIEW-R1-FIX: ISSUE-006）；**两处例外（非 store.pools 消费，须随对应阶段迁移）——① `resource_search_panel.py:61` 消费 `env.pools`（运行时），Ph6 后元素为 `List[Banner]`、`p.cost` AttributeError（AUDIT-BREAK-5，Ph6）；② `gacha_panel.py:111` 读 `pool_end_resources` 键，Ph7 字段改名后 `.get` 静默空 dict（AUDIT-BREAK-6，Ph7）**| 0~（依赖 dual-write）+ ~6行 |
+| `gui/analysis_panel.py` / `gacha_panel.py` / `resource_search_panel.py` / `worst_impact_panel.py` / `retreat_panel.py` / `cli.py` <!-- REVIEW-R2-FIX: AUDIT-BREAK-5 --> <!-- REVIEW-R2-FIX: AUDIT-BREAK-6 --> | `store.pools` 消费在 banner 模式经 Ph3 属性化只读视图保持非空（D3 裁决），消费方零改动（ISSUE-007 / REVIEW-R1-FIX: ISSUE-006）；**两处例外（非 store.pools 消费，须随对应阶段迁移）——① `resource_search_panel.py:61` 消费 `env.pools`（运行时），Ph6 后元素为 `List[Banner]`、`p.cost` AttributeError（AUDIT-BREAK-5，Ph6）；② `gacha_panel.py:111` 读 `pool_end_resources` 键，Ph7 字段改名后 `.get` 静默空 dict（AUDIT-BREAK-6，Ph7）**| 0~（依赖只读视图）+ ~6行 |
 | `core/streaming.py` | 聚合提取器支持 banner 维度 | ~15行 |
 | `tests/test_banner.py` | **新建**（含策略迁移回归，ISSUE-001）| ~200行 |
 | `tests/core/test_state.py` <!-- REVIEW-R2-FIX: AUDIT-BREAK-7 --> | 删除 `test_get_available_pools`（随 Ph1b 并入原子单元，REVIEW-R1-FIX: GATE-6_测试策略，ISSUE-002）| -12行 |
@@ -1308,10 +1252,11 @@ Ph0: core/notifier.py + gacha_service 加一行 emit()
     │
     ├── P61 Ph1-9（Banner 全套）
     │       依赖：无。Ph0 交付后即可启。
+    │       前置：Ph1-base 基线固化（旧代码 + [[pool]] 配置跑固定种子，固化 golden fixture）
     │       内部提交边界（REVIEW-R1-FIX: GATE-3，见 §3.12 交付单元注）：首提交 = {Ph1, Ph1a, Ph1b, Ph1c, Ph2, Ph5}
     │         一次落地（最小可运行原子单元——Ph1 删字段立即击穿 gacha_service 的 pool_end_times_sorted/current_pools
     │         与 GachaState.get_available_pools，Ph1a 依赖 StrategyContext.banners=Ph5、Ph2 依赖 Banner 类=Ph1c）；
-    │         其后 Ph3/Ph4/Ph6/Ph7/Ph8/8b/8c/Ph9 各自独立交付
+    │         其后 Ph3/Ph4/Ph4b（配置迁移 + 等价对照）/Ph6/Ph7/Ph8/8b/8c/Ph9 各自独立交付
     │
     └── P58 M1-8（Milestone 全套）
             依赖：无。Ph0 交付后即可启。
@@ -1359,7 +1304,7 @@ notifier.emit("after_draw",
 **契约补充（REVIEW-R1-FIX: ISSUE-014，P61 计划内定稿，P58 落地以本节为准）：**
 - **emit 与结算顺序**：§3.5 契约点 7——`after_draw` emit 位于逐抽结算（stats.on_draw / add_card / collector.on_draw / combined_gained）之后。P58 priority=0 注入的 milestone 资源进入 `state.resources`，但**不并入当抽** `combined_gained`/collector 记录（P63 单通道不可回溯）——里程碑资源注入语义为「下一抽起可用」。若 P58 需要当抽并入，须在 emit 前经 `collector`/`rg` 回调（超出本计划范围，P58 自行定夺）。
 - **after_draw 订阅签名（banner 级过滤）**：订阅函数内 `_milestone_engine.after_draw(pool_id)` 单参不足——§5.5 `[[milestone]].banner` 过滤需要 banner_id。改传 `(banner_id, pool_id)` 双参，milestone 匹配以 `banner_id` 为准、`pool_id` 作为下钻信息；`pool_id` 为本次实际产出池的全限定键（§3.11.3）。
-- **里程碑计数语义**：free_10pull / one_shot / 一次性池的抽数**计入** milestone 计数（「所有抽数无论出什么」无条件计数）；`excludes_all_pity` 仅旁路保底，不影响 milestone 抽数计数。
+- **里程碑计数语义**：free_10pull / 一次性池（max_draws=batch_size）的抽数**计入** milestone 计数（「所有抽数无论出什么」无条件计数）；`excludes_all_pity` 仅旁路保底，不影响 milestone 抽数计数。
 
 ### 5.5 `[[milestone]].pools` → `[[milestone]].banner`
 
@@ -1386,27 +1331,27 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 | Banner 内部 pool 切换逻辑与 PityEngine 的交互复杂（送抽pool排除保底时，保底计数器跨pool是否继承） | Banner.draw() 内部显式分两路：`excludes_all_pity` 的 pool 完全旁路 `before_draw/after_draw`，不触碰 `pity_state`；正常 pool 走完整保底管线 |
 | 生命周期规则遗漏边界条件（如送抽pool激活时主pool恰好也被时间窗口过期关闭） | 规则评估顺序：时间窗口（最先，直接 exhaust banner）→ 转换条件 → 可用性汇总。时间过期的 banner 不进入 `active_banners` |
 | `[[banner]]` TOML 解析复杂度——pool / lifecycle 嵌套段与现有 `[[pool]]` 格式差异大 | `config_toml.py` 中检测到 `[[banner]]` 段时走新解析路径，`[[pool]]` 段保持现有解析路径不变。两者可共存于同一 TOML |
-| 现有 `Pool` 对象缓存和共享引用（schedule_generator 等）与新 Banner 包装层的兼容 | `_wrap_pools_as_banners()` 包装而非替换——原始 Pool 对象保留在 `self._pools` dict 中，Banner 引用 Pool 而非复制 |
+| 现有 `Pool` 对象缓存和共享引用（schedule_generator 等）在无自动包装后如何构造 | 一次性迁移后 Pool 直接进 `[[banner.pool]]`，构造点（schedule_generator 等）按新签名构造 `Banner`（§3.4 / Ph1a 构造点迁移）；无包装层 |
 | 跨 Banner 依赖——如「Banner B 的某个 pool 需等待 Banner A 的 pool 耗尽后才开放」，当前 lifecycle 规则仅在单个 Banner 内部生效 | **已知限制，MVP 不覆盖。** 跨 Banner 事件可通过 Notifier 在后续版本支持——Banner 发射 `pool_exhausted` / `banner_exhausted` 事件，其他 Banner 订阅并据此切换活跃池。当前可用 TOML `available_from` 时间窗口近似模拟 |
 | `card_obtained`（card_id 匹配）与 `time_window` 条件需要本抽 `card_id` / 模拟 `real_time`——Banner 内部无法获取 | 事件数据经 §3.5 after_draw 订阅透传：handler 把 `card_id` 与 `state.real_time` 传入 `_check_transitions(card_id, real_time)`（§3.2 签名 / §3.5 装配）——`card_obtained` card_id 匹配与 `time_window` 在引擎层已可求值（REVIEW-R1-FIX: ISSUE-001） |
 | 等待期不评估 `time_window`：活跃池在 time_window 阈值前已不可抽（资源耗尽→策略 WaitAction）时，转换永不触发、目标池永不可达（死锁至 max_iterations/停止条件）；即使有抽卡，转换也延迟到阈值后首次抽卡才执行，与旧模型每轮按 real_time 纯时间求值 `is_available_at` 的「随时间为真」语义存在时隙差异（ISSUE-003） | WaitAction 分支在 real_time 推进、资源结算后对 `active_banners` 评估一次 `_check_transitions(real_time=...)`——仅 `time_window` 纯时间条件在等待期可满足（事件型/抽数型等待期不触发），与 after_draw 单一触发点按动作类型互补、每个动作周期至多一次转换（§3.5 WaitAction 分支 / ISSUE-003，Ph2）；Ph9 有「无抽卡跨 time_window」用例锁定目标池可达 |
 | `card_obtained` 的 `rarity` 稀有度匹配（终末地新手池「出任意 6★ 即关闭」） | UI 已设计二级匹配控件（§3.10.5）；`rarity` 模式**列入 Ph1c 引擎交付**（REVIEW-R1-FIX: ISSUE-306）——`_check_transitions` 经 `DrawOutcome.reward.extra_info['rarity']`（batch_simulator 注入）判定，card_id / rarity 两模式均交付；Ph9 有对应用例锁定。**banner 模式数据源由 Ph6 从 `rewards[].rarity` 回填 `extra_info['rarity']`**（漏注入则 KeyError/恒空、静默失效，REVIEW-R1-FIX: ISSUE-007） |
 | P55 槽位概率聚合（featured/standard + scale_factors 还原）从 gacha_service 迁入 Banner.draw，若遗漏则送抽/step 池保底概率行为退化 | Banner.draw 显式执行「聚合-调整-还原」三段（§3.5 契约）；聚合函数下沉为 core/pool.py 模块级函数，core 层与 service 层共用（ISSUE-004）；验收含 AUDIT-BREAK-8 回归（featured 卡保底概率与现状一致）（REVIEW-R1-FIX: ISSUE-005） |
 | batch_size>1 池的 after_draw 粒度不明确——P58「每抽计数」与 collector 逐抽记录可能少计 | after_draw 按单抽粒度发射（batch 内每抽 emit 一次），batch 循环保留在 gacha_service（§3.5）（REVIEW-R1-FIX: ISSUE-004） |
-| 批次原子预检查基于初池成本，lifecycle 批次中途 switch_to 改变活跃池成本（旗舰 free_10pull 第 1 抽即切回 main）→ 预检查与实际消耗不一致，仅持 free_ticket 时第 2 抽 spend 返回 None、免费十连实际只出 1 抽 | 批次内每抽对当前活跃池单独 afford 检查（spend 返回 None 即终止本批次剩余抽数）；one_shot 定义为「一次性批次」——批次中途不因 one_shot 耗尽切换，pool_exhausted → switch_to 落在批次边界（§3.5 / REVIEW-R1-FIX: ISSUE-002，Ph2 + Ph4） |
-| `_wrap_pools_as_banners()` 未透传抽取语义，旧 `[[pool]]` 行为退化 | 完整透传 batch_size/exchange_card_id/epitomizable_cards/enabled/featured 标志 + exchange_card_id 展开为 100% 单卡分布 + 包装前过滤 enabled=False 池 + 包装在 rerun_of/featured 填充后执行（§3.4，ISSUE-006）；验收含 exchange/batch_size≠1/定轨/禁用池旧行为等价测试（REVIEW-R1-FIX: ISSUE-007） |
+| 批次原子预检查基于初池成本，lifecycle 批次中途 switch_to 改变活跃池成本（旗舰 free_10pull 第 1 抽即切回 main）→ 预检查与实际消耗不一致，仅持 free_ticket 时第 2 抽 spend 返回 None、免费十连实际只出 1 抽 | 批次内每抽对当前活跃池单独 afford 检查（spend 返回 None 即终止本批次剩余抽数）；一次性池定义为 max_draws=batch_size（DECISION-1 归约）——批次中途不因耗尽切换，pool_exhausted → switch_to 落在批次边界（§3.5 / REVIEW-R1-FIX: ISSUE-002，Ph2 + Ph4） |
+| 配置一次性迁移遗漏抽取语义字段，行为退化 | 迁移清单完整覆盖 batch_size/exchange_card_id/epitomizable_cards/enabled/featured 标志（§3.4 / Ph4b）；验收含 exchange/batch_size≠1/定轨/禁用池迁移前后等价测试（基线固化对照，REVIEW-R1-FIX: ISSUE-007） |
 | 活跃池耗尽且无 lifecycle 接管（单池 Banner 只配一个池）时 draw() 行为未定义 | 兜底语义：Banner 自动 exhaust（§3.2）——`is_available=False`、`is_exhausted=True`；空 rewards 推导 random 显式短路为 False（§3.13.1），避免 IndexError（REVIEW-R1-FIX: ISSUE-010） |
 | `Pool.available_until` 退役后 `pool_end_times_sorted`/`on_pool_end` 数据链断裂（P62 可达过滤 / per-pool 快照 / 脆弱性分析运行时数据源） | 迁移为 `banner_end_times_sorted`/`on_banner_end`，`CompactResult` 写 `banner_end_resources`/`banner_end_pity_states`；消费端含 `core/vulnerability.py`（逐池分箱，漏改则静默空结果）（§3.5 要点 6 / ISSUE-003 / REVIEW-R1-FIX: ISSUE-005，Ph2 + Ph7） |
-| 永久 Banner（`available_until=None`）在 `from_config_store` 的 `end_time = max(available_until ...)` 计算遇 None 抛 TypeError，或 end_time=0 使结束条件/资源收益日程全部退化 | `available_until=None` 兜底：逐 Banner 有效结束时间 `eff_end = until if until is not None else from + 21 * DAY`、`end_time = max(eff_end)`（单位秒，与现状 `(start_day + 21) * DAY` 语义逐池等价，ISSUE-001）；`_wrap_pools_as_banners` 对 None end_day 透传 None 而非 `float(None)`（§3.13.4 / §3.4 / REVIEW-R1-FIX: ISSUE-007/001，Ph4 + Ph6） |
+| 永久 Banner（`available_until=None`）在 `from_config_store` 的 `end_time = max(available_until ...)` 计算遇 None 抛 TypeError，或 end_time=0 使结束条件/资源收益日程全部退化 | `available_until=None` 兜底：逐 Banner 有效结束时间 `eff_end = until if until is not None else from + 21 * DAY`、`end_time = max(eff_end)`（单位秒，与现状 `(start_day + 21) * DAY` 语义逐池等价，ISSUE-001）；配置迁移对 None end_day 透传 None 而非 `float(None)`（§3.13.4 / §3.4 / REVIEW-R1-FIX: ISSUE-007/001，Ph4 + Ph6） |
 | `result.pool_types` 生成点读将删的 `Pool.pool_type`（gdr/process_trace/main_window/data_manager 消费） | 由 output/random 推导填充（`derive_type` 映射回旧三值）+ 键格式改全限定 `{banner_id}.{pool_id}`，下游消费端同步迁移键（§3.13.1 / ISSUE-004/002，Ph2 + Ph7） |
 | DrawAction 无 `banner_id` 字段 + 主循环缺 NonDrawAction 分支（定轨 P56 在 banner 模型下断裂） | `DrawAction` 新增 `banner_id`；NonDrawAction 的 `pool_id` 定位改全限定键 `{banner_id}.{pool_id}`（§3.5 要点 5 / ISSUE-006，Ph2） |
-| `store.pools` 在 banner 配置下为空 → 成本抽取/统计/模拟目标静默消失 | Ph4 `_build_banners()` 写侧 dual-write：把 `flattened_pools` 展平结果写回 `store.pools`（Legacy mirror），旧字段读者拿非空数据；`flattened_pools` 为规范只读视图（§3.9 / ISSUE-007 / REVIEW-R1-FIX: ISSUE-006，Ph3 + Ph4）——消费方零改动 |
+| `store.pools` 在 banner 配置下为空 → 成本抽取/统计/模拟目标静默消失 | `store.pools` 属性化为只读展平视图（D3 裁决，Ph3）——从 `store.banner` 实时展平，旧字段读者拿非空数据，消费方零改动 |
 | `Pool(...)` 关键字构造调用方（config_service/worst_impact/schedule_generator/retreat_config）在删字段后 TypeError | Ph1a 构造点迁移：删字段参数、时间窗口移 Banner 级、is_exchange 改 property、停止读 pool_type；retreat_config 的 `PoolEntry` 重建同时改不传 pool_type/rerun_of（写侧，ISSUE-007/008） |
 | 多 Banner 各含同名 `main` 时 PityEngine 裸 `pool.id` 键冲突、保底串池 | 全限定键 `{banner_id}.{pool_id}` 统一键空间（§3.11.3 / ISSUE-010，Ph2/Ph6） |
-| 旧 `PityDef.pools` 裸池 id fnmatch 模式（`pools = ["genshin_limited"]`）在 `[[pool]]` 包装模式（键 `genshin_limited.main`）下失绑——fnmatch 全串匹配命中不了 `banner_id` 段，保底规则静默不作用于该池 | 三路兼容匹配：全限定 / `banner_id` 段 / 裸 `pool_id` 段任一命中即绑定；Ph9 用『旧 `[[pool]]` + 旧 `pools`』用例锁定等价行为（§3.11.3 / REVIEW-R1-FIX: ISSUE-004，Ph8b） |
-| 保存侧只写 `[[pool]]`，banner 配置无法 round-trip；pool_type/rerun_of 解析残留 | 保存侧双路径写回 `[[banner]]` + pool_type/rerun_of 残留清理（§3.9 / ISSUE-012，Ph4） |
+| 旧 `PityDef.pools` 裸池 id fnmatch 模式（`pools = ["genshin_limited"]`）在全限定键（`genshin_limited.main`）下失绑——fnmatch 全串匹配命中不了，保底规则静默不作用于该池 | D4 一次性迁移：PityDef.pools 改全限定键 `{banner_id}.{pool_id}`（`genshin_limited.main`），配置迁移清单同步改写；Ph9 用迁移后用例锁定绑定行为（§3.11.3 / REVIEW-R1-FIX: ISSUE-004，Ph8b） |
+| 保存侧只写 `[[pool]]`，banner 配置无法 round-trip；pool_type/rerun_of 解析残留 | 保存侧统一写 `[[banner]]` + pool_type/rerun_of 残留清理（§3.9 / ISSUE-012，D3/D4 后简化，Ph4） |
 | 可比性指纹/config_hash 不含 Banner 配置 → 仅 Banner 不同的数据集被判「配置相同」 | Ph7 指纹适配：pool_ids 指纹改 banner 维度、config_hash 纳入 Banner 级配置（ISSUE-013） |
-| 原子提交态（Ph2 落地、Ph6 未落地）pity 键不一致：gacha_service 以全限定 `{旧pid}.main` 查询、`_build_pity_engine_from_gui` 的 pool_specs 键仍为裸 `pool.id` → `get_spec` 为 None、soft pity 静默失效（AUDIT-BREAK-3） | **pool_specs 键全限定 + fnmatch 三路匹配提前并入原子提交（随 Ph2，§3.5 要点 12）**——原子提交态键为 `{pool.id}.main`、与查询键同口径；Ph6 数据源切换后键自然承接 |
+| 原子提交态（Ph2 落地、Ph6 未落地）pity 键不一致：gacha_service 以全限定 `{旧pid}.main` 查询、`_build_pity_engine_from_gui` 的 pool_specs 键仍为裸 `pool.id` → `get_spec` 为 None、soft pity 静默失效（AUDIT-BREAK-3） | **pool_specs 键全限定 + 全限定键 fnmatch 提前并入原子提交（随 Ph2，§3.5 要点 12；D4 一次性迁移后仅全限定键匹配，无三路兼容）**——原子提交态键为 `{pool.id}.main`、与查询键同口径；Ph6 数据源切换后键自然承接 |
 | 全限定键推导口径歧义：构造桥 `Banner(id=p.id, pools={'main': p})` 中 `p.id` ≠ 'main'，取 `pool.id` 得 `{旧pid}.{旧pid}` 而非约定 `{旧pid}.main`（AUDIT-BREAK-3） | 全限定键一律由 `f"{banner.id}.{Banner.pools 字典键}"` 推导（§3.5 要点 11）——`DrawOutcome.pool_id`/`active_pool_id`/`banner.pool_draws` 键统一为 pools 字典键 |
 | `SimulationEnv.pools` 改承载 `List[Banner]` 后，`retreat_search.py:407-412`（`pool.is_exchange`/`pool.rewards`）、`resource_search_panel.py:61`（`p.cost`）、`batch_simulator.py:676`（`all_drawable_ids` 读 `p.rewards`）直接 AttributeError（AUDIT-BREAK-5，mapping item 10 gaps 2/3/4/5） | Ph6 一并迁移这三个运行时 `env.pools` 消费端为 banner 池展开读取（§3.12 Ph6 / §四 波及范围）——原计划未安排、现已排期 |
 | `result.pool_end_resources` 字段改名 banner_end 后，`gacha_panel.py:111` 的 `.get('pool_end_resources', {})` 静默拿空 dict、无异常可发现（AUDIT-BREAK-6） | Ph7 将 gacha_panel.py:111 一并迁移为 `.get('banner_end_resources', {})`（§3.12 Ph7 / §四 波及范围） |
@@ -1417,14 +1362,14 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 
 > **定位（REVIEW-R1-FIX: GATE-4）**：§六 风险表 20+ 项均有缓解，但下表中 **4 项「待人工裁决」是承重语义分叉**——计划已选默认分支并写入方案，但默认与备选实现出不同语义，实施后改判将返工。每项在**对应阶段启动前**须经用户裁决（语义属产品/验收口径，计划作者无法单方定夺）；未裁决时按「默认选型」实施。
 
-| 编号 | 分叉点 | 默认选型（计划已写入） | 备选方案 | 语义差异 | 影响面 | 裁决时点 |
-|------|--------|------------------------|----------|----------|--------|----------|
-| **DECISION-1** | `one_shot` 语义（§3.2） | **一次性批次**——batch_size 抽完成后才 exhausted | 抽取 1 次即 exhausted | 默认使免费十连 =10 抽；备选使 free_10pull 退化为单抽 | §3.5 批次语义 / §3.6 示例 / Ph9 用例 / §七 验收 | **Ph1 启动前** |
-| **DECISION-2** | 批次中途耗尽处置（§3.2） | **立即生效 + batch 循环 break 终止剩余**——max_draws 硬上限不被批次惯性突破（15/10 恒 15） | 继续抽完本批次 | 备选把 max_draws 退化为批次边界近似（15/10 抽满 20） | §3.5 批次循环守卫 / Ph9 用例（ISSUE-302） | **Ph1 启动前** |
-| **DECISION-3** | `store.pools` 读侧兜底（§3.9） | **写侧 dual-write**（Legacy mirror 回填 `store.pools`）——旧消费方零改动 | 消费方逐一改读 `flattened_pools`（点改清单入 Ph7/Ph8c） | 备选严格单一数据源但改动面扩大、与 ISSUE-010「`store.pools` 保持可变字段」约束需重平衡 | §3.9 数据模型 / §四 6+ 消费方 / Ph4 + Ph8c | **Ph3/Ph4 启动前** |
-| **DECISION-4** | 兼容模式统计键格式（§3.13.1） | **全限定 `{旧pool_id}.main`** + 旧数据集键迁移映射 / 消费端兼容读取（Ph7 指纹/版本化一并处理，ISSUE-013） | 兼容模式保持裸 `{旧pool_id}`——双键格式并存 | 备选不迁移旧数据但双键并存、消费端需区分来源 | 旧 compact 结果兼容 / Ph7 指纹 / gdr / process_trace / main_window / data_manager | **Ph7 启动前** |
+| 编号 | 分叉点 | 裁决结果（2026-08-02 用户确认） | 原默认选型 | 语义说明 | 影响面 | 裁决时点 |
+|------|--------|--------------------------------|------------|----------|--------|----------|
+| **DECISION-1** | `one_shot` 语义（§3.2） | **归约掉 `one_shot` 参数**：语义 = `max_draws = batch_size`（一次性批次，批次末耗尽）；UI「一次性」勾选保留为 sugar，勾选时自动写入 `max_draws=batch_size` | 一次性批次 | one_shot 引擎行为与 max_draws=batch_size 完全等价（耗尽公式均 `_pool_draws >= batch_size`），归约消除参数冗余；「抽 1 次即关闭」对应 max_draws=1，是配置取值而非独立语义 | §3.2 字段 / §3.5 批次语义 / §3.6 示例 / Ph9 用例 / §七 验收 | **Ph1 启动前（已裁决）** |
+| **DECISION-2** | 批次中途耗尽处置（§3.2） | **立即生效 + batch 循环 break 终止剩余**（确认原默认） | 立即生效 + break | max_draws 硬上限不被批次惯性突破（15/10 恒 15） | §3.5 批次循环守卫 / Ph9 用例（ISSUE-302） | **Ph1 启动前（已裁决）** |
+| **DECISION-3** | `store.pools` 读侧兜底（§3.9） | **store.pools 改只读展平视图（属性名保留）+ 写侧统一走 store.banner**（砍 dual-write） | 写侧 dual-write（Legacy mirror） | 读侧消费方零改动（属性名/结构不变，仍 List[PoolEntry]）；写侧（config_toml 解析、config_panel 编辑）统一写 store.banner；无冗余镜像，单一数据源 | §3.9 数据模型 / 写侧点（config_toml、config_panel）/ Ph4 + Ph8c | **Ph3/Ph4 启动前（已裁决）** |
+| **DECISION-4** | 兼容模式统计键格式（§3.13.1） | **一次性迁移到全限定键 `{banner_id}.{pool_id}`**，不保留旧裸键、不做旧数据迁移映射（砍兼容） | 全限定 + 旧数据集键迁移映射 | 新代码仅一种键格式；无历史结果（未上线），指纹版本化直接按 banner 维度；「兼容」仅指旧 `[[pool]]` 配置允许一次性改写为 `[[banner]]`（等价性由基线对照验证） | §3.13.1 / §3.11.3 / gdr / process_trace / main_window / data_manager | **Ph7 启动前（已裁决）** |
 
-**门控机制**：裁决经用户确认默认选型（或改选备选）后关闭对应门控；§3.12 实施前置自检后、首提交落地前完成 DECISION-1/2 裁决，DECISION-3/4 在其阶段启动前完成。裁决结果写回本节「默认选型」列。**改判代价**：DECISION-1/2 在 Ph1 落地后改判 → 重写 §3.5 批次循环与 Ph9 用例；DECISION-3 在 Ph4 后改判 → 重建消费方点改清单；DECISION-4 在 Ph7 后改判 → 重做统计键迁移。裁决因此必须早于对应阶段启动。
+**裁决状态（2026-08-02 用户确认，依据「无历史包袱」原则——见 CLAUDE.md）**：四项全部按一次性迁移方向裁决，门控已关闭。**决策依据**：这些分叉源于「旧 `[[pool]]` 必须向后兼容」的假设；本项目未上线、config.toml 仅为示例与测试用文件（CLAUDE.md「无历史包袱原则」），该假设不成立，故全部简化为一次性迁移；等价性由「基线固化 + 等价对照」保障（见 §3.12 Ph1 基线阶段 / §七 验收）。**改判代价**：D1 在 Ph1 后改判需恢复 one_shot 字段并重写耗尽判定；D3 在 Ph4 后改判需恢复 dual-write 或迁移 15 处消费点；D4 在 Ph7 后改判需恢复键兼容读取。
 
 <!-- REVIEW-R1-FIX: GATE-5 -->
 ### 6.2 回滚策略
@@ -1435,27 +1380,27 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 
 | 层 | 可回滚机制 | 操作 | 前提 |
 |----|-----------|------|------|
-| **配置层** | 旧 `[[pool]]` 向后兼容 + 保存侧双路径（§3.9 ISSUE-012）——「不写 `[[banner]]` 时现有 `[[pool]]` 行为完全不变」 | 删除 `[[banner]]` 段即回到纯 `[[pool]]` 配置，旧版本解析器原样可读 | 配置文件从未在 P61 版本保存过 `[[banner]]`（见「保存格式回滚」注意） |
-| **代码层** | GATE-3 commit 边界：首提交 = {Ph1, Ph1a, Ph1b, Ph1c, Ph2, Ph5} 一次落地；Ph3/Ph4/Ph6/Ph7/Ph8/8b/8c/Ph9 各自独立可运行 | 逐 commit `git revert <commit>`，或 `git checkout <前一可运行commit> -- <文件>` | 每个 commit 是完整可运行态（GATE-3 已保证） |
+| **配置层** | config.toml 由 git 管理（一次性迁移到 `[[banner]]`，D3/D4），回滚 = 代码+配置同 commit 回退 | `git checkout <旧commit> -- gacha_simulator/config/config.toml` | 配置迁移已在 Ph1 前置一次性完成（无向后兼容/双路径，见 §3.9） |
+| **代码层** | GATE-3 commit 边界：Ph1-base（基线固化）前置独立交付；首提交 = {Ph1, Ph1a, Ph1b, Ph1c, Ph2, Ph5} 一次落地；Ph3/Ph4/Ph4b/Ph6/Ph7/Ph8/8b/8c/Ph9 各自独立可运行 | 逐 commit `git revert <commit>`，或 `git checkout <前一可运行commit> -- <文件>` | 每个 commit 是完整可运行态（GATE-3 已保证） |
 | **数据层** | 统计键全限定化前，旧 compact 结果以裸 `{pool_id}` 存储；回滚后旧代码读旧键仍兼容 | 不迁移旧结果；新结果经 DECISION-4 裁决的映射/兼容读取与旧结果隔离（ISSUE-013 指纹/版本化） | DECISION-4 裁决完成（§6.1） |
 
 **回滚触发条件：**
-1. **首提交（原子单元）**验证失败（`pytest` 不通过、8 策略 banner 模式回归失败、旧 `[[pool]]` 等价验收失败）→ **整体 revert 首提交**回 Ph0 态。首提交内部无中间态可部分回退（字段已删而策略未迁的中间态不可运行，这正是 GATE-3 强制同 commit 的原因）。
+1. **首提交（原子单元）**验证失败（`pytest` 不通过、8 策略 banner 模式回归失败、基线固化等价对照失败）→ **整体 revert 首提交**回 Ph0 态。首提交内部无中间态可部分回退（字段已删而策略未迁的中间态不可运行，这正是 GATE-3 强制同 commit 的原因）。
 2. 任一后续阶段 commit 引入回归（模拟结果与旧版本批量差异 / GDR / 保底 / 池结束快照异常）→ 定位该 commit 并 revert。
-3. **保存格式回滚**：若配置文件已在 P61 版本保存为 `[[banner]]`，回滚到旧版本（仅解析 `[[pool]]`）会让池数据整体丢失——回滚前须经 Ph4 `flattened_pools` 导出为 `[[pool]]` 回退格式，或连同配置文件一起回退（config.toml 受 git 管理时最简：`git checkout <旧commit> -- gacha_simulator/config/config.toml`，代码+配置同 commit 回退天然一致）。
+3. **保存格式回滚（D3/D4 后简化）**：无历史包袱、无双路径，回滚 = 代码+配置同 commit 回退（config.toml 受 git 管理）：`git checkout <旧commit> -- gacha_simulator/config/config.toml`，代码+配置同 commit 回退天然一致。无 flattened_pools 导出回退格式需求。
 4. 数据分析侧：可比性指纹 / `config_hash` 含 Banner 维度（ISSUE-013）——回滚代码后旧数据集与 P61 版本结果可区分，不被误判「配置相同」。
 
-**不可部分回滚点**：首提交的字段删除（`Pool.available_from/until`、`pool_type`、`is_rerun`、`original_pool_id`）在落地后固化——单独 revert 字段删除而保留 Banner 路由会立即 AttributeError。回滚首提交 = 整体回到 Ph0（Notifier 保留，其余撤销）。计划因此将**配置层**（向后兼容）与**代码层**（commit 边界）分离回滚，避免「配置已迁移而代码未回滚」或反之的错位。
+**不可部分回滚点**：首提交的字段删除（`Pool.available_from/until`、`pool_type`、`is_rerun`、`original_pool_id`）在落地后固化——单独 revert 字段删除而保留 Banner 路由会立即 AttributeError。回滚首提交 = 整体回到 Ph0（Notifier 保留，其余撤销）。**D3/D4 后配置层无向后兼容依赖**，配置回滚随代码 commit 边界一并处理（代码 + config.toml 同 commit 回退），无需配置/代码分离。
 
 ## 七、验收标准
 
 **引擎与集成：**
-- [ ] 不写 `[[banner]]` 时，现有 `[[pool]]` 行为完全不变（向后兼容）
+- [ ] 配置一次性迁移完成：`[[banner]]` 解析正确、旧 `[[pool]]` 配置已改写（无自动包装路径），迁移后模拟结果与迁移前逐字段一致（基线固化等价对照，见基线阶段）
 - [ ] Step 链：3个 pool 的阶梯池按 `pool_draws` 阈值自动切换
 - [ ] 送抽插入：main 池30抽后自动切换到 free_10pull 池；free_10pull 耗尽后自动切回 main
 - [ ] 保底旁路：`excludes_all_pity` 的 pool 不触发 `before_draw`/`after_draw`，不影响保底计数器
 - [ ] 新手池：`max_draws` 达到后 exhaust
-- [ ] 一次性 pool：`one_shot=true` 的 pool 在一次 batch（batch_size 抽）完成后标记 exhausted，不可再抽；批次中途不因 one_shot 耗尽切换/终止（REVIEW-R1-FIX: ISSUE-002）
+- [ ] 一次性 pool：`max_draws = batch_size` 的 pool 在一次 batch（batch_size 抽）完成后标记 exhausted，不可再抽；批次中途不因耗尽切换/终止（DECISION-1 归约，REVIEW-R1-FIX: ISSUE-002）
 - [ ] 批次内每抽对当前活跃池单独扣费：lifecycle 中途 switch_to 改变成本后，剩余抽数按新池成本逐抽检查，不可负担即终止本批次——旗舰 free_10pull 场景仅持 free_ticket 时不静默消耗 orundum，免费十连实际出满 10 抽（REVIEW-R1-FIX: ISSUE-002）
 - [ ] Pool `max_draws` 自动耗尽：引擎自动监控 `_pool_draws[id] >= max_draws` → 标记 exhausted——无需在 lifecycle 中手写 `pool_draws → exhaust_pool` 规则
 - [ ] Banner `max_draws` 自动耗尽：引擎自动监控 `_total_draws >= max_draws` → 自动 `_exhaust()`——新手池 `max_draws = 20` 配置即生效，无需手写 `banner_draws → exhaust_banner` lifecycle 规则（§3.6 新手池示例已移除冗余规则，ISSUE-303）
@@ -1471,7 +1416,7 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 - [ ] `random` 推导公式按两种 rewards 表示分别实现（tuple：`rewards[0][1] < 1.0`；dict：`rewards[0]['probability'] < 100.0`），无 `rewards[0].prob` 属性访问（REVIEW-R1-FIX: ISSUE-008）
 - [ ] `time_window` 生命周期阈值支持浮点天数书写（TOML/UI 层 `at` / `at_value` 为 float），解析边界 `* DAY` 换算为秒后与 `real_time`（秒）比较——21.5 天等非整数值不截断提前触发，与 `available_from`/`available_until` 精度一致（REVIEW-R1-FIX: ISSUE-009/001）
 - [ ] P55 槽位概率聚合（featured/standard + scale_factors 还原）在 Banner.draw 内正确迁移——featured 卡保底概率与现状一致（AUDIT-BREAK-8 回归）；`aggregate_probs_by_rarity`/`infer_rarity_from_spec` 已下沉为 core 层模块级函数，core 层与 service 层调用结果一致（REVIEW-R1-FIX: ISSUE-004/005）
-- [ ] 含 exchange / batch_size≠1 / P56 定轨 / `enabled=False` 禁用池 的旧 `[[pool]]` 自动包装后行为与现状等价——enabled 判定与 featured 保底重置判定（featured_ids 由 rewards featured 聚合）不退化（REVIEW-R1-FIX: ISSUE-006/007）
+- [ ] 含 exchange / batch_size≠1 / P56 定轨 / `enabled=False` 禁用池 的配置迁移后行为与迁移前等价——enabled 判定与 featured 保底重置判定（featured_ids 由 rewards featured 聚合）不退化（基线固化等价对照，REVIEW-R1-FIX: ISSUE-006/007）
 - [ ] banner 池的保底重置判定与现状等价——PoolPitySpec.featured_ids 从 banner rewards 聚合（REVIEW-R1-FIX: ISSUE-009）
 - [ ] `StrategyContext` 同时提供 `banners` 和 `current_pools`（后者由 `active_banners[*].active_pool` 推导填充）；8 个内置策略经 Ph1a 迁移后，banner 模式与旧 `[[pool]]` 模式运行结果等价（策略迁移是强制项——「无需修改」验收取消）（REVIEW-R1-FIX: ISSUE-001）
 - [ ] fixed_count / target_hunting 已随 Ph1a 迁移到 `ctx.banners` 双字段——target_hunting 的 `target_pool_ids` 匹配 `banner_id`，`[[pool]]` 兼容模式下旧池 id（如 `'genshin_limited'`）命中 Banner id，不再恒空；fixed_count 的 `DrawAction` 带 `banner_id`，不依赖裸 `'main'` 反查（REVIEW-R1-FIX: ISSUE-003）
@@ -1492,14 +1437,14 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 **ConfigStore：**
 - [ ] `BannerEntry` / `BannerPoolEntry` / `LifecycleRuleEntry` / `BannerConfig` dataclass 正确定义
 - [ ] `ConfigStore.banner` 字段可用，`ConfigStore.clear()` 重置 `self.banner = BannerConfig()`
-- [ ] `flattened_pools` 只读视图 + 写侧 dual-write：banner 模式下 `store.pools` 字段本身被 `_build_banners()` 展平回填（非空），`pool_id` 为全限定 `{banner_id}.{pool_id}`；旧字段读者不拿空列表（REVIEW-R1-FIX: ISSUE-007/006）
-- [ ] `_wrap_pools_as_banners` 的 rewards 元素统一为 dict（正常分支 PoolDistEntry→dict 转换；exchange 分支 100% 单卡 dict）——`rewards[0]['probability']` 推导与 featured 聚合 `r['card_id']` 对两种分支均不抛 TypeError（REVIEW-R1-FIX: ISSUE-304）
+- [ ] `store.pools` 属性化只读视图：从 `store.banner` 实时展平（`pool_id` 为全限定 `{banner_id}.{pool_id}`），旧字段读者不拿空列表；写侧已全部迁移到 `store.banner`（D3 裁决，无 dual-write）
+- [ ] `[[banner.pool]]` 的 rewards 元素统一为 dict——`rewards[0]['probability']` 推导与 featured 聚合 `r['card_id']` 不抛 TypeError（迁移后配置验证，REVIEW-R1-FIX: ISSUE-304）
 
 **TOML：**
 - [ ] `[[banner]]` / `[[banner.pool]]` / `[[banner.pool.reward]]` / `[[banner.lifecycle]]` TOML 段解析正确
-- [ ] `[[pool]]` 自动包装为单 pool Banner（无 `[[banner]]` 段时）
+- [ ] 无自动包装路径（`_wrap_pools_as_banners` 已删除，解析器只认 `[[banner]]`）；config.toml 一次性迁移完成（D3/D4 裁决）
 - [ ] Banner TOML round-trip 保真——GUI 编辑 → 保存 → 重载后字段不丢失
-- [ ] 保存侧双路径：banner 配置保存写回 `[[banner]]`；无 `[[banner]]` 时仍写 `[[pool]]` 且旧 `[[pool]]` 行为完全不变（REVIEW-R1-FIX: ISSUE-012）
+- [ ] 保存侧统一写 `[[banner]]`（含 `[[banner.pool]]` / `[[banner.lifecycle]]`），无双路径（D3/D4 裁决，REVIEW-R1-FIX: ISSUE-012）
 - [ ] 永久 Banner（`available_until=None`）不抛 TypeError——逐 Banner 有效结束时间 `eff_end = until if until is not None else from + 21 * DAY`、`end_time = max(eff_end)`（单位秒，与 `banner_end_times_sorted` 的 `available_until`、`real_time` 一致），`AllPoolsEndCondition` / 资源收益日程不退化，与现状 `(start_day + 21) * DAY` 秒兜底语义逐池等价（REVIEW-R1-FIX: ISSUE-007/001）
 
 **UI（ConfigPanel「卡池管理」Tab）：**
@@ -1525,14 +1470,14 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 - [ ] `excludes_all_pity=True` 的 pool 在「说明」列标注「(不计保底)」
 - [ ] 加载时：`pools` fnmatch pattern → 自动勾选匹配行；保存时：勾选行 → 自动生成紧凑 fnmatch pattern
 - [ ] `[全选]` `[全不选]` 按钮
-- [ ] 匹配逻辑三路兼容：对每个 `{banner_id}.{pool_id}` 依次做全限定 / `banner_id` 段 / 裸 `pool_id` 段 fnmatch——旧 `[[pool]]` + 旧 `pools = ["genshin_limited"]`（命中 banner_id 段）与旧 `pools = ["main"]`（命中裸 pool_id 段）均不失绑（REVIEW-R1-FIX: ISSUE-004）
+- [ ] PityDef.pools 绑定为全限定键 fnmatch：`pools = ["genshin_limited.main"]` 精确命中；配置迁移已把旧裸 id（`genshin_limited` / `main`）改写为全限定键（D4 一次性迁移，REVIEW-R1-FIX: ISSUE-004）
 - [ ] 保留现有左列表+右动态表单结构（BEHAVIOR_REGISTRY 驱动）不变
 
 **DataManager / 指纹：**
 - [ ] 可比性指纹按 banner 维度（pool_ids 指纹改 banner 标识或新增 banner_ids 字段，旧数据集兼容）；`config_hash` 纳入 Banner 级配置（lifecycle / 时间窗口 / 开关属性）——仅 Banner 配置不同的数据集不被判「配置相同」（REVIEW-R1-FIX: ISSUE-013）
 
 **测试：**
-- [ ] `test_banner.py` 覆盖全部 lifecycle 规则 + 集成 + 向后兼容 + 8 策略迁移回归（banner 模式跑通）
+- [ ] `test_banner.py` 覆盖全部 lifecycle 规则 + 集成 + 配置一次性迁移 + 基线固化等价对照 + 8 策略迁移回归（banner 模式跑通）
 - [ ] `tests/core/test_state.py::test_get_available_pools` 已随 Ph1b 删除/改写，不再引用 `get_available_pools`
 - [ ] `tests/service/test_gacha_service.py::test_env_builder_from_config_store_smoke` 已随 Ph1b 改写——不再断言已删 `pool_type` 字段，改断言推导属性（`pool.output`/`pool.random` 或 §3.13.1 `derive_type`）；`_make_pool`（:14-21）与 `test_initial_count_multiple_cards`（:68-69）不再以 `available_from`/`available_until` 构造 `Pool`（AUDIT-BREAK-7）
 - [ ] `tests/core/test_pool.py` 的 `is_available_at` 用例已删除/改写——不再直测退役 API、不以将删字段构造 `Pool`（AUDIT-BREAK-7）；`tests/core/test_epitomizable_cards.py:189/202-205`、`tests/core/test_pity_integration.py:97/150` 不再以 `pool_type`/`available_from`/`available_until` 构造 `Pool`（AUDIT-BREAK-7）；`tests/core/test_batch_draw.py:24`、`tests/service/test_gacha_service.py:142` 不再以 `pool_type` 构造 `PoolEntry`（随 Ph4 删字段，AUDIT-BREAK-4/7）

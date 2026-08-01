@@ -1,8 +1,8 @@
-<!-- META: P61 | module:模拟服务层 | status:designing | last:2026-07-30 -->
+<!-- META: P61 | module:模拟服务层 | status:designing | last:2026-08-01 -->
 
 # P61 池子可用性联动机制——Banner生命周期与复合池
 
-> 日期：2026-07-30 | 状态：设计中（原方案重写，UI/配置设计已补全）
+> 日期：2026-08-01 | 状态：设计中（原方案重写 + 五轮归约：类型/复刻推导化、Lifecycle 统一为 switch_to、方案甲）
 > 触发：step池拆分建模（每步抽N次后解锁下一步）与终末地30抽取送抽池（强制插入、一次性、不计保底）需要池间可用性联动，当前仅支持基于时间窗口的单池独立可用性。
 > 原方案归档：[P61 池子可用性联动机制——step链与送抽插入（规则引擎版）](../../../03-归档/P61 池子可用性联动机制——step链与送抽插入（规则引擎版）.md)（2026-06-20，已归档）
 
@@ -15,7 +15,7 @@
 | 场景 | 机制 | 缺失能力 |
 |------|------|---------|
 | **Step 池链** | 拆分 N 个阶梯，step N 抽满 M 次后解锁 step N+1，step N 不可用 | 池内阶段切换 + 抽数阈值触发 |
-| **送抽插入** | 主池累计 30 抽 → 强制弹出独立送抽池 → 必须先抽送抽才回主池 → 送抽不计主池保底 | 强制插入 + 主源阻塞 + 一次性消耗 + 保底旁路 |
+| **送抽插入** | 主池累计 30 抽 → 强制弹出独立送抽池 → 必须先抽送抽才回主池 → 送抽不计主池保底 | 强制插入 + 切换接管 + 一次性消耗 + 保底旁路 |
 | **新手池关闭** | 抽满 N 次或出特定卡后永久关闭 | 退出条件触发 + 永久耗尽 |
 
 更根本的问题有四个：
@@ -42,7 +42,7 @@
 
 核心交付四个东西：
 
-1. **Banner（逻辑卡池）** — 用户配置和统计的一等单位。内部包含多个 Pool（抽取源），Pool 对用户透明。Banner 自动管理 Pool 之间的切换、阻塞、耗尽。
+1. **Banner（逻辑卡池）** — 用户配置和统计的一等单位。内部包含多个 Pool（抽取源），Pool 对用户透明。Banner 自动管理 Pool 之间的切换、耗尽。
 2. **Lifecycle（声明式生命周期）** — `on 条件 → action` 规则驱动阶段转换，替代规则引擎的每迭代重算。
 3. **Notifier（轻量通知机制）** — `core/notifier.py`（~30行），P61和P58通过订阅同一事件总线协作，互不 import 对方模块。
 4. **TransitionPreview（策略可见进度）** — 策略可查询「还差多少抽触发下一阶段」。
@@ -50,11 +50,11 @@
 覆盖场景（与原方案一致）：
 
 - [x] Step 池链：step1→step2→step3 按抽数阈值自动切换
-- [x] 送抽插入：主池30抽后触发，主源被阻塞，送抽源消耗完毕后恢复
+- [x] 送抽插入：主池30抽后触发，切换到送抽池，送抽源消耗完毕后切回
 - [x] 新手池关闭：`max_draws` 硬上限 + 可选 `card_obtained` 提前退出
-- [x] 一次性池：`one_shot` source 抽后永久不可用
-- [x] 保底排除：`excludes_all_pity` source 完全旁路保底引擎
-- [x] 向后兼容：不写 `[[banner]]` 时现有 `[[pool]]` 自动包装为单 source 的 banner
+- [x] 一次性池：`one_shot` pool 抽后永久不可用
+- [x] 保底排除：`excludes_all_pity` pool 完全旁路保底引擎
+- [x] 向后兼容：不写 `[[banner]]` 时现有 `[[pool]]` 自动包装为单 pool 的 banner
 
 ## 三、方案
 
@@ -75,6 +75,8 @@ Notifier（通知机制——P61和P58共享的解耦层）
 
 ### 3.2 新增文件：`core/banner.py`
 
+> **归属说明（方案甲）**：`Pool` 定义落在 `core/pool.py`（原地改造，见 §3.4），`core/banner.py` 只新建 `Banner` / `Lifecycle` / `TransitionRule`。下方集中展示全部数据结构，文件归属以 §3.4 为准。
+
 ```python
 # ── 数据结构 ──
 
@@ -87,21 +89,31 @@ class Pool:
     batch_size: int = 1              # 每次抽取连数
     one_shot: bool = False           # 一次性消耗——抽取1次后即标记 exhausted
     excludes_all_pity: bool = False  # 完全旁路保底引擎
-    blocks_parent: bool = False      # 激活时阻塞 id="main" 的池
     max_draws: Optional[int] = None  # 该 pool 的最大抽取次数（由引擎自动执行——pool 抽数达上限后自动标记 exhausted，无需手写 lifecycle 规则）
+
+    # ── 推导属性（从 rewards 计算，非配置字段，见 §3.13.1）──
+    #   output       = 'resource' if 全部 reward.id == '_no_card' else 'card'
+    #   random       = len(rewards) > 1 or rewards[0].prob < 1.0
+    #   is_exchange  = output == 'card' and not random
 
 
 @dataclass
 class TransitionRule:
-    """声明式转换规则：on 条件 → action"""
+    """声明式转换规则：条件满足 → 切换到 target 池（或终结 Banner）"""
     condition: str                   # "pool_draws" | "banner_draws" | "card_obtained"
                                      # | "pool_exhausted" | "time_window"
     pool: Optional[str] = None       # 条件关联的 pool id
-    at_value: int = 0                # 阈值
-    action: str                      # "activate_pool" | "deactivate_pool"
-                                     # | "block_pool" | "unblock_pool"
-                                     # | "exhaust_banner" | "advance_step"
-    target: Optional[str] = None     # action 的目标 pool id
+    at_value: int = 0                # 阈值（pool_draws/banner_draws/time_window 条件时）
+    action: str = "switch_to"        # "switch_to"（停用当前活跃池 + 激活 target）
+                                     # | "exhaust_banner"（终结 Banner，无需 target）
+    target: Optional[str] = None     # 切换目标 pool id（action=switch_to 时必填）
+
+    # ── 触发语义：边缘触发（edge-triggered）──
+    # 条件从 False→True 转变的那次评估执行一次；持续满足不重复；条件回落后再满足可重新触发。
+    # 阈值型（pool_draws/banner_draws/time_window）：单调递增，达到即触发一次。
+    #   time_window 为当前模拟时间 >= at_value（天数），是 Banner 窗口内的阶段切换时间触发。
+    # 事件型（card_obtained/pool_exhausted）：事件发生时本次评估为 True，每次事件都触发。
+    _prev_satisfied: bool = False    # 上次评估时的条件满足状态（引擎维护，非配置字段）
 
 
 @dataclass
@@ -111,10 +123,10 @@ class TransitionPreview:
     remaining: int                   # 还差多少
     at_value: int                    # 阈值
     current_value: int               # 当前进度
-    action: str                      # 触发后执行的动作
+    action: str                      # "switch_to" | "exhaust_banner"
     description: str                 # 人类可读描述
     target_pool: Optional[str] = None
-    blocks_current: bool = False     # 触发后是否阻塞当前活跃池
+    switches_current: bool = False   # 触发后当前活跃池是否被停用（switch_to 且 target != 当前池）
 
 
 @dataclass
@@ -122,29 +134,23 @@ class Banner:
     """卡池——用户配置的一等单位"""
     id: str
     name: str
-    pool_type: str = ""                             # "角色" | "武器" | "常驻" | "新手" | "混池" | "阶梯"
     pools: Dict[str, Pool]                          # pool_id → Pool
-    lifecycle: Dict[str, List[TransitionRule]]      # phase → rules
+    lifecycle: List[TransitionRule]                # 平铺规则，每轮边缘触发评估（触发语义见 TransitionRule）
     max_draws: Optional[int] = None                 # Banner 级总抽数硬上限
-    available_from: Optional[float] = None          # 时间窗口起点
+    available_from: Optional[float] = None          # 时间窗口起点（唯一时间窗口，Pool 级已退役，见 §3.13.4）
     available_until: Optional[float] = None         # 时间窗口终点
 
-    # 运行时状态
-    _phase: str = "normal"
-    _active_pool_id: str = "main"
-    _blocked_pools: Set[str] = field(default_factory=set)
+    # 运行时状态（无 phase 概念——active_pool_id 是唯一阶段状态，见 §3.13.5）
+    _active_pool_id: str = "main"    # 单活跃池模型：切换即停用旧池 + 激活新池
     _exhausted_pools: Set[str] = field(default_factory=set)
     _pool_draws: Dict[str, int] = field(default_factory=dict)
     _total_draws: int = 0
-    _phase_history: List[Tuple[int, str, str]] = field(default_factory=list)
 
     # ── 策略可见属性 ──
     @property
     def is_available(self) -> bool: ...
     @property
     def is_exhausted(self) -> bool: ...
-    @property
-    def phase(self) -> str: ...
     @property
     def active_pool(self) -> Pool: ...
     @property
@@ -157,10 +163,9 @@ class Banner:
         """自动路由到活跃 pool，处理保底旁路"""
 
     def _check_transitions(self):
-        """检查当前 phase 的转换规则，触发条件满足时执行 action"""
+        """评估全部 lifecycle 规则，条件满足（边缘触发）时执行 switch_to / exhaust_banner"""
 
-    def _activate_pool(self, pool_id: str): ...
-    def _block_pool(self, pool_id: str): ...
+    def _switch_to(self, pool_id: str): ...    # 停用当前活跃池 + 激活 target
     def _exhaust(self): ...
 ```
 
@@ -191,7 +196,7 @@ notifier.emit("after_draw", banner_id=banner.id, draw_count=banner.total_draws,
               card=reward.id, pity_triggered=triggered)
 
 # P58 侧 —— 订阅事实（P58 模块内部，P61 不知晓）
-notifier.subscribe("after_draw", milestone_engine.on_draw, priority=0)
+notifier.subscribe("after_draw", milestone_engine.after_draw, priority=0)
 ```
 
 **关键约束：**
@@ -200,38 +205,33 @@ notifier.subscribe("after_draw", milestone_engine.on_draw, priority=0)
 - 优先级保证顺序：P58（资源注入，priority=0）→ P61（生命周期检查，priority=1），避免「P61检查时资源还没注入」的竞态
 - P61 不 import P58 的任何符号，反之亦然
 
-### 3.4 旧 Pool 与 Banner 的关系
+### 3.4 旧 Pool 与 Banner 的关系（方案甲：原地改造）
 
-Banner 内的 `Pool`（`core/banner.py`）和旧 `Pool`（`core/pool.py`）是**两个不同的类**，共享同样的名字但处于不同层级：
+Banner 内的抽取单元就是旧 `Pool`（`core/pool.py`）**同一个类**，原地改造，不另起同名类：
 
-- 旧 `Pool`：顶层物理池，存于 `ConfigStore.pools`，`core/pool.py` 不动
-- 新 `Pool`：Banner 内部的自包含抽取单元，所有字段内联
+- 旧 `Pool` 原地新增 P61 字段：`one_shot` / `excludes_all_pity` / `max_draws`
+- 移除死字段：`pool_type`（类型改推导属性，见 §3.13.1）、`is_rerun` / `original_pool_id`（复刻走推导，见 §3.13.2）、`available_from` / `available_until`（时间窗口统一到 Banner 级，见 §3.13.4）
+- 现有字段保留：`id` / `name` / `cost` / `rewards` / `batch_size` / `epitomizable_cards`
+- 推导属性（非配置字段，从 rewards 计算，见 §3.13.1）：`output` / `random` / `is_exchange`（旧策略 `pool.is_exchange` 零改动）
 
-迁移路径：
+迁移路径（旧 Pool 直接作为 Banner 的抽取单元，无字段复制）：
 
 ```python
-# 向后兼容：现有 [[pool]] 自动包装为 Banner
-def _wrap_pools_as_banners(pools: List[Pool]) -> List[Banner]:
-    """每个旧 Pool 包装为一个 Banner（内有一个 main pool）"""
+# 向后兼容：现有 [[pool]] 自动包装为 Banner（config_toml 解析时执行，操作 PoolEntry）
+def _wrap_pools_as_banners(entries: List[PoolEntry]) -> List[BannerEntry]:
+    """每个 PoolEntry 包装为单池 Banner——时间窗口从 start_day/end_day 上移到 Banner"""
     banners = []
-    for old_pool in pools:
-        new_pool = Pool(
-            id="main",
-            cost=old_pool.cost,
-            rewards=old_pool.rewards,
-            batch_size=old_pool.batch_size,
-        )
-        banner = Banner(
-            id=old_pool.id, name=old_pool.name,
-            pools={"main": new_pool},
-            available_from=old_pool.available_from,
-            available_until=old_pool.available_until,
+    for e in entries:
+        banner = BannerEntry(
+            id=e.pool_id, name=e.name,
+            available_from=float(e.start_day), available_until=float(e.end_day),
+            pools=[BannerPoolEntry(id="main", cost=e.cost, rewards=e.distribution)],
         )
         banners.append(banner)
     return banners
 ```
 
-**不修改 `core/pool.py`。** 旧 Pool 类继续存在，Banner 内的 Pool 是独立定义。
+**理由**：归约确认 `pool_type` / `is_rerun` / `original_pool_id` 是死代码或伪需求（§3.13）。方案乙（旧类保留 + 另起同名类）会让死字段继续存活，且字段复制制造「两套真相」，与单一真相源目标相悖。
 
 ### 3.5 GachaService 集成
 
@@ -252,7 +252,7 @@ def run_simulation(self, ...):
         ctx = build_strategy_context(
             state=state,
             banners=active_banners,       # ← 替代 current_pools
-            all_banners=banners,          # ← 替代 all_pools（策略可查看被阻塞的 banner）
+            all_banners=banners,          # ← 替代 all_pools（策略可查看未激活的 banner）
             ...
         )
 
@@ -260,15 +260,18 @@ def run_simulation(self, ...):
 
         if isinstance(action, DrawAction):
             banner = self._banners.get(action.banner_id)
-            # Banner.draw() 内部自动路由到活跃 source + 处理保底旁路
+            # Banner.draw() 内部自动路由到活跃 pool + 处理保底旁路
             reward = banner.draw(state, _pity_engine, pity_state)
 
             # 抽后通知——P58 和 P61 的生命周期规则各自订阅
+            # after_draw 事件契约：banner_id / pool_id / card_id / pity_triggered + state / collector（P58 消费 bonus 需要）
             notifier.emit("after_draw",
                           banner_id=banner.id,
-                          draw_count=banner.total_draws,
-                          card=reward.id,
-                          pity_triggered=triggered)
+                          pool_id=banner.active_pool_id,
+                          card_id=reward.id,
+                          pity_triggered=triggered,
+                          state=state,
+                          collector=collector)
 ```
 
 ### 3.6 TOML 配置
@@ -290,7 +293,6 @@ cost = { intertwined = 1 }
 [[banner]]
 id = "genshin_beginner"
 name = "新手祈愿"
-pool_type = "新手"
 max_draws = 20
 
 [[banner.pool]]
@@ -318,7 +320,6 @@ action = "exhaust_banner"
 [[banner]]
 id = "endfield_limited"
 name = "终末地限定寻访"
-pool_type = "角色"
 
 [[banner.pool]]
 id = "main"
@@ -338,7 +339,6 @@ cost = { free_ticket = 1 }
 batch_size = 10
 one_shot = true
 excludes_all_pity = true
-blocks_parent = true
 
 [[banner.pool.reward]]
 card_id = "endfield_ssr_1"
@@ -348,15 +348,15 @@ featured = true
 # ... 奖励表（通常与 main 相同）...
 
 [[banner.lifecycle]]
-# main 抽满30次 → 激活送抽 + 阻塞 main
+# main 抽满30次 → 切换到送抽池（main 自动停用）
 on = { pool_draws = "main", at = 30 }
-action = "activate_pool"
+action = "switch_to"
 target = "free_10pull"
 
 [[banner.lifecycle]]
-# 送抽耗尽 → 解除 main 阻塞
+# 送抽耗尽 → 切回 main
 on = { pool_exhausted = "free_10pull" }
-action = "unblock_pool"
+action = "switch_to"
 target = "main"
 
 # ── P58 管辖（独立 [[milestone]] 段，不在 banner 内）──
@@ -377,7 +377,6 @@ reward = { resource = "next_banner_ticket", amount = 10 }
 [[banner]]
 id = "step_up"
 name = "阶梯寻访"
-pool_type = "阶梯"
 
 [[banner.pool]]
 id = "step1"
@@ -410,17 +409,12 @@ rarity = "ssr"
 
 [[banner.lifecycle]]
 on = { pool_draws = "step1", at = 10 }
-action = "activate_pool"
+action = "switch_to"
 target = "step2"
 
 [[banner.lifecycle]]
-on = { pool_exhausted = "step1" }
-action = "deactivate_pool"
-target = "step1"
-
-[[banner.lifecycle]]
 on = { pool_draws = "step2", at = 10 }
-action = "activate_pool"
+action = "switch_to"
 target = "step3"
 ```
 
@@ -434,8 +428,7 @@ banner.is_available       # bool: 当前是否可以抽
 banner.is_exhausted       # bool: 是否已永久关闭
 
 # ── 当前状态 ──
-banner.phase              # str: "normal" | "free_pull_interrupted" | ...
-banner.active_pool_id   # str: 当前活跃的 pool
+banner.active_pool_id   # str: 当前活跃的 pool（无 phase 概念——活跃池即阶段，见 §3.13.5）
 
 # ── 进度 ──
 banner.total_draws        # int: 该 Banner 的总抽数（跨 pool 聚合）
@@ -451,11 +444,11 @@ banner.pending_transitions  # List[TransitionPreview]: 按 remaining 升序排�
 for banner in ctx.banners:
     for pt in banner.pending_transitions:
         # 送抽即将触发 → 垫刀
-        if pt.remaining <= 5 and pt.blocks_current:
+        if pt.remaining <= 5 and pt.switches_current:
             return DrawAction(banner_id=banner.id)
 
-        # 送抽已激活 → 优先消耗免费抽
-        if banner.phase == "free_pull_interrupted":
+        # 送抽已激活（当前活跃池是送抽池）→ 优先消耗免费抽
+        if banner.active_pool_id == "free_10pull":
             return DrawAction(banner_id=banner.id)
 
         # 离阈值远 → 不优先
@@ -470,10 +463,10 @@ Banner 是统计的天然聚合边界：
 ```python
 class BannerStats:
     banner_id: str
-    total_draws: int              # 跨 source 自动聚合
+    total_draws: int              # 跨 pool 自动聚合
     total_cost: Dict[str, float]
     cards_obtained: Dict[str, int]
-    pity_triggers: int            # 仅统计非 excludes_all_pity 的 source
+    pity_triggers: int            # 仅统计非 excludes_all_pity 的 pool
     pool_breakdown: Dict[str, PoolStats]  # 按需下钻
 ```
 
@@ -492,9 +485,9 @@ class BannerPoolEntry:
     batch_size: int = 1                  # 每次抽取连数
     one_shot: bool = False
     excludes_all_pity: bool = False
-    blocks_parent: bool = False
     max_draws: Optional[int] = None
     rewards: List[dict] = field(default_factory=list)  # [[banner.pool.reward]] 解析
+    # output/random 不配置——从 rewards 推导（见 §3.13.1）
 
 
 @dataclass
@@ -502,12 +495,11 @@ class LifecycleRuleEntry:
     """声明式转换规则——从 TOML [[banner.lifecycle]] 解析"""
     condition: str                       # "pool_draws" | "banner_draws"
                                          # | "card_obtained" | "pool_exhausted"
+                                         # | "time_window"
     pool: Optional[str] = None           # 条件关联的 pool id
     at: int = 0                          # 阈值
-    action: str                          # "activate_pool" | "deactivate_pool"
-                                         # | "block_pool" | "unblock_pool"
-                                         # | "exhaust_banner"
-    target: Optional[str] = None         # action 的目标 pool id
+    action: str = "switch_to"            # "switch_to" | "exhaust_banner"
+    target: Optional[str] = None         # 切换目标 pool id（action=switch_to 时必填）
 
 
 @dataclass
@@ -515,7 +507,6 @@ class BannerEntry:
     """单个 Banner 定义——从 TOML [[banner]] 解析"""
     id: str
     name: str
-    pool_type: str = ""
     max_draws: Optional[int] = None
     available_from: Optional[float] = None
     available_until: Optional[float] = None
@@ -549,15 +540,15 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 │ ┌─ Banner列表 ──┐ ┌─ Banner详情 ───────────────────────────┐  │
 │ │               │ │ 名称: [终末地限定寻访            ]       │  │
 │ │ ✓ 终末地限定   │ │ ID:   [endfield_limited          ]     │  │
-│ │   新手寻访     │ │ 类型: [限定 ▼]  最大抽数: [     ]      │  │
-│ │   标准寻访     │ │ 时间窗口: [0.0] ~ [21.0]                │  │
+│ │   新手寻访     │ │ 最大抽数: [     ]  时间窗口: [0.0]~[21.0] │  │
+│ │   标准寻访     │ │                                         │  │
 │ │   阶梯寻访     │ │                                         │  │
 │ │               │ │ ── [池] [生命周期] ──────────────────    │  │
 │ │               │ │                                         │  │
 │ │               │ │ ┌─ 上半：Pool 列表 ────────────────┐    │  │
-│ │               │ │ │ID  │成本      │批│一│不│阻        │    │  │
-│ │               │ │ │main│orundum:..│10│☐│☐│—         │    │  │
-│ │               │ │ │free│ticket:1  │10│☑│☑│☑         │    │  │
+│ │               │ │ │ID  │成本      │批│一│不          │    │  │
+│ │               │ │ │main│orundum:..│10│☐│☐          │    │  │
+│ │               │ │ │free│ticket:1  │10│☑│☑          │    │  │
 │ │               │ │ └──────────────────────────────────┘    │  │
 │ │               │ │      [添加] [移除选中]                    │  │
 │ │               │ │ ─────────────────────────────────────    │  │
@@ -572,8 +563,8 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 │ │               │ │ （「生命周期」子标签页切换后↓↓）           │  │
 │ │               │ │ ┌──────────────────────────────────┐    │  │
 │ │               │ │ │关联池│条件      │阈值│动作    │目标│    │  │
-│ │               │ │ │main  │pool_draws│30 │activ..▼│free│    │  │
-│ │               │ │ │free  │pool_exh. │ — │unblo..▼│main│    │  │
+│ │               │ │ │main  │pool_draws│30 │switch..│free│    │  │
+│ │               │ │ │free  │pool_exh. │ — │switch..│main│    │  │
 │ │               │ │ └──────────────────────────────────┘    │  │
 │ │               │ │        [添加] [移除选中]                  │  │
 │ └───────────────┘ └─────────────────────────────────────────┘  │
@@ -583,7 +574,7 @@ banner: BannerConfig = field(default_factory=BannerConfig)
 #### 3.10.2 布局结构
 
 - **左栏**（QListWidget，~180px）：Banner 列表，`currentRowChanged` 驱动右侧
-- **右栏顶部**（QFormLayout，始终可见）：Banner 基础字段（5个）
+- **右栏顶部**（QFormLayout，始终可见）：Banner 基础字段（4个）
 - **右栏中部**（QTabWidget，**2个子标签页**）：池 / 生命周期
 - **左栏底部**：`[添加] [移除] [复制] [批量创建...]`
 - **[移除] 安全检查**：删除 Banner 前检查「保底机制」Tab 中是否有保底规则通过绑定池勾选了此 Banner 的 Pool，以及「累抽奖励」Tab 中是否有里程碑引用了此 Banner。若存在绑定关系，弹出确认对话框列出引用方，用户确认后自动解除绑定并删除
@@ -596,13 +587,12 @@ Banner 自身不抽卡——成本/批次/奖励都在 Pool 层级各自配置�
 |------|------|------|
 | `name` | `QLineEdit` | 显示名称 |
 | `id` | `QLineEdit` | 唯一标识符（可编辑——变更时级联更新生命周期/保底中的引用） |
-| `pool_type` | `QComboBox` | `角色` / `武器` / `常驻` / `新手` / `混池` / `阶梯`——用于分析分类和 UI 筛选 |
 | `max_draws` | `QSpinBox` | Banner 级硬上限，0=无限制 |
 | `available_from` / `available_until` | `QDoubleSpinBox` | 模拟内相对天数（float） |
 
 #### 3.10.4 子标签页：「池」——上半 Pool 列表
 
-6 列（删除了卡牌摘要列——奖励表在下半内联显示）：
+5 列（删除了卡牌摘要列——奖励表在下半内联显示）：
 
 | # | 列名 | 控件 | 说明 |
 |---|------|------|------|
@@ -611,11 +601,9 @@ Banner 自身不抽卡——成本/批次/奖励都在 Pool 层级各自配置�
 | 3 | 批次 | `QSpinBox` 委托 | 1–100，默认 1 |
 | 4 | 一次性 | `QCheckBox` 委托 | `one_shot` |
 | 5 | 不计保底 | `QCheckBox` 委托 | `excludes_all_pity` |
-| 6 | 阻塞主池 | `QCheckBox` 委托 | `blocks_parent`——仅当此行 ID ≠ `"main"` 时可用 |
 
 **交互细节**：
 - 选中行变更 → 下半奖励表自动切换到该 Pool 的 rewards
-- 「阻塞主池」列：ID == "main" 时禁用
 - 按钮：`[添加] [移除选中]`
 
 #### 3.10.5 子标签页：「池」——下半奖励表
@@ -646,15 +634,16 @@ QTableWidget 内联编辑，5 列：
 | # | 列名 | 控件 | 说明 |
 |---|------|------|------|
 | 1 | 关联池 | `QComboBox` 委托 | 从当前 Banner 已有 Pool ID 列表动态填充——用户无法输入不存在的 Pool ID |
-| 2 | 条件 | `QComboBox` 委托 | `pool_draws` / `pool_exhausted` / `card_obtained` / `banner_draws` |
-| 3 | 阈值 | `QSpinBox` 委托 | 条件为 `pool_exhausted` 时禁用（置灰） |
-| 4 | 动作 | `QComboBox` 委托 | `activate_pool` / `deactivate_pool` / `block_pool` / `unblock_pool` / `exhaust_banner` |
+| 2 | 条件 | `QComboBox` 委托 | `pool_draws` / `banner_draws` / `card_obtained` / `pool_exhausted` / `time_window` |
+| 3 | 阈值 | `QSpinBox` 委托 | `pool_draws`/`banner_draws` 为抽数；`time_window` 时切换为 `QDoubleSpinBox`（模拟内天数）；`pool_exhausted`/`card_obtained` 时禁用（置灰） |
+| 4 | 动作 | `QComboBox` 委托 | `switch_to` / `exhaust_banner` |
 | 5 | 目标 | `QComboBox` 委托 | 从当前 Banner 已有 Pool ID 列表动态填充；动作为 `exhaust_banner` 时禁用 |
 
 按钮：`[添加] [移除选中]`
 
 **交互细节**：
 - 「关联池」和「目标」的 QComboBox 选项实时取自当前 Banner 的 Pool ID 列表——添加/删除/重命名 Pool 后下拉自动同步，杜绝悬空引用
+- 条件 = `time_window` 时，「关联池」禁用（置灰）——time_window 是 Banner 级时间条件（当前模拟时间 >= 阈值天数），不关联特定 pool
 - 当条件 = `card_obtained` 时，「阈值」列自动切换为二级匹配控件：
   - 左侧 `QComboBox`：匹配方式——`card_id`（指定卡牌）/ `rarity`（按稀有度）
   - 右侧：取值控件——`card_id` 模式为 QComboBox（已注册卡牌列表，`card_id（名称）` 格式）；`rarity` 模式为 QComboBox（SSR/SR/R，从「卡牌定义」Tab 已使用的稀有度动态填充）
@@ -724,13 +713,13 @@ QTableWidget 内联编辑，5 列：
 │ ── 绑定池 ───────────────────────────────────────     │
 │ 筛选: [______________] 🔍     [全选] [全不选]         │
 │ ┌──┬──────────────────┬──────┬──────────┬────────────┐│
-│ │☑│ Banner            │ 类型  │ Pool     │ 说明        ││
+│ │☑│ Banner            │ Pool     │ 说明        ││
 │ ├──┼──────────────────┼──────┼──────────┼────────────┤│
-│ │☑│ endfield_limited  │ 角色  │ main     │            ││
-│ │☐│ endfield_limited  │ 角色  │ free     │不计保底,一次││
-│ │☑│ standard_banner   │ 常驻  │ main     │            ││
-│ │☐│ step_up           │ 阶梯  │ step1    │            ││
-│ │☐│ step_up           │ 阶梯  │ step2    │            ││
+│ │☑│ endfield_limited  │ main     │            ││
+│ │☐│ endfield_limited  │ free     │不计保底,一次││
+│ │☑│ standard_banner   │ main     │            ││
+│ │☐│ step_up           │ step1    │            ││
+│ │☐│ step_up           │ step2    │            ││
 │ └──┴──────────────────┴──────┴──────────┴────────────┘│
 └──────────────────────────────────────────────────────┘
 ```
@@ -739,15 +728,13 @@ QTableWidget 内联编辑，5 列：
 |---|------|------|------|
 | 1 | ☑ | `QCheckBox`（`setCellWidget`） | 勾选 = 该保底规则绑定到此 Banner.Pool |
 | 2 | Banner | `QTableWidgetItem`（只读） | Banner 名称 |
-| 3 | 类型 | `QTableWidgetItem`（只读） | Banner 的 `pool_type`——辅助按类别筛选（如仅看角色池） |
-| 4 | Pool | `QTableWidgetItem`（只读） | Pool ID |
-| 5 | 说明 | `QTableWidgetItem`（只读） | 合并显示标签：`excludes_all_pity` →「不计保底」/ `one_shot` →「一次性」/ `blocks_parent` →「阻塞主池」；正常池留空 |
+| 3 | Pool | `QTableWidgetItem`（只读） | Pool ID |
+| 4 | 说明 | `QTableWidgetItem`（只读） | 合并显示标签：`excludes_all_pity` →「不计保底」/ `one_shot` →「一次性」；正常池留空 |
 
 **交互细节**：
-- 表格顶部有一行 `QLineEdit` 筛选器——输入关键词后表格仅显示匹配行（匹配 Banner 名 / Pool ID / 类型），方便 Banner 数量多时快速定位目标池
+- 表格顶部有一行 `QLineEdit` 筛选器——输入关键词后表格仅显示匹配行（匹配 Banner 名 / Pool ID），方便 Banner 数量多时快速定位目标池
 - 数据来源：遍历 `store.banner.banners` → 展开每个 Banner 的所有 Pool → 每行一个 `{banner_id}.{pool_id}`
-- 「类型」列从 Banner 的 `pool_type` 读取（角色/武器/常驻/新手/混池/阶梯），辅助用户按类别筛选绑定范围
-- 「说明」列自动聚合 Pool 的特殊属性标签——用户无需逐列查看 `one_shot`/`excludes_all_pity`/`blocks_parent`
+- 「说明」列自动聚合 Pool 的特殊属性标签——用户无需逐列查看 `one_shot`/`excludes_all_pity`
 - 加载时：读取 `pools` fnmatch pattern → 对每个 `{banner_id}.{pool_id}` 做 `fnmatch` → 勾选匹配的行
 - 保存时：从所有勾选行反向生成紧凑的 fnmatch pattern（共享前缀自动缩写为 `*`，精确 ID 用逗号分隔）→ 写回 `pools`
 - 「全选」勾选所有行（生成 `*` = 匹配全部）；「全不选」取消所有勾选
@@ -762,7 +749,8 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 | 阶段 | 内容 | 文件 | 预估 |
 |------|------|------|:---:|
 | Ph0 | `core/notifier.py` —— subscribe / emit / priority。**P61 + P58 共享基础设施**——Ph0 交付后两个计划可完全并行 | 新建 | ~30行 |
-| Ph1 | `core/banner.py` —— Banner + Pool + TransitionRule + TransitionPreview + Lifecycle 引擎 | 新建 | ~250行 |
+| Ph1 | `core/pool.py` —— 原地改造：加 one_shot/excludes_all_pity/max_draws，删 pool_type/is_rerun/original_pool_id/blocks_parent/available_from/available_until，output/random/is_exchange 改推导 property | 修改 | ~30行 |
+| Ph1b | `core/banner.py` —— Banner + TransitionRule + TransitionPreview + Lifecycle 引擎（不含 Pool，直接引用 core/pool.py 的 Pool）| 新建 | ~220行 |
 | Ph2 | `service/gacha_service.py` —— `current_pools` → `current_banners`，集成 Banner.draw() + Notifier | 修改 | ~40行变更 |
 | Ph3 | `core/config_store.py` —— `BannerEntry` / `BannerPoolEntry` / `LifecycleRuleEntry` / `BannerConfig` dataclass + `ConfigStore` 新增 `banner` 字段 | 修改 | ~50行 |
 | Ph4 | `config/config_toml.py` —— `_build_banners()` 解析 `[[banner]]` + `[[banner.pool]]` + `[[banner.lifecycle]]` 段 + `_wrap_pools_as_banners()` 自动包装 | 修改 | ~70行 |
@@ -774,6 +762,64 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 | Ph8c | `gui/config_panel.py` —— `apply_to_store()`/`set_config()`/`get_config()` Banner 适配 + 移除池子模板 + `_setup_ui()` 注册 Tab | 修改 | ~50行 |
 | Ph9 | `tests/test_banner.py` —— 覆盖 lifecycle 全部规则 + 送抽 + step + 新手池 + 向后兼容 | 新建 | ~200行 |
 
+### 3.13 类型与复刻：纯解析归约（设计决策记录）
+
+本节记录一次设计归约（2026-08-01）：池子「类型」与「复刻」均不建模为 tag 或字符串字段，改为推导属性或纯解析推导。背景见 P61 走查讨论：运营命名不可靠，复刻本质是卡级时间出现。
+
+#### 3.13.1 类型 → 推导属性（output / random，从 rewards 计算）
+
+- 旧 `pool_type` 自由字符串（角色/武器/常驻/新手/混池/阶梯）**移除**，Banner 不再持有类型字段
+- 机制本质由两个**可推导**维度描述（消耗维度已由 `cost` 字段承载，不重复）：
+  - `output`：产出类型，`'card'`（抽卡）| `'resource'`（产出资源）
+  - `random`：产出是否随机，`True`（概率抽取）| `False`（确定性兑换/固定产出）
+- **两者都是推导 property，非配置字段，从 rewards 计算**：
+  - `output = 'resource'` 当全部 reward.id 为 `_no_card`（资源池以 `_no_card` 占位行 + `resources_gained` 表达），否则 `'card'`
+  - `random = len(rewards) > 1 or rewards[0].prob < 1.0`（概率已归一化；单卡 100% = 确定性）
+- 组合语义：
+  - `output='card' and random=True` = 普通抽卡池
+  - `output='card' and random=False` = 兑换池（100% 指定卡；`exchange_card_id` 快捷方式保留，写入后自动生成 100% 分布）
+  - `output='resource'` = 资源池
+- 角色/武器/常驻/新手/混池/阶梯全部是**运营命名**，不驱动任何分析逻辑（见消费点修正），不入字段，由 Banner 的 `name` 自然体现
+- 消费点修正：
+  - GDR 转化效率白名单（`_gdr_draw_conversion_efficiency`）由 `pool_type in ('角色','武器','')` 改为 `output == 'card' and random`。顺带修复「用户自定义类型被误排除」的 bug
+  - 过程分析分类：`output == 'resource'` → resource；`output == 'card' and not random` → exchange；其余 → draw
+- 兼容：`is_exchange` 保留为 `output == 'card' and not random` 的 property，旧策略（`smart`/`pity_reserve`/`pool_quota`/`stop_on_target` 等）零改动
+- 无 UI 入口需要：output/random 是推导值，用户不配置，统计层直接消费
+
+#### 3.13.2 复刻 → 卡出现时间线（纯解析推导）
+
+- 复刻不是独立概念/字段/tag。**唯一事实是每张 featured 卡的出现时间线**
+- 推导规则：按时间窗口（`available_from`）排序所有 Banner 的 featured 卡出现事件（`Pool.rewards` 中 `featured=True`，等价 `featured_card_ids`）
+  - 首元素 = debut（首发）
+  - 后续元素 = 复刻
+  - 相邻元素时差 = 复刻间隔（等歪 / A24 时间惩罚 / GDR 时间序列消费）
+- 边界情况（双 up / 混合池）天然支持：复刻标记落在**卡**上，与池子整体是否「复刻池」无关
+  - 单 up X 之后出现双 up X+Y：X 是时间线第二元素（复刻），Y 是首元素（debut）
+  - 双 up X+Y 之后出现双 up X+Z：X 再次出现即复刻，与 Y/Z 完全无关
+- 时间重叠（同一卡在两个时间窗口重叠的池都 featured）算两次出现（不同可获取窗口各算一次）
+- `rerun_of`（整池复刻源）不再作为配置输入；「从其他池导入 rewards」按钮 = 内容继承的唯一机制（UI 复制分布），复刻标记由推导自动给出
+- 旧死代码 `Pool.is_rerun` / `original_pool_id` 不迁移
+
+#### 3.13.3 池子 tag 系统不建（YAGNI）
+
+- 池子/Banner 级 tag 系统**不建**。类型已归约推导属性、复刻已归约推导，无真实消费点
+- 卡片级 P65 tag（`tags`/`list_tags`）已落地，不受影响
+- 未来若出现「按运营分类（角色/武器/常驻）分组分析」的真实需求，复用 P65 tags/list_tags 模式补充，届时再引入
+
+#### 3.13.4 时间窗口统一到 Banner 级
+
+- 可用性完全由 Banner 级 `available_from` / `available_until` + lifecycle 激活状态决定
+- 旧 Pool 级 `available_from` / `available_until` **退役**（单活跃池模型下冗余，AND 语义无真实需求）
+- `[[pool]]` 自动包装时，`start_day` / `end_day` 上移到 Banner（§3.4 `_wrap_pools_as_banners`）
+- 复刻时间线推导按各 Banner `available_from` 排序（§3.13.2 已一致）；复刻 = 新 Banner + 内容导入（「从其他池导入 rewards」按钮），不需要多 schedule 支持
+
+#### 3.13.5 phase 概念移除
+
+- 统一 switch_to 模型下 `_phase` 冗余：`active_pool_id` 已表达当前阶段（送抽中断期 = 活跃池为 `free_10pull`）
+- Banner 移除 `_phase` / `_phase_history` / `phase` property；`lifecycle` 平铺为 `List[TransitionRule]`，每轮边缘触发评估全部规则
+- 策略用 `active_pool_id` 判断阶段（如 `active_pool_id == 'free_10pull'` 即送抽中断期）
+- **单活跃池模型边界**：串行切换（阶梯/送抽）用单 Banner `switch_to`；并行自选（如原神角色池+武器池同时开）用多个独立 Banner，策略在 `active_banners` 间选择。单 Banner 内多池同时活跃且玩家自选不直接支持，建模为独立 Banner
+
 ## 四、波及范围
 
 | 文件 | 变更性质 | 量级 |
@@ -781,7 +827,7 @@ TOML `pools` 字段仍存储 fnmatch pattern。引擎匹配流程不变——遍
 | `core/notifier.py` | **新建** | ~30行 |
 | `core/banner.py` | **新建** | ~250行 |
 | `core/config_store.py` | 新增 `BannerEntry` / `BannerPoolEntry` / `LifecycleRuleEntry` / `BannerConfig` + `ConfigStore.banner` 字段 | ~50行 |
-| `core/pool.py` | **不改** | 0 |
+| `core/pool.py` | **原地改造**：加 one_shot/excludes_all_pity/max_draws，删 pool_type/is_rerun/original_pool_id/blocks_parent/available_from/available_until，output/random/is_exchange 改推导 property | ~30行变更 |
 | `core/strategy.py` | `StrategyContext` 新增 `banners` + `all_banners` 字段 | +5行 |
 | `service/gacha_service.py` | `current_pools` → `current_banners` + Notifier 集成 | ~40行变更 |
 | `service/batch_simulator.py` | `SimulationEnv` 新增 `banner_defs` + `SimulationEnvBuilder` 构建 Banner | ~25行 |
@@ -861,13 +907,16 @@ if _milestone_engine:
 
 ```python
 # P58 模块中 —— 逻辑完全不变
-def _on_after_draw(banner_id, pool_id, reward_id, state, collector, ...):
+def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, state, collector):
     if _milestone_engine:
         for entry in _milestone_engine.after_draw(pool_id):
-            # ... 消费 bonus（与 M4 代码完全相同）...
+            # ... 消费 bonus（与 M4 代码完全相同，用 state/collector 更新资源）...
 
-# gacha_service.py 中 —— 原来的 inline 代码块替换为一行 emit
-notifier.emit("after_draw", banner_id=banner.id, pool_id=source.id, ...)
+# gacha_service.py 中 —— 原来的 inline 代码块替换为一行 emit（契约见 §3.5）
+notifier.emit("after_draw",
+              banner_id=banner.id, pool_id=banner.active_pool_id,
+              card_id=reward.id, pity_triggered=triggered,
+              state=state, collector=collector)
 ```
 
 **P58 改动量：约 15 行**（把 inline 代码块包进一个订阅函数 + 一行 `subscribe`）。P58 审计完成后的其余全部代码不受影响。
@@ -893,11 +942,11 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 | 风险 | 缓解 |
 |------|------|
 | `current_pools` → `banners` 导致现有 8 种策略全部需要适配 | `StrategyContext` 同时保留 `current_pools` 和 `banners` 字段两个版本；策略迁移可选 |
-| Banner 内部 source 切换逻辑与 PityEngine 的交互复杂（送抽source排除保底时，保底计数器跨source是否继承） | Banner.draw() 内部显式分两路：`excludes_all_pity` 的 source 完全旁路 `before_draw/after_draw`，不触碰 `pity_state`；正常 source 走完整保底管线 |
-| 生命周期规则遗漏边界条件（如送抽source激活时主source恰好也被时间窗口过期关闭） | 规则评估顺序：时间窗口（最先，直接 exhaust banner）→ 转换条件 → 可用性汇总。时间过期的 banner 不进入 `active_banners` |
-| `[[banner]]` TOML 解析复杂度——source / lifecycle 嵌套段与现有 `[[pool]]` 格式差异大 | `config_toml.py` 中检测到 `[[banner]]` 段时走新解析路径，`[[pool]]` 段保持现有解析路径不变。两者可共存于同一 TOML |
+| Banner 内部 pool 切换逻辑与 PityEngine 的交互复杂（送抽pool排除保底时，保底计数器跨pool是否继承） | Banner.draw() 内部显式分两路：`excludes_all_pity` 的 pool 完全旁路 `before_draw/after_draw`，不触碰 `pity_state`；正常 pool 走完整保底管线 |
+| 生命周期规则遗漏边界条件（如送抽pool激活时主pool恰好也被时间窗口过期关闭） | 规则评估顺序：时间窗口（最先，直接 exhaust banner）→ 转换条件 → 可用性汇总。时间过期的 banner 不进入 `active_banners` |
+| `[[banner]]` TOML 解析复杂度——pool / lifecycle 嵌套段与现有 `[[pool]]` 格式差异大 | `config_toml.py` 中检测到 `[[banner]]` 段时走新解析路径，`[[pool]]` 段保持现有解析路径不变。两者可共存于同一 TOML |
 | 现有 `Pool` 对象缓存和共享引用（schedule_generator 等）与新 Banner 包装层的兼容 | `_wrap_pools_as_banners()` 包装而非替换——原始 Pool 对象保留在 `self._pools` dict 中，Banner 引用 Pool 而非复制 |
-| 跨 Banner 依赖——如「Banner B 的某个 pool 需等待 Banner A 的 pool 耗尽后才开放」，当前 lifecycle 规则仅在单个 Banner 内部生效 | **已知限制，MVP 不覆盖。** 跨 Banner 事件可通过 Notifier 在后续版本支持——Banner 发射 `pool_exhausted` / `banner_exhausted` 事件，其他 Banner 订阅并据此切换 phase。当前可用 TOML `available_from` 时间窗口近似模拟 |
+| 跨 Banner 依赖——如「Banner B 的某个 pool 需等待 Banner A 的 pool 耗尽后才开放」，当前 lifecycle 规则仅在单个 Banner 内部生效 | **已知限制，MVP 不覆盖。** 跨 Banner 事件可通过 Notifier 在后续版本支持——Banner 发射 `pool_exhausted` / `banner_exhausted` 事件，其他 Banner 订阅并据此切换活跃池。当前可用 TOML `available_from` 时间窗口近似模拟 |
 | `card_obtained` 条件仅支持精确 `card_id` 匹配——终末地新手池「出任意 6★ 即关闭」需稀有度匹配 | UI 已设计 `card_obtained` 的二级匹配控件（§3.10.5）——`rarity` 模式在引擎层待实施 |
 
 ## 七、验收标准
@@ -905,7 +954,7 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 **引擎与集成：**
 - [ ] 不写 `[[banner]]` 时，现有 `[[pool]]` 行为完全不变（向后兼容）
 - [ ] Step 链：3个 pool 的阶梯池按 `pool_draws` 阈值自动切换
-- [ ] 送抽插入：main 池30抽后自动激活 free_10pull 池 + 阻塞 main 池；free_10pull 耗尽后自动恢复
+- [ ] 送抽插入：main 池30抽后自动切换到 free_10pull 池；free_10pull 耗尽后自动切回 main
 - [ ] 保底旁路：`excludes_all_pity` 的 pool 不触发 `before_draw`/`after_draw`，不影响保底计数器
 - [ ] 新手池：`max_draws` 达到后 exhaust
 - [ ] 一次性 pool：`one_shot=true` 的 pool 消耗后标记 exhausted，不可再抽
@@ -926,11 +975,10 @@ banner = "endfield_limited"       # 精确指向一个 Banner
 - [ ] Banner TOML round-trip 保真——GUI 编辑 → 保存 → 重载后字段不丢失
 
 **UI（ConfigPanel「卡池管理」Tab）：**
-- [ ] 左侧 Banner 列表 + 右侧顶部基础字段（QFormLayout，5个字段：name/id/pool_type/max_draws/时间窗口）
+- [ ] 左侧 Banner 列表 + 右侧顶部基础字段（QFormLayout，4个字段：name/id/max_draws/时间窗口）
 - [ ] `id` 为 `QLineEdit`（可编辑），变更时级联更新生命周期和保底中的引用
-- [ ] `pool_type` 为 `QComboBox`（角色/武器/常驻/新手/混池/阶梯）
 - [ ] 右侧两子标签页：池 / 生命周期
-- [ ] 「池」子标签页上半——6 列表格（ID/成本/批次/一次性/不计保底/阻塞主池），内联编辑
+- [ ] 「池」子标签页上半——5 列表格（ID/成本/批次/一次性/不计保底），内联编辑
 - [ ] 「池」子标签页下半——5 列奖励表（卡ID QComboBox 仅可选已注册卡牌/概率% QDoubleSpinBox/稀有度 QLabel 自动解析/Featured QCheckBox/资源获取 QLineEdit），选中上半行自动切换
 - [ ] 按钮 `[添加]` `[移除选中]` `[缩放至100%]`——添加空行/仅删除选中行/按比例缩放所有行至合计100%
 - [ ] 「生命周期」子标签页——5 列表格（关联池/条件/阈值/动作/目标），QComboBox 委托正确填充

@@ -1,4 +1,4 @@
-<!-- META: P58 | module:模拟服务层 | status:designing | last:2026-07-29 | depends:P60✅,P63✅ -->
+<!-- META: P58 | module:模拟服务层 | status:designing | last:2026-08-01 | depends:P60✅,P63✅,P61-Ph0(待) -->
 
 # P58 累抽奖励引擎——独立 MilestoneEngine 实现
 
@@ -297,6 +297,7 @@ class MilestoneDef:
     max_triggers: int = 0                       # 最大触发次数（0=无限触发）
     bonus_reward: dict = field(default_factory=dict)
     pools: tuple = ()  # 作用池子（空元组=全部；支持 fnmatch 通配符，如 "limited_*"）。类型与 PityDef.pools (tuple) 一致<!-- REVIEW-R1-FIX: ISSUE-006 -->
+    banner: str = ""   # P61 协作：精确指向一个 Banner（推荐用法）。P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），故新增 banner 级过滤；pools 保留兼容旧 pool_id 过滤。空字符串 = 不按 banner 过滤
 
 
 @dataclass
@@ -477,6 +478,33 @@ before_draw → PityEngine.before_draw (不含 milestone)
   → rg → resources（资源累加，P63 单通道）
   → collector.on_bonus() + collector.on_draw()
 ```
+
+**P61 协作（Notifier 集成）—— 2026-08-01 新增：**
+
+P61 引入 Banner 抽象后，抽卡事件经 `core/notifier.py`（P61 Ph0 交付）分发。P58 通过订阅 `after_draw` 事件集成，替代 M4 的 inline 调用（逻辑不变，约 15 行迁移）：
+
+```python
+# gacha_service.py —— 模拟循环中（P61 已 emit，契约见 P61 §3.5）
+notifier.emit("after_draw",
+              banner_id=banner.id, pool_id=banner.active_pool_id,
+              card_id=reward.id, pity_triggered=triggered,
+              state=state, collector=collector)
+
+# P58 模块中 —— 订阅函数（逻辑与上方 M4 inline 完全一致）
+def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, state, collector):
+    if _milestone_engine:
+        for entry in _milestone_engine.after_draw(banner_id, pool_id):
+            # ... 消费 bonus（与 M4 代码完全相同，用 state/collector 更新资源）...
+
+notifier.subscribe("after_draw", _on_after_draw, priority=0)   # P58 资源注入先于 P61 生命周期检查
+```
+
+**关键变更：**
+- `after_draw` 事件契约：`banner_id / pool_id / card_id / pity_triggered + state / collector`（P61 §3.5 定义）
+- `MilestoneEngine.after_draw(banner_id, pool_id)` 签名扩展：P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），需用 banner_id 做 banner 级过滤（`MilestoneDef.banner`）。P61 前（M4 inline）用 `after_draw("", pool_id)` 等价旧行为
+- 订阅 priority=0：P58（资源注入）先于 P61（生命周期检查），避免「P61 切换池时 P58 资源未注入」的竞态
+- `[[milestone]]` 推荐新增 `banner` 字段（精确指向一个 Banner）；`pools` 保留兼容旧 pool_id 过滤
+- 依赖 P61-Ph0（core/notifier.py）。Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61，M9 依赖 Ph0
 
 ### 3.5a 策略层查询接口
 
@@ -1334,7 +1362,8 @@ self.left_tabs.addTab(milestone_tab_scroll, "累抽奖励")
 | M7b2 | 奖励编辑器 CRUD + 回写逻辑——固定卡牌 QListWidget（含 `_populate_milestone_cards_list`）+ 资源 QTableWidget（含 `_add/_remove_milestone_resource`）+ 随机卡摘要行（`_update_milestone_random_summary`）+ 随机卡池 CRUD（`_add/_remove/_edit_milestone_random_pool`，依赖 M7b1 的 `RandomCardPoolDialog`）+ `_flush_milestone_current_detail` 全量回写逻辑。M7b1 提供 Dialog 后串行集成<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~45 |
 | M7c | 现有方法适配——`apply_to_store()` 里程碑写入（~10行）<!-- REVIEW-R1-FIX: ISSUE-001 --> + `set_config()` 里程碑回填（~10行）<!-- REVIEW-R1-FIX: ISSUE-002 --> + `get_config()` 追加 `milestone` 键（~8行）<!-- REVIEW-R1-FIX: ISSUE-003 --> + Tab 注册到 `_setup_ui()`（~7行）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~35 |
 | M8 | 集成测试（7 个 G20 场景的 TOML 配置 → 模拟 → 验证期望输出）+ 单元测试（MilestoneEngine._resolve_bonus、_build_milestone 解析器、TOML round-trip、collector 序列化闭环）<!-- REVIEW-R1-FIX: GATE-6-测试策略 --> | `tests/` | ~130 |
-| **总计** | | | **~615** |
+| M9 | P61 协作——`MilestoneEngine.after_draw` 扩展 banner_id 参数 + `_on_after_draw` 订阅函数（替代 M4 inline，逻辑不变）+ `[[milestone]].banner` 字段解析 + `MilestoneDef.banner` 过滤。依赖 P61-Ph0（notifier.py） | `milestone.py` + `gacha_service.py` + `config_toml.py` | ~15 |
+| **总计** | | | **~630** |
 
 > ~~M6（`resources_gained` 解析遗漏修复）已删除——P63 已修复 TOML 管道。~~ M4b 新增——`batch_simulator.py` 的 `SimulationEnv`/`SimulationEnvBuilder` 需传递 `milestone_config`。M5 行数上调至 ~40 以反映跨文件协调成本（`collector.py` + `result_types.py` + `streaming.py` 三文件 + `to_dict`/`from_dict` 序列化自动同步验证）。**M7 拆分为 M7a / M7b1 / M7b2 / M7c 四个 ≤1 小时子阶段**（分别 ~60/~35/~45/~35 行，保守估计各 20-50 分钟）。M7b1（`RandomCardPoolDialog` 独立 QDialog）先于 M7b2（奖励编辑器 CRUD + 回写）串行执行——M7b2 的 `_edit_milestone_random_pool` 依赖 M7b1 提供的 Dialog。M8 行数上调至 ~130 以覆盖 GATE-6 单元测试（~50 行）与集成测试（~80 行）。<!-- REVIEW-R1-FIX: GATE-1-变更粒度 / GATE-6-测试策略 / UPDATED TOTALS -->
 
@@ -1428,11 +1457,16 @@ P63（已完成 ✅ —— 2026-07-29）
    —— P63 核心代码（OverflowBand、state.add_card()、card_overflow_map）已落地。
    2026-07-30 plan-review R2 修正：不再依赖 C1 cron，已在本次审查中直接修正矩阵状态。
 
+P61-Ph0（待实施 —— 2026-08-01 新增）
+├── core/notifier.py（subscribe/emit/priority）                      ← M9 使用
+├── after_draw 事件契约（banner_id/pool_id/card_id/pity_triggered + state/collector） ← M9 订阅
+└── Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61，仅 M9 依赖 Ph0
+
 本计划（P58——独立 MilestoneEngine）
 ├── 零依赖 PityEngine / BEHAVIOR_REGISTRY
 ├── 零依赖 CounterBasedBehavior / PityState
 ├── 零依赖 P55 / P56
-└── 与 P55 / P56 / P63 完全并行——改不同文件、不同 TOML 段、不同 UI Tab
+└── 与 P55 / P56 / P63 / P61(M1-M8) 完全并行——改不同文件、不同 TOML 段、不同 UI Tab
 ```
 
 **关键识别：独立方案消除了「milestone 与 P55 共享平台层」的伪依赖。** P55 的 `CounterBasedBehavior` 是为保底计数器（未出目标稀有度）设计的——milestone 不需要它。里程碑计数器是纯粹的 `int` 自增，极简到不需要继承任何东西。

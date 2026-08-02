@@ -271,6 +271,7 @@ notifier.emit("after_draw",
               pool_id=draw_pool_key,          # 全限定键 {banner_id}.{pool_id}，本次实际产出
               card_id=reward.id,
               pity_triggered=triggered,
+              draw_index=stats.total_draws,   # P58 方案 C 扩展字段（2026-08-03，归因钥匙），见 P58 §3.5 关键变更
               state=state, collector=collector)
 
 # P58 侧 —— 订阅事实（P58 模块内部，P61 不知晓）。
@@ -434,11 +435,13 @@ def run_simulation(self, ...):
 
                 # ── 单抽粒度 emit——batch 内每抽一次 ──
                 # 事件契约（§3.5 唯一真相，ISSUE-005）：banner_id / pool_id=全限定键 / card_id / pity_triggered
+                # draw_index = stats.total_draws（P58 方案 C 扩展字段，2026-08-03，归因钥匙；见 P58 §3.5 关键变更）
                 notifier.emit("after_draw",
                               banner_id=banner.id,
                               pool_id=draw_pool_key,
                               card_id=reward.id,
                               pity_triggered=pity_triggered,
+                              draw_index=stats.total_draws,
                               state=state,
                               collector=collector)
 
@@ -1273,10 +1276,12 @@ P58 落地时，其里程碑结算逻辑（`_milestone_engine.after_draw(...)` +
 <!-- REVIEW-R1-FIX: ISSUE-301 -->
 ```python
 # P58 模块内 —— 订阅函数 + 装配函数（P58 落地时实施）
-def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, state, collector):
+def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, draw_index, state, collector):
     if _milestone_engine:
         for entry in _milestone_engine.after_draw(banner_id, pool_id):   # 双参（§5.4 契约补充）
             # ... 消费 bonus（用 state/collector 更新资源）...
+            # draw_index 为 P58 方案 C 扩展字段（emit 传 stats.total_draws，1-based 当前抽数），
+            # on_bonus 存 draw_index - 1（0-based 本抽索引）
 
 def register_milestone_engine(notifier, engine):
     """P61 Ph0 装配点回调（REVIEW-R1-FIX: ISSUE-301）——装配层在构造 GachaService 前调用。
@@ -1296,6 +1301,7 @@ def register_milestone_engine(notifier, engine):
 notifier.emit("after_draw",
               banner_id=banner.id, pool_id=draw_pool_key,
               card_id=reward.id, pity_triggered=triggered,
+              draw_index=stats.total_draws,   # P58 方案 C 扩展字段（2026-08-03，归因钥匙）
               state=state, collector=collector)
 ```
 
@@ -1406,7 +1412,7 @@ banner = "endfield_limited"       # 精确指向一个 Banner；空 = 全部
 - [ ] Notifier 优先级生效：P58（资源注入，priority=0）先于 P61（生命周期检查，priority=1）
 - [ ] 生命周期转换单一触发点：`_check_transitions` 仅由 `after_draw` 订阅（P61 priority=1）触发一次，Banner.draw 内部不再评估——每抽至多一次转换，无级联二次触发；Notifier 实例与 P61 订阅装配于 Ph2 的 gacha_service（REVIEW-R1-FIX: ISSUE-001）
 - [ ] after_draw 事件按单抽粒度发射——batch_size=10 的池每抽 emit 一次，P58 每抽计数与 collector 逐抽记录与现状等价（REVIEW-R1-FIX: ISSUE-004）
-- [ ] after_draw 事件契约三处统一（§3.3 / §3.5 / §5.4 键名与 pool_id 取值源一致：`banner_id` + `card_id` + `pool_id`=全限定键 + `pity_triggered` + `state` + `collector`），P58 按 §5.4 契约实现即可消费（REVIEW-R1-FIX: ISSUE-005）
+- [ ] after_draw 事件契约三处统一（§3.3 / §3.5 / §5.4 键名与 pool_id 取值源一致：`banner_id` + `card_id` + `pool_id`=全限定键 + `pity_triggered` + `draw_index`（P58 方案 C 扩展字段，2026-08-03）+ `state` + `collector`），P58 按 §5.4 契约实现即可消费（REVIEW-R1-FIX: ISSUE-005）
 - [ ] collector 逐抽记录与现状等价——compact `draw_pity_names` 由 `DrawOutcome.triggered_pity_name` 供给、非恒为 None（含触发保底名称，与 gacha_service.py:310-316 现状一致）（REVIEW-R1-FIX: ISSUE-003）
 - [ ] `random` 推导公式按两种 rewards 表示分别实现（tuple：`rewards[0][1] < 1.0`；dict：`rewards[0]['probability'] < 100.0`），无 `rewards[0].prob` 属性访问（REVIEW-R1-FIX: ISSUE-008）
 - [ ] `time_window` 生命周期阈值支持浮点天数书写（TOML/UI 层 `at` / `at_value` 为 float），解析边界 `* DAY` 换算为秒后与 `real_time`（秒）比较——21.5 天等非整数值不截断提前触发，与 `available_from`/`available_until` 精度一致（REVIEW-R1-FIX: ISSUE-009/001）

@@ -56,7 +56,7 @@
 - 若存在交换池或概率归零场景（`pool.draw()` 返回 `_NO_CARD_ID`），`MilestoneEngine.after_draw()` 仍被调用 → 计数器无条件递增 → 空抽计入累抽进度。验证：模拟包含 N 次空抽的序列 → 计数器值 = 实际调用 `after_draw` 次数（含空抽）。
 
 **里程碑卡溢出验证：**<!-- REVIEW-R1-FIX: GATE-6-测试策略-溢出 -->
-- 若里程碑赠送的卡牌已达到满突上限（`initial_counts` 中已满），`state.add_card(cid, overflow_bands=card_overflow_map.get(cid), ...)` 应触发 `match_overflow_bands()` 并返回溢出资源（如星辉、井币）。验证：模拟前预设该卡已满突破 → milestone 触发 → 溢出资源正确入账 `milestone_rg` → `combined_gained` 反映溢出金额。
+- 若里程碑赠送的卡牌已达到满突上限（`initial_counts` 中已满），`state.add_card(cid, overflow_bands=card_overflow_map.get(cid), ...)` 应触发 `match_overflow_bands()` 并返回溢出资源（如星辉、井币）。验证：模拟前预设该卡已满突破 → milestone 触发 → 溢出资源注入 `resources`（可用性）并计入 `on_bonus` 归因（方案 C，2026-08-03）→ `final_resources` 与合并后 `draw_resources_gained[draw_index]` 反映溢出金额。
 
 ### 1.2 为什么 milestone 不是「保底」
 
@@ -114,18 +114,18 @@ gacha_service 模拟循环
 ├─ MilestoneEngine.after_draw(banner_id, pool_id) → [bonus...]  ← 独立判定、独立注入
 │   ├─ 计数器递增（自管，极简 int）
 │   ├─ 达阈值 → 解析 bonus_reward
-│   ├─ state.add_card() / state.gain()
-│   └─ collector.on_bonus()
+│   ├─ state.add_card()（milestone 卡/溢出）→ 资源注入 state.resources
+│   └─ collector.on_bonus()（源头归因，on_draw 后，方案 C）
 │
-├─ 资源结算（正常产出溢出 + milestone 卡片溢出 + milestone 直接资源，统一经 P63 add_card 管道归入 rg）
-└─ collector.on_draw()
+├─ 资源结算（正常产出溢出归入 rg；milestone 资源已注入 state.resources、不进 rg/combined_gained）
+└─ collector.on_draw() → collector.on_bonus()（方案 C：卡/资源归因源头合并）
 ```
 
 **关键约束：**
 - MilestoneEngine 不触碰概率分布
 - MilestoneEngine 不依赖 PityState——计数器自管
-- bonus 注入发生在 PityEngine.after_draw() 之后、资源结算之前
-- collector.on_bonus() 独立于 on_draw()——元数据（事件名、时间戳、赠送内容）走 on_bonus，资源金额统一走 `combined_gained`（P63 单通道约束）
+- bonus 资源注入（state.resources）发生在 PityEngine.after_draw() 之后、资源结算之前；`on_bonus` 归因记录在 `collector.on_draw()` 之后（方案 C，2026-08-03）
+- collector.on_bonus() 独立于 on_draw()——归因元数据（事件名、触发池、draw_index、赠送内容、资源金额）走 on_bonus；milestone 资源【不】走 combined_gained，而是注入 state.resources + on_bonus 源头归因（方案 C，2026-08-03；P63 单通道约束仅限正常产出结算通道）
 - milestone 注入的卡牌通过 P63 统一 `state.add_card(card_id, path="milestone_gift", overflow_bands=card_overflow_map.get(card_id), initial_counts=...)` 管道触发溢出——与正常抽卡一致。P58 自身不实现溢出逻辑，由 P63 的 `match_overflow_bands()` 提供
 - **GDR 始终包含里程碑奖励。** 里程碑是池子的固有属性——抽 A 池 40 发实打实多一张 SSR，GDR 如实反映。不提供排除开关：需要裸概率时删 `[[milestone]]` 段重跑即可
 
@@ -164,7 +164,7 @@ class MilestoneEngine:
           - card 类型 → state.add_card(cid, path="milestone_gift",
               overflow_bands=card_overflow_map.get(cid),
               initial_counts=_initial_counts)
-          - resource 类型 → 归入 milestone_rg（P63 单通道，不通过 state.gain）
+          - resource 类型 → 注入 state.resources（方案 C，2026-08-03；不并入当抽 combined_gained）
           - collector.on_bonus(...)
 
         banner_id 用于 MilestoneDef.banner 级过滤（P61 后裸 pool_id 非全局唯一）：
@@ -427,19 +427,25 @@ if reward.id != _NO_CARD_ID:
     for k, v in overflow.items():
         rg[k] = rg.get(k, 0) + v
 
-# ── 【新增】里程碑判定与注入 ──<!-- REVIEW-R1-FIX: ISSUE-001 -->
-milestone_rg: dict = {}
+# ── 【新增】里程碑判定与注入（方案 C：资源独立归因，2026-08-03 决策）──
+# 核心：milestone 资源（直接 + 溢出）当抽末注入 resources（玩家/策略视角「当抽即用」），
+# 但【不并入】当抽 combined_gained——M9 时代 emit 在逐抽结算之后，P63 单通道不可回溯，
+# 无法当抽并入。归因走 on_bonus 源头合并（§3.6）：记录完整资源金额 + draw_index（0-based
+# 本抽索引），on_bonus 在 collector.on_draw【之后】调用（此时 draw_resources_gained 已 append
+# 本抽），直接把资源并入该抽产出 + total_gained——对象与 to_dict() 产物一致，流式/主路径都覆盖。
+# M4/M9 统一此形态，迁移行为等价。
+bonus_pending: list = []   # 暂存待 on_bonus 的 bonus（on_bonus 延迟至 on_draw 后）
 if _milestone_engine:
     for entry in _milestone_engine.after_draw("", pool.id):   # P61 前 banner=""（全部生效）；M9 后传真实 banner_id
         bonus = entry['bonus']
-        # 直接资源——归入 milestone_rg（P63 单通道，不通过 state.gain）<!-- REVIEW-R1-FIX: ISSUE-003 -->
-        # state.gain() 已删除——同一批资源经 milestone_rg → rg → resources
-        # 再次累加到 state.resources 会双重入账，违反 P63 单通道约束
+        milestone_res: dict = {}   # 归因资源累计（直接 + 溢出），随 bonus_events 记录
+        # 直接资源——注入 resources（当抽末可用，不进 combined_gained）
         direct_res = bonus.get('resources', {})
         if direct_res:
             for k, v in direct_res.items():
-                milestone_rg[k] = milestone_rg.get(k, 0) + v
-        # 卡牌——经 P63 state.add_card() 统一管道，自动计算溢出
+                resources[k] = resources.get(k, 0) + v
+                milestone_res[k] = milestone_res.get(k, 0) + v
+        # 卡牌——经 P63 state.add_card() 统一管道，溢出资源同样注入 resources 并计入归因
         for cid in bonus.get('card_ids', []):
             overflow = state.add_card(
                 cid,
@@ -448,20 +454,26 @@ if _milestone_engine:
                 initial_counts=_initial_counts,
             )
             for k, v in overflow.items():
-                milestone_rg[k] = milestone_rg.get(k, 0) + v
-        collector.on_bonus(
-            milestone_name=entry['name'],
-            card_ids=bonus.get('card_ids', []),
-            resources=bonus.get('resources', {}),
-            pool_id=pool.id,               # ← 用于 per-pool 归因（pool_card_counts）<!-- REVIEW-R1-FIX: ISSUE-011 -->
-            real_time=real_time,
-        )
-    # milestone 溢出资源 + 直接资源 → 归入 rg（P63 单通道）—— rg 已在上方定义完毕
-    if milestone_rg:
-        for k, v in milestone_rg.items():
-            rg[k] = rg.get(k, 0) + v
+                resources[k] = resources.get(k, 0) + v
+                milestone_res[k] = milestone_res.get(k, 0) + v
+        bonus_pending.append((entry['name'], bonus.get('card_ids', []), milestone_res))
 
 # ── rg → resources + combined_gained → collector.on_draw（保持不变）──
+#   milestone 资源不进 rg/combined_gained——当抽 combined_gained 仅含正常产出 + 挂账等待收益
+collector.on_draw(...)
+
+# ── on_bonus（collector.on_draw 之后）──
+#   draw_resources_gained 已 append 本抽；draw_index = stats.total_draws - 1（stats.on_draw 已 +1）
+for mname, cids, mres in bonus_pending:
+    collector.on_bonus(
+        milestone_name=mname,
+        card_ids=cids,
+        resources=mres,               # 归因数据（直接 + 溢出）
+        pool_id=pool.id,              # ← 用于 per-pool 归因（pool_card_counts）<!-- REVIEW-R1-FIX: ISSUE-011 -->
+        real_time=real_time,          # 审计时间戳（不用于归因——抽卡不推进 real_time）
+        draw_index=stats.total_draws - 1,   # 0-based 本抽索引（归因钥匙，唯一单调）
+    )
+
 # ... 后续保持不变
 ```
 
@@ -471,7 +483,7 @@ if _milestone_engine:
 - 不再使用计划中原假设的 `bonus_config=` kwarg——P63 统一为 `overflow_bands=` 参数 + `match_overflow_bands()` 内部匹配
 - `on_bonus` 参数 `pity_name` → `milestone_name`（语义修正）
 
-**关键时序：**<!-- REVIEW-R1-FIX: ISSUE-001 + ISSUE-003 -->
+**关键时序（2026-08-03 方案 C 修订——资源独立归因）：**<!-- REVIEW-R1-FIX: ISSUE-001 + ISSUE-003 -->
 
 ```
 before_draw → PityEngine.before_draw (不含 milestone)
@@ -480,39 +492,44 @@ before_draw → PityEngine.before_draw (不含 milestone)
   → rg = dict(reward.resources_gained or {}) → 正常资源提取
   → state.add_card(reward.id, path="draw", overflow_bands=...) → 正常产出溢出 → rg（P63）
   → MilestoneEngine.after_draw → 达阈值 → 返回 bonus
-  → state.add_card(cid, path="milestone_gift", overflow_bands=...) → milestone 卡片溢出 → milestone_rg（P63 统一管道）
-  → 直接资源归入 milestone_rg（P63 单通道，不通过 state.gain）<!-- REVIEW-R1-FIX: ISSUE-003 -->
-  → milestone_rg 归入 rg（P63 单通道）
-  → rg → resources（资源累加，P63 单通道）
-  → collector.on_bonus() + collector.on_draw()
+  → 直接资源 + milestone 卡片溢出资源 → 注入 resources（当抽末可用，不进 combined_gained）
+  → rg → resources + combined_gained（仅正常产出 + 挂账等待收益，不含 milestone）
+  → collector.on_draw()
+  → collector.on_bonus(..., draw_index=stats.total_draws - 1)   # 源头合并资源（on_draw 后）
 ```
 
-**P61 协作（Notifier 集成）—— 2026-08-01 新增：**
+M9 时代同时序但触发点变为 `notifier.emit("after_draw")` 订阅（结算后），资源注入语义「下一抽起可用」、统计经 bonus_events 事后归因——见下方「P61 协作（Notifier 集成）」段。
 
-P61 引入 Banner 抽象后，抽卡事件经 `core/notifier.py`（P61 Ph0 交付）分发。P58 通过订阅 `after_draw` 事件集成，替代 M4 的 inline 调用（逻辑不变，约 15 行迁移）：
+**P61 协作（Notifier 集成）—— 2026-08-01 新增 / 2026-08-03 方案 C 修订：**
+
+P61 引入 Banner 抽象后，抽卡事件经 `core/notifier.py`（P61 Ph0 交付）分发。P58 通过订阅 `after_draw` 事件集成，替代 M4 的 inline 调用（资源注入逻辑与 M4 完全一致，约 15 行迁移）：
 
 ```python
 # gacha_service.py —— 模拟循环中（P61 已 emit，契约见 P61 §3.5）
+# P61 侧新增 draw_index=stats.total_draws（1-based 当前抽数）——方案 C 归因钥匙来源
 notifier.emit("after_draw",
               banner_id=banner.id, pool_id=banner.active_pool_id,
               card_id=reward.id, pity_triggered=triggered,
+              draw_index=stats.total_draws,     # 方案 C 新增（P61 契约扩展点）
               state=state, collector=collector)
 
-# P58 模块中 —— 订阅函数（逻辑与上方 M4 inline 完全一致）
-def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, state, collector):
+# P58 模块中 —— 订阅函数（资源注入逻辑与上方 M4 inline 完全一致）
+def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, draw_index, state, collector):
     if _milestone_engine:
         for entry in _milestone_engine.after_draw(banner_id, pool_id):
-            # ... 消费 bonus（与 M4 代码完全相同，用 state/collector 更新资源）...
+            # ... 消费 bonus（与 M4 代码相同：资源注入 state.resources + on_bonus）
+            # on_bonus 的 draw_index 参数 = draw_index - 1（0-based 本抽索引）...
 
 notifier.subscribe("after_draw", _on_after_draw, priority=0)   # P58 资源注入先于 P61 生命周期检查
 ```
 
 **关键变更：**
-- `after_draw` 事件契约：`banner_id / pool_id / card_id / pity_triggered + state / collector`（P61 §3.5 定义）
+- `after_draw` 事件契约：`banner_id / pool_id / card_id / pity_triggered + draw_index + state / collector`（P61 §3.5 定义；`draw_index` 为方案 C 扩展字段，2026-08-03）
+- **方案 C 归因钥匙**：`bonus_events` 存 `draw_index = 契约 draw_index - 1`（0-based 本抽索引），合并时直接索引 `draw_resources_gained`。**不用 real_time**——抽卡不推进 real_time（仅 WaitAction 推进，gacha_service L372-374），连续无等待抽卡共享同一 real_time 值，无法唯一定位一抽；`stats.total_draws` 每抽 +1（L37）单调唯一，`total_draws - 1` 即本抽在 `draw_resources_gained` 的索引（L107 每抽 append）
 - `MilestoneEngine.after_draw(banner_id, pool_id)` 签名含 banner_id：P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），用 banner_id 做 banner 级过滤（`MilestoneDef.banner`，精确匹配，空 = 全部）；P61 前调用方传 `""`
 - 订阅 priority=0：P58（资源注入）先于 P61（生命周期检查），避免「P61 切换池时 P58 资源未注入」的竞态
 - `[[milestone]]` 用 `banner` 字段（精确指向一个 Banner）；原 `pools` 字段已删除（2026-08-02 无历史包袱迁移，见 §3.3 修订）——不再有「pools 保留兼容旧 pool_id 过滤」的双路径
-- 依赖 P61-Ph0（core/notifier.py）。Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61（此时 banner 过滤用 `banner=""`，全部生效），M9 依赖 Ph0
+- 依赖 P61-Ph0（core/notifier.py）+ **P61 emit 契约含 `draw_index` 字段**。Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61（此时 banner 过滤用 `banner=""`，全部生效），M9 依赖 Ph0 与契约字段
 
 ### 3.5a 策略层查询接口
 
@@ -603,10 +620,15 @@ for name, md in ctx.get_milestone_defs().items():
 # collector.py
 class SimulationCollector(ABC):
     def on_bonus(self, milestone_name: str, card_ids: List[str],
-                 resources: Dict[str, float], pool_id: str, real_time: float):
-        """milestone 注入事件——只存元数据（里程碑名、时间戳、赠送内容、触发池）。
+                 resources: Dict[str, float], pool_id: str, real_time: float,
+                 draw_index: int):
+        """milestone 注入事件——记录归因元数据并源头合并卡/资源。
         pool_id 用于 per-pool GDR 分析归因。<!-- REVIEW-R1-FIX: ISSUE-011 -->
-        P63 单通道约束：资源金额不在这里存储——统一走 combined_gained。
+        draw_index 为 0-based 本抽索引（归因钥匙）。方案 C（2026-08-03）：milestone 资源
+        注入 state.resources（当抽末可用）、【不并入】当抽 combined_gained（P63 单通道不可回溯、
+        M9 emit 在逐抽结算之后）；on_bonus 在 collector.on_draw【之后】调用，把 resources 源头
+        并入 draw_resources_gained[draw_index] 与 total_gained——对象与 to_dict() 产物一致，
+        流式/主路径均覆盖，无需统计层再合并（§3.6a）。
         参数名用 milestone_name 而非 pity_name——语义准确。
         """
 
@@ -616,12 +638,12 @@ def on_bonus(self, ...):
     r.bonus_events.append({
         'milestone_name': milestone_name,
         'card_ids': list(card_ids),
-        'resources': dict(resources),      # 直接资源元数据（审计用，不做会计）
+        'resources': dict(resources),      # 归因数据（直接 + 溢出）
         'pool_id': pool_id,                # ← 触发池 ID，用于 per-pool 归因<!-- REVIEW-R1-FIX: ISSUE-011 -->
-        'real_time': real_time,
-        # 资源金额不在此存储——已通过 milestone_rg 归入 combined_gained（P63）
+        'real_time': real_time,            # 审计时间戳（不用于归因）
+        'draw_index': draw_index,          # 0-based 本抽索引（归因钥匙）
     })
-    # ── 源头合并 card_counts / pool_card_counts（方案 A）──<!-- REVIEW-R1-FIX: ISSUE-003 -->
+    # ── 源头合并卡（方案 A）──<!-- REVIEW-R1-FIX: ISSUE-003 -->
     # SharedResultCollector 无 on_bonus 方法，合并必须在 to_dict() 之前完成
     for cid in card_ids:
         r.card_counts[cid] = r.card_counts.get(cid, 0) + 1
@@ -629,6 +651,23 @@ def on_bonus(self, ...):
             if pool_id not in r.pool_card_counts:
                 r.pool_card_counts[pool_id] = {}
             r.pool_card_counts[pool_id][cid] = r.pool_card_counts[pool_id].get(cid, 0) + 1
+    # ── 源头合并资源（方案 C，2026-08-03）──
+    # 前置：on_bonus 在 collector.on_draw 之后——draw_resources_gained 已 append 本抽，
+    #   draw_index 处元素存在，可安全累加。归因到触发抽 + 补 total_gained。
+    for k, v in resources.items():
+        dpg = r.draw_resources_gained[draw_index]
+        dpg[k] = dpg.get(k, 0) + v
+        r.total_gained[k] = r.total_gained.get(k, 0) + v
+
+# ⚠ gacha_service 循环结束组装 CompactResult 时（现状 gacha_service L419 `result.total_gained = total_gained`）
+# 必须改为【合并】而非覆盖：on_bonus 已把 milestone 资源并入 result.total_gained（对象字段），
+# 局部 total_gained（仅正常产出 + 等待收益）直接赋值会整体覆盖、丢失 milestone 资源。
+# 改为：
+#   merged = dict(total_gained)
+#   for k, v in result.total_gained.items():
+#       merged[k] = merged.get(k, 0) + v
+#   result.total_gained = merged
+# 最终 final_resources / total_gained / draw_resources_gained 三处一致。
 ```
 
 `CompactResult` 新增字段：
@@ -640,7 +679,7 @@ bonus_events: list = field(default_factory=list)
 `to_dict()` / `from_dict()` 需同步更新——**此项未列入原实施阶段，需追加。**
 
 **SharedResultCollector（流式分析）聚合策略：**<!-- REVIEW-R1-FIX: ISSUE-003 -->
-**设计方案 A（源头合并——推荐）：** `SharedResultCollector` 不具备 `on_bonus` 方法（当前仅有 `on_result(compact: Dict)`），且 `extract_aggregate()` 仅读取 `compact['card_counts']`/`compact['pool_card_counts']` 等字段，不解析 `bonus_events`。因此 bonus 合并必须在数据进入 `SharedResultCollector` **之前**完成——即 `CompactCollector.on_bonus()` 中同步更新 `self._result.card_counts` 和 `self._result.pool_card_counts`。这样 `to_dict()` 产出的紧凑字典已含合并后的全量卡牌统计，`extract_aggregate()` 无需改动、流式分析自然包含里程碑产出。此方案与计划「GDR 始终包含里程碑奖励」的约束一致。
+**设计方案 A（源头合并——推荐）：** `SharedResultCollector` 不具备 `on_bonus` 方法（当前仅有 `on_result(compact: Dict)`），且 `extract_aggregate()` 仅读取 `compact['card_counts']`/`compact['pool_card_counts']` 等字段，不解析 `bonus_events`。因此 bonus 合并必须在数据进入 `SharedResultCollector` **之前**完成——即 `CompactCollector.on_bonus()` 中同步更新 `self._result.card_counts` 和 `self._result.pool_card_counts`。这样 `to_dict()` 产出的紧凑字典已含合并后的全量卡牌统计，`extract_aggregate()` 无需改动、流式分析自然包含里程碑产出。此方案与计划「GDR 始终包含里程碑奖励」的约束一致。方案 C（2026-08-03）同步在 `on_bonus()` 中把资源并入 `draw_resources_gained[draw_index]` 与 `total_gained`——`to_dict()` 产物对卡与资源均源头合并，流式路径里程碑产出（卡+资源）完整可见。
 
 **与 _merge_milestone_cards() 互斥声明（2026-07-30 审查修正）：**<!-- REVIEW-R1-FIX: ISSUE-002 -->
 方案 A 在 `on_bonus` 阶段已完成 `card_counts` / `pool_card_counts` 的源头合并。若方案 A 被实施，**§3.6a 的 `_merge_milestone_cards()` 不得再重复写入 `card_counts` 或 `pool_card_counts`**——否则 milestone 赠卡会被双重计入。`_merge_milestone_cards()` 降级为仅构建合并后的 `merged: Dict[str, List[int]]` 映射（供 GDR 时序计算），其 `pool_card_counts` 更新逻辑需移除——由 `card_counts` 反推即可。两方案不可同时生效于同一数据字段。参见 §3.6a 开头的备选方案标注。
@@ -662,17 +701,18 @@ milestone 赠卡不经过 `pool.draw()` 管线——不会出现在 `draw_card_i
 
 **方案 A（推荐——与 ISSUE-003 联动）：** `CompactCollector.on_bonus()` 已同步更新 `card_counts`/`pool_card_counts`。以上五条路径统一改用合并后的 `card_counts` 作为输入源（`to_dict()` 产出的 compact dict 中 `card_counts` 已含 bonus）。`_update_cumulative()` 无需遍历 `draw_card_ids`——直接从 `card_counts` 增量构建 `cumulative_card_counts`。`WorkerLocalExtractor.process()` 中的热力图/转变标记同理。
 
-**方案 B（备选）：** 在各遍历入口处构建 `merged_card_ids`（正常 `draw_card_ids` + `bonus_events` 赠卡按 `real_time` 定位插入），遍历 `merged_card_ids` 而非 `draw_card_ids`。`real_time → draw_index` 映射共用 `_time_to_draw_index()` 工具函数。
+**方案 B（备选）：** 在各遍历入口处构建 `merged_card_ids`（正常 `draw_card_ids` + `bonus_events` 赠卡按 `draw_index` 定位插入），遍历 `merged_card_ids` 而非 `draw_card_ids`。定位直接用 `bonus_events[].draw_index`（方案 C 归因钥匙，2026-08-03），无需 `_time_to_draw_index()` 映射工具。
 
 两方案等效——方案 A 更简洁（源头已完成合并，消费方无需感知 bonus 来源），方案 B 保留时序信息（bonus 赠卡插入到正确的抽数位置）。实际实现时两方案可组合使用。
 
-正确性保证（逐层追踪）：
+正确性保证（逐层追踪，2026-08-03 方案 C 修订）：
 ```
-单抽 on_draw(card_id="ssr_a", resources_gained=rg)  ← rg 已含: 正常溢出 + milestone溢出 + milestone直接资源
-     on_bonus(card_ids=["ssr_b"], resources={coin: 500})  ← 仅累加 card_counts["ssr_b"]，不动资源
+单抽 on_draw(card_id="ssr_a", resources_gained=rg)  ← rg 仅含正常产出（不含 milestone 资源）
+     on_bonus(card_ids=["ssr_b"], resources={coin: 500, ...}, draw_index=i)  ← 卡源头合并 card_counts；资源记录归因数据
 ```
-- **不会少加：** milestone 卡通过 `on_bonus` 显式累加进 `card_counts`
-- **不会多加：** 资源仅通过 `on_draw` 的 `rg` 入账（单通道），`on_bonus` 不碰资源
+- **卡不会少加：** milestone 卡通过 `on_bonus` 显式累加进 `card_counts`
+- **资源不会少算：** milestone 资源注入 `resources`（可用性）+ `bonus_events` 记录（归因）——统计层合并后逐抽产出 / 总账 / 最终余额三处一致（§3.6a）
+- **资源不双重入账：** milestone 资源不进 `combined_gained`（P63 结算通道不可回溯），仅在统计层合并一次
 
 分析面板据此区分两类来源——但 GDR 计算时始终合并（里程碑是池子固有属性，§3.1 约束）。
 
@@ -682,43 +722,40 @@ milestone 赠卡不经过 `pool.draw()` 管线——不会出现在 `draw_card_i
 
 > **2026-07-29 注：** P63 未碰 GDR 层——此项完全由 P58 自行实现。
 
-`bonus_events` 与 `card_counts` 是独立通道。GDR 计算时需要将 milestone 赠卡合并到正常产出中以正确计算出率。资源金额已通过 P63 单通道（`milestone_rg` → `combined_gained`）自动归入，无需额外合并：
+`bonus_events` 与 `card_counts` 是独立通道。GDR 计算时需要将 milestone 赠卡合并到正常产出中以正确计算出率。**资源归因在 on_bonus 源头完成（2026-08-03 方案 C 修订）**——方案 C 下 milestone 资源注入 `state.resources`（可用性）而非当抽 `combined_gained`；`on_bonus`（collector.on_draw 之后）按 `draw_index` 直接把资源并入该抽产出 `draw_resources_gained[draw_index]` 与 `total_gained`。因此 `to_dict()` 产物（含流式路径）与 CompactResult 对象均已含 milestone 资源，无需统计层再合并；`_merge_milestone_cards` 仅建卡时序映射。三处一致由 on_bonus 保证：逐抽明细 / 总账 / `final_resources`：
 
 ```python
 # gdr.py —— 在 compute_gdr_from_compact() / compute_gdr_from_cumulative() 入口处调用
 <!-- REVIEW-R1-FIX: ISSUE-009 -->
 
 def _merge_milestone_cards(result: CompactResult) -> Dict[str, List[int]]:
-    """将 bonus_events 中的卡按抽数索引合并到 card_counts。
+    """将 bonus_events 中的卡按抽数索引合并到 merged 映射（供 GDR 时序计算）。
 
-    bonus_events 携带 real_time → 映射到对应抽数 → 追加到该抽的卡产出中。
-    同时更新 pool_card_counts——bonus_events 中的 pool_id 用于 per-pool 归因。
+    方案 C（2026-08-03）：bonus_events 携带 draw_index（0-based 本抽索引）——直接索引，
+    无 real_time→draw_index 映射（抽卡不推进 real_time，映射有损，见 §3.5 关键变更）。
+    卡计数与资源归因已由 on_bonus 源头合并（§3.6）：card_counts / pool_card_counts /
+    draw_resources_gained[draw_index] / total_gained 在 on_bonus 阶段即完成——本函数
+    【不】重复写入这些字段，仅构建 merged 时序映射（bonus 卡出现在哪些抽，供 GDR 时序计算）。
     """
     merged: Dict[str, List[int]] = defaultdict(list)
     # 先复制正常抽卡产出
     for i, card_id in enumerate(result.draw_card_ids):  # ← 修正：card_sequence → draw_card_ids <!-- REVIEW-R1-FIX: ISSUE-010 -->
         merged[card_id].append(i)
 
-    # 合并里程碑赠卡
+    # 追加里程碑赠卡的抽数位置（计数已源头合并，此处仅时序映射）
     for ev in result.bonus_events:
-        draw_idx = result._time_to_draw_index(ev['real_time'])  # 时间戳→抽数
-        pool_id = ev.get('pool_id', '')
+        draw_idx = ev['draw_index']   # 0-based 本抽索引（归因钥匙，唯一单调）
         for cid in ev.get('card_ids', []):
             merged[cid].append(draw_idx)
-            # 同步更新 pool_card_counts——在循环内逐卡累加，多卡赠礼不漏<!-- REVIEW-R1-FIX: ISSUE-002 -->
-            if pool_id and cid:
-                if pool_id not in result.pool_card_counts:
-                    result.pool_card_counts[pool_id] = {}
-                result.pool_card_counts[pool_id][cid] = result.pool_card_counts[pool_id].get(cid, 0) + 1
 
     return merged
 ```
 
-资源同理——`bonus_events` 中的资源在总账 `resources` 中已合并，但单抽明细需要对齐 `real_time`。
+资源归因（方案 C，源头完成）：`on_bonus`（collector.on_draw 后）直接把 `resources` 并入 `draw_resources_gained[draw_index]` 与 `total_gained`——对象与 `to_dict()` 产物一致，流式/主路径均覆盖。
 
 **波及（2026-07-30 修正）：** `compute_gdr_from_compact()` / `compute_gdr_from_cumulative()` 调用前先合并——这两个入口均在 `gdr.py` 中。不改函数签名——合并发生在入口。若历史路径（`compute_gdr_from_history()`，通过 `generalized_drop_rate.py` 中的 `GeneralizedDropRate` 子类计算）也需反映 milestone 产出，需在历史路径中单独适配（见风险表 ISSUE-008）。
 
-**`real_time → draw_index` 映射方案：** 模拟结束后构建 `{draw_times[i]: i}` 字典（`CompactResult.draw_times` 已存在），O(1) 查找。`bonus_events` 数量极少（每场至多数十次），字典开销可忽略。`real_time` 来自 `gacha_service` 循环中的同一时钟，应精确匹配——KeyError 反而能暴露时钟不同步 bug。
+**归因钥匙（2026-08-03 方案 C 修订，废弃 real_time 映射）：** `bonus_events` 直接存 `draw_index`（0-based 本抽索引），来源 `stats.total_draws - 1`（M4 inline）或 P61 emit 契约 `draw_index - 1`（M9 订阅）。**不用 real_time 映射**——抽卡不推进 real_time（仅 WaitAction 推进，gacha_service L372-374），连续无等待抽卡共享同一 real_time 值，`{draw_times[i]: i}` 字典退化为「时间点 → 该段最后一抽」，milestone 资源会错位到段末。`draw_index` 由 `stats.total_draws`（每抽 +1，唯一单调）推导，无映射、无碰撞。
 
 ### 3.7 TOML 解析 (`config_toml.py`)
 
@@ -1362,8 +1399,8 @@ self.left_tabs.addTab(milestone_tab_scroll, "累抽奖励")
 | M4 | `gacha_service` 集成——`__init__` 新增 `milestone_engine` 参数 + 模拟循环中 bonus 消费 + `StrategyContext` 传入 | `gacha_service.py` | ~20 |
 | M4b | `SimulationEnv` 新增 `milestone_defs` 字段；`SimulationEnvBuilder.from_config_store()` 提取配置；`_run_single` 中 `MilestoneEngine(defs, seed=seed)` 延迟构造 | `batch_simulator.py` | ~15 |
 | M4a | `StrategyContext` 新增 `_milestone_engine` 字段 + 3 个查询方法；`build_strategy_context()` (`strategy_context_builder.py`) 签名新增 `_milestone_engine` 参数并透传；`gacha_service.py` 调用处传入 `self.milestone_engine` <!-- REVIEW-R1-FIX: ISSUE-004 --> | `strategy.py` + `strategy_context_builder.py` + `gacha_service.py` | ~25 |
-| M5 | `collector.on_bonus()` + `CompactResult.bonus_events`（**含 `pool_id` 字段**）+ `to_dict()`/`from_dict()` 序列化 + `SharedResultCollector` 同步（含 `_update_cumulative()` 中的 bonus 卡注入，解决流式路径遗漏<!-- REVIEW-R1-FIX: ISSUE-005 -->）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 —— 行数 ~30→~40 反映跨文件协调成本（collector.py + result_types.py + streaming.py 三文件 + to_dict/from_dict 因 dataclasses.asdict 零成本但需验证自动同步正确性）。可选拆分：M5a「collector + result_types 序列化」（~15行）→ M5b「流式路径适配」（~15行——streaming.py 五条路径统一改用合并后 card_counts 作为输入源） --> | `collector.py` + `result_types.py` + `streaming.py` | ~40 |
-| M5a | GDR 层合并 `bonus_events`——`_merge_milestone_cards()`（合并 `card_counts` + `pool_card_counts`）+ `real_time→draw_index` 映射。代码位于 `gdr.py`（compact/cumulative 入口均在此）；若历史路径也需合并，`generalized_drop_rate.py` 也需改动 <!-- REVIEW-R1-FIX: ISSUE-009 --><!-- REVIEW-R1-FIX: ISSUE-011 --> | `gdr.py` | ~25 |
+| M5 | `collector.on_bonus()`（**含 `draw_index` 参数 + 卡/资源源头合并**，方案 C 2026-08-03）+ `CompactResult.bonus_events`（**含 `pool_id`/`draw_index` 字段**）+ `to_dict()`/`from_dict()` 序列化 + `SharedResultCollector` 同步（含 `_update_cumulative()` 中的 bonus 卡注入，解决流式路径遗漏<!-- REVIEW-R1-FIX: ISSUE-005 -->）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 —— 行数 ~30→~45 反映跨文件协调成本（collector.py + result_types.py + streaming.py 三文件 + to_dict/from_dict 因 dataclasses.asdict 零成本但需验证自动同步正确性 + on_bonus 资源源头合并）。可选拆分：M5a「collector + result_types 序列化」（~15行）→ M5b「流式路径适配」（~15行——streaming.py 五条路径统一改用合并后 card_counts 作为输入源） --> | `collector.py` + `result_types.py` + `streaming.py` | ~45 |
+| M5a | GDR 层合并 `bonus_events`——`_merge_milestone_cards()`（仅建卡时序映射；卡计数/资源归因已由 on_bonus 源头完成，方案 C 2026-08-03）+ `draw_index` 直接索引（无 real_time→draw_index 映射）。代码位于 `gdr.py`（compact/cumulative 入口均在此）；若历史路径也需合并，`generalized_drop_rate.py` 也需改动 <!-- REVIEW-R1-FIX: ISSUE-009 --><!-- REVIEW-R1-FIX: ISSUE-011 --> | `gdr.py` | ~15 |
 | M7a | 配置面板 Tab 骨架——`_setup_milestone_config` 基础布局：总闸开关 + QListWidget 左列表 + QGroupBox 右详情 + 基础字段控件（名称/阈值/repeat/max_triggers/banner）+ `_on_milestone_selected` + `_add_milestone` + `_remove_milestone` + 信号连接骨架（不含奖励区域）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~60 |
 | M7b1 | `RandomCardPoolDialog` 独立 QDialog 类——四列勾选/卡/稀有度/权重表格（从 `self._store.card_defs` 填充）+ 权重列 `QDoubleSpinBox` + 抽取张数 `QSpinBox` + 确定/取消按钮 + `result()` 方法返回 `{candidates, weights, count}`。不依赖里程碑编辑器其他控件，可独立开发与测试<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~35 |
 | M7b2 | 奖励编辑器 CRUD + 回写逻辑——固定卡牌 QListWidget（含 `_populate_milestone_cards_list`）+ 资源 QTableWidget（含 `_add/_remove_milestone_resource`）+ 随机卡摘要行（`_update_milestone_random_summary`）+ 随机卡池 CRUD（`_add/_remove/_edit_milestone_random_pool`，依赖 M7b1 的 `RandomCardPoolDialog`）+ `_flush_milestone_current_detail` 全量回写逻辑。M7b1 提供 Dialog 后串行集成<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~45 |
@@ -1386,7 +1423,7 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 | UT1 | `MilestoneEngine._resolve_bonus()` | 构造 `MilestoneDef(name="test", bonus_reward={'cards': ['a','b'], 'resources': {'c': 5}, 'random_cards': [{'candidates': ['x','y'], 'weights': [1.0,1.0], 'count': 1}]})`，传入 `engine._rng = random.Random(42)` 固定 seed | `result['card_ids']` 含 `['a','b']` + 1 张随机卡（固定 seed 下确定）；`result['resources'] == {'c': 5}`；`_resolve_bonus` 不修改 `engine._counters`/`_active`/`_triggered` | `bonus_reward.cards` / `bonus_reward.resources` / `bonus_reward.random_cards` 解析正确 + 随机卡可复现 |
 | UT2 | `_build_milestone()` 解析器 | 最小合法 TOML dict：`{'milestone': [{'name': 'test', 'threshold': 10, 'repeat': True, 'bonus_reward': {'cards': ['a'], 'resources': {}, 'random_cards': []}}]}` → 传入 `ConfigStore()` | `store.milestone.milestones` 长度为 1；`milestones[0].name == 'test'`；`milestones[0].threshold == 10`；`milestones[0].repeat == True`；`milestones[0].banner == ''` （空字符串=全部 Banner） | `[[milestone]]` 独立 TOML 段解析正确 + `banner` 正确过滤 |
 | UT3 | TOML round-trip | 构造 `MilestoneConfig(milestones=[MilestoneDef(...)])` → 写入 TOML → `load_toml()` 读回 → 构造新 `ConfigStore` | 读回的 `store.milestone.milestones` 与原始相等：`name`/`threshold`/`repeat`/`max_triggers`/`banner`/`bonus_reward` 逐字段一致。`random_cards` 内嵌列表/数字完整保真（无字符串化退化） | TOML 段 round-trip 保真——GUI 编辑 → 保存 → 重载后字段不丢失 |
-| UT4 | collector `on_bonus()→to_dict()→from_dict()` 序列化闭环 | 构造 `CompactCollector` → 调用 `on_bonus(milestone_name="m1", card_ids=["a","b"], resources={"coin":500}, pool_id="pool_1", real_time=10.0)` → `to_dict()` → `from_dict()` 重构 `CompactResult` | 重构后 `result.bonus_events[0]['milestone_name'] == 'm1'`；`card_ids == ['a','b']`；`resources == {'coin': 500}`；`pool_id == 'pool_1'`；`real_time == 10.0`。并行模拟不丢数据 | `CompactResult.to_dict()`/`from_dict()` 正确序列化/反序列化 `bonus_events` |
+| UT4 | collector `on_bonus()→to_dict()→from_dict()` 序列化闭环 | 构造 `CompactCollector`（先 on_draw 制造 `draw_resources_gained` 长度 ≥1）→ 调用 `on_bonus(milestone_name="m1", card_ids=["a","b"], resources={"coin":500}, pool_id="pool_1", real_time=10.0, draw_index=0)` → `to_dict()` → `from_dict()` 重构 `CompactResult` | 重构后 `result.bonus_events[0]['milestone_name'] == 'm1'`；`card_ids == ['a','b']`；`resources == {'coin': 500}`；`pool_id == 'pool_1'`；`real_time == 10.0`；`draw_index == 0`。并行模拟不丢数据 | `CompactResult.to_dict()`/`from_dict()` 正确序列化/反序列化 `bonus_events` |
 
 #### B. 集成测试（8 组场景，~80 行）
 
@@ -1400,7 +1437,7 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 |------|:---:|
 | `[[milestone]]` 独立 TOML 段解析正确 | UT2 + IT（场景 1-7 均依赖 TOML 解析） |
 | `bonus_reward.cards` 直入 `state.acquired` | UT1 + IT（场景 5 含 card 赠送） |
-| `bonus_reward.resources` 归入 `rg`（P63 单通道） | UT1 + IT（场景 1/2/3/5/6/7 含资源） |
+| `bonus_reward.resources` 注入 `resources` + on_bonus 源头归因（方案 C，2026-08-03） | UT1 + IT（场景 1/2/3/5/6/7 含资源） |
 | `bonus_reward.random_cards` 加权随机抽取可复现 | UT1（固定 seed）+ IT（场景 4） |
 | cards+resources+random_cards 同时配置生效 | UT1（三字段并存）+ IT（场景 3 含 card+resource） |
 | repeat=false 触发后永久停用 | IT（场景 3：150 抽仅 1 次 bonus_events） |
@@ -1408,9 +1445,9 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 | max_triggers 正确限制 | IT（需追加专用场景：repeat=true, max_triggers=2 → 3 次触发后 is_active=False） |
 | banner 正确过滤 | UT2（空→全部；非空→仅该 banner 触发——该路径 M1-M8 无 banner 概念、M4 传 `""` 时非空 banner 的 milestone 永不触发，**过滤验证移至 M9**（P61 集成后传真实 banner_id））+ IT（M9 后补场景 4/5 限定单 banner） |
 | bonus 不触发常规保底重置 | IT（含保底配置的 milestone 场景→验证保底计数器不受影响） |
-| milestone 卡溢出（P63 管道） | IT（里程碑卡溢出场景：满突后赠送→`combined_gained` 含溢出资源） |
-| milestone 溢出资源+直接资源归入 rg | IT（同溢出场景） |
-| collector.on_bonus() 只存元数据 | UT4（序列化后不含资源金额字段）+ IT |
+| milestone 卡溢出（P63 管道） | IT（里程碑卡溢出场景：满突后赠送→溢出资源注入 state.resources + on_bonus 归因，方案 C 2026-08-03） |
+| milestone 溢出资源+直接资源注入 state.resources + on_bonus 归因（方案 C，2026-08-03） | IT（同溢出场景） |
+| collector.on_bonus() 记录归因数据（含资源金额 + draw_index，方案 C 2026-08-03） | UT4（序列化后含资源金额字段 + draw_index）+ IT |
 | SharedResultCollector 同步 | IT（流式路径——需 SharedResultCollector 场景） |
 | CompactResult.to_dict()/from_dict() 序列化 | UT4 |
 | GDR 合并 bonus_events | IT（场景含 milestone→GDR 计算验证 bonus 卡入出率） |
@@ -1432,7 +1469,7 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 | bonus_events 含 pool_id | UT4（构造 bonus_events→验证 `pool_id` 字段存在） |
 | 流式五路径含 bonus 卡 | IT（流式路径专用场景：milestone 赠卡→`streaming._update_cumulative` + 4 条 Worker/DrawSeq 路径→验证 bonus 卡贡献入热力图/转变标记/累积快照） |
 | 方案 A/B 互斥 | IT（§1.1a 方案 A/B 互斥断言：若实施方案 A，`card_counts['milestone_card']` = `sum(...)` + bonus 卡不被双重计入） |
-| 里程碑卡溢出 | IT（满突后赠送→溢出资源正确入账 `milestone_rg`） |
+| 里程碑卡溢出 | IT（满突后赠送→溢出资源注入 state.resources + `on_bonus` 归因，`draw_resources_gained[draw_index]` 反映，方案 C 2026-08-03） |
 | 空抽计数推进 | IT（`_NO_CARD_ID` 抽数→计数器正常推进） |
 | 同抽多触发顺序确定性 | IT（场景 S1：50 抽同时触发 2 个 milestone→顺序验证） |
 | 场景 1 具体期望 | IT（25 抽→bonus_events=2, resources=2） |
@@ -1519,10 +1556,10 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 | ~~旧序列化快照（无 `acquired`）反序列化失败~~ | ~~P60 已处理~~ —— 已消除 |
 | ~~TOML 中 `resources_gained`/bonus 字段从未被解析~~ | ~~P63 已修复 TOML 管道~~ —— 已消除 |
 | `milestone` 计数器生命周期（`repeat`=true 重置 vs false 停用）自管 bug | 极简逻辑——`int` 自增 + `if c >= threshold`，M8 集成测试覆盖 |
-| bonus 注入时序不当（早于/晚于保底重置导致状态不一致） | 时序固定：`PityEngine.after_draw` → `state.add_card(path="draw")`（正常溢出，P63）→ `MilestoneEngine.after_draw` → `state.add_card(path="milestone_gift")`（milestone 溢出，P63）→ 资源结算 |
+| bonus 注入时序不当（早于/晚于保底重置导致状态不一致） | 时序固定（方案 C，2026-08-03）：`PityEngine.after_draw` → `state.add_card(path="draw")`（正常溢出，P63）→ `MilestoneEngine.after_draw` → 直接资源 + `state.add_card(path="milestone_gift")`（milestone 溢出）注入 `resources`（不进 combined_gained）→ 资源结算 → `collector.on_draw` → `collector.on_bonus`（源头归因，draw_index） |
 | `bonus_events` 序列化遗漏导致并行模拟数据丢失 | `CompactResult.to_dict()`/`from_dict()` 必须同步更新——M5 追加此项 |
 | `SharedResultCollector` 未实现 `on_bonus`——流式分析中里程碑不可见 | M5 同时覆盖 `SharedResultCollector` |
-| GDR `_merge_milestone_cards()` 依赖 `real_time→draw_index` 映射 | `CompactResult` 需新增 `_time_to_draw_index()` 或预建映射字典——M5a 设计时决定 |
+| GDR `_merge_milestone_cards()` 依赖 `real_time→draw_index` 映射 | **已消除（方案 C，2026-08-03）**：`bonus_events` 直接存 `draw_index`（0-based 本抽索引，来源 `stats.total_draws - 1`），无映射；资源归因移到 `on_bonus` 源头合并 |
 |（已删除）原 `pools` 字符串 `"*"` 兼容 | 2026-08-02 无历史包袱迁移删除 `pools` 字段（§3.3 修订）——不再有字符串检测；`banner` 解析校验字符串类型（§3.7） |
 | banner 拼写错误/引用不存在 Banner id → 里程碑永不触发 | `_build_milestone()` 校验 banner 值存在或为空（§3.7）；banner 精确匹配（非 fnmatch），配置错误由用户自查 banner id 与 `[[banner]]` 定义对齐 |
 | 配置面板 UI 与 P55/P56 保底 UI 改造潜在冲突 | 独立 Tab——不碰 `_setup_pity_config()` |
@@ -1530,7 +1567,7 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 | `set_config()` 缺少里程碑回填——加载配置后 UI 不显示里程碑 | **M7c 追加：** 在 `set_config()` 末尾从 `store.milestone.milestones` 反序列化到 `self._milestone_defs` + 刷新 `milestone_list`（~10行）。模式仿照 `_pity_defs` 回填逻辑（L3408-3478） <!-- REVIEW-R1-FIX: ISSUE-002 / GATE-1-变更粒度 --> |
 | `get_config()` 返回字典缺少 `milestone` 键——预览摘要始终为空 | **M7c 追加：** `get_config()` 返回字典追加 `'milestone': {'enabled': ..., 'milestones': [...]}` 键（~8行）。`_do_update_preview()` 合成摘要代码已为此适配 <!-- REVIEW-R1-FIX: ISSUE-003 / GATE-1-变更粒度 --> |
 | `build_strategy_context()` 未纳入波及范围——`StrategyContext` 构造绕过此函数将丢失派生字段 | **波及范围追加 `strategy_context_builder.py`：** `build_strategy_context()` 签名新增 `_milestone_engine` 参数，`gacha_service.py` 调用处传入 `self.milestone_engine` <!-- REVIEW-R1-FIX: ISSUE-004 --> |
-| 流式路径 `_update_cumulative()` / `WorkerLocalExtractor.process()` / `DrawSequenceExtractor._update_heatmap()` / `DrawSequenceExtractor._update_transition()` 均遍历 `draw_card_ids` 构建热力图/转变标记/累积快照——bonus 卡不在 `draw_card_ids` 中，流式 GDR/热力图/转变标记将遗漏里程碑产出 | **M5 追加——统一合并策略：** 所有四条路径（`_update_cumulative` / `WorkerLocalExtractor.process` 内联热力图+转变标记 / `_update_heatmap` / `_update_transition`）统一改用已合并的 `card_counts`（方案 A 下由 `CompactCollector.on_bonus()` 提前注入）作为输入源，而非仅遍历原始 `draw_card_ids`。或在进入遍历前构建 `merged_card_ids`（正常 draw 序列 + bonus 赠卡按 `real_time` 定位插入）。`real_time → draw_index` 映射共用 `_time_to_draw_index()` 工具函数 <!-- REVIEW-R1-FIX: ISSUE-004 --> |
+| 流式路径 `_update_cumulative()` / `WorkerLocalExtractor.process()` / `DrawSequenceExtractor._update_heatmap()` / `DrawSequenceExtractor._update_transition()` 均遍历 `draw_card_ids` 构建热力图/转变标记/累积快照——bonus 卡不在 `draw_card_ids` 中，流式 GDR/热力图/转变标记将遗漏里程碑产出 | **M5 追加——统一合并策略：** 所有四条路径（`_update_cumulative` / `WorkerLocalExtractor.process` 内联热力图+转变标记 / `_update_heatmap` / `_update_transition`）统一改用已合并的 `card_counts`（方案 A 下由 `CompactCollector.on_bonus()` 提前注入）作为输入源，而非仅遍历原始 `draw_card_ids`。或在进入遍历前构建 `merged_card_ids`（正常 draw 序列 + bonus 赠卡按 `draw_index` 定位插入，方案 C 归因钥匙）。卡计数/资源归因均源头合并（on_bonus），`to_dict()` 产物一致，无需 `_time_to_draw_index()` 映射 <!-- REVIEW-R1-FIX: ISSUE-004 --> |
 | `SimulationEnv.from_dict()` 遗漏 `milestone_defs` 参数——`worst_impact.py` 等调用方丢失 milestone 配置 | **波及范围追加 `from_dict`：** `SimulationEnv.from_dict()` 追加 `milestone_defs=config.get('milestone_defs', [])`（与 `card_overflow_map` 占位模式一致） <!-- REVIEW-R1-FIX: ISSUE-006 --> |
 | `ConfigStore.clear()` 遗漏 `self.milestone = MilestoneConfig()`——连续 `set_config()` 间状态残留 | **M1 追加：** `clear()` 末尾追加 `self.milestone = MilestoneConfig()`（1行）。虽非功能阻塞（`set_config()` 开头 `clear()` 后立即覆盖），但违反全量清零契约 <!-- REVIEW-R1-FIX: ISSUE-007 --> |
 | `InfoVectorCollector` 继承空 `on_bonus` 实现——历史路径 `compute_gdr_from_history()` 将静默丢失里程碑数据 | **已知限制（标注）：** `InfoVectorCollector` 不实现 `on_bonus`——历史路径 GDR 不反映 milestone 产出。批量模拟主流使用 compact 路径，历史路径为边缘场景。若后续需支持，需新建 `InfoVector` 动作类型 `milestone_gift` <!-- REVIEW-R1-FIX: ISSUE-008 --> |
@@ -1546,7 +1583,7 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 
 - [ ] `[[milestone]]` 独立 TOML 段解析正确——与 `[[pity]]` 互不影响
 - [ ] `bonus_reward.cards`——达阈值后固定卡经 `state.add_card(cid, path="milestone_gift", overflow_bands=...)` 直入 `state.acquired`，不修改概率分布
-- [ ] `bonus_reward.resources`——达阈值后资源归入 `rg`（P63 单通道），不重复入账
+- [ ] `bonus_reward.resources`——达阈值后资源注入 `resources`（可用性）+ `on_bonus` 源头归因（方案 C，2026-08-03；不并入当抽 combined_gained、不双重入账）
 - [ ] `bonus_reward.random_cards`——达阈值后从候选池加权随机抽取指定张数（使用 `self._rng.choices()` 保证可复现），直入 `state.acquired`
 - [ ] `cards` + `resources` + `random_cards` 可同时配置、同时生效——一次触发可同时赠送卡+资源+随机卡
 - [ ] `repeat = false`（at=N）：触发一次后永久停用，计数器不复位
@@ -1555,11 +1592,11 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 - [ ] `banner` 正确过滤——空字符串 = 全部 Banner，非空 = 仅该 Banner 内触发（2026-08-02 起无 `"*"` 字符串兼容，原 pools 已删除）
 - [ ] bonus 注入不触发常规保底重置（`hard`/`soft` 计数器不受 milestone 影响）
 - [ ] milestone 注入的卡经 P63 `state.add_card(path="milestone_gift", overflow_bands=card_overflow_map.get(cid), initial_counts=...)` 统一管道正确触发溢出（`match_overflow_bands()` 自动匹配分段表），与正常抽卡一致
-- [ ] milestone 溢出资源 + 直接资源统一归入 `rg`（P63 单通道），不重复入账
-- [ ] `collector.on_bonus()` 只存元数据（`milestone_name`、时间戳、赠送卡 ID、资源），不承载资源金额（P63 单通道约束）
+- [ ] milestone 溢出资源 + 直接资源注入 `resources` + `on_bonus` 源头归因（方案 C，2026-08-03；不进 rg/combined_gained，不双重入账）
+- [ ] `collector.on_bonus()` 记录归因元数据（`milestone_name`、时间戳、`pool_id`、`draw_index`、赠送卡 ID、资源金额）——资源走源头归因（方案 C，2026-08-03；不并入当抽 combined_gained）
 - [ ] `SharedResultCollector` 同步实现 `on_bonus`——流式分析中里程碑事件可见
 - [ ] `CompactResult.to_dict()`/`from_dict()` 正确序列化/反序列化 `bonus_events`——并行模拟不丢数据
-- [ ] GDR 计算层合并 `bonus_events`——里程碑卡按 `real_time→draw_index` 对齐到正确抽数，参与 GDR 计算
+- [ ] GDR 计算层合并 `bonus_events`——里程碑卡按 `draw_index` 对齐到正确抽数，参与 GDR 计算（方案 C，2026-08-03；卡计数/资源已源头合并，`_merge_milestone_cards` 仅建时序映射）
 - [ ] GDR 合并不改函数签名——在 `compute_gdr_from_compact` / `compute_gdr_from_cumulative` 入口处完成（`compute_gdr_from_history` 不存在；历史路径通过 `GeneralizedDropRate` 子类直接迭代 `InfoVector`，无统一入口函数）<!-- REVIEW-R1-FIX: ISSUE-005 -->
 - [ ] `PityEngine` 零改动——milestone 完全不参与保底管道
 - [ ] `BEHAVIOR_REGISTRY` 不含 `milestone` 条目
@@ -1582,7 +1619,7 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 - [ ] 流式路径 `DrawSequenceExtractor._update_heatmap()` 热力图分箱包含 bonus 卡贡献——不遗漏<!-- REVIEW-R1-FIX: GATE-6-测试策略-流式路径 -->
 - [ ] 流式路径 `DrawSequenceExtractor._update_transition()` 转变标记包含 bonus 卡贡献——不遗漏<!-- REVIEW-R1-FIX: GATE-6-测试策略-流式路径 -->
 - [ ] 方案 A/B 互斥——若实施 `on_bonus` 源头合并（方案 A），`_merge_milestone_cards()` 不再写入 `pool_card_counts`，milestone 卡不被双重计入；`card_counts['milestone_card']` 恰好等于 bonus_events 中该卡出现次数（`sum(1 for ev in bonus_events for cid in ev['card_ids'] if cid == 'milestone_card')`）<!-- REVIEW-R1-FIX: GATE-6-测试策略-方案AB互斥 -->
-- [ ] 里程碑卡溢出——满突后 milestone 赠送触发 `match_overflow_bands()`，溢出资源正确入账 `milestone_rg`；`combined_gained` 反映溢出金额<!-- REVIEW-R1-FIX: GATE-6-测试策略-溢出 -->
+- [ ] 里程碑卡溢出——满突后 milestone 赠送触发 `match_overflow_bands()`，溢出资源注入 `state.resources` + `on_bonus` 归因；`draw_resources_gained[draw_index]` 反映溢出金额（方案 C，2026-08-03）<!-- REVIEW-R1-FIX: GATE-6-测试策略-溢出 -->
 - [ ] 空抽计数推进——`_NO_CARD_ID` 抽数正常计入累抽进度；计数器值 = `after_draw` 调用次数（含空抽）<!-- REVIEW-R1-FIX: GATE-6-测试策略-空抽计数 -->
 - [ ] 同抽多触发顺序确定性——第 50 抽同时触发 threshold=10 和 threshold=50 两个 milestone；`bonus_events` 顺序 = TOML `[[milestone]]` 定义顺序（`for name, md in self._defs.items()` 迭代顺序即 dict 插入顺序 = TOML 数组顺序）<!-- REVIEW-R1-FIX: GATE-6-测试策略-同抽多触发顺序 -->
 - [ ] 场景 1（火影每 10 抽碎片）——25 抽 → `len(bonus_events) == 2`，`resources['fragment_s'] == 2`<!-- REVIEW-R1-FIX: GATE-6-测试策略-具体期望 -->

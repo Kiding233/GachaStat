@@ -1406,7 +1406,7 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 | repeat=false 触发后永久停用 | IT（场景 3：150 抽仅 1 次 bonus_events） |
 | repeat=true 触发后归零继续 | IT（场景 1：25 抽触发 2 次） |
 | max_triggers 正确限制 | IT（需追加专用场景：repeat=true, max_triggers=2 → 3 次触发后 is_active=False） |
-| banner 正确过滤 | UT2（空→全部，非空→仅该 banner 触发）+ IT（场景 4/5 限定单 banner） |
+| banner 正确过滤 | UT2（空→全部；非空→仅该 banner 触发——该路径 M1-M8 无 banner 概念、M4 传 `""` 时非空 banner 的 milestone 永不触发，**过滤验证移至 M9**（P61 集成后传真实 banner_id））+ IT（M9 后补场景 4/5 限定单 banner） |
 | bonus 不触发常规保底重置 | IT（含保底配置的 milestone 场景→验证保底计数器不受影响） |
 | milestone 卡溢出（P63 管道） | IT（里程碑卡溢出场景：满突后赠送→`combined_gained` 含溢出资源） |
 | milestone 溢出资源+直接资源归入 rg | IT（同溢出场景） |
@@ -1524,7 +1524,7 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 | `SharedResultCollector` 未实现 `on_bonus`——流式分析中里程碑不可见 | M5 同时覆盖 `SharedResultCollector` |
 | GDR `_merge_milestone_cards()` 依赖 `real_time→draw_index` 映射 | `CompactResult` 需新增 `_time_to_draw_index()` 或预建映射字典——M5a 设计时决定 |
 |（已删除）原 `pools` 字符串 `"*"` 兼容 | 2026-08-02 无历史包袱迁移删除 `pools` 字段（§3.3 修订）——不再有字符串检测；`banner` 解析校验字符串类型（§3.7） |
-| fnmatch 通配符误匹配（如 `"limited_*"` 不当匹配 `"limited_pool_old"`) | 与保底体系一致的 fnmatch 行为——用户自己在 TOML 中控制精度 |
+| banner 拼写错误/引用不存在 Banner id → 里程碑永不触发 | `_build_milestone()` 校验 banner 值存在或为空（§3.7）；banner 精确匹配（非 fnmatch），配置错误由用户自查 banner id 与 `[[banner]]` 定义对齐 |
 | 配置面板 UI 与 P55/P56 保底 UI 改造潜在冲突 | 独立 Tab——不碰 `_setup_pity_config()` |
 | `apply_to_store()` 缺少里程碑写入逻辑——GUI 编辑无法持久化到 TOML | **M7c 追加：** 在 `apply_to_store()` 中遍历 `self._milestone_defs` 转换为 `MilestoneDef` 实例写入 `store.milestone.milestones`（~10行）。模式与 `store.pity.pities` 写入一致 <!-- REVIEW-R1-FIX: ISSUE-001 / GATE-1-变更粒度 --> |
 | `set_config()` 缺少里程碑回填——加载配置后 UI 不显示里程碑 | **M7c 追加：** 在 `set_config()` 末尾从 `store.milestone.milestones` 反序列化到 `self._milestone_defs` + 刷新 `milestone_list`（~10行）。模式仿照 `_pity_defs` 回填逻辑（L3408-3478） <!-- REVIEW-R1-FIX: ISSUE-002 / GATE-1-变更粒度 --> |

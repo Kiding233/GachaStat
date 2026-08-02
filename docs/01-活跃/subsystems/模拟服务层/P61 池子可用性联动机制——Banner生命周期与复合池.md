@@ -570,13 +570,13 @@ target = "main"
 # ── P58 管辖（独立 [[milestone]] 段，不在 banner 内）──
 [[milestone]]
 banner = "endfield_limited"
-at = 30
-reward = { resource = "free_ticket", amount = 10 }
+threshold = 30
+bonus_reward = { resources = { free_ticket = 10 } }
 
 [[milestone]]
 banner = "endfield_limited"
-at = 60
-reward = { resource = "next_banner_ticket", amount = 10 }
+threshold = 60
+bonus_reward = { resources = { next_banner_ticket = 10 } }
 ```
 
 **Step-up 阶梯池：**
@@ -1262,7 +1262,7 @@ Ph0: core/notifier.py + gacha_service 加一行 emit()
             依赖：无。Ph0 交付后即可启。
 ```
 
-**不提取独立 P 编号。** Notifier 太小（30 行），不值得单独成计划。P61 Ph0 交付，P58 的 M4 节声明 `depends: P61-Ph0` 即可。
+**不提取独立 P 编号。** Notifier 太小（30 行），不值得单独成计划。P61 Ph0 交付，P58 的 M9 节声明 `depends: P61-Ph0` 即可（M1-M8 零 P61 依赖）。
 
 ### 5.4 P58 接入 Notifier 的改动
 

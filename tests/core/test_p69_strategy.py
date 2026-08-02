@@ -208,3 +208,77 @@ def test_strategy_pickle_subprocess():
 
     assert action_name == 'DrawAction'
     assert strategy_key == 'plugin/test_pickle'
+
+
+# ── Ps01 R1：future_resource_gains 派生字段测试 ────────────────────
+
+def _min_strategy_context(**kw):
+    """构造最小 build_strategy_context 调用（Ps01 R1 测试辅助）。"""
+    from gacha_simulator.core.state import GachaState
+    from gacha_simulator.core.strategy_context_builder import build_strategy_context
+    rt = kw.pop('real_time', 0.0)
+    state = GachaState()
+    state.real_time = rt
+    base = dict(
+        state=state, current_pools=[], all_pools=[], real_time=rt,
+        target_cards=None, stop_condition=None, pity_engine=None, pity_state=None,
+        pool_draw_counts={}, total_draws=0, last_draw_pity_triggered=False,
+        ssr_ids=set(),
+    )
+    base.update(kw)
+    return build_strategy_context(**base)
+
+
+def test_future_resource_gains_schedule():
+    """SC-01（Ps01 R1）：未来未到达日程资源聚合，day 天数与 real_time 秒正确换算。
+
+    日程 day0=50（已到达，第 3 天前）、day5=100（未到达），real_time=第 3 天，
+    lookahead=10 天 → 聚合 day5 的 100，排除 day0。用区分性数值钉死
+    「聚合未来未到达资源」方向（P69 SC-01 原文两金额相同无法区分）。
+    """
+    from gacha_simulator.core.resource_gain import ScheduleResourceGain
+    DAY = 86400
+    rg = ScheduleResourceGain({0: {'gem': 50.0}, 5: {'gem': 100.0}}, total_days=30)
+    ctx = _min_strategy_context(real_time=3 * DAY, resource_gain=rg, lookahead=10)
+    assert ctx.future_resource_gains == {'gem': 100.0}
+
+
+def test_future_resource_gains_empty():
+    """SC-02（Ps01 R1）：无 resource_gain / lookahead 时为空 dict（非 None），
+    策略 `ctx.future_resource_gains.get('gem', 0.0)` 正常工作。"""
+    ctx = _min_strategy_context()
+    assert ctx.future_resource_gains == {}
+    assert ctx.future_resource_gains is not None
+
+
+def test_future_resource_gains_no_lookahead():
+    """lookahead 为 None 时 future_resource_gains 为空（未请求前瞻），
+    即使传了 resource_gain 也不计算。"""
+    from gacha_simulator.core.resource_gain import ScheduleResourceGain
+    rg = ScheduleResourceGain({5: {'gem': 100.0}}, total_days=30)
+    ctx = _min_strategy_context(resource_gain=rg, lookahead=None)
+    assert ctx.future_resource_gains == {}
+
+
+def test_future_resource_gains_with_schedule_mgr_no_crash():
+    """Ps01 R1 回归：带 schedule_mgr + resource_gain 时 build_strategy_context 不崩溃。
+
+    原缺陷：遍历 get_future_schedules() 访问 entry.day/entry.gains 抛 AttributeError
+    （PoolSchedule 无这两个属性），带 schedule 配置的批量模拟每轮必崩被吞。
+    修复后 schedule_mgr 只供 future_schedules 使用、resource_gain 走 compute，
+    两者并存不再抛异常。
+    """
+    from gacha_simulator.core.resource_gain import ScheduleResourceGain
+    from gacha_simulator.core.schedule import PoolSchedule, PoolScheduleManager
+    DAY = 86400
+    rg = ScheduleResourceGain({5: {'gem': 100.0}}, total_days=30)
+    mgr = PoolScheduleManager([
+        PoolSchedule(pool_id='pool_a', available_from=0.0, available_until=30 * DAY),
+    ])
+    ctx = _min_strategy_context(
+        real_time=0.0, schedule_mgr=mgr, resource_gain=rg, lookahead=10,
+    )
+    # 不再抛 AttributeError；future_schedules 正常返回、future_resource_gains 正确聚合
+    assert len(ctx.future_schedules) == 1
+    assert ctx.future_schedules[0].pool_id == 'pool_a'
+    assert ctx.future_resource_gains == {'gem': 100.0}

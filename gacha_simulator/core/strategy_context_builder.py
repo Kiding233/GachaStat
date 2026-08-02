@@ -17,8 +17,12 @@ if TYPE_CHECKING:
     from .pool import Pool
     from .schedule import PoolScheduleManager
     from .pity import PityEngine, PityState
+    from .resource_gain import ResourceGainFunction
     from .stop_condition import StopCondition
     from .target_card import TargetCardSet
+
+# 秒/天换算常量（与 resource_gain.py ScheduleResourceGain.DAY 一致）
+DAY = 86400
 
 
 def build_strategy_context(
@@ -37,6 +41,7 @@ def build_strategy_context(
     *,
     schedule_mgr: Optional[PoolScheduleManager] = None,
     lookahead: Optional[float] = None,
+    resource_gain: Optional['ResourceGainFunction'] = None,
     time_discount: float = 1.0,
 ) -> StrategyContext:
     """构建完整的 StrategyContext，含派生字段。
@@ -54,27 +59,25 @@ def build_strategy_context(
         total_draws: 总抽数。
         last_draw_pity_triggered: 上抽是否触发了保底。
         ssr_ids: SSR 卡牌 ID 集合。
-        schedule_mgr: 可选——排期管理器，用于计算 future_resource_gains。
-        lookahead: 策略的 lookahead 天数——future_schedules 的时间窗口。
+        schedule_mgr: 可选——排期管理器，用于计算 future_schedules。
+        lookahead: 策略的 lookahead 天数——future_schedules / future_resource_gains 的时间窗口（天）。
+        resource_gain: 可选——资源获得函数，用于计算 future_resource_gains（复用模拟结算同一 compute）。
         time_discount: 时间偏好因子（默认 1.0 = 无折扣）。
 
     Returns:
         完全填充的 StrategyContext。
     """
-    # ── future_schedules ──
+    # ── future_schedules：未来 lookahead 天内的池子开放窗口 ──
     future_schedules = []
     if schedule_mgr and lookahead:
-        future_schedules = schedule_mgr.get_future_schedules(real_time, lookahead)
+        future_schedules = schedule_mgr.get_future_schedules(real_time, lookahead * DAY)
 
-    # ── future_resource_gains：聚合 schedule 中尚未到达的资源条目 ──
+    # ── future_resource_gains：未来 lookahead 天的资源收入 ──
+    # 复用抽卡/等待结算的同一函数 resource_gain.compute(elapsed_time, state)：
+    # 对 schedule 型查未来日程、linear/periodic/step 型算未来增量（Ps01 R1，替代原 entry.day/gains 错误访问）
     future_resource_gains: Dict[str, float] = {}
-    if schedule_mgr:
-        for entry in schedule_mgr.get_future_schedules(real_time, float('inf')):
-            if entry.day > real_time:
-                for res_id, amount in entry.gains.items():
-                    future_resource_gains[res_id] = (
-                        future_resource_gains.get(res_id, 0.0) + float(amount)
-                    )
+    if resource_gain is not None and lookahead:
+        future_resource_gains = resource_gain.compute(lookahead * DAY, state)
 
     # ── inter_pool_pity_links：从 PityEngine 提取跨池保底继承关系 ──
     inter_pool_pity_links: Dict[str, List[str]] = {}

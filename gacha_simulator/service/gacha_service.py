@@ -240,6 +240,7 @@ class GachaService:
                 ssr_ids=self.ssr_ids,
                 schedule_mgr=_schedule_mgr,
                 lookahead=_lookahead,
+                resource_gain=_resource_gain,
             )
 
             action = _strategy.select_action(ctx)

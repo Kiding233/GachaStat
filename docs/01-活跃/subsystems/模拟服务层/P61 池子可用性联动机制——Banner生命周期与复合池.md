@@ -1303,24 +1303,19 @@ notifier.emit("after_draw",
 
 **契约补充（REVIEW-R1-FIX: ISSUE-014，P61 计划内定稿，P58 落地以本节为准）：**
 - **emit 与结算顺序**：§3.5 契约点 7——`after_draw` emit 位于逐抽结算（stats.on_draw / add_card / collector.on_draw / combined_gained）之后。P58 priority=0 注入的 milestone 资源进入 `state.resources`，但**不并入当抽** `combined_gained`/collector 记录（P63 单通道不可回溯）——里程碑资源注入语义为「下一抽起可用」。若 P58 需要当抽并入，须在 emit 前经 `collector`/`rg` 回调（超出本计划范围，P58 自行定夺）。
-- **after_draw 订阅签名（banner 级过滤）**：订阅函数内 `_milestone_engine.after_draw(pool_id)` 单参不足——§5.5 `[[milestone]].banner` 过滤需要 banner_id。改传 `(banner_id, pool_id)` 双参，milestone 匹配以 `banner_id` 为准、`pool_id` 作为下钻信息；`pool_id` 为本次实际产出池的全限定键（§3.11.3）。
+- **after_draw 订阅签名（banner 级过滤）**：`MilestoneEngine.after_draw(banner_id, pool_id)` 双参（P58 已定为双参签名，见 P58 §3.5）——milestone 匹配以 `banner_id` 为准、`pool_id` 作为下钻信息；`pool_id` 为本次实际产出池的全限定键（§3.11.3）。
 - **里程碑计数语义**：free_10pull / 一次性池（max_draws=batch_size）的抽数**计入** milestone 计数（「所有抽数无论出什么」无条件计数）；`excludes_all_pity` 仅旁路保底，不影响 milestone 抽数计数。
 
-### 5.5 `[[milestone]].pools` → `[[milestone]].banner`
+### 5.5 `[[milestone]]` 用 `banner` 字段（pools 已删除）
 
-P58 的 `[[milestone]].pools` 字段用于过滤作用池子。Banner 模式后，milestone 应引用 `banner` 而非独立 `pool`：
+P58 原 `[[milestone]].pools` 字段（裸 pool_id fnmatch 过滤）已**一次性删除**（2026-08-02，无历史包袱迁移，见 P58 §3.3 修订）。Banner 模式后 milestone 按 `banner` 引用：
 
 ```toml
-# 旧写法（P58 当前）
 [[milestone]]
-pools = ["endfield_limited"]
-
-# Banner 模式后——语义更准确
-[[milestone]]
-banner = "endfield_limited"       # 精确指向一个 Banner
+banner = "endfield_limited"       # 精确指向一个 Banner；空 = 全部
 ```
 
-此项改动属于 P58 范畴（`MilestoneDef.pools` → `banner`），不阻塞 P61。P58 可保留 `pools` 向后兼容，新增 `banner` 字段作为推荐用法。
+此项改动属于 P58 范畴，已由 P58 完成（`MilestoneDef.pools` 字段删除、`MilestoneDef.banner` 唯一过滤字段），不阻塞 P61，P61 无需重复处理。
 
 ## 六、风险
 

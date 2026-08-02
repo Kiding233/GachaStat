@@ -111,7 +111,7 @@ gacha_service 模拟循环
 ├─ pool.draw()
 ├─ PityEngine.after_draw → [soft → hard]            ← milestone 不参与
 │
-├─ MilestoneEngine.after_draw(pool_id) → [bonus...]  ← 独立判定、独立注入
+├─ MilestoneEngine.after_draw(banner_id, pool_id) → [bonus...]  ← 独立判定、独立注入
 │   ├─ 计数器递增（自管，极简 int）
 │   ├─ 达阈值 → 解析 bonus_reward
 │   ├─ state.add_card() / state.gain()
@@ -157,7 +157,7 @@ class MilestoneEngine:
         # 独立 RNG——保证可复现性
         self._rng = random.Random(seed)
 
-    def after_draw(self, pool_id: str) -> List[dict]:
+    def after_draw(self, banner_id: str, pool_id: str) -> List[dict]:
         """判定并返回触发的 bonus 列表。
 
         调用方（gacha_service）负责消费 bonus：
@@ -166,6 +166,10 @@ class MilestoneEngine:
               initial_counts=_initial_counts)
           - resource 类型 → 归入 milestone_rg（P63 单通道，不通过 state.gain）
           - collector.on_bonus(...)
+
+        banner_id 用于 MilestoneDef.banner 级过滤（P61 后裸 pool_id 非全局唯一）：
+        P61 前（M4 inline）调用方传 ""（banner="" 匹配全部，M1-M8 行为）；
+        P61 后经 after_draw 事件传入真实 banner_id（M9）。
 
         _NO_CARD_ID（空抽）行为：计数器无条件递增——只要 gacha_service 调用了
         after_draw() 即视为一次有效抽数。空抽（交换池/概率归零场景下 pool.draw()
@@ -177,7 +181,7 @@ class MilestoneEngine:
         for name, md in self._defs.items():
             if not self._active[name]:
                 continue
-            if md.pools and not any(fnmatch(pool_id, pat) for pat in md.pools):
+            if md.banner and banner_id != md.banner:
                 continue
 
             c = self._counters.get(name, 0) + 1
@@ -296,8 +300,10 @@ class MilestoneDef:
     repeat: bool = False                        # False=at:N 一次性 / True=every:N 周期
     max_triggers: int = 0                       # 最大触发次数（0=无限触发）
     bonus_reward: dict = field(default_factory=dict)
-    pools: tuple = ()  # 作用池子（空元组=全部；支持 fnmatch 通配符，如 "limited_*"）。类型与 PityDef.pools (tuple) 一致<!-- REVIEW-R1-FIX: ISSUE-006 -->
-    banner: str = ""   # P61 协作：精确指向一个 Banner（推荐用法）。P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），故新增 banner 级过滤；pools 保留兼容旧 pool_id 过滤。空字符串 = 不按 banner 过滤
+    banner: str = ""   # 精确指向一个 Banner（P61 协作）。空字符串 = 不按 banner 过滤（全部）。
+                       # 2026-08-02 修正（无历史包袱一次性迁移）：原 `pools`（裸 pool_id fnmatch）已删除——
+                       # P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），裸 pool_id 无法全局唯一；
+                       # 统一用 banner 级过滤，与 P61 全限定键方向一致（原 pools 的 `"*"` 字符串语法兼容同步删除）
 
 
 @dataclass
@@ -314,9 +320,11 @@ milestone: MilestoneConfig = field(default_factory=MilestoneConfig)
 ```
 
 **2026-07-29 修订：**
-- `pools` 从 `str` 改为 `tuple`（最终类型，与 `PityDef.pools: tuple = ('*',)` 一致<!-- REVIEW-R1-FIX: ISSUE-006 -->），解决原来字符串 `in` 子串误匹配问题（`"ak_limited" in "onmyoji_limited"` → True）。空元组 `()` = 全部池子，非空 = fnmatch 精确匹配。
 - `max_triggers` 默认值从 `1` 改为 `0`（0=无限触发），与 TOML 示例和文档一致。
-- 匹配逻辑相应调整：`if md.pools and not any(fnmatch(pool_id, pat) for pat in md.pools): continue` —— tuple 同样支持 `any()` 迭代。
+
+**2026-08-02 修订（无历史包袱一次性迁移，与 P61 D4 全限定键方向一致）：**
+- `pools` 字段**删除**，统一改用 `banner`（精确指向一个 Banner）。历史轨迹：原 `pools` 从 `str` 改为 `tuple`（2026-07-29，解决 `in` 子串误匹配），再演进为 P61 后的 `banner` 级过滤。**删除理由**：P61 引入 Banner 后裸 pool_id 非全局唯一（跨 banner 重复），`pools` 的裸 pool_id fnmatch 语义失效；且项目未上线（CLAUDE.md「无历史包袱原则」），一次性迁移、不保留新旧双路径。
+- 匹配逻辑相应调整：`if md.banner and banner_id != md.banner: continue` —— banner 精确匹配，空字符串 = 全部。原 `fnmatch(pool_id, pat)` 的 pool 粒度过滤能力由「banner 级」取代（P61 后 pool 粒度用全限定键 `{banner_id}.{pool_id}`，未来如需要可扩展）。
 
 ### 3.4 TOML 配置语法
 
@@ -330,7 +338,7 @@ name = "onmyoji_40_gift"
 threshold = 40
 repeat = false
 max_triggers = 1
-pools = ["onmyoji_limited"]                       # 精确匹配单池；也可用 fnmatch: "onmyoji_*"
+banner = "onmyoji_limited"                       # 精确指向一个 Banner（空 = 全部）
 bonus_reward = { random_cards = [
     { candidates = ["ssr_ibaraki", "ssr_shuten", "ssr_oomoji", "ssr_kaguya"],
       weights = [1.0, 1.0, 1.0, 1.0], count = 1 },
@@ -342,7 +350,7 @@ name = "naruto_fragment"
 threshold = 10
 repeat = true
 max_triggers = 0                                 # 0 = 无限触发
-pools = []                                       # 空 = 全部池子；也可写 ["*"] 等价
+banner = ""                                      # 空 = 全部 banner
 bonus_reward = { resources = { fragment_s = 1 } }
 
 # every=N：每 50 抽大保底碎片（火影忍者）
@@ -351,7 +359,7 @@ name = "naruto_s_fragment"
 threshold = 50
 repeat = true
 max_triggers = 0
-pools = []
+banner = ""
 bonus_reward = { resources = { fragment_s = 5 } }
 
 # at=N：100 抽首付返利——S 忍碎片 + 金币（火影忍者）
@@ -362,7 +370,7 @@ name = "naruto_first_payback_s"
 threshold = 100
 repeat = false
 max_triggers = 1
-pools = []
+banner = ""
 bonus_reward = { cards = ["limited_ssr_1"], resources = { coin = 500 } }
 
 # at=N：300 抽赠送当期限定 + 补偿资源（明日方舟）
@@ -371,7 +379,7 @@ name = "ak_300_gift"
 threshold = 300
 repeat = false
 max_triggers = 1
-pools = ["ak_limited"]
+banner = "ak_limited"
 bonus_reward = { cards = ["limited_operator"], resources = { exchange_currency = 300 } }
 
 # at=N：60 抽送跨期券（终末地）
@@ -380,7 +388,7 @@ name = "endfield_archive"
 threshold = 60
 repeat = false
 max_triggers = 1
-pools = ["endfield_limited"]
+banner = "endfield_limited"
 bonus_reward = { resources = { endfield_next_voucher = 10 } }
 ```
 
@@ -392,7 +400,7 @@ bonus_reward = { resources = { endfield_next_voucher = 10 } }
 | 概率相关 | 有（`func` / `increment` / `target_featured`） | 无——不操作概率 |
 | 重置逻辑 | `reset`（出 SSR/featured/never） | 自管（触发后 repeat 决定） |
 | 奖励 | 无——产出走 pool.draw() | `bonus_reward`（card / resource / random_card） |
-| 池子筛选 | `fnmatch` 通配符（`pools` 字段） | `fnmatch` 通配符（`pools` 字段）——与保底一致 |
+| 作用范围 | `pools` fnmatch（裸 pool id） | `banner` 精确匹配（P61 后裸 pool id 非全局唯一） |
 | 语义 | 「保底」——运气保护 | 「里程碑」——抽数奖励 |
 
 ### 3.5 gacha_service 集成
@@ -422,7 +430,7 @@ if reward.id != _NO_CARD_ID:
 # ── 【新增】里程碑判定与注入 ──<!-- REVIEW-R1-FIX: ISSUE-001 -->
 milestone_rg: dict = {}
 if _milestone_engine:
-    for entry in _milestone_engine.after_draw(pool.id):
+    for entry in _milestone_engine.after_draw("", pool.id):   # P61 前 banner=""（全部生效）；M9 后传真实 banner_id
         bonus = entry['bonus']
         # 直接资源——归入 milestone_rg（P63 单通道，不通过 state.gain）<!-- REVIEW-R1-FIX: ISSUE-003 -->
         # state.gain() 已删除——同一批资源经 milestone_rg → rg → resources
@@ -501,10 +509,10 @@ notifier.subscribe("after_draw", _on_after_draw, priority=0)   # P58 资源注�
 
 **关键变更：**
 - `after_draw` 事件契约：`banner_id / pool_id / card_id / pity_triggered + state / collector`（P61 §3.5 定义）
-- `MilestoneEngine.after_draw(banner_id, pool_id)` 签名扩展：P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），需用 banner_id 做 banner 级过滤（`MilestoneDef.banner`）。P61 前（M4 inline）用 `after_draw("", pool_id)` 等价旧行为
+- `MilestoneEngine.after_draw(banner_id, pool_id)` 签名含 banner_id：P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），用 banner_id 做 banner 级过滤（`MilestoneDef.banner`，精确匹配，空 = 全部）；P61 前调用方传 `""`
 - 订阅 priority=0：P58（资源注入）先于 P61（生命周期检查），避免「P61 切换池时 P58 资源未注入」的竞态
-- `[[milestone]]` 推荐新增 `banner` 字段（精确指向一个 Banner）；`pools` 保留兼容旧 pool_id 过滤
-- 依赖 P61-Ph0（core/notifier.py）。Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61，M9 依赖 Ph0
+- `[[milestone]]` 用 `banner` 字段（精确指向一个 Banner）；原 `pools` 字段已删除（2026-08-02 无历史包袱迁移，见 §3.3 修订）——不再有「pools 保留兼容旧 pool_id 过滤」的双路径
+- 依赖 P61-Ph0（core/notifier.py）。Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61（此时 banner 过滤用 `banner=""`，全部生效），M9 依赖 Ph0
 
 ### 3.5a 策略层查询接口
 
@@ -760,10 +768,10 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
                     f"与 candidates({len(candidates)})不匹配"
                 )  <!-- REVIEW-R1-FIX: ISSUE-005: 防止手工 TOML 中 weights 长度错误 → random.choices ValueError -->
 
-        # ── pools 兼容解析（支持 fnmatch 通配符）──
-        raw_pools = m.get('pools', [])
-        if isinstance(raw_pools, str):
-            raw_pools = [raw_pools]  # "*" → ["*"]（fnmatch 中 * 匹配全部）
+        # ── banner 过滤解析（空字符串 = 全部；无字符串兼容，2026-08-02 无历史包袱迁移）──
+        raw_banner = m.get('banner', '')
+        if not isinstance(raw_banner, str):
+            raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
 
         milestones.append(MilestoneDef(
             name=name,
@@ -775,7 +783,7 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
                 'resources': dict(resources),
                 'random_cards': list(random_cards),
             },
-            pools=tuple(raw_pools),  # tuple 类型与 PityDef.pools 一致<!-- REVIEW-R1-FIX: ISSUE-006 -->
+            banner=raw_banner,
         ))
 
     store.milestone = MilestoneConfig(enabled=True, milestones=milestones)
@@ -795,7 +803,7 @@ if store.milestone.enabled and store.milestone.milestones:
             'threshold': m.threshold,
             'repeat': m.repeat,
             'max_triggers': m.max_triggers,
-            'pools': m.pools if m.pools else [],
+            'banner': m.banner,
             'bonus_reward': m.bonus_reward,
         }
         for m in store.milestone.milestones
@@ -867,7 +875,7 @@ if store.milestone.enabled and store.milestone.milestones:
 | `threshold` | `QSpinBox` | 触发阈值（1–9999） |
 | `repeat` | `QCheckBox("可重复触发")` | 不勾选=`at:N`一发即停，勾选=`every:N`触发后重置继续 |
 | `max_triggers` | `QSpinBox` | 0=无限，≥1=触发 N 次后停用 |
-| `pools` | `QLineEdit` | 空=全部池子，或逗号分隔的 fnmatch 表达式 |
+| `banner` | `QLineEdit` | 空=全部 Banner；填 Banner id 则仅该 Banner 内触发 |
 | `bonus_reward.cards` | `QListWidget`（多选） | 每行显示 `[稀有度] 名称 (card_id)`，稀有度着色 |
 | `bonus_reward.resources` | `QTableWidget`（资源×数量） | 从 `store.resource_defs` 填充 |
 | `bonus_reward.random_cards` | 摘要行 + 弹窗 | 主面板仅显示摘要行（`[池名: 卡列表, 抽N张]`），点击 `[编辑]` 弹出 `QDialog` |
@@ -915,7 +923,7 @@ if store.milestone.enabled and store.milestone.milestones:
 
 ConfigPanel 右侧 `right_widget` 内仅有一个全局 `QGroupBox("配置预览")` + monospace `QLabel`（`preview_text`）。所有 Tab 共享此预览区——`_do_update_preview()` 遍历各配置段统一拼接摘要文本。
 
-P58 的 7 条信号连接（`milestone_enabled.stateChanged` / `ml_name_edit.textChanged` / `ml_threshold_spin.valueChanged` / `ml_repeat_check.stateChanged` / `ml_max_triggers_spin.valueChanged` / `ml_pools_edit.textChanged` / 随机卡摘要变更 → `self._update_preview()`）触发的是 ConfigPanel 已有的 500ms 去抖全局预览方法。唯一需追加的是 `_do_update_preview()` 中的累抽摘要段：
+P58 的 7 条信号连接（`milestone_enabled.stateChanged` / `ml_name_edit.textChanged` / `ml_threshold_spin.valueChanged` / `ml_repeat_check.stateChanged` / `ml_max_triggers_spin.valueChanged` / `ml_banner_edit.textChanged` / 随机卡摘要变更 → `self._update_preview()`）触发的是 ConfigPanel 已有的 500ms 去抖全局预览方法。唯一需追加的是 `_do_update_preview()` 中的累抽摘要段：
 
 ```python
 # _do_update_preview() 中追加 ~15 行
@@ -992,9 +1000,9 @@ def _setup_milestone_config(self, parent):
     self.ml_max_triggers_spin.setToolTip("0 = 无限触发")
     detail_form.addRow("最大触发次数:", self.ml_max_triggers_spin)
 
-    self.ml_pools_edit = QLineEdit()
-    self.ml_pools_edit.setPlaceholderText("留空 = 全部池子，或逗号分隔的池子 ID")
-    detail_form.addRow("适用池子:", self.ml_pools_edit)
+    self.ml_banner_edit = QLineEdit()
+    self.ml_banner_edit.setPlaceholderText("留空 = 全部 Banner")
+    detail_form.addRow("适用 Banner:", self.ml_banner_edit)
 
     # ── 奖励配置（三区域并行） ──
     detail_form.addRow(QLabel(""))  # 分隔
@@ -1046,7 +1054,7 @@ def _setup_milestone_config(self, parent):
 
     # ── 自动写入 + 预览信号（仿 _flush_pity_current_detail 模式） ──
     # 所有控件变更 → 实时写回 self._milestone_defs[row] → 触发预览
-    for w in [self.ml_name_edit, self.ml_pools_edit]:
+    for w in [self.ml_name_edit, self.ml_banner_edit]:
         w.textChanged.connect(self._flush_milestone_current_detail)
     for w in [self.ml_threshold_spin, self.ml_max_triggers_spin]:
         w.valueChanged.connect(self._flush_milestone_current_detail)
@@ -1086,7 +1094,7 @@ def _on_milestone_selected(self, row):
     self.ml_threshold_spin.setValue(md.get('threshold', 40))
     self.ml_repeat_check.setChecked(md.get('repeat', False))
     self.ml_max_triggers_spin.setValue(md.get('max_triggers', 0))
-    self.ml_pools_edit.setText(','.join(md.get('pools', [])) if isinstance(md.get('pools'), list) else str(md.get('pools') or ''))  <!-- REVIEW-R1-FIX: ISSUE-003: 防御 None 值 → setText(None) 显示为 'None' -->
+    self.ml_banner_edit.setText(md.get('banner', ''))
 
     # 奖励：固定卡牌
     card_ids = set(md.get('bonus_reward', {}).get('cards', []))
@@ -1123,8 +1131,7 @@ def _flush_milestone_current_detail(self):
     md['threshold'] = self.ml_threshold_spin.value()
     md['repeat'] = self.ml_repeat_check.isChecked()
     md['max_triggers'] = self.ml_max_triggers_spin.value()
-    pools_text = self.ml_pools_edit.text().strip()
-    md['pools'] = [p.strip() for p in pools_text.split(',') if p.strip()] if pools_text else []
+    md['banner'] = self.ml_banner_edit.text().strip()
 
     # 固定卡牌
     cards = []
@@ -1160,7 +1167,7 @@ def _add_milestone(self):
     while f'milestone_{n}' in existing:
         n += 1
     md = {'name': f'milestone_{n}', 'threshold': 40,
-          'repeat': False, 'max_triggers': 0, 'pools': [],
+          'repeat': False, 'max_triggers': 0, 'banner': '',
           'bonus_reward': {'cards': [], 'resources': {}, 'random_cards': []}}
     self._milestone_defs.append(md)
     self.milestone_list.addItem(md['name'])
@@ -1280,7 +1287,7 @@ for md in self._milestone_defs:
         threshold=md.get('threshold', 40),
         repeat=md.get('repeat', False),
         max_triggers=md.get('max_triggers', 0),
-        pools=tuple(md.get('pools', [])),  # tuple 类型与 PityDef.pools 一致<!-- REVIEW-R1-FIX: ISSUE-006 -->
+        banner=md.get('banner', ''),
         bonus_reward=md.get('bonus_reward', {'cards': [], 'resources': {}, 'random_cards': []}),
     ))
 ```
@@ -1301,7 +1308,7 @@ for md in store.milestone.milestones:
         'threshold': md.threshold,
         'repeat': md.repeat,
         'max_triggers': md.max_triggers,
-        'pools': list(md.pools),
+        'banner': md.banner,
         'bonus_reward': {
             'cards': list(md.bonus_reward.get('cards', [])),
             'resources': dict(md.bonus_reward.get('resources', {})),
@@ -1321,7 +1328,7 @@ for md in store.milestone.milestones:
     'enabled': store.milestone.enabled,
     'milestones': [
         {'name': m.name, 'threshold': m.threshold, 'repeat': m.repeat,
-         'max_triggers': m.max_triggers, 'pools': m.pools, 'bonus_reward': m.bonus_reward}
+         'max_triggers': m.max_triggers, 'banner': m.banner, 'bonus_reward': m.bonus_reward}
         for m in store.milestone.milestones
     ],
 },
@@ -1357,12 +1364,12 @@ self.left_tabs.addTab(milestone_tab_scroll, "累抽奖励")
 | M4a | `StrategyContext` 新增 `_milestone_engine` 字段 + 3 个查询方法；`build_strategy_context()` (`strategy_context_builder.py`) 签名新增 `_milestone_engine` 参数并透传；`gacha_service.py` 调用处传入 `self.milestone_engine` <!-- REVIEW-R1-FIX: ISSUE-004 --> | `strategy.py` + `strategy_context_builder.py` + `gacha_service.py` | ~25 |
 | M5 | `collector.on_bonus()` + `CompactResult.bonus_events`（**含 `pool_id` 字段**）+ `to_dict()`/`from_dict()` 序列化 + `SharedResultCollector` 同步（含 `_update_cumulative()` 中的 bonus 卡注入，解决流式路径遗漏<!-- REVIEW-R1-FIX: ISSUE-005 -->）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 —— 行数 ~30→~40 反映跨文件协调成本（collector.py + result_types.py + streaming.py 三文件 + to_dict/from_dict 因 dataclasses.asdict 零成本但需验证自动同步正确性）。可选拆分：M5a「collector + result_types 序列化」（~15行）→ M5b「流式路径适配」（~15行——streaming.py 五条路径统一改用合并后 card_counts 作为输入源） --> | `collector.py` + `result_types.py` + `streaming.py` | ~40 |
 | M5a | GDR 层合并 `bonus_events`——`_merge_milestone_cards()`（合并 `card_counts` + `pool_card_counts`）+ `real_time→draw_index` 映射。代码位于 `gdr.py`（compact/cumulative 入口均在此）；若历史路径也需合并，`generalized_drop_rate.py` 也需改动 <!-- REVIEW-R1-FIX: ISSUE-009 --><!-- REVIEW-R1-FIX: ISSUE-011 --> | `gdr.py` | ~25 |
-| M7a | 配置面板 Tab 骨架——`_setup_milestone_config` 基础布局：总闸开关 + QListWidget 左列表 + QGroupBox 右详情 + 基础字段控件（名称/阈值/repeat/max_triggers/pools）+ `_on_milestone_selected` + `_add_milestone` + `_remove_milestone` + 信号连接骨架（不含奖励区域）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~60 |
+| M7a | 配置面板 Tab 骨架——`_setup_milestone_config` 基础布局：总闸开关 + QListWidget 左列表 + QGroupBox 右详情 + 基础字段控件（名称/阈值/repeat/max_triggers/banner）+ `_on_milestone_selected` + `_add_milestone` + `_remove_milestone` + 信号连接骨架（不含奖励区域）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~60 |
 | M7b1 | `RandomCardPoolDialog` 独立 QDialog 类——四列勾选/卡/稀有度/权重表格（从 `self._store.card_defs` 填充）+ 权重列 `QDoubleSpinBox` + 抽取张数 `QSpinBox` + 确定/取消按钮 + `result()` 方法返回 `{candidates, weights, count}`。不依赖里程碑编辑器其他控件，可独立开发与测试<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~35 |
 | M7b2 | 奖励编辑器 CRUD + 回写逻辑——固定卡牌 QListWidget（含 `_populate_milestone_cards_list`）+ 资源 QTableWidget（含 `_add/_remove_milestone_resource`）+ 随机卡摘要行（`_update_milestone_random_summary`）+ 随机卡池 CRUD（`_add/_remove/_edit_milestone_random_pool`，依赖 M7b1 的 `RandomCardPoolDialog`）+ `_flush_milestone_current_detail` 全量回写逻辑。M7b1 提供 Dialog 后串行集成<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~45 |
 | M7c | 现有方法适配——`apply_to_store()` 里程碑写入（~10行）<!-- REVIEW-R1-FIX: ISSUE-001 --> + `set_config()` 里程碑回填（~10行）<!-- REVIEW-R1-FIX: ISSUE-002 --> + `get_config()` 追加 `milestone` 键（~8行）<!-- REVIEW-R1-FIX: ISSUE-003 --> + Tab 注册到 `_setup_ui()`（~7行）<!-- REVIEW-R1-FIX: GATE-1-变更粒度 --> | `config_panel.py` | ~35 |
 | M8 | 集成测试（7 个 G20 场景的 TOML 配置 → 模拟 → 验证期望输出）+ 单元测试（MilestoneEngine._resolve_bonus、_build_milestone 解析器、TOML round-trip、collector 序列化闭环）<!-- REVIEW-R1-FIX: GATE-6-测试策略 --> | `tests/` | ~130 |
-| M9 | P61 协作——`MilestoneEngine.after_draw` 扩展 banner_id 参数 + `_on_after_draw` 订阅函数（替代 M4 inline，逻辑不变）+ `[[milestone]].banner` 字段解析 + `MilestoneDef.banner` 过滤。依赖 P61-Ph0（notifier.py） | `milestone.py` + `gacha_service.py` + `config_toml.py` | ~15 |
+| M9 | P61 协作——订阅 `after_draw` 事件（notifier priority=0，P61 Ph0 交付）→ `_on_after_draw` 调用 `MilestoneEngine.after_draw(banner_id, pool_id)` 传真实 banner_id（P61 前 M4 inline 传 `""`）。`banner` 字段解析与过滤已在 M1-M8（`_build_milestone` / `after_draw` 双参）落地，M9 仅接事件。依赖 P61-Ph0（notifier.py） | `milestone.py` + `gacha_service.py` | ~15 |
 | **总计** | | | **~630** |
 
 > ~~M6（`resources_gained` 解析遗漏修复）已删除——P63 已修复 TOML 管道。~~ M4b 新增——`batch_simulator.py` 的 `SimulationEnv`/`SimulationEnvBuilder` 需传递 `milestone_config`。M5 行数上调至 ~40 以反映跨文件协调成本（`collector.py` + `result_types.py` + `streaming.py` 三文件 + `to_dict`/`from_dict` 序列化自动同步验证）。**M7 拆分为 M7a / M7b1 / M7b2 / M7c 四个 ≤1 小时子阶段**（分别 ~60/~35/~45/~35 行，保守估计各 20-50 分钟）。M7b1（`RandomCardPoolDialog` 独立 QDialog）先于 M7b2（奖励编辑器 CRUD + 回写）串行执行——M7b2 的 `_edit_milestone_random_pool` 依赖 M7b1 提供的 Dialog。M8 行数上调至 ~130 以覆盖 GATE-6 单元测试（~50 行）与集成测试（~80 行）。<!-- REVIEW-R1-FIX: GATE-1-变更粒度 / GATE-6-测试策略 / UPDATED TOTALS -->
@@ -1377,8 +1384,8 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 | 编号 | 测试目标 | 输入 | 期望输出 | 对应验收项 |
 |:---:|------|------|------|------|
 | UT1 | `MilestoneEngine._resolve_bonus()` | 构造 `MilestoneDef(name="test", bonus_reward={'cards': ['a','b'], 'resources': {'c': 5}, 'random_cards': [{'candidates': ['x','y'], 'weights': [1.0,1.0], 'count': 1}]})`，传入 `engine._rng = random.Random(42)` 固定 seed | `result['card_ids']` 含 `['a','b']` + 1 张随机卡（固定 seed 下确定）；`result['resources'] == {'c': 5}`；`_resolve_bonus` 不修改 `engine._counters`/`_active`/`_triggered` | `bonus_reward.cards` / `bonus_reward.resources` / `bonus_reward.random_cards` 解析正确 + 随机卡可复现 |
-| UT2 | `_build_milestone()` 解析器 | 最小合法 TOML dict：`{'milestone': [{'name': 'test', 'threshold': 10, 'repeat': True, 'bonus_reward': {'cards': ['a'], 'resources': {}, 'random_cards': []}}]}` → 传入 `ConfigStore()` | `store.milestone.milestones` 长度为 1；`milestones[0].name == 'test'`；`milestones[0].threshold == 10`；`milestones[0].repeat == True`；`milestones[0].pools == ()` （空元组=全部池子） | `[[milestone]]` 独立 TOML 段解析正确 + `pools` 正确过滤 |
-| UT3 | TOML round-trip | 构造 `MilestoneConfig(milestones=[MilestoneDef(...)])` → 写入 TOML → `load_toml()` 读回 → 构造新 `ConfigStore` | 读回的 `store.milestone.milestones` 与原始相等：`name`/`threshold`/`repeat`/`max_triggers`/`pools`/`bonus_reward` 逐字段一致。`random_cards` 内嵌列表/数字完整保真（无字符串化退化） | TOML 段 round-trip 保真——GUI 编辑 → 保存 → 重载后字段不丢失 |
+| UT2 | `_build_milestone()` 解析器 | 最小合法 TOML dict：`{'milestone': [{'name': 'test', 'threshold': 10, 'repeat': True, 'bonus_reward': {'cards': ['a'], 'resources': {}, 'random_cards': []}}]}` → 传入 `ConfigStore()` | `store.milestone.milestones` 长度为 1；`milestones[0].name == 'test'`；`milestones[0].threshold == 10`；`milestones[0].repeat == True`；`milestones[0].banner == ''` （空字符串=全部 Banner） | `[[milestone]]` 独立 TOML 段解析正确 + `banner` 正确过滤 |
+| UT3 | TOML round-trip | 构造 `MilestoneConfig(milestones=[MilestoneDef(...)])` → 写入 TOML → `load_toml()` 读回 → 构造新 `ConfigStore` | 读回的 `store.milestone.milestones` 与原始相等：`name`/`threshold`/`repeat`/`max_triggers`/`banner`/`bonus_reward` 逐字段一致。`random_cards` 内嵌列表/数字完整保真（无字符串化退化） | TOML 段 round-trip 保真——GUI 编辑 → 保存 → 重载后字段不丢失 |
 | UT4 | collector `on_bonus()→to_dict()→from_dict()` 序列化闭环 | 构造 `CompactCollector` → 调用 `on_bonus(milestone_name="m1", card_ids=["a","b"], resources={"coin":500}, pool_id="pool_1", real_time=10.0)` → `to_dict()` → `from_dict()` 重构 `CompactResult` | 重构后 `result.bonus_events[0]['milestone_name'] == 'm1'`；`card_ids == ['a','b']`；`resources == {'coin': 500}`；`pool_id == 'pool_1'`；`real_time == 10.0`。并行模拟不丢数据 | `CompactResult.to_dict()`/`from_dict()` 正确序列化/反序列化 `bonus_events` |
 
 #### B. 集成测试（8 组场景，~80 行）
@@ -1399,7 +1406,7 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 | repeat=false 触发后永久停用 | IT（场景 3：150 抽仅 1 次 bonus_events） |
 | repeat=true 触发后归零继续 | IT（场景 1：25 抽触发 2 次） |
 | max_triggers 正确限制 | IT（需追加专用场景：repeat=true, max_triggers=2 → 3 次触发后 is_active=False） |
-| pools 正确过滤 | UT2（空→全部，非空→fnmatch）+ IT（场景 4/5 限定单池） |
+| banner 正确过滤 | UT2（空→全部，非空→仅该 banner 触发）+ IT（场景 4/5 限定单 banner） |
 | bonus 不触发常规保底重置 | IT（含保底配置的 milestone 场景→验证保底计数器不受影响） |
 | milestone 卡溢出（P63 管道） | IT（里程碑卡溢出场景：满突后赠送→`combined_gained` 含溢出资源） |
 | milestone 溢出资源+直接资源归入 rg | IT（同溢出场景） |
@@ -1516,7 +1523,7 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 | `bonus_events` 序列化遗漏导致并行模拟数据丢失 | `CompactResult.to_dict()`/`from_dict()` 必须同步更新——M5 追加此项 |
 | `SharedResultCollector` 未实现 `on_bonus`——流式分析中里程碑不可见 | M5 同时覆盖 `SharedResultCollector` |
 | GDR `_merge_milestone_cards()` 依赖 `real_time→draw_index` 映射 | `CompactResult` 需新增 `_time_to_draw_index()` 或预建映射字典——M5a 设计时决定 |
-| `pools` 字段兼容旧 TOML（字符串 `"*"` 语法） | `_build_milestone()` 中 `isinstance(raw_pools, str)` 检测 → 自动转 `["*"]`（fnmatch 中 `*` 匹配全部） |
+|（已删除）原 `pools` 字符串 `"*"` 兼容 | 2026-08-02 无历史包袱迁移删除 `pools` 字段（§3.3 修订）——不再有字符串检测；`banner` 解析校验字符串类型（§3.7） |
 | fnmatch 通配符误匹配（如 `"limited_*"` 不当匹配 `"limited_pool_old"`) | 与保底体系一致的 fnmatch 行为——用户自己在 TOML 中控制精度 |
 | 配置面板 UI 与 P55/P56 保底 UI 改造潜在冲突 | 独立 Tab——不碰 `_setup_pity_config()` |
 | `apply_to_store()` 缺少里程碑写入逻辑——GUI 编辑无法持久化到 TOML | **M7c 追加：** 在 `apply_to_store()` 中遍历 `self._milestone_defs` 转换为 `MilestoneDef` 实例写入 `store.milestone.milestones`（~10行）。模式与 `store.pity.pities` 写入一致 <!-- REVIEW-R1-FIX: ISSUE-001 / GATE-1-变更粒度 --> |
@@ -1529,7 +1536,7 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 | `InfoVectorCollector` 继承空 `on_bonus` 实现——历史路径 `compute_gdr_from_history()` 将静默丢失里程碑数据 | **已知限制（标注）：** `InfoVectorCollector` 不实现 `on_bonus`——历史路径 GDR 不反映 milestone 产出。批量模拟主流使用 compact 路径，历史路径为边缘场景。若后续需支持，需新建 `InfoVector` 动作类型 `milestone_gift` <!-- REVIEW-R1-FIX: ISSUE-008 --> |
 | GDR 波及范围表指向 `generalized_drop_rate.py`——但 `compute_gdr_from_compact`/`compute_gdr_from_cumulative` 实际在 `gdr.py` | **波及范围表修正：** M5a 目标文件改为 `gdr.py`，`_merge_milestone_cards()` 位于 `gdr.py` 中，在 compact/cumulative 入口处调用。若历史路径也需合并，`generalized_drop_rate.py` 也需修改——波及表明确两份文件各自改动 <!-- REVIEW-R1-FIX: ISSUE-009 --> |
 | 计划 §3.6a 伪代码使用 `result.card_sequence`——实际字段是 `result.draw_card_ids` | **伪代码修正：** `card_sequence` → `draw_card_ids` <!-- REVIEW-R1-FIX: ISSUE-010 --> |
-| `pool_card_counts` 未纳入 milestone 合并——per-pool GDR 分析遗漏里程碑产出 | **bonus_events 增加 `pool_id` 字段：** `after_draw(pool_id)` 已知触发池，`on_bonus`/`bonus_events` 同时存储 `pool_id`。合并时同步更新 `pool_card_counts` <!-- REVIEW-R1-FIX: ISSUE-011 --> |
+| `pool_card_counts` 未纳入 milestone 合并——per-pool GDR 分析遗漏里程碑产出 | **bonus_events 增加 `pool_id` 字段：** `after_draw(banner_id, pool_id)` 已知触发池，`on_bonus`/`bonus_events` 同时存储 `pool_id`。合并时同步更新 `pool_card_counts` <!-- REVIEW-R1-FIX: ISSUE-011 --> |
 | 计划波及范围表未含 `CLAUDE.md`——重大架构变更后未同步项目指令文件 | **波及范围表追加一行：** `CLAUDE.md`——扩展指南表格新增「新里程碑」行，架构分层注释新增 `core/milestone.py` 条目 <!-- REVIEW-R1-FIX: ISSUE-012 --> |
 | `run_batch_parallel` 单进程兜底路径（L307-325）与 `_wk_run_single` worker 路径（L242-267）是否正确构造 `MilestoneEngine` 并传入 `GachaService`——当前 plan-review 审查仅覆盖计划文件与靶向代码，未执行集成测试环境验证 | **M4b 实施后、M8 集成测试中追加：** 专门针对 `run_batch_parallel` 单进程兜底路径的测试用例——验证 `_run_single` 内部正确构造 `MilestoneEngine(defs, seed=seed)` 并传入 `GachaService.__init__`。同时验证 `_wk_env.milestone_defs` 经 pickle 正确序列化/反序列化（`SimulationEnv.from_dict()` 需含 `milestone_defs`）。当前 M8 仅计划 7 个 G20 场景 TOML 配置测试——需追加至少 1 个批量并行路径覆盖用例。参见 ISSUE-006 <!-- REVIEW-R1-FIX: ISSUE-006 --> |
 
@@ -1545,7 +1552,7 @@ P61-Ph0（待实施 —— 2026-08-01 新增）
 - [ ] `repeat = false`（at=N）：触发一次后永久停用，计数器不复位
 - [ ] `repeat = true`（every=N）：触发后计数器归零继续计数，下一轮继续触发
 - [ ] `max_triggers` 正确限制触发次数——达上限后永久停用；默认 0 = 无限触发
-- [ ] `pools` 正确过滤——空列表 = 全部池子，非空 = 精确匹配（`isinstance(raw_pools, str)` 兼容旧 `"*"` 语法）
+- [ ] `banner` 正确过滤——空字符串 = 全部 Banner，非空 = 仅该 Banner 内触发（2026-08-02 起无 `"*"` 字符串兼容，原 pools 已删除）
 - [ ] bonus 注入不触发常规保底重置（`hard`/`soft` 计数器不受 milestone 影响）
 - [ ] milestone 注入的卡经 P63 `state.add_card(path="milestone_gift", overflow_bands=card_overflow_map.get(cid), initial_counts=...)` 统一管道正确触发溢出（`match_overflow_bands()` 自动匹配分段表），与正常抽卡一致
 - [ ] milestone 溢出资源 + 直接资源统一归入 `rg`（P63 单通道），不重复入账

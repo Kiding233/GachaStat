@@ -469,7 +469,7 @@ for mname, cids, mres in bonus_pending:
         milestone_name=mname,
         card_ids=cids,
         resources=mres,               # 归因数据（直接 + 溢出）
-        pool_id=pool.id,              # ← 用于 per-pool 归因（pool_card_counts）<!-- REVIEW-R1-FIX: ISSUE-011 -->
+        pool_id=pool.id,              # ← per-pool 归因；M4（P61 前）裸 pool.id 与 draw_pool_ids 同键空间；M9 须换全限定 draw_pool_key（见 M9 段键空间约定）<!-- REVIEW-R1-FIX: ISSUE-011 -->
         real_time=real_time,          # 审计时间戳（不用于归因——抽卡不推进 real_time）
         draw_index=stats.total_draws - 1,   # 0-based 本抽索引（归因钥匙，唯一单调）
     )
@@ -526,6 +526,7 @@ notifier.subscribe("after_draw", _on_after_draw, priority=0)   # P58 资源注�
 **关键变更：**
 - `after_draw` 事件契约：`banner_id / pool_id / card_id / pity_triggered + draw_index + state / collector`（P61 §3.5 定义；`draw_index` 为方案 C 扩展字段，2026-08-03）
 - **方案 C 归因钥匙**：`bonus_events` 存 `draw_index = 契约 draw_index - 1`（0-based 本抽索引），合并时直接索引 `draw_resources_gained`。**不用 real_time**——抽卡不推进 real_time（仅 WaitAction 推进，gacha_service L372-374），连续无等待抽卡共享同一 real_time 值，无法唯一定位一抽；`stats.total_draws` 每抽 +1（L37）单调唯一，`total_draws - 1` 即本抽在 `draw_resources_gained` 的索引（L107 每抽 append）
+- **`pool_id` 键空间约定（2026-08-03 语义审查）**：`on_bonus` 的 `pool_id` 恒与 `draw_pool_ids` **同键空间**——M4（P61 前）传裸 `pool.id`（此时 `draw_pool_ids` 亦裸键）；M9（P61 后）须传 emit 契约的 `draw_pool_key`（全限定 `{banner_id}.{pool_id}`，此时 `draw_pool_ids` 亦全限定，ISSUE-006）。禁止 M9 迁移时漏换为裸 `pool.id`——否则 `bonus_events['pool_id']`/`pool_card_counts` 与 `draw_pool_ids` 键空间分裂、per-pool GDR 错配
 - `MilestoneEngine.after_draw(banner_id, pool_id)` 签名含 banner_id：P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），用 banner_id 做 banner 级过滤（`MilestoneDef.banner`，精确匹配，空 = 全部）；P61 前调用方传 `""`
 - 订阅 priority=0：P58（资源注入）先于 P61（生命周期检查），避免「P61 切换池时 P58 资源未注入」的竞态
 - `[[milestone]]` 用 `banner` 字段（精确指向一个 Banner）；原 `pools` 字段已删除（2026-08-02 无历史包袱迁移，见 §3.3 修订）——不再有「pools 保留兼容旧 pool_id 过滤」的双路径
@@ -631,6 +632,10 @@ class SimulationCollector(ABC):
         流式/主路径均覆盖，无需统计层再合并（§3.6a）。
         参数名用 milestone_name 而非 pity_name——语义准确。
         """
+# ⚠ 实现注意（2026-08-03 语义审查）：本方法必须为【具体 no-op 默认实现】，【不可】标 @abstractmethod——
+#   InfoVectorCollector（run_simulation 默认 collector，gacha_service L180-183）不重写 on_bonus，
+#   若标 abstractmethod 则无法实例化，无 milestone 配置时任何模拟即 TypeError。
+#   InfoVectorCollector 继承空实现 → 历史路径静默丢弃 milestone 产出（已知限制，风险表 ISSUE-008）。
 
 # CompactCollector
 def on_bonus(self, ...):
@@ -676,7 +681,7 @@ def on_bonus(self, ...):
 bonus_events: list = field(default_factory=list)
 ```
 
-`to_dict()` / `from_dict()` 需同步更新——**此项未列入原实施阶段，需追加。**
+`to_dict()` / `from_dict()` 无需显式代码（2026-08-03 语义审查核实）：`result_types.py` 的 `to_dict` 用 `dataclasses.asdict` 自动深拷贝新字段、`from_dict` 按 known 字段过滤自动接收 `bonus_events`——序列化零成本，M5 实施时仅需测试验证自动同步正确性。
 
 **SharedResultCollector（流式分析）聚合策略：**<!-- REVIEW-R1-FIX: ISSUE-003 -->
 **设计方案 A（源头合并——推荐）：** `SharedResultCollector` 不具备 `on_bonus` 方法（当前仅有 `on_result(compact: Dict)`），且 `extract_aggregate()` 仅读取 `compact['card_counts']`/`compact['pool_card_counts']` 等字段，不解析 `bonus_events`。因此 bonus 合并必须在数据进入 `SharedResultCollector` **之前**完成——即 `CompactCollector.on_bonus()` 中同步更新 `self._result.card_counts` 和 `self._result.pool_card_counts`。这样 `to_dict()` 产出的紧凑字典已含合并后的全量卡牌统计，`extract_aggregate()` 无需改动、流式分析自然包含里程碑产出。此方案与计划「GDR 始终包含里程碑奖励」的约束一致。方案 C（2026-08-03）同步在 `on_bonus()` 中把资源并入 `draw_resources_gained[draw_index]` 与 `total_gained`——`to_dict()` 产物对卡与资源均源头合并，流式路径里程碑产出（卡+资源）完整可见。

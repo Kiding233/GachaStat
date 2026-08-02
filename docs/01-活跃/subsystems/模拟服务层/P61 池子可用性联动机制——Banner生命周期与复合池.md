@@ -1308,7 +1308,7 @@ notifier.emit("after_draw",
 **P58 侧改动量预估：约 20 行**（订阅函数 + `register_milestone_engine` 装配函数 + 装配点注册一行）。此预估为契约假设，实际以 P58 实施为准——不承诺「原封不动迁移」或「逻辑完全不变」的工作量。P58 的 `MilestoneDef` / 计数器自管逻辑均不受影响：Notifier 是 P61 Ph0 提供的唯一集成依赖，P58 无需触碰 `gacha_service.py`（订阅经装配点回调落在同一实例，REVIEW-R1-FIX: ISSUE-301）。
 
 **契约补充（REVIEW-R1-FIX: ISSUE-014，P61 计划内定稿，P58 落地以本节为准）：**
-- **emit 与结算顺序**：§3.5 契约点 7——`after_draw` emit 位于逐抽结算（stats.on_draw / add_card / collector.on_draw / combined_gained）之后。P58 priority=0 注入的 milestone 资源进入 `state.resources`，但**不并入当抽** `combined_gained`/collector 记录（P63 单通道不可回溯）——里程碑资源注入语义为「下一抽起可用」。若 P58 需要当抽并入，须在 emit 前经 `collector`/`rg` 回调（超出本计划范围，P58 自行定夺）。
+- **emit 与结算顺序**：§3.5 契约点 7——`after_draw` emit 位于逐抽结算（stats.on_draw / add_card / collector.on_draw / combined_gained）之后。P58 priority=0 注入的 milestone 资源进入 `state.resources`，但**不并入当抽** `combined_gained` 的 rg 部分（P63 单通道不可回溯）——里程碑资源注入语义为「下一抽起可用」。（2026-08-03 语义审查澄清：P58 方案 C 在 emit 订阅内经 `collector.on_bonus`（on_draw 之后）把资源源头并入 `draw_resources_gained[draw_index]` 统计数组行——这是统计归因通道，`combined_gained` 的 rg 仍不含 milestone，语义等价；「不并入当抽 collector 记录」应理解为"不并入 on_draw 的 rg 快照"，而非"统计不可见"。若 P58 需要当抽并入 on_draw 的 rg，须在 emit 前经 `collector`/`rg` 回调（超出本计划范围，P58 自行定夺）。）
 - **after_draw 订阅签名（banner 级过滤）**：`MilestoneEngine.after_draw(banner_id, pool_id)` 双参（P58 已定为双参签名，见 P58 §3.5）——milestone 匹配以 `banner_id` 为准、`pool_id` 作为下钻信息；`pool_id` 为本次实际产出池的全限定键（§3.11.3）。
 - **里程碑计数语义**：free_10pull / 一次性池（max_draws=batch_size）的抽数**计入** milestone 计数（「所有抽数无论出什么」无条件计数）；`excludes_all_pity` 仅旁路保底，不影响 milestone 抽数计数。
 

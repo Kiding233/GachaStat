@@ -424,18 +424,52 @@ def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dic
 
 def compute_config_hash(pools_config: List[Any], pity_config: Any,
                         schedules_config: List[Any]) -> str:
-    """计算配置的确定性 hash（用于可比性判断）"""
+    """计算配置的确定性 hash（用于可比性判断）。
+
+    P61（Ph7 / ISSUE-013）：纳入 Banner 级配置。pools_config 现为
+    store.banner.banners（List[BannerEntry]）——hash 覆盖 Banner 的
+    available_from/until（秒）、enabled、max_draws、lifecycle 规则、内层池
+    rewards 分布（featured/rarity/probability）；对旧 List[PoolEntry] 展平
+    视图保留兼容分支（仅 hash pool_id/cost，不覆盖 Banner 级字段——时间
+    窗口/lifecycle 差异时指纹会误判可比，主路径不得再走该分支）。
+    """
     h = hashlib.sha256()
+
+    def _update(seg: str):
+        h.update(seg.encode())
+
     # 池子配置
-    for p in sorted(pools_config, key=lambda x: getattr(x, 'pool_id', '')):
-        h.update(getattr(p, 'pool_id', '').encode())
-        h.update(str(getattr(p, 'cost', '')).encode())
+    for p in sorted(pools_config, key=lambda x: getattr(x, 'id', getattr(x, 'pool_id', ''))):
+        if hasattr(p, 'lifecycle'):
+            # BannerEntry——Banner 级全字段
+            _update(str(getattr(p, 'id', '')))
+            _update(str(getattr(p, 'name', '')))
+            _update(str(getattr(p, 'enabled', True)))
+            _update(str(getattr(p, 'max_draws', None)))
+            _update(str(getattr(p, 'available_from', None)))
+            _update(str(getattr(p, 'available_until', None)))
+            for lp in getattr(p, 'lifecycle', []) or []:
+                _update(str(lp))
+            for bp in getattr(p, 'pools', []) or []:
+                _update(getattr(bp, 'id', ''))
+                _update(str(getattr(bp, 'cost', '')))
+                _update(str(getattr(bp, 'batch_size', 1)))
+                _update(str(getattr(bp, 'max_draws', None)))
+                _update(str(getattr(bp, 'excludes_all_pity', False)))
+                _update(str(getattr(bp, 'exchange_card_id', None)))
+                _update(str(getattr(bp, 'epitomizable_cards', [])))
+                for r in getattr(bp, 'rewards', []) or []:
+                    _update(str(r))
+        else:
+            # 旧 PoolEntry 展平视图兼容分支（仅 pool_id/cost）
+            _update(getattr(p, 'pool_id', ''))
+            _update(str(getattr(p, 'cost', '')))
     # 保底配置
     if pity_config and hasattr(pity_config, 'pities'):
         for pd in sorted(pity_config.pities, key=lambda x: x.name):
             h.update(pd.name.encode())
             h.update(str(getattr(pd, 'params', {})).encode())
-    # 排期
+    # 排期（P61 Ph6 后 pool_id 为 banner 级）
     for s in sorted(schedules_config, key=lambda x: getattr(x, 'pool_id', '')):
         h.update(getattr(s, 'pool_id', '').encode())
         h.update(str(getattr(s, 'available_from', 0)).encode())

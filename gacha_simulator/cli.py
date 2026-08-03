@@ -215,6 +215,8 @@ def main():
                 batch_result.extraction.get('aggregates', [])),
             'kept_sequences_count': len(
                 batch_result.extraction.get('kept_sequences', [])),
+            # P61（Ph7 / ISSUE-325）：cumulative_snapshots 键为 banner_id（Ph6
+            # pool_end_times 已改 banner 级），非内层 pool_id——展示口径登记
             'cumulative_snapshots_pools': list(
                 batch_result.extraction.get('cumulative_snapshots', {}).keys()),
             'transition_flags_count': len(

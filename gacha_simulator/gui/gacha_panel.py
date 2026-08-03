@@ -108,7 +108,9 @@ class SimulationThread(QThread):
                 if no_draw_results and no_draw_results[0]:
                     no_draw_resources = no_draw_results[0].get('final_resources', {})
                     no_draw_resource = no_draw_resources.get('draw_resource', None)
-                    no_draw_pool_resources = no_draw_results[0].get('pool_end_resources', {})
+                    # P61（Ph7 / AUDIT-BREAK-6）：字段已改 banner_end_resources（Ph2），
+                    # 键为 banner_id——旧 pool_end_* .get 静默拿空 dict
+                    no_draw_pool_resources = no_draw_results[0].get('banner_end_resources', {})
             except Exception:
                 pass
 

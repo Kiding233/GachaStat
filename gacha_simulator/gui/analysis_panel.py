@@ -1129,7 +1129,13 @@ class AnalysisWorker(QThread):
                     if parse_gdr_key(metric_key)[0] == 'resource_remaining' and self.no_draw_pool_resources:
                         _, _rid = parse_gdr_key(metric_key)
                         for pid in pool_ids:
-                            pool_res = self.no_draw_pool_resources.get(pid, {})
+                            # P61（Ph7 / ISSUE-323）：no_draw 基线键为 banner 级
+                            #（banner_end_resources，gacha_panel 读点修复后非空）；
+                            # pool_ids 为累积快照键（banner id）。取段为防御性
+                            #（当前数据为裸 banner id、无 '.'），与全限定消费端
+                            # 口径兼容，不恒 miss
+                            pid_banner = pid.split('.')[0] if '.' in pid else pid
+                            pool_res = self.no_draw_pool_resources.get(pid_banner, {})
                             if _rid in pool_res:
                                 baseline = float(pool_res[_rid])
                                 if self.use_draw_units and self.cost_per_draw > 0:

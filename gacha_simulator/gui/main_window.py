@@ -432,8 +432,11 @@ class MainWindow(QMainWindow):
 
         pool_ids = tuple(pe.pool_id for pe in self._store.pools)
 
+        # P61（Ph7 / ISSUE-013）：config_hash 纳入 Banner 级配置——改传
+        # store.banner.banners（含 lifecycle/时间窗口/featured），展平视图
+        # 仅含 pool_id/cost 会漏掉 Banner 级差异致指纹误判可比
         config_hash = compute_config_hash(
-            self._store.pools, getattr(self._store, 'pity', None),
+            self._store.banner.banners, getattr(self._store, 'pity', None),
             getattr(self._store, 'schedules', [])
         )
 

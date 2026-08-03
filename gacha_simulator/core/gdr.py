@@ -1111,14 +1111,16 @@ def compute_gdr_from_cumulative(cum_snapshot, target_specs, gdr_key,
     cum_consumed = cum_snapshot.get('cumulative_consumed', {})
     cum_gained = cum_snapshot.get('cumulative_gained', {})
     _, resource_id = parse_gdr_key(gdr_key)
-    # 优先使用多资源 dict（P22 扩展），回退旧格式标量 pool_end_resource
-    pool_end_resources = cum_snapshot.get('pool_end_resources')
-    if pool_end_resources is not None:
-        pseudo_final_resources = dict(pool_end_resources)
+    # P61（Ph7 / ISSUE-322）：累积快照字段已改 banner_end_*（streaming.py 生产端同步），
+    # 键为 banner_id——per-pool 累计 GDR 与 P62 可达过滤伪最终资源读真实数据
+    #（旧 pool_end_* 读点 .get 静默拿空、回退 initial_resources/derive 推算分支）。
+    banner_end_resources = cum_snapshot.get('banner_end_resources')
+    if banner_end_resources is not None:
+        pseudo_final_resources = dict(banner_end_resources)
     else:
-        pool_end_resource = cum_snapshot.get('pool_end_resource')
-        if pool_end_resource is not None:
-            pseudo_final_resources = {resource_id: pool_end_resource}
+        banner_end_resource = cum_snapshot.get('banner_end_resource')
+        if banner_end_resource is not None:
+            pseudo_final_resources = {resource_id: banner_end_resource}
         else:
             pseudo_final_resources = {}
             if initial_resources:

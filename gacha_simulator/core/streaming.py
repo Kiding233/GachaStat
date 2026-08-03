@@ -111,8 +111,11 @@ def extract_aggregate(compact):
         'final_resources': dict(compact.get('final_resources', {})),
         'final_time': compact.get('final_time', 0),
         'pity_triggers': compact.get('pity_triggers', 0),
-        'pool_end_resources': dict(compact.get('pool_end_resources', {})),
-        'pool_end_pity_states': dict(compact.get('pool_end_pity_states', {})),
+        # P61（Ph7 / ISSUE-322）：CompactResult 字段已改 banner_end_*（Ph2）、键为
+        # banner_id（Ph6 pool_end_times 已 banner 级）——旧 pool_end_* 读点 .get 静默
+        # 拿空 dict、per-pool 累计 GDR 与 P62 可达过滤伪最终资源静默退化，此处迁移生产端。
+        'banner_end_resources': dict(compact.get('banner_end_resources', {})),
+        'banner_end_pity_states': dict(compact.get('banner_end_pity_states', {})),
         'pool_resources_consumed': pool_resources_consumed,
         'pool_resources_gained': pool_resources_gained,
         'pool_counter_max': pool_counter_max,
@@ -262,7 +265,7 @@ class WorkerLocalExtractor:
             while pool_idx < self._n_pools and t > self._sorted_pools[pool_idx][1]:
                 pid = self._sorted_pools[pool_idx][0]
                 pool_end_time = self._sorted_pools[pool_idx][1]
-                pool_end_res = compact.get('pool_end_resources', {}).get(pid, {})
+                pool_end_res = compact.get('banner_end_resources', {}).get(pid, {})
                 cumulative_snapshots.append({
                     'pool_id': pid,
                     'cumulative_card_counts': dict(cum_cards),
@@ -270,8 +273,8 @@ class WorkerLocalExtractor:
                     'cumulative_pity_draws': cum_pity,
                     'cumulative_consumed': dict(cum_consumed),
                     'cumulative_gained': dict(cum_gained),
-                    'pool_end_resource': pool_end_res.get('draw_resource', 0.0),
-                    'pool_end_resources': dict(pool_end_res),
+                    'banner_end_resource': pool_end_res.get('draw_resource', 0.0),
+                    'banner_end_resources': dict(pool_end_res),
                     'pool_end_time': pool_end_time,
                 })
                 transition_flags.append(self._check_success(cum_cards))
@@ -281,7 +284,7 @@ class WorkerLocalExtractor:
         while pool_idx < self._n_pools:
             pid = self._sorted_pools[pool_idx][0]
             pool_end_time = self._sorted_pools[pool_idx][1]
-            pool_end_res = compact.get('pool_end_resources', {}).get(pid, {})
+            pool_end_res = compact.get('banner_end_resources', {}).get(pid, {})
             cumulative_snapshots.append({
                 'pool_id': pid,
                 'cumulative_card_counts': dict(cum_cards),
@@ -289,8 +292,8 @@ class WorkerLocalExtractor:
                 'cumulative_pity_draws': cum_pity,
                 'cumulative_consumed': dict(cum_consumed),
                 'cumulative_gained': dict(cum_gained),
-                'pool_end_resource': pool_end_res.get('draw_resource', 0.0),
-                'pool_end_resources': dict(pool_end_res),
+                'banner_end_resource': pool_end_res.get('draw_resource', 0.0),
+                'banner_end_resources': dict(pool_end_res),
                 'pool_end_time': pool_end_time,
             })
             transition_flags.append(self._check_success(cum_cards))
@@ -522,15 +525,15 @@ class DrawSequenceExtractor(StreamingAnalyzer):
 
             if pool_id not in self._cumulative_snapshots:
                 self._cumulative_snapshots[pool_id] = []
-            pool_end_res = compact.get('pool_end_resources', {}).get(pool_id, {})
+            pool_end_res = compact.get('banner_end_resources', {}).get(pool_id, {})
             self._cumulative_snapshots[pool_id].append({
                 'cumulative_card_counts': cumulative_card_counts,
                 'cumulative_draws': cumulative_draws,
                 'cumulative_pity_draws': cumulative_pity,
                 'cumulative_consumed': cumulative_consumed,
                 'cumulative_gained': cumulative_gained,
-                'pool_end_resource': pool_end_res.get('draw_resource', 0.0),
-                'pool_end_resources': dict(pool_end_res),
+                'banner_end_resource': pool_end_res.get('draw_resource', 0.0),
+                'banner_end_resources': dict(pool_end_res),
             })
 
     def _update_transition(self, compact):

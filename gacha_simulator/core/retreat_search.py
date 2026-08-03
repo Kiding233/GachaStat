@@ -206,7 +206,7 @@ class PlanSearchEngine:
             num_simulations=self.num_simulations,
             max_workers=self.max_workers,
             seed=zlib.crc32(str(resource_value).encode()) % (2**31),
-            strategy_name=self.strategy_name,
+            strategy_key=self.strategy_name,
             strategy_params=self.strategy_params,
         )
         checker = make_gdr_calculator(

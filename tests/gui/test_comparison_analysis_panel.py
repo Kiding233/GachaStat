@@ -1,5 +1,4 @@
 """P45 任务 2a2——GUI 分类判定逻辑冒烟测试 (不依赖 QApplication)."""
-import pytest
 from gacha_simulator.core.comparison_analyzer import (
     classify_dominance,
     ClassificationResult,

@@ -650,3 +650,40 @@ card_id = "r_6"
 desire = 1.0
 miss_cost = 1.0
 card_value = 0.0
+
+# ── P63：稀有度默认溢出规则（取消注释以启用） ──────────────────
+# 卡片获得时根据 total_holding 匹配分段表，命中区间即产出资源。
+# 优先级：卡片显式配置 > 稀有度默认；键名大小写不敏感。
+#
+# [rarity_defaults.ssr]
+# [[rarity_defaults.ssr.overflow_bands]]
+# range = [1, 1]
+# resources = { exchange_currency = 10 }
+#
+# [[rarity_defaults.ssr.overflow_bands]]
+# range = [2, 7]
+# resources = { exchange_currency = 10 }
+#
+# [[rarity_defaults.ssr.overflow_bands]]
+# range = [8, "inf"]
+# resources = { exchange_currency = 25 }
+#
+# [rarity_defaults.sr]
+# [[rarity_defaults.sr.overflow_bands]]
+# range = [1, 7]
+# resources = { exchange_currency = 2 }
+#
+# [[rarity_defaults.sr.overflow_bands]]
+# range = [8, "inf"]
+# resources = { exchange_currency = 5 }
+#
+# ── 卡片级溢出覆盖（取消注释以启用） ──────────────────────────
+# 如需为单张卡片配置不同于稀有度默认的溢出规则：
+#
+# [[card]]
+# card_id = "limited_ssr_1"
+# name = "限定角色1"
+# rarity = "ssr"
+# [card.overflow]
+# first_time_bonus = { exchange_currency = 10 }
+# excess_bonus = { threshold = 7, resources = { exchange_currency = 25 } }

@@ -1,6 +1,7 @@
 from .result_types import CompactResult
 from .collector import SimulationCollector, InfoVectorCollector, CompactCollector
-from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, compute_bonus_resources
+from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string
+from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
 from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
 from .info_vector import InfoVector
@@ -18,11 +19,17 @@ from .pity import (
     SoftPityMixin, _redistribute_scope,
 )
 from .strategy import (
-    Strategy, StrategyContext,
+    Strategy, StrategyContext, StrategyMeta, register_strategy,
     SmartStrategy, PoolQuotaStrategy, PityReserveStrategy, StopOnTargetStrategy,
-    FixedCountStrategy, TargetHuntingStrategy, CompositeStrategy,
+    FixedCountStrategy, TargetHuntingStrategy, NoDrawStrategy, DrawTargetStrategy,
+    CompositeStrategy, DrawSegmentStrategy, PriorityChainStrategy, ConditionalStrategy,
     STRATEGY_REGISTRY, create_strategy, strategy_type_to_key, strategy_key_to_type,
 )
+from .param_descriptor import (
+    FloatParam, IntParam, BoolParam, StrParam, StringListParam, PoolIntMapParam,
+)
+from .strategy_loader import load_plugin_strategies
+from .strategy_context_builder import build_strategy_context
 from .stop_condition import (
     StopCondition, FixedActionCountCondition, ResourceThresholdCondition,
     TargetAcquiredCondition, TimeLimitCondition, CompositeStopCondition,
@@ -62,7 +69,6 @@ from .vulnerability import (
 )
 from .worst_impact import (
     WorstImpactAnalyzer, WorstImpactResult, ConditionalResourceDistribution,
-    DrawTargetStrategy,
 )
 from .result_store import (
     ResultStore, StoredDataset, ComparabilityFingerprint, ComparabilityDiff, compute_config_hash,
@@ -94,7 +100,8 @@ from .process_analysis import (
 __all__ = [
     'CompactResult',
     'SimulationCollector', 'InfoVectorCollector', 'CompactCollector',
-    'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string', 'compute_bonus_resources',
+    'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
+    'OverflowBand', 'match_overflow_bands', 'expand_sugar_to_bands',
     'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
     'InfoVector',
@@ -109,10 +116,13 @@ __all__ = [
     'RotatingCRBehavior', 'RotatingCRSoftBehavior',
     'TargetedBehavior', 'TargetedSoftBehavior',
     'SoftPityMixin', '_redistribute_scope',
-    'Strategy', 'StrategyContext',
+    'Strategy', 'StrategyContext', 'StrategyMeta', 'register_strategy',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
-    'FixedCountStrategy', 'TargetHuntingStrategy', 'CompositeStrategy',
+    'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',
+    'CompositeStrategy', 'DrawSegmentStrategy', 'PriorityChainStrategy', 'ConditionalStrategy',
     'STRATEGY_REGISTRY', 'create_strategy', 'strategy_type_to_key', 'strategy_key_to_type',
+    'FloatParam', 'IntParam', 'BoolParam', 'StrParam', 'StringListParam', 'PoolIntMapParam',
+    'load_plugin_strategies', 'build_strategy_context',
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',
     'AllPoolsEndCondition', 'LastDrawCardCondition',
@@ -139,7 +149,6 @@ __all__ = [
     'VulnerabilityInterval', 'PityStatSnapshot', 'PoolVulnerabilityResult', 'VulnerabilityAnalysisResult',
     'compute_vulnerability_analysis', 'plot_vulnerability', 'plot_vulnerability_ridge',
     'WorstImpactAnalyzer', 'WorstImpactResult', 'ConditionalResourceDistribution',
-    'DrawTargetStrategy',
     'StreamingAnalyzer', 'StreamingSuccessCounter', 'SharedResultCollector', 'DrawSequenceExtractor', 'extract_aggregate', 'extract_process', 'WorkerLocalExtractor', 'merge_extraction_packets',
     'PoolEvent', 'SampleTrace', 'infer_events', 'compute_pool_gdr_cumulative', 'compute_pool_gdr_single_pool',
     'compute_aa', 'compute_bb', 'compute_ab', 'compute_ba',

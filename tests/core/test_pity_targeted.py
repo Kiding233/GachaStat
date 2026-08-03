@@ -13,7 +13,6 @@ import pytest
 from gacha_simulator.core.pity import (
     PityState, DrawInfo, PityContext,
     TargetedBehavior, TargetedSoftBehavior,
-    _redistribute_scope,
 )
 
 

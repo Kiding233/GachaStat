@@ -35,6 +35,7 @@ class CompactResult:
     pool_end_pity_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     pool_types: Dict[str, str] = field(default_factory=dict)
     strategy_name: str = ''
+    strategy_key: str = ''                 # P69 ISSUE-002：策略注册 key（如 'smart'），与类名 strategy_name 互补
     result_version: int = _RESULT_VERSION
     generated_at: float = 0.0
 

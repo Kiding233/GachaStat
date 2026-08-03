@@ -10,9 +10,7 @@
 import pytest
 from gacha_simulator.core.action import (
     NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError,
-    DrawAction, WaitAction,
 )
-from gacha_simulator.core.pity import PityState
 
 
 class TestNonDrawAction:

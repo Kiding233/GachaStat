@@ -2,7 +2,7 @@ import datetime as _dt
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
-from .strategy import strategy_type_to_key, STRATEGY_REGISTRY
+from .overflow import OverflowBand
 
 
 class ConfigError(ValueError):
@@ -16,9 +16,6 @@ class PoolDistEntry:
     rarity: str = 'R'
     featured: bool = False
     resources_gained: Dict[str, float] = field(default_factory=dict)
-    first_time_bonus: Dict[str, float] = field(default_factory=dict)
-    nth_time_bonus: Dict[str, Any] = field(default_factory=dict)
-    excess_bonus: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -117,6 +114,7 @@ class CardDefEntry:
     initial_count: int = 0
     tags: Dict[str, str] = field(default_factory=dict)               # P65：单值标签
     list_tags: Dict[str, List[str]] = field(default_factory=dict)     # P65：多值标签
+    overflow_bands: Optional[List[OverflowBand]] = None               # P63：卡片溢出分段表
 
 
 @dataclass
@@ -136,9 +134,9 @@ class ConfigStore:
     day_overrides: List[DayOverride] = field(default_factory=list)
     initial_resources: Dict[str, float] = field(default_factory=dict)
     target_cards: List[TargetCardEntry] = field(default_factory=list)
-    strategy_type: str = '按需追卡'
-    strategy_name: str = 'smart'
+    strategy_key: str = 'smart'
     strategy_params: Dict[str, Any] = field(default_factory=dict)
+    _unknown_strategy_raw: Optional[Dict[str, Any]] = None  # 未知 key 降级保留
     stop_condition_type: str = '所有池结束'
     stop_condition_params: Dict[str, Any] = field(default_factory=dict)
     auto_wait: bool = True
@@ -149,16 +147,14 @@ class ConfigStore:
     seed: int = 42
     _distribution_templates: List[dict] = field(default_factory=list)
     rarity_rank: Dict[str, int] = field(default_factory=dict)       # ← P60：稀有度 → 层级（0=最高）
+    rarity_defaults: Dict[str, Any] = field(default_factory=dict)    # ← P63：稀有度默认溢出规则（键名 .lower()）
+    card_overflow_map: Dict[str, List[OverflowBand]] = field(default_factory=dict)  # ← P63：card_id → 分段表
     _migrated_from_legacy: bool = False                              # ← P55：旧格式迁移标记
 
     def __post_init__(self):
-        if self.strategy_type:
-            if self.strategy_type in STRATEGY_REGISTRY:
-                self.strategy_name = self.strategy_type
-            else:
-                resolved = strategy_type_to_key(self.strategy_type)
-                if resolved != self.strategy_name:
-                    self.strategy_name = resolved
+        # P69：strategy_type 字段已删除，strategy_name → strategy_key。
+        # 旧 type→key 映射逻辑不再需要——TOML [strategy] 段直接使用 key。
+        pass
 
     def clear(self):
         self.card_defs.clear()
@@ -169,9 +165,9 @@ class ConfigStore:
         self.day_overrides.clear()
         self.initial_resources.clear()
         self.target_cards.clear()
-        self.strategy_type = '按需追卡'
-        self.strategy_name = 'smart'
+        self.strategy_key = 'smart'
         self.strategy_params.clear()
+        self._unknown_strategy_raw = None
         self.stop_condition_type = '所有池结束'
         self.stop_condition_params.clear()
         self.auto_wait = True
@@ -182,6 +178,8 @@ class ConfigStore:
         self.seed = 42
         self._distribution_templates.clear()
         self.rarity_rank.clear()                                      # ← P60
+        self.rarity_defaults.clear()                                  # ← P63
+        self.card_overflow_map.clear()                                # ← P63
         self._migrated_from_legacy = False                            # ← P55
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────

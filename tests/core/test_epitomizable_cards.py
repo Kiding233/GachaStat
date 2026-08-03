@@ -9,7 +9,6 @@
 import pytest
 import tempfile
 import os
-from gacha_simulator.core.config_store import ConfigStore, PoolEntry, PoolDistEntry
 from gacha_simulator.core.pool import Pool, Reward
 
 

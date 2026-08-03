@@ -1077,7 +1077,7 @@ class PlanSearchPanel(QWidget):
                 max_workers=self.max_workers_spin.value(),
                 max_binary_iterations=self.max_iter_spin.value(),
                 precision_draws=self.precision_spin.value(),
-                strategy_name=self._store.strategy_name if self._store else 'smart',
+                strategy_name=self._store.strategy_key if self._store else 'smart',
                 strategy_params=self._store.strategy_params if self._store else None,
                 upper_bound=float(self.upper_bound_spin.value()),
                 lower_bound=float(self.lower_bound_spin.value()),
@@ -1243,7 +1243,7 @@ class PlanSearchPanel(QWidget):
             self._on_gdr_changed(self.gdr_combo.currentIndex())
 
         # 更新策略标签
-        strategy_name = getattr(store, 'strategy_name', 'smart') or 'smart'
+        strategy_name = getattr(store, 'strategy_key', 'smart') or 'smart'
         from gacha_simulator.core.strategy import strategy_key_to_type
         self.strategy_label.setText(strategy_key_to_type(strategy_name))
 

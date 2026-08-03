@@ -29,7 +29,7 @@ ALLOWED_DIRS = [
     "gacha_simulator/", "docs/", "config/", ".claude/",
     "tests/", "scripts/", "tools/", ".recycle_bin/",
     "pyproject.toml", "CLAUDE.md", "CONTRIBUTING.md", "project.md",
-    "README.md", "LICENSE",
+    "README.md", "LICENSE", "GachaStat.spec",
 ]
 
 

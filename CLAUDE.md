@@ -18,7 +18,7 @@ pytest --cov=gacha_simulator                         # 测试
 **架构分层：**
 ```
 gacha_simulator/
-├── core/       # 引擎：池子、状态、策略、保底、GDR、分析算法（无 GUI 依赖）
+├── core/       # 引擎：池子、状态、策略、保底、GDR、溢出、分析算法（无 GUI 依赖）
 ├── service/    # GachaService + batch_simulator
 ├── gui/        # PyQt6 面板（Tab 列表见 main.py，C1 cron 自动同步）
 │               # wheel_blocker.py — QApplication 全局事件过滤器，统一拦截
@@ -35,9 +35,62 @@ gacha_simulator/
 
 ## 二、架构约束
 
-### 策略 (`core/strategy.py`)
+### 无历史包袱原则（发布前生效）
 
-`STRATEGY_REGISTRY` 注册 7 种策略（`smart`/`pool_quota`/`pity_reserve`/`stop_on_target`/`target_hunting`/`fixed_count`/`draw_target`），统一接口 `select_action(self, ctx: StrategyContext) -> Action`。`StrategyContext` 封装 `state`/`current_pools`/`target_cards`/`acquired`/`pool_draw_counts`/`total_draws` 等，`get_pity_probabilities()` 惰性计算。工厂：`create_strategy(name, params)`。**P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。显式传入值覆盖默认值。**P56 新增：** `NonDrawAction`（`type='non_draw'`）——策略可返回非抽卡动作（`switch_epitomized_target` 切换定轨目标 / `cancel_epitomized_path` 取消定轨），由 `gacha_service._apply_non_draw()` 分发执行。
+本项目**尚未上线**：`config.toml` 仅为示例与测试用文件，无真实用户数据、无历史结果文件。因此在未发布阶段，允许：
+- 一次性迁移配置格式，不维护新旧双路径
+- 删除兼容机制，代码只保留新形态
+- 变更必须配「基线固化 + 等价对照」验证：迁移前用旧配置跑固定种子模拟，固化 CompactResult golden 快照，迁移后同种子重跑逐字段对比，保证行为等价
+
+**保险措施**：发布状态标志见 `gacha_simulator/_version.py` 的 `RELEASED`。**正式上线 / 真实用户接入时，必须把 `RELEASED` 改为 `True`**，此后本原则立即失效：
+- 禁止一次性迁移、删除兼容机制、破坏配置格式；所有变更默认「兼容优先」
+- 每次会话（CLAUDE.md 自动加载）与编写/审查计划时检查 `RELEASED`：`False` 才可继续使用迁移方式，`True` 必须反向决策
+
+### 独立审查原则（编写与审查分离）
+
+**核心规则：编写者不得自审。** 主 agent 编写或修改的文件，在正式审核/检查类任务（代码审查、计划审查、质量评审、提交前核查等）中，必须派出子 agent 独立检查，不得由主 agent 自查充当结论。
+
+- **验证与审查分离**：开发中的功能验证（跑测试、调试、确认行为）属主 agent 职责，不在此列；本原则约束的是对产物作正式检查并作为结论的环节
+- **子 agent 独立性**：子 agent 不携带主 agent 会话上下文，以文件内容与代码库为准独立判断，允许质疑既有决策
+- **提示词边界**：主 agent 只提供审查范围与检查清单，不得在提示词中引导子 agent 得出特定结论，否则独立性退化为橡皮图章
+- **豁免**：一行 typo、纯文档表述修改等极简单改动可不派子 agent，但仍须通过既有 hook 门控（H7 ruff / H5 一致性校验）
+- **理由**：编写者自查存在固有盲区（编写时的心智模型与意图偏差），独立第三方视角是审查有效性的前提；E1 独立评估、P38 五阶段对抗审查、peer-review 工作流均基于同一原则
+
+### 决策报告原则
+
+需要用户决策时，报告必须「自包含」，用户无需翻阅代码或文档即可理解并做决定。按理解路径组织：先铺理解前提，再诊断现状，最后落到决策结论。简单决策（yes/no、小选择）压缩为 1-2 句；复杂决策（方案权衡、边界裁决）完整覆盖下列要素：
+
+1. **决策预告**：开头一句话声明需要决策，避免误读为普通说明
+2. **背景**（问题无法自明定位时）：问题出现在哪个文件/场景
+3. **概念解释**（涉及代码库内部机制或冷僻概念时）：按下方「解释规范」执行
+4. **设计意图**（涉及某概念/行为时）：该机制原始设计意图，作为「预期行为」的依据
+5. **现状 vs 预期**（涉及边界/异常时）：正常情况下的预期行为 + 当前实际行为 + 差异
+6. **可能原因**（必须）：成因假设；不适用时明确说明「不适用」及原因
+7. **问题**：完整描述要决定什么
+8. **选项与推荐**：可行选项 + 推荐项及理由
+
+**解释规范（分级）：**
+- **决策依据必解释**：选项判断所依赖的机制/术语，首次出现必须让用户理解其行为，不得仅抛名字
+- **相关性分级**：与决策无关或用户已熟悉的引用可省略解释；拿不准熟悉度时倾向解释
+- **聚合解释**：涉及相互关联的一组机制时，用一段话整体说明关系与本次涉及的部分，不必逐个解释
+- **写作格式**：短解释用括号（如 `_redistribute_scope()`（rotating/targeted 保底家族共用的范围重分配函数））；需完整句展开时用冒号（如 `_redistribute_scope()`：它负责把超范围外的保底计数移交给下一个池）
+
+反例（决策依据裸抛名字）：「此问题涉及 `_redistribute_scope()` 的调用时机」
+正例：「此问题涉及 `_redistribute_scope()`（rotating/targeted 保底家族共用的范围重分配函数），它与本次决策的关系是……」
+
+### 策略 (`core/strategy.py` + `strategies/builtin/*.py`)
+
+**P69 架构：** `STRATEGY_REGISTRY: Dict[str, StrategyMeta]`——`@register_strategy(key, display_name, *, params, internal)` 装饰器副作用自动注册。`StrategyMeta` dataclass 封装 `key`/`display_name`/`description`/`cls`/`params: List[ParamDescriptor]`/`internal`/`disabled`/`plugin_path`/`_invalid_state`。`create_strategy(key, params)` 数据驱动工厂——查 meta → `_invalid_state` 守卫 → 合并默认值 → `ParamDescriptor.validate()` → `cls(**resolved)`。`_validate_registry()` 模块导入时自动执行（5 项检查）。`strategy_type_to_key()` / `strategy_key_to_type()` 保留。
+
+**ParamDescriptor 类族**（`core/param_descriptor.py`，零 Qt 依赖）：`FloatParam`/`IntParam`/`BoolParam`/`StrParam`/`StringListParam`/`PoolIntMapParam`——纯数据类，`validate()` 方法类型+范围校验。GUI 控件创建在 `gui/param_renderer.py`（未实现时由 `config_panel._on_strategy_type_changed` 直接实例化）。
+
+**策略组织：** 8 个内置策略拆分至 `strategies/builtin/*.py`，与插件策略统一目录结构。框架核心（`Strategy` ABC / `StrategyContext` / `StrategyMeta` / `register_strategy` / `create_strategy`）保留在 `core/strategy.py`。`StrategyContext` 含新字段 `future_resource_gains`/`inter_pool_pity_links`/`time_discount`（均带默认值），由 `core/strategy_context_builder.py` 的 `build_strategy_context()` 集中构造。
+
+**插件系统**（`core/strategy_loader.py`）：`load_plugin_strategies(plugin_dir)` 扫描 `strategies/*.py`，importlib 动态加载，装饰器自动注册。加载失败注册 `_invalid_state` 占位。`reload_plugin_strategy()` / `disable_plugin_strategy()` / `enable_plugin_strategy()` 热重载。GUI 插件管理面板（`gui/plugin_manager_panel.py`）提供启用/禁用/重新扫描。禁用状态持久化到 TOML `[plugins].disabled`。
+
+**复合策略**（`core/strategy.py`，代码级 building block——不进入 TOML/GUI）：`DrawSegmentStrategy`（按抽数分段）/ `PriorityChainStrategy`（优先级降级链）/ `ConditionalStrategy`（lambda 条件分支）。三者均设 `_strategy_key = None` 哨兵。旧 `CompositeStrategy` 保留并发出 `DeprecationWarning`。
+
+**P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。**P56 新增：** `NonDrawAction`（`type='non_draw'`）——策略可返回非抽卡动作（`switch_epitomized_target` 切换定轨目标 / `cancel_epitomized_path` 取消定轨），由 `gacha_service._apply_non_draw()` 分发执行。
 
 ### 保底 (`core/pity.py`)
 
@@ -49,7 +102,11 @@ gacha_simulator/
 
 ### GachaState (`core/state.py`)
 
-dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id)` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。
+dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`acquired_by_path`（P63 路径切片）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id, path, overflow_bands, initial_counts) → Dict[str, float]` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。P63：`add_card()` 统一溢出管道——接受分段表，内部匹配区间并返回溢出资源（无规则返回 `{}`）；`clone()` 深拷贝 `acquired_by_path`。
+
+### 溢出 (`core/overflow.py`)
+
+P63 新建——`OverflowBand` dataclass（`min`/`max: int|None`/`resources`，`None`=∞）+ `match_overflow_bands(bands, n)` + `expand_sugar_to_bands(first, nth, excess)` 语法糖展开。分段表统一表示 CardAcquired 触发点的溢出规则，替代旧 `compute_bonus_resources()`（已删除）。
 
 ### GDR (`core/gdr.py` + `core/generalized_drop_rate.py`)
 
@@ -80,7 +137,8 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 | 扩展 | 入口 |
 |------|------|
 | 新 GDR | `core/gdr.py` + `UNIFIED_GDR_REGISTRY` 注册 `GDRDefinition` |
-| 新策略 | `core/strategy.py` + `STRATEGY_REGISTRY` 注册 |
+| 新溢出规则 | `core/overflow.py` → `CardDefEntry.overflow_bands` / `[rarity_defaults]` TOML 段 / GUI「满突溢出」标签页 |
+| 新策略 | `strategies/builtin/` 或 `strategies/` 插件目录 —— `@register_strategy` 装饰器 + `Strategy` ABC |
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |

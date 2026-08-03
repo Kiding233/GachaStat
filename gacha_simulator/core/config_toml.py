@@ -28,6 +28,7 @@ from .config_store import (
     PoolEntry,
     TargetCardEntry,
 )
+from .overflow import OverflowBand, expand_sugar_to_bands
 
 # ══════════════════════════════════════════════════════════════════
 # 公开接口
@@ -65,6 +66,9 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     _build_targets(data, store)
     _build_weights(data, store)
 
+    # P69：策略段
+    _build_strategy(data, store)
+
     # 分布模板 → 池子（需先构建模板索引，再展开池子）
     templates = _build_distribution_templates(data)
     store._distribution_templates = templates
@@ -72,6 +76,12 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
 
     # 回填 card_defs.pools：从池子分布逆向推导每张卡属于哪些池子
     _backfill_card_pools(store)
+
+    # P63：解析稀有度默认溢出规则（键名统一 .lower()）
+    _build_rarity_defaults(data, store)
+
+    # P63：构建 card_overflow_map（必须在 _build_cards 和 _build_rarity_defaults 之后）
+    _build_card_overflow_map(store)
 
     return store
 
@@ -123,6 +133,15 @@ def save_toml(store: ConfigStore, path: str) -> None:
             lt = {k: v for k, v in c.list_tags.items() if v}
             if lt:
                 entry['list_tags'] = lt
+        # P63：卡片溢出分段表——统一写 bands 数组（与内部表示一致、round-trip 无损）
+        if c.overflow_bands:
+            entry['overflow_bands'] = [
+                {
+                    'range': [b.min, 'inf' if b.max is None else b.max],
+                    'resources': dict(b.resources),
+                }
+                for b in c.overflow_bands
+            ]
         data['card'].append(entry)
 
     # templates + pools
@@ -131,6 +150,31 @@ def save_toml(store: ConfigStore, path: str) -> None:
     # pity（P55 扁平化格式）
     if store.pity.enabled and store.pity.pities:
         data['pity'] = [_pitydef_to_toml(p) for p in store.pity.pities]
+
+    # strategy（P69：key + params 格式）
+    if store.strategy_key:
+        strategy_entry: dict = {'key': store.strategy_key}
+        # 仅写入与默认值不同的参数
+        from .strategy import STRATEGY_REGISTRY
+        meta = STRATEGY_REGISTRY.get(store.strategy_key)
+        if meta and meta.params and store.strategy_params:
+            non_default = {}
+            for pdesc in meta.params:
+                user_val = store.strategy_params.get(pdesc.key)
+                if user_val is not None and user_val != pdesc.default:
+                    non_default[pdesc.key] = user_val
+            if non_default:
+                strategy_entry['params'] = non_default
+        data['strategy'] = strategy_entry
+
+    # plugins（P69 阶段 4d：持久化禁用状态）
+    from .strategy import STRATEGY_REGISTRY as _sr
+    disabled_keys = [
+        key for key, m in _sr.items()
+        if m.disabled and not m.internal
+    ]
+    if disabled_keys:
+        data['plugins'] = {'disabled': disabled_keys}
 
     # targets
     if store.target_cards:
@@ -158,6 +202,24 @@ def save_toml(store: ConfigStore, path: str) -> None:
             buckets.setdefault(rank_idx, []).append(name)
         ranks = [buckets[r] for r in sorted(buckets)]
         data['rarities'] = {'ranks': ranks}
+
+    # P63：稀有度默认溢出规则——与解析路径双向对称
+    if store.rarity_defaults:
+        rd_data = {}
+        for rarity_key, rd_entry in store.rarity_defaults.items():
+            bands = rd_entry.get('overflow_bands', [])
+            if bands:
+                rd_data[rarity_key] = {
+                    'overflow_bands': [
+                        {
+                            'range': [b.min, 'inf' if b.max is None else b.max],
+                            'resources': dict(b.resources),
+                        }
+                        for b in bands
+                    ]
+                }
+        if rd_data:
+            data['rarity_defaults'] = rd_data
 
     header = (
         '# ============================================================\n'
@@ -228,6 +290,8 @@ def _save_templates_and_pools(store: ConfigStore, data: dict) -> None:
                     'probability': d.probability,
                     'rarity': d.rarity,
                     'featured': d.featured,
+                    **({'resources_gained': dict(d.resources_gained)}
+                       if d.resources_gained else {}),
                 }
                 for d in pool.distribution
             ]
@@ -268,6 +332,9 @@ def _distribution_matches_template(
         if d.featured != e.featured:
             return False
         if not math.isclose(d.probability, e.probability, rel_tol=1e-6):
+            return False
+        # P63：resources_gained 比较——含非默认值的分布不应误判为模板匹配
+        if d.resources_gained != e.resources_gained:
             return False
 
     return True
@@ -330,6 +397,8 @@ def _expand_template_with_bindings(
         rarity = tc.get('rarity', 'r')
         featured = tc.get('featured', False)
 
+        resources_gained = dict(tc.get('resources_gained', {}))
+
         if card_id in BINDING_KEYS:
             # 绑定键 → 从 bindings 查找值并展开
             binding_value = bindings.get(card_id, card_id)
@@ -340,6 +409,7 @@ def _expand_template_with_bindings(
                     probability=card_prob,
                     rarity=rarity,
                     featured=(featured and card_id == 'ssr'),
+                    resources_gained=resources_gained,
                 ))
         else:
             # 非绑定键 → 直接作为单卡 ID
@@ -348,6 +418,7 @@ def _expand_template_with_bindings(
                 probability=prob,
                 rarity=rarity,
                 featured=featured,
+                resources_gained=resources_gained,
             ))
 
     return result
@@ -438,6 +509,33 @@ def _build_cards(data: dict, store: ConfigStore) -> None:
         # P65：跨表同名 key 检测
         _warn_cross_table_keys(tags, list_tags, card_id)
 
+        # ── P63：卡片溢出规则解析 ──
+        overflow_bands = None
+        # 高级模式：[[card.overflow_bands]] 数组——与语法糖不共存
+        raw_bands = c.get('overflow_bands')
+        if raw_bands:
+            parsed_bands = _parse_overflow_bands_array(raw_bands)
+            if parsed_bands is not None:
+                overflow_bands = parsed_bands
+        else:
+            # 语法糖模式：[card.overflow] 三字段
+            overflow_raw = c.get('overflow')
+            if overflow_raw:
+                first = overflow_raw.get('first_time_bonus')
+                nth_raw = overflow_raw.get('nth_time_bonus')
+                # 将 TOML 的整数键还原为 int（tomllib 可能保留为 int）
+                nth = None
+                if nth_raw:
+                    nth = {int(k): v for k, v in nth_raw.items()}
+                excess = overflow_raw.get('excess_bonus')
+                overflow_bands = expand_sugar_to_bands(
+                    first_time_bonus=first,
+                    nth_time_bonus=nth,
+                    excess_bonus=excess,
+                )
+                if not overflow_bands:
+                    overflow_bands = None  # 全部为空 → 无规则
+
         store.card_defs.append(CardDefEntry(
             card_id=card_id,
             name=name,
@@ -445,6 +543,7 @@ def _build_cards(data: dict, store: ConfigStore) -> None:
             initial_count=ic,
             tags=tags,
             list_tags=list_tags,
+            overflow_bands=overflow_bands,
         ))
 
 
@@ -822,6 +921,35 @@ def _migrate_legacy_pity(pity_list: list) -> list:
     return new_pities
 
 
+def _build_rarity_defaults(data: dict, store: ConfigStore) -> None:
+    """[rarity_defaults] → store.rarity_defaults。
+
+    稀有度键名统一 .lower() 归一化存储——与 rarity_rank 的 .upper() 方向互补。
+    .lower() 用于 TOML 段名查找（不分大小写），.upper() 用于展示/排序。
+
+    TOML 格式：
+      [rarity_defaults.ssr]
+      [[rarity_defaults.ssr.overflow_bands]]
+      range = [1, 7]
+      resources = { starglitter = 10 }
+    """
+    raw = data.get('rarity_defaults', {})
+    if not raw:
+        return
+
+    store.rarity_defaults.clear()
+    for rarity_name, rd_config in raw.items():
+        key = rarity_name.lower()
+        entry: dict = {}
+        raw_bands = rd_config.get('overflow_bands', [])
+        if raw_bands:
+            bands = _parse_overflow_bands_array(raw_bands)
+            if bands:
+                entry['overflow_bands'] = bands
+        if entry:
+            store.rarity_defaults[key] = entry
+
+
 def _build_targets(data: dict, store: ConfigStore) -> None:
     """[[targets]] → store.target_cards"""
     for t in data.get('targets', []):
@@ -830,6 +958,43 @@ def _build_targets(data: dict, store: ConfigStore) -> None:
             quantity=t.get('quantity', 1),
             pool_ids=list(t.get('pool_ids', [])),
         ))
+
+
+def _build_strategy(data: dict, store: ConfigStore) -> None:
+    """[strategy] → store.strategy_key + store.strategy_params（P69：key + params 格式）。
+
+    旧 TOML type + name 格式自动检测并迁移到 key 格式。
+    key 不存在时回退 'smart'。
+    """
+    strat = data.get('strategy', {})
+    if not strat:
+        return
+
+    # 新格式：key + params
+    if 'key' in strat:
+        store.strategy_key = str(strat['key'])
+        store.strategy_params = dict(strat.get('params', {}))
+        return
+
+    # 旧格式兼容：type(显示名) + name(key) —— 自动迁移
+    if 'name' in strat:
+        store.strategy_key = str(strat['name'])
+        store.strategy_params = dict(strat.get('params', {}))
+        return
+
+
+def _build_plugins(data: dict, store: ConfigStore) -> None:
+    """[plugins] → 设置 StrategyMeta.disabled = True（P69 阶段 4d）。"""
+    plugins = data.get('plugins', {})
+    disabled_list = plugins.get('disabled', [])
+    if not disabled_list:
+        return
+
+    from .strategy import STRATEGY_REGISTRY
+    for key in disabled_list:
+        meta = STRATEGY_REGISTRY.get(key)
+        if meta is not None and not meta.internal:
+            meta.disabled = True
 
 
 def _build_weights(data: dict, store: ConfigStore) -> None:
@@ -897,6 +1062,7 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
                     probability=d['probability'],
                     rarity=d.get('rarity', 'r'),
                     featured=d.get('featured', False),
+                    resources_gained=dict(d.get('resources_gained', {})),
                 ))
 
         # bindings + target_specs
@@ -951,6 +1117,53 @@ def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
     # P60：统一填充 featured_card_ids——覆盖所有 pool（含复刻池，其 distribution 在第二步才赋值）
     for pool in store.pools:
         pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
+
+
+def _parse_overflow_bands_array(raw_bands: list) -> Optional[List[OverflowBand]]:
+    """解析 [[card.overflow_bands]] 数组 → List[OverflowBand]。
+
+    TOML 格式：
+      [[card.overflow_bands]]
+      range = [1, 1]
+      resources = { yellow_cert = 1 }
+
+    range[1] 可以是整数或字符串 "inf"（→ None）。
+    返回 None 若数组为空或全部区间无效。
+    """
+    bands: List[OverflowBand] = []
+    for entry in raw_bands:
+        rng = entry.get('range', [])
+        if not rng or len(rng) < 2:
+            continue
+        min_val = int(rng[0])
+        max_raw = rng[1]
+        if isinstance(max_raw, str) and max_raw.strip().lower() == 'inf':
+            max_val = None
+        else:
+            max_val = int(max_raw)
+        resources = dict(entry.get('resources', {}))
+        bands.append(OverflowBand(min=min_val, max=max_val, resources=resources))
+    return bands if bands else None
+
+
+def _build_card_overflow_map(store: ConfigStore) -> None:
+    """构建 card_overflow_map——确定每张卡的最终分段表。
+
+    优先级：卡片显式配置 > 稀有度默认。
+    稀有度默认键名已统一为 .lower()——查找时同样 .lower() 归一化。
+    """
+    store.card_overflow_map.clear()
+    rarity_defaults = store.rarity_defaults  # 键名已 .lower()
+
+    for card_def in store.card_defs:
+        if card_def.overflow_bands:
+            store.card_overflow_map[card_def.card_id] = list(card_def.overflow_bands)
+        else:
+            rarity_key = card_def.rarity.lower()
+            rd = rarity_defaults.get(rarity_key, {})
+            default_bands = rd.get('overflow_bands', [])
+            if default_bands:
+                store.card_overflow_map[card_def.card_id] = list(default_bands)
 
 
 def _backfill_card_pools(store: ConfigStore) -> None:

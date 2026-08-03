@@ -16,7 +16,6 @@ a = Analysis(
     binaries=[],
 
     datas=[
-        ('gacha_simulator/config', 'config'),
         ('gacha_simulator/resources', 'resources'),
     ],
 
@@ -177,3 +176,15 @@ coll = COLLECT(
     upx_exclude=[],
     name='GachaStat',
 )
+
+# ── P69 Step 1.0：打包配置目录到 dist 输出顶层（与 .exe 同级，非 _internal/ 内） ──
+import shutil
+
+_SRC_CONFIG = os.path.join(str(_SPEC_DIR), 'gacha_simulator', 'config')
+_DST_CONFIG = os.path.join(str(_SPEC_DIR), 'dist', 'GachaStat', 'config')
+if os.path.isdir(_SRC_CONFIG):
+    shutil.copytree(_SRC_CONFIG, _DST_CONFIG, dirs_exist_ok=True)
+
+# 确保 strategies/ 目录存在（可以为空——插件扫描器依赖该目录存在）
+_DST_STRATEGIES = os.path.join(str(_SPEC_DIR), 'dist', 'GachaStat', 'strategies')
+os.makedirs(_DST_STRATEGIES, exist_ok=True)

@@ -16,87 +16,8 @@ from ..core.config_store import (
     CardDefEntry, PoolEntry, PoolDistEntry,
     PityDef, PityConfig, GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
 )
+from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
-
-
-def _bonus_to_text(d):
-    """将额外资源字段序列化为紧凑文本格式"""
-    parts = []
-    ft = d.get('first_time_bonus', {})
-    if ft:
-        parts.append('ft:' + ','.join(f'{k}:{v}' for k, v in ft.items()))
-    nth = d.get('nth_time_bonus', {})
-    if nth:
-        nth_parts = []
-        for n, res in sorted(nth.items()):
-            nth_parts.append(f'{n}={",".join(f"{k}:{v}" for k, v in res.items())}')
-        parts.append('nth:' + ';'.join(nth_parts))
-    xs = d.get('excess_bonus', {})
-    if xs:
-        threshold = xs.get('threshold', 999999)
-        res = xs.get('resources', {})
-        xs_str = f'{threshold}>' + ','.join(f'{k}:{v}' for k, v in res.items())
-        parts.append('xs:' + xs_str)
-    return ' & '.join(parts)
-
-
-def _parse_bonus_text(text):
-    """解析紧凑格式的额外资源文本"""
-    result = {'first_time_bonus': {}, 'nth_time_bonus': {}, 'excess_bonus': {}}
-    if not text or not text.strip():
-        return result
-    for segment in text.split('&'):
-        segment = segment.strip()
-        if not segment:
-            continue
-        if segment.startswith('ft:'):
-            for part in segment[3:].split(','):
-                part = part.strip()
-                if ':' in part:
-                    k, v = part.split(':', 1)
-                    try:
-                        result['first_time_bonus'][k.strip()] = float(v.strip())
-                    except ValueError:
-                        pass
-        elif segment.startswith('nth:'):
-            for entry in segment[4:].split(';'):
-                entry = entry.strip()
-                if '=' in entry:
-                    n_str, res_str = entry.split('=', 1)
-                    try:
-                        n = int(n_str.strip())
-                    except ValueError:
-                        continue
-                    resources = {}
-                    for part in res_str.split(','):
-                        part = part.strip()
-                        if ':' in part:
-                            k, v = part.split(':', 1)
-                            try:
-                                resources[k.strip()] = float(v.strip())
-                            except ValueError:
-                                pass
-                    if resources:
-                        result['nth_time_bonus'][n] = resources
-        elif segment.startswith('xs:'):
-            xs_content = segment[3:].strip()
-            if '>' in xs_content:
-                t_str, res_str = xs_content.split('>', 1)
-                try:
-                    threshold = int(t_str.strip())
-                except ValueError:
-                    threshold = 999999
-                resources = {}
-                for part in res_str.split(','):
-                    part = part.strip()
-                    if ':' in part:
-                        k, v = part.split(':', 1)
-                        try:
-                            resources[k.strip()] = float(v.strip())
-                        except ValueError:
-                            pass
-                result['excess_bonus'] = {'threshold': threshold, 'resources': resources}
-    return result
 
 
 class PoolDistributionDialog(QDialog):
@@ -109,8 +30,8 @@ class PoolDistributionDialog(QDialog):
         layout = QVBoxLayout(self)
 
         self.dist_table = QTableWidget()
-        self.dist_table.setColumnCount(6)
-        self.dist_table.setHorizontalHeaderLabels(["卡ID", "概率(%)", "稀有度", "Featured", "资源获取", "额外资源"])
+        self.dist_table.setColumnCount(5)
+        self.dist_table.setHorizontalHeaderLabels(["卡ID", "概率(%)", "稀有度", "Featured", "资源获取"])
         self.dist_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.dist_table.verticalHeader().setVisible(False)
         self.dist_table.setAlternatingRowColors(True)
@@ -189,11 +110,6 @@ class PoolDistributionDialog(QDialog):
             res_edit.setPlaceholderText("resource_id:amount,...")
             self.dist_table.setCellWidget(i, 4, res_edit)
 
-            bonus_text = _bonus_to_text(d)
-            bonus_edit = QLineEdit(bonus_text)
-            bonus_edit.setPlaceholderText("ft:r:a & nth:n=r:a;n=r:a & xs:t>r:a")
-            self.dist_table.setCellWidget(i, 5, bonus_edit)
-
         self._update_total()
 
     def _add_row(self):
@@ -218,10 +134,6 @@ class PoolDistributionDialog(QDialog):
         res_edit = QLineEdit()
         res_edit.setPlaceholderText("resource_id:amount,...")
         self.dist_table.setCellWidget(row, 4, res_edit)
-
-        bonus_edit = QLineEdit()
-        bonus_edit.setPlaceholderText("ft:r:a & nth:n=r:a;n=r:a & xs:t>r:a")
-        self.dist_table.setCellWidget(row, 5, bonus_edit)
 
         self._update_total()
 
@@ -253,10 +165,6 @@ class PoolDistributionDialog(QDialog):
         res_edit = QLineEdit()
         res_edit.setPlaceholderText("resource_id:amount,...")
         self.dist_table.setCellWidget(row, 4, res_edit)
-
-        bonus_edit = QLineEdit()
-        bonus_edit.setPlaceholderText("ft:r:a & nth:n=r:a;n=r:a & xs:t>r:a")
-        self.dist_table.setCellWidget(row, 5, bonus_edit)
 
         self._update_total()
 
@@ -309,7 +217,6 @@ class PoolDistributionDialog(QDialog):
             rarity_combo = self.dist_table.cellWidget(i, 2)
             featured_cb = self.dist_table.cellWidget(i, 3)
             res_edit = self.dist_table.cellWidget(i, 4)
-            bonus_edit = self.dist_table.cellWidget(i, 5)
 
             card_id = card_id_item.text().strip() if card_id_item else ''
 
@@ -326,8 +233,6 @@ class PoolDistributionDialog(QDialog):
                             except ValueError:
                                 pass
 
-            bonus = _parse_bonus_text(bonus_edit.text() if bonus_edit else '')
-
             rarity = rarity_combo.currentText() if rarity_combo else 'R'
             featured = featured_cb.isChecked() if featured_cb else False
             if card_id == '_no_card':
@@ -340,9 +245,6 @@ class PoolDistributionDialog(QDialog):
                 'rarity': rarity,
                 'featured': featured,
                 'resources_gained': resources_gained,
-                'first_time_bonus': bonus.get('first_time_bonus', {}),
-                'nth_time_bonus': bonus.get('nth_time_bonus', {}),
-                'excess_bonus': bonus.get('excess_bonus', {}),
             })
         return result
 
@@ -440,7 +342,17 @@ class ConfigPanel(QWidget):
         self._setup_strategy_tab(strategy_tab_layout)
         strategy_tab_layout.addStretch()
         strategy_tab_scroll.setWidget(strategy_tab_content)
-        self.left_tabs.addTab(strategy_tab_scroll, "策略与目标")
+        self.left_tabs.addTab(strategy_tab_scroll, "抽卡策略")
+
+        target_tab_scroll = QScrollArea()
+        target_tab_scroll.verticalScrollBar().setSingleStep(15)
+        target_tab_scroll.setWidgetResizable(True)
+        target_tab_content = QWidget()
+        target_tab_layout = QVBoxLayout(target_tab_content)
+        self._setup_target_tab(target_tab_layout)
+        target_tab_layout.addStretch()
+        target_tab_scroll.setWidget(target_tab_content)
+        self.left_tabs.addTab(target_tab_scroll, "目标卡")
 
         weight_tab_scroll = QScrollArea()
         weight_tab_scroll.verticalScrollBar().setSingleStep(15)
@@ -452,6 +364,17 @@ class ConfigPanel(QWidget):
         weight_tab_scroll.setWidget(weight_tab_content)
         self.left_tabs.addTab(weight_tab_scroll, "权重配置")
 
+        # P63：满突溢出标签页
+        overflow_tab_scroll = QScrollArea()
+        overflow_tab_scroll.verticalScrollBar().setSingleStep(15)
+        overflow_tab_scroll.setWidgetResizable(True)
+        overflow_tab_content = QWidget()
+        overflow_tab_layout = QVBoxLayout(overflow_tab_content)
+        self._setup_overflow_tab(overflow_tab_layout)
+        overflow_tab_layout.addStretch()
+        overflow_tab_scroll.setWidget(overflow_tab_content)
+        self.left_tabs.addTab(overflow_tab_scroll, "满突溢出")
+
         splitter.addWidget(self.left_tabs)
 
         right_widget = QWidget()
@@ -459,7 +382,7 @@ class ConfigPanel(QWidget):
         self._setup_preview(right_layout)
         splitter.addWidget(right_widget)
 
-        splitter.setSizes([800, 400])
+        splitter.setSizes([880, 320])
 
     def _setup_pool_config(self, parent):
         template_group = QGroupBox("池子模板")
@@ -919,7 +842,7 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _edit_pool_distribution(self, row, col):
-        if col != 8:
+        if col != 9:
             return
         pool_id_item = self.pool_table.item(row, 1)
         if not pool_id_item:
@@ -1717,14 +1640,14 @@ class ConfigPanel(QWidget):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY
         from gacha_simulator.core.stop_condition import STOP_CONDITION_REGISTRY
 
-        group = QGroupBox("策略与目标卡")
+        group = QGroupBox("抽卡策略")
         layout = QVBoxLayout(group)
 
         strategy_layout = QFormLayout()
         self.strategy_type = QComboBox()
         self._strategy_display_names = [
-            entry['display_name'] for entry in STRATEGY_REGISTRY.values()
-            if not entry.get('internal')
+            entry.display_name for entry in STRATEGY_REGISTRY.values()
+            if not entry.internal and not entry.disabled
         ]
         self.strategy_type.addItems(self._strategy_display_names)
         strategy_layout.addRow("策略类型:", self.strategy_type)
@@ -1748,6 +1671,13 @@ class ConfigPanel(QWidget):
 
         self.strategy_type.currentIndexChanged.connect(self._on_strategy_type_changed)
         self._on_strategy_type_changed(0)
+
+        parent.addWidget(group)
+
+    def _setup_target_tab(self, parent):
+        """目标卡编辑标签页。"""
+        group = QGroupBox("目标卡")
+        layout = QVBoxLayout(group)
 
         target_label = QLabel("目标卡（卡ID + 需求数量）:")
         layout.addWidget(target_label)
@@ -1792,13 +1722,38 @@ class ConfigPanel(QWidget):
         self.card_id_list.itemDoubleClicked.connect(self._on_card_id_double_clicked)
         layout.addWidget(self.card_id_list)
 
-        self.strategy_type.currentIndexChanged.connect(self._on_strategy_type_changed)
         self.target_table.cellChanged.connect(self._update_preview)
 
         parent.addWidget(group)
 
+    def _rebuild_strategy_dropdown(self):
+        """公开方法——重建策略下拉框（供插件管理面板启用/禁用后调用）。"""
+        from gacha_simulator.core.strategy import STRATEGY_REGISTRY as _sr
+        current_key = None
+        if self.strategy_type.currentIndex() >= 0:
+            from gacha_simulator.core.strategy import strategy_type_to_key
+            current_key = strategy_type_to_key(self.strategy_type.currentText())
+
+        self._strategy_display_names = [
+            entry.display_name for entry in _sr.values()
+            if not entry.internal and not entry.disabled
+        ]
+        self.strategy_type.blockSignals(True)
+        self.strategy_type.clear()
+        self.strategy_type.addItems(self._strategy_display_names)
+        if current_key:
+            from gacha_simulator.core.strategy import STRATEGY_REGISTRY
+            meta = STRATEGY_REGISTRY.get(current_key)
+            if meta and not meta.disabled and meta.display_name in self._strategy_display_names:
+                self.strategy_type.setCurrentIndex(
+                    self._strategy_display_names.index(meta.display_name))
+            else:
+                self.strategy_type.setCurrentIndex(0)
+        self.strategy_type.blockSignals(False)
+
     def _on_strategy_type_changed(self, idx):
         from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key
+        from gacha_simulator.gui.param_renderer import render_param_widgets
 
         while self._strategy_params_layout.rowCount() > 0:
             self._strategy_params_layout.removeRow(0)
@@ -1807,100 +1762,34 @@ class ConfigPanel(QWidget):
         display_name = self.strategy_type.currentText()
         key = strategy_type_to_key(display_name)
         entry = STRATEGY_REGISTRY.get(key)
-        if not entry or not entry.get('params'):
+        if not entry or not entry.params:
             self._strategy_params_group.setVisible(False)
             if hasattr(self, 'preview_text'):
                 self._update_preview()
             return
 
         self._strategy_params_group.setVisible(True)
-        for param_key, param_def in entry['params'].items():
-            ptype = param_def.get('type', 'str')
-            display = param_def.get('display_name', param_key)
-            default = param_def.get('default')
-
-            if ptype == 'int':
-                widget = QSpinBox()
-                widget.setRange(param_def.get('min', 0), param_def.get('max', 99999))
-                widget.setValue(int(default) if default is not None else 0)
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'float':
-                widget = QDoubleSpinBox()
-                widget.setRange(param_def.get('min', 0.0), param_def.get('max', 99999.0))
-                widget.setDecimals(2)
-                widget.setSingleStep(0.1)
-                widget.setValue(float(default) if default is not None else 0.0)
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'bool':
-                widget = QCheckBox()
-                widget.setChecked(bool(default) if default is not None else False)
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'string_list':
-                widget = QLineEdit()
-                widget.setText(','.join(str(v) for v in default) if default else '')
-                widget.setPlaceholderText("逗号分隔")
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            elif ptype == 'pool_int_map':
-                widget = QLineEdit()
-                widget.setText(','.join(f'{k}:{v}' for k, v in default.items()) if default else '')
-                widget.setPlaceholderText("pool_id:数量,...")
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-            else:
-                widget = QLineEdit()
-                widget.setText(str(default) if default is not None else '')
-                self._strategy_params_layout.addRow(f"{display}:", widget)
-
-            self._strategy_param_widgets[param_key] = (ptype, widget)
+        render_param_widgets(
+            entry.params, self._strategy_params_layout,
+            self._strategy_param_widgets, parent=self,
+        )
 
         if hasattr(self, 'preview_text'):
             self._update_preview()
 
     def _get_strategy_params_from_widgets(self):
-        params = {}
-        for param_key, (ptype, widget) in self._strategy_param_widgets.items():
-            if ptype == 'int':
-                params[param_key] = widget.value()
-            elif ptype == 'float':
-                params[param_key] = widget.value()
-            elif ptype == 'bool':
-                params[param_key] = widget.isChecked()
-            elif ptype == 'string_list':
-                text = widget.text().strip()
-                params[param_key] = [s.strip() for s in text.split(',') if s.strip()] if text else []
-            elif ptype == 'pool_int_map':
-                text = widget.text().strip()
-                result = {}
-                if text:
-                    for part in text.split(','):
-                        part = part.strip()
-                        if ':' in part:
-                            k, v = part.split(':', 1)
-                            try:
-                                result[k.strip()] = int(v.strip())
-                            except ValueError:
-                                pass
-                params[param_key] = result
-            else:
-                params[param_key] = widget.text().strip()
-        return params
+        from gacha_simulator.gui.param_renderer import collect_params_from_widgets
+        return collect_params_from_widgets(self._strategy_param_widgets)
 
     def _set_strategy_params_to_widgets(self, params):
-        for param_key, (ptype, widget) in self._strategy_param_widgets.items():
-            value = params.get(param_key)
-            if value is None:
-                continue
-            if ptype == 'int':
-                widget.setValue(int(value))
-            elif ptype == 'float':
-                widget.setValue(float(value))
-            elif ptype == 'bool':
-                widget.setChecked(bool(value))
-            elif ptype == 'string_list':
-                widget.setText(','.join(str(v) for v in value) if isinstance(value, list) else str(value))
-            elif ptype == 'pool_int_map':
-                widget.setText(','.join(f'{k}:{v}' for k, v in value.items()) if isinstance(value, dict) else str(value))
-            else:
-                widget.setText(str(value))
+        from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key
+        from gacha_simulator.gui.param_renderer import set_params_to_widgets
+
+        display_name = self.strategy_type.currentText()
+        key = strategy_type_to_key(display_name)
+        entry = STRATEGY_REGISTRY.get(key)
+        if entry:
+            set_params_to_widgets(entry.params, self._strategy_param_widgets, params)
 
     def _setup_weight_config(self, parent):
         info_label = QLabel("配置每张卡的权重，用于加权满意度和总出卡价值等广义出率的计算。\n"
@@ -1940,6 +1829,223 @@ class ConfigPanel(QWidget):
         parent.addLayout(btn_layout)
 
         self._weight_data = {}
+
+    # ═══════════════════════════════════════════════════════════════
+    # P63：满突溢出标签页
+    # ═══════════════════════════════════════════════════════════════
+
+    def _setup_overflow_tab(self, parent):
+        info_label = QLabel(
+            "配置稀有度级别的卡片溢出规则。\n"
+            "卡片获得时根据累计持有次数匹配分段表，命中区间即产出资源。\n"
+            "优先级：卡片显式配置 > 稀有度默认。键名大小写不敏感。\n"
+            "产出格式：资源名:数值，多个用逗号分隔（如 exchange_currency:10,starglitter:5）"
+        )
+        info_label.setWordWrap(True)
+        parent.addWidget(info_label)
+
+        self.overflow_table = QTableWidget()
+        self.overflow_table.setColumnCount(5)
+        self.overflow_table.setHorizontalHeaderLabels([
+            "稀有度", "首次获得产出", "满突张数", "满突前每次产出", "满突后每次产出"
+        ])
+        header = self.overflow_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(1, 5):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        self.overflow_table.verticalHeader().setVisible(False)
+        self.overflow_table.setAlternatingRowColors(True)
+        self.overflow_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.overflow_table.setMinimumHeight(150)
+        parent.addWidget(self.overflow_table)
+
+        # 变更即写回 store（P56 自动应用模式）
+        self.overflow_table.cellChanged.connect(self._on_overflow_cell_changed)
+
+        parent.addStretch()
+
+        # 初始化时填充表格
+        self._refresh_overflow_tab()
+
+    def _get_rarity_list(self):
+        """从 [rarities].ranks 动态解析稀有度列表；无配置时回退默认三级。"""
+        store = getattr(self, '_store', None)
+        if store and store.rarity_rank:
+            # rarities.ranks 如 [["SSR"], ["SR"], ["R"]] → 展平按 rank 排序
+            buckets = {}
+            for name, rank_idx in store.rarity_rank.items():
+                buckets.setdefault(rank_idx, []).append(name.upper())
+            result = []
+            for r in sorted(buckets):
+                result.extend(buckets[r])
+            return result
+        return ["SSR", "SR", "R"]
+
+    def _refresh_overflow_tab(self):
+        """从 ConfigStore.rarity_defaults 填充溢出表格。"""
+        store = getattr(self, '_store', None)
+        rarities = self._get_rarity_list()
+
+        # 阻断信号避免刷新期间的 cellChanged 触发写入
+        self.overflow_table.blockSignals(True)
+
+        self.overflow_table.setRowCount(len(rarities))
+        for i, rarity_name in enumerate(rarities):
+            # 稀有度列（只读）
+            rarity_item = QTableWidgetItem(rarity_name)
+            rarity_item.setFlags(rarity_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.overflow_table.setItem(i, 0, rarity_item)
+
+            # 从 store 读取该稀有度的溢出规则（键名 .lower()）
+            rarity_key = rarity_name.lower()
+            rd = {}
+            if store and hasattr(store, 'rarity_defaults'):
+                rd = store.rarity_defaults.get(rarity_key, {})
+
+            bands = rd.get('overflow_bands', [])
+            # 将分段表反推为三字段
+            first, threshold, pre_excess, post_excess = self._bands_to_fields(bands)
+
+            # 首次获得产出
+            first_text = ','.join(f'{k}:{v}' for k, v in sorted(first.items())) if first else ''
+            first_item = QTableWidgetItem(first_text)
+            self.overflow_table.setItem(i, 1, first_item)
+
+            # 满突张数（阈值）
+            threshold_item = QTableWidgetItem(str(threshold) if threshold else '')
+            self.overflow_table.setItem(i, 2, threshold_item)
+
+            # 满突前每次产出
+            pre_text = ','.join(f'{k}:{v}' for k, v in sorted(pre_excess.items())) if pre_excess else ''
+            pre_item = QTableWidgetItem(pre_text)
+            self.overflow_table.setItem(i, 3, pre_item)
+
+            # 满突后每次产出
+            post_text = ','.join(f'{k}:{v}' for k, v in sorted(post_excess.items())) if post_excess else ''
+            post_item = QTableWidgetItem(post_text)
+            self.overflow_table.setItem(i, 4, post_item)
+
+        self.overflow_table.blockSignals(False)
+
+    def _bands_to_fields(self, bands):
+        """将 OverflowBand 列表反推为三字段（首次/阈值/满突前/满突后）。
+
+        Returns:
+            (first, threshold, pre_excess, post_excess)
+        """
+        first = {}
+        threshold = 7
+        pre_excess = {}
+        post_excess = {}
+
+        for band in bands:
+            if band.min == 1 and band.max == 1:
+                first = dict(band.resources)
+            elif band.max is None:
+                # [N, ∞) → 满突后
+                post_excess = dict(band.resources)
+                threshold = band.min
+            elif band.min == 2 and band.max is not None:
+                # [2, N] → 满突前（假设首次=1, 满突后=N+1）
+                pre_excess = dict(band.resources)
+                if threshold is None:
+                    threshold = band.max + 1
+            elif band.min > 1 and band.max is None:
+                post_excess = dict(band.resources)
+                threshold = band.min
+            elif band.min == 1 and band.max is not None and band.max > 1:
+                # [1, N] 恒真单段——无首次、无满突后
+                pre_excess = dict(band.resources)
+
+        return first, threshold, pre_excess, post_excess
+
+    def _on_overflow_cell_changed(self, row, col):
+        """溢出表格单元格变更 → 实时展开为分段表并写回 store.rarity_defaults。"""
+        store = getattr(self, '_store', None)
+        if store is None:
+            return
+
+        rarity_name = self._get_rarity_list()[row]
+        rarity_key = rarity_name.lower()
+
+        # 读取四组字段
+        def _parse_resources(item):
+            if item is None:
+                return {}
+            text = item.text().strip()
+            if not text:
+                return {}
+            result = {}
+            for part in text.split(','):
+                part = part.strip()
+                if not part:
+                    continue
+                if ':' in part:
+                    k, v = part.split(':', 1)
+                    try:
+                        val = float(v.strip())
+                        if val < 0:
+                            continue  # GUI-3：负数拒绝写入
+                        result[k.strip()] = val
+                    except ValueError:
+                        continue  # GUI-4：非数值拒绝写入，保持旧值
+            return result
+
+        first = _parse_resources(self.overflow_table.item(row, 1))
+        threshold_text = (self.overflow_table.item(row, 2).text().strip()
+                          if self.overflow_table.item(row, 2) else '')
+        try:
+            threshold = int(threshold_text) if threshold_text else None
+        except ValueError:
+            threshold = None
+        pre_excess = _parse_resources(self.overflow_table.item(row, 3))
+        post_excess = _parse_resources(self.overflow_table.item(row, 4))
+
+        # 展开为分段表（四种组合映射）
+        bands = self._expand_fields_to_bands(first, threshold, pre_excess, post_excess)
+
+        # 写回 store.rarity_defaults（键名 .lower()）
+        if not hasattr(store, 'rarity_defaults'):
+            store.rarity_defaults = {}
+        if bands:
+            store.rarity_defaults[rarity_key] = {'overflow_bands': bands}
+        elif rarity_key in store.rarity_defaults:
+            del store.rarity_defaults[rarity_key]
+
+        # 重新构建 card_overflow_map
+        from ..core.config_toml import _build_card_overflow_map
+        _build_card_overflow_map(store)
+
+    def _expand_fields_to_bands(self, first, threshold, pre_excess, post_excess):
+        """将三字段展开为 OverflowBand 列表（四种组合映射）。
+
+        组合：
+          首次 + 满突张数N + 满突前 + 满突后 → [1,1]→首次 + [2,N]→满突前 + [N+1,∞)→满突后
+          满突张数N + 满突前 + 满突后（无首次）→ [1,N]→满突前 + [N+1,∞)→满突后
+          仅有满突前（无张数）→ [1,∞)→满突前（恒真单段）
+          全空 → 无溢出规则
+        """
+        bands = []
+
+        if first:
+            bands.append(OverflowBand(min=1, max=1, resources=first))
+
+        if threshold is not None and threshold > 0:
+            if post_excess:
+                bands.append(OverflowBand(min=threshold, max=None, resources=post_excess))
+            if pre_excess:
+                # 满突前区间取决于是否有首次
+                pre_start = 2 if first else 1
+                pre_end = threshold - 1
+                if pre_start <= pre_end:
+                    bands.append(OverflowBand(min=pre_start, max=pre_end, resources=pre_excess))
+        elif pre_excess and not post_excess:
+            # 仅有满突前、无张数、无满突后 → 恒真单段 [1,∞)
+            pre_start = 2 if first else 1
+            bands.append(OverflowBand(min=pre_start, max=None, resources=pre_excess))
+
+        bands.sort(key=lambda b: b.min)
+        return bands if bands else None
 
     def _sync_weight_cards(self):
         card_defs = self.get_card_defs()
@@ -3141,10 +3247,7 @@ class ConfigPanel(QWidget):
                 'epitomizable_cards': getattr(p, 'epitomizable_cards', []),
                 'distribution': [{'card_id': d.card_id, 'probability': d.probability,
                                   'rarity': d.rarity, 'featured': d.featured,
-                                  'resources_gained': d.resources_gained,
-                                  'first_time_bonus': getattr(d, 'first_time_bonus', {}),
-                                  'nth_time_bonus': getattr(d, 'nth_time_bonus', {}),
-                                  'excess_bonus': getattr(d, 'excess_bonus', {}),}
+                                  'resources_gained': d.resources_gained,}
                                  for d in p.distribution] if p.distribution else None,
             })
 
@@ -3226,11 +3329,10 @@ class ConfigPanel(QWidget):
                     } if (pd.get('deactivate_on_early_hit') or pd.get('depends_on')) else {},
                 } for pd in self._pity_defs],
             },
+            'auto_wait': store.auto_wait,
             'strategy': {
-                'type': store.strategy_type,
-                'name': store.strategy_name,
+                'key': store.strategy_key,
                 'params': dict(store.strategy_params),
-                'auto_wait': store.auto_wait,
             },
             'stop_condition': {
                 'type': store.stop_condition_type,
@@ -3275,9 +3377,6 @@ class ConfigPanel(QWidget):
                         rarity=d.get('rarity', 'R'),
                         featured=d.get('featured', False),
                         resources_gained=d.get('resources_gained', {}),
-                        first_time_bonus=d.get('first_time_bonus', {}),
-                        nth_time_bonus=d.get('nth_time_bonus', {}),
-                        excess_bonus=d.get('excess_bonus', {}),
                     ))
             pool_type = p.get('type', '角色')
             bindings = {}
@@ -3366,16 +3465,16 @@ class ConfigPanel(QWidget):
         )
 
         strategy = config.get('strategy', {})
-        strategy_type_raw = strategy.get('type', '按需追卡')
-        from gacha_simulator.core.strategy import STRATEGY_REGISTRY, strategy_type_to_key, strategy_key_to_type
-        if strategy_type_raw in STRATEGY_REGISTRY:
-            strategy_type_resolved = strategy_key_to_type(strategy_type_raw)
+        # P69：新格式 {key, params}，兼容旧格式 {type, name, params}
+        if 'key' in strategy:
+            store.strategy_key = str(strategy['key'])
+        elif 'name' in strategy:
+            store.strategy_key = str(strategy['name'])
         else:
-            strategy_type_resolved = strategy_type_raw
-        store.strategy_type = strategy_type_resolved
-        store.strategy_name = strategy.get('name', None) or strategy_type_to_key(strategy_type_resolved)
+            store.strategy_key = 'smart'
         store.strategy_params = strategy.get('params', {})
-        store.auto_wait = strategy.get('auto_wait', True)
+        # auto_wait：优先从顶层读取（P69 新位置），回退到旧 strategy 子 dict
+        store.auto_wait = config.get('auto_wait', strategy.get('auto_wait', True))
 
         stop_cond = config.get('stop_condition', {})
         stop_type_raw = stop_cond.get('type', '所有池结束')
@@ -3817,9 +3916,6 @@ class ConfigPanel(QWidget):
                         rarity=d.get('rarity', 'R'),
                         featured=d.get('featured', False),
                         resources_gained=d.get('resources_gained', {}),
-                        first_time_bonus=d.get('first_time_bonus', {}),
-                        nth_time_bonus=d.get('nth_time_bonus', {}),
-                        excess_bonus=d.get('excess_bonus', {}),
                     ))
 
             bindings = {}
@@ -3872,8 +3968,8 @@ class ConfigPanel(QWidget):
             ))
         store.pity.pities = pities
 
-        store.strategy_type = self.strategy_type.currentText()
-        store.strategy_name = strategy_type_to_key(store.strategy_type)
+        display_name = self.strategy_type.currentText()
+        store.strategy_key = strategy_type_to_key(display_name)
         store.strategy_params = self._get_strategy_params_from_widgets()
         store.stop_condition_type = self.stop_condition_type.currentText()
         store.stop_condition_params = {}
@@ -3956,10 +4052,7 @@ class ConfigPanel(QWidget):
             if p.distribution:
                 dist_list = [{'card_id': d.card_id, 'probability': d.probability,
                               'rarity': d.rarity, 'featured': d.featured,
-                              'resources_gained': d.resources_gained,
-                              'first_time_bonus': getattr(d, 'first_time_bonus', {}),
-                              'nth_time_bonus': getattr(d, 'nth_time_bonus', {}),
-                              'excess_bonus': getattr(d, 'excess_bonus', {}),}
+                              'resources_gained': d.resources_gained,}
                              for d in p.distribution]
                 self._pool_distributions[p.pool_id] = dist_list
 
@@ -4017,7 +4110,27 @@ class ConfigPanel(QWidget):
         if self._pity_defs:
             self.pity_list.setCurrentRow(0)
 
-        strategy_idx = self._strategy_display_names.index(store.strategy_type) if store.strategy_type in self._strategy_display_names else 0
+        # P69：通过 strategy_key 反向查找 display_name + _invalid_state 守卫
+        from gacha_simulator.core.strategy import STRATEGY_REGISTRY as _sr
+        meta = _sr.get(store.strategy_key)
+        if meta is not None and meta._invalid_state is not None:
+            # 插件加载失败——弹出警告并回退为 'smart'
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "策略插件加载失败",
+                f"策略 '{store.strategy_key}' 的插件加载失败：\n{meta._invalid_state}\n\n"
+                f"已自动回退为 'smart'。原始参数已保留，修复插件后可手动恢复。"
+            )
+            store._unknown_strategy_raw = {
+                'key': store.strategy_key,
+                'params': dict(store.strategy_params),
+            }
+            store.strategy_key = 'smart'
+            store.strategy_params = {}
+
+        display_name = _sr[store.strategy_key].display_name if store.strategy_key in _sr else '按需追卡'
+        strategy_idx = self._strategy_display_names.index(display_name) if display_name in self._strategy_display_names else 0
         self.strategy_type.setCurrentIndex(strategy_idx)
         self._set_strategy_params_to_widgets(store.strategy_params)
         stop_idx = self._stop_condition_display_names.index(store.stop_condition_type) if store.stop_condition_type in self._stop_condition_display_names else 0
@@ -4087,6 +4200,12 @@ class ConfigPanel(QWidget):
                 self.sim_start_date_edit.blockSignals(True)
                 self.sim_start_date_edit.setDate(qd)
                 self.sim_start_date_edit.blockSignals(False)
+        except Exception:
+            pass
+
+        # P63：刷新溢出表格
+        try:
+            self._refresh_overflow_tab()
         except Exception:
             pass
 

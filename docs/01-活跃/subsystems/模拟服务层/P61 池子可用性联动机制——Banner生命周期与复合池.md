@@ -1,4 +1,4 @@
-<!-- META: P61 | module:模拟服务层 | status:designing | last:2026-08-02 -->
+<!-- META: P61 | module:模拟服务层 | status:ready | last:2026-08-03 -->
 
 # P61 池子可用性联动机制——Banner生命周期与复合池
 

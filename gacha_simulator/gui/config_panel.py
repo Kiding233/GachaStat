@@ -382,7 +382,7 @@ class ConfigPanel(QWidget):
         self._setup_preview(right_layout)
         splitter.addWidget(right_widget)
 
-        splitter.setSizes([800, 400])
+        splitter.setSizes([880, 320])
 
     def _setup_pool_config(self, parent):
         template_group = QGroupBox("池子模板")
@@ -842,7 +842,7 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _edit_pool_distribution(self, row, col):
-        if col != 8:
+        if col != 9:
             return
         pool_id_item = self.pool_table.item(row, 1)
         if not pool_id_item:
@@ -4128,12 +4128,6 @@ class ConfigPanel(QWidget):
             }
             store.strategy_key = 'smart'
             store.strategy_params = {}
-            # 持久化回退结果，避免每次启动都弹警告
-            from gacha_simulator.paths import get_config_dir
-            import os
-            config_path = os.path.join(get_config_dir(), 'config.toml')
-            from gacha_simulator.core.config_toml import save_toml
-            save_toml(store, config_path)
 
         display_name = _sr[store.strategy_key].display_name if store.strategy_key in _sr else '按需追卡'
         strategy_idx = self._strategy_display_names.index(display_name) if display_name in self._strategy_display_names else 0

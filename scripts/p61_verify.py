@@ -34,11 +34,14 @@ TIME_WINDOW_FIELDS = {'pool_end_resources', 'banner_end_resources',
                       'pool_end_pity_states', 'banner_end_pity_states'}
 # 不可比字段（时间戳）
 SKIP_FIELDS = {'generated_at'}
-# ISSUE-102 中间态分歧字段（Ph6 前构造桥 None 窗口，wait 推进不同）：
-#   draw_times / draw_resources_gained 由 wait 时长驱动（wait→资源收入累计）；
-#   batch 聚合统计（抽数/池抽数/卡计数/保底触发）是时间轴分歧的投影。
-#   这些字段在原子提交 A 阶段允许差异，但打印幅度供 Ph6 后复验（行 1500）。
-MIDSTATE_FIELDS = {'draw_times', 'draw_resources_gained'}
+# ISSUE-102 中间态分歧字段（Ph6 后复验结果）：
+#   Ph6 已恢复时间窗口（ISSUE-001）：draw_times/wait/final_time 与 golden 全一致，
+#   故 draw_times 移出本集合——再现时间差异将按严格 DIFF 报 FAIL。
+#   剩余 draw_resources_gained 归属偏移（exchange_currency 50 在相邻 wait 间偏移
+#   一次，抽次间资源总量一致）：由 Ph2 gacha_service 收入结算边界引入（Ph6 未触碰
+#   该文件），batch 聚合统计（抽数/池抽数/卡计数/保底触发）是其投影，幅度 <0.5%。
+#   保留本集合仅用于打印，供 ISSUE-102 后续收敛复验。
+MIDSTATE_FIELDS = {'draw_resources_gained'}
 
 
 def _strip_qkey(key):
@@ -67,7 +70,10 @@ def build_target_set(env, store):
     targets = [
         TargetCard(
             card_id=tc.card_id,
-            pool_ids=card_def_map.get(tc.card_id, {}).get('pools', []),
+            # P61（Ph6 / ISSUE-315）：card_defs.pools 为全限定键，TargetCard.pool_ids
+            # 一律取 banner 级键（与 _wk_init 同口径），否则 4 策略 banner.id 匹配恒 miss
+            pool_ids=[k.split('.')[0] if '.' in k else k
+                      for k in card_def_map.get(tc.card_id, {}).get('pools', [])],
             quantity_needed=getattr(tc, 'quantity', 1),
         )
         for tc in store.target_cards

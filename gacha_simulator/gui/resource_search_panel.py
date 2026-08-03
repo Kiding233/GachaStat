@@ -68,7 +68,10 @@ class ResourceSearchWorker(QThread):
         if not pools:
             return 160
         for p in pools:
-            cost = p.cost
+            # P61（Ph6 / AUDIT-BREAK-5 ③）：env.pools 承载 List[Banner]，读 banner.active_pool.cost
+            cost = getattr(p, 'cost', None)
+            if cost is None and hasattr(p, 'active_pool'):
+                cost = getattr(p.active_pool, 'cost', None)
             if isinstance(cost, list) and cost:
                 for opt in cost:
                     if isinstance(opt, dict):

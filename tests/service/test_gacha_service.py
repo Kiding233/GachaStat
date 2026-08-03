@@ -164,9 +164,14 @@ def test_env_builder_from_config_store_smoke():
     env = SimulationEnvBuilder.from_config_store(store)
     assert env is not None
     assert len(env.pools) == 1
-    # P61（ISSUE-102 中间态）：from_config_store 暂读扁平 store.pools，Pool.id 为全限定键
-    # {banner_id}.{pool_id}；Ph6 改为读 store.banner 后恢复裸 id
-    assert env.pools[0].id == 'pool_draw.main'
-    # P61（Ph1a）：Pool.pool_type 已删除——推导属性 is_exchange（output='card' and not random）
-    assert env.pools[0].is_exchange is False
-    assert env.end_time > 0
+    # P61（Ph6）：from_config_store 改读 store.banner，env.pools 承载 List[Banner]
+    assert env.pools[0].id == 'pool_draw'
+    assert env.pools[0].name == '测试抽卡池'
+    # Pool.pool_type 已删除——推导属性 is_exchange（output='card' and not random）
+    assert env.pools[0].active_pool.is_exchange is False
+    # P61（Ph6 / ISSUE-001）：Banner 级时间窗口透传（TOML 解析边界已 *DAY 为秒）
+    assert env.pools[0].available_from == 0 * DAY
+    assert env.pools[0].available_until == 21 * DAY
+    # P61（Ph6 / ISSUE-011）：banner_defs 与 pools 同源（_run_single 深拷贝隔离用）
+    assert env.banner_defs is not None and len(env.banner_defs) == 1
+    assert env.end_time == 21 * DAY

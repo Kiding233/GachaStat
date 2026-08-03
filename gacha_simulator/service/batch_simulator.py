@@ -69,6 +69,10 @@ class SimulationEnv:
     stop_condition: Any = None
     return_compact: bool = True
     card_overflow_map: Dict[str, list] = dc_field(default_factory=dict)  # ← P63
+    # P61（Ph6，ISSUE-011）：Banner 构造定义——from_config_store 填充 List[Banner]
+    # （与 pools 同对象）。_run_single 每次从它（或 pools）深拷贝重建，隔离 Banner
+    # 运行时状态跨模拟泄漏（ISSUE-312）。带默认值保证跨进程 pickle 兼容。
+    banner_defs: list = dc_field(default_factory=list)
 
 
 def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None, rarity_rank=None):
@@ -134,31 +138,35 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
         if rarity_rank is None:
             rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
 
-        # 构建 PoolPitySpec——pool_specs 键全限定 {pool.id}.main（单池包装口径，ISSUE-021/AUDIT-BREAK-3）
+        # P61（Ph6 / ISSUE-332）：遍历对象重写——pools 承载 List[Banner]，
+        # for b in pools: for pool_key, p in b.pools.items(): 双重展开。
+        # pool_specs 键全限定 {banner_id}.{pool_key}（多池展开自然承接 {pid}.main 键，
+        # 与 PityDef.pools 全限定 fnmatch 同口径，ISSUE-005/010/011）。
         pool_specs = {}
-        for pool in pools:
-            qualified_key = f"{pool.id}.main"
-            spec_pity_names = []
-            for pdef in pity_defs_list:
-                pools_ptn = pdef.pools
-                if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
-                    spec_pity_names.append(pdef.name)
+        for b in pools:
+            for pool_key, p in b.pools.items():
+                qualified_key = f"{b.id}.{pool_key}"
+                spec_pity_names = []
+                for pdef in pity_defs_list:
+                    pools_ptn = pdef.pools
+                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
+                        spec_pity_names.append(pdef.name)
 
-            featured = (pool_featured_map.get(qualified_key) or pool_featured_map.get(pool.id, set())
-                        if pool_featured_map else set())
-            ssr = (pool_ssr_map.get(qualified_key) or pool_ssr_map.get(pool.id, set())
-                   if pool_ssr_map else set())
-            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(pool)
-            pool_specs[qualified_key] = PoolPitySpec(
-                pity_names=spec_pity_names,
-                featured_ids=featured,
-                ssr_ids=ssr,
-                scope_cards=scope_cards,
-                featured_cards=featured_cards,
-                scope_slots=scope_slots,
-                featured_slots=featured_slots,
-                card_to_slot=card_to_slot,
-            )
+                featured = (pool_featured_map.get(qualified_key) or pool_featured_map.get(pool_key, set())
+                            if pool_featured_map else set())
+                ssr = (pool_ssr_map.get(qualified_key) or pool_ssr_map.get(pool_key, set())
+                       if pool_ssr_map else set())
+                scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(p)
+                pool_specs[qualified_key] = PoolPitySpec(
+                    pity_names=spec_pity_names,
+                    featured_ids=featured,
+                    ssr_ids=ssr,
+                    scope_cards=scope_cards,
+                    featured_cards=featured_cards,
+                    scope_slots=scope_slots,
+                    featured_slots=featured_slots,
+                    card_to_slot=card_to_slot,
+                )
 
         return PityEngine(pool_specs, pity_defs_list, state=state, rarity_rank=rarity_rank)
 
@@ -168,6 +176,26 @@ _wk_env: Optional[SimulationEnv] = None
 _wk_target_set = None
 _wk_extractor = None
 _wk_return_compact = True
+
+
+def _build_target_set(card_defs, target_specs):
+    """构建 TargetCardSet（单/多进程共用）。
+
+    P61（Ph6 / ISSUE-315 / BLOCK-1 修复）：TargetCard.pool_ids 一律取 banner 级段——
+    card_defs.pools 是全限定键 {banner_id}.{pool_id}（无段则原样保留），与 4 策略
+    _pool_needs_target 的 banner.id 匹配口径恒同。此前主进程路径与 _wk_init 各自内联
+    构建导致口径漂移（单进程 vs 多进程策略 miss），统一收敛到此公共函数。
+    """
+    from gacha_simulator.core import TargetCard, TargetCardSet
+    if not target_specs:
+        return TargetCardSet([])
+    card_def_map = {c['card_id']: c for c in card_defs} if card_defs else {}
+    targets = []
+    for card_id, qty in target_specs.items():
+        raw_pools = card_def_map.get(card_id, {}).get('pools', [])
+        pools = [k.split('.')[0] if '.' in k else k for k in raw_pools]
+        targets.append(TargetCard(card_id=card_id, pool_ids=pools, quantity_needed=qty))
+    return TargetCardSet(targets)
 
 
 def _wk_init(env: SimulationEnv, target_specs: Dict[str, int] = None):
@@ -183,17 +211,9 @@ def _wk_init(env: SimulationEnv, target_specs: Dict[str, int] = None):
     # failed: 页面文件太小)。懒加载在 _run_single 首次调用时触发，
     # 各 worker 错峰加载，内存峰值更低。
 
-    if target_specs:
-        from gacha_simulator.core import TargetCard, TargetCardSet
-        card_def_map = {c['card_id']: c for c in env.card_defs} if env.card_defs else {}
-        targets = []
-        for card_id, qty in target_specs.items():
-            pools = card_def_map.get(card_id, {}).get('pools', [])
-            targets.append(TargetCard(card_id=card_id, pool_ids=pools, quantity_needed=qty))
-        _wk_target_set = TargetCardSet(targets)
-    else:
-        from gacha_simulator.core import TargetCardSet
-        _wk_target_set = TargetCardSet([])
+    # P61（Ph6 / ISSUE-315）：TargetCard.pool_ids 一律为 banner 级键，与
+    # run_batch_parallel 主进程共用 _build_target_set，避免口径漂移（BLOCK-1）
+    _wk_target_set = _build_target_set(env.card_defs, target_specs)
 
     # 预构建 WorkerLocalExtractor（每个 worker 一份，并行提取）
     from gacha_simulator.core.streaming import WorkerLocalExtractor
@@ -231,8 +251,14 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
 
     # P61 Ph0：装配层创建共享 Notifier 实例，与模拟循环 emit 同一实例（§3.5「Notifier 装配位置」）
     notifier = Notifier()
+    # P61（Ph6 / ISSUE-312，阻塞）：Banner 运行时状态跨模拟隔离——env.pools 承载
+    # List[Banner]，直接传入则 draw/_check_transitions 修改的 _pool_draws/_exhausted/
+    # _active_pool_id 等泄漏到下次模拟（固定种子不可复现）。每次构造 GachaService 前
+    # 深拷贝（或从 banner_defs 重建），Pool 纯数据可安全 deepcopy。
+    import copy
+    banners = copy.deepcopy(env.banner_defs or env.pools)
     service = GachaService(
-        env.pools, strategy, stop_cond, target_set,
+        banners, strategy, stop_cond, target_set,
         schedule_manager=env.schedule_mgr,
         pity_engine=env.pity_engine,
         resource_gain=env.resource_gain,
@@ -299,17 +325,7 @@ def run_batch_parallel(
         env.strategy_params = strategy_params
 
     # 构建 TargetCardSet（单/多进程共用）
-    if target_specs:
-        from gacha_simulator.core import TargetCard, TargetCardSet
-        card_def_map = {c['card_id']: c for c in env.card_defs} if env.card_defs else {}
-        targets = []
-        for card_id, qty in target_specs.items():
-            pools = card_def_map.get(card_id, {}).get('pools', [])
-            targets.append(TargetCard(card_id=card_id, pool_ids=pools, quantity_needed=qty))
-        target_set = TargetCardSet(targets)
-    else:
-        from gacha_simulator.core import TargetCardSet
-        target_set = TargetCardSet([])
+    target_set = _build_target_set(env.card_defs, target_specs)
 
     if max_workers <= 1:
         # 单进程路径：直接调用 _run_single，同时本地提取
@@ -490,73 +506,99 @@ class SimulationEnvBuilder:
         from gacha_simulator.core.schedule import PoolScheduleManager, PoolSchedule
 
         DAY = 86400
-        pool_entries = config_store.pools
+        banner_entries = config_store.banner.banners
         schedules = []
-        pools = []
+        banners = []
         pool_featured_map = {}
         pool_ssr_map = {}
 
-        for pe in pool_entries:
-            pid = pe.pool_id
-            start_day = pe.start_day or 0
-            end_day = (pe.end_day if pe.end_day is not None and pe.end_day > start_day
-                       else (start_day + 21))
-            if pe.end_day is None:
-                logger.warning("Pool '%s' end_day is None, defaulting to start_day+21=%d",
-                               pid, start_day + 21)
+        # P61（Ph6）：from_config_store 改从 store.banner 解析（ISSUE-001/011）。
+        # 每个 BannerEntry → 运行时 Banner（Pool.id 为 pools 字典键 'main'/'free_10pull'）；
+        # 全限定键 {banner_id}.{pool_id} 供保底绑定/统计/卡池回填消费（ISSUE-010/011）。
+        for be in banner_entries:
+            inner_pools = {}
+            for bp in be.pools:
+                rewards = []
+                # P61（Ph6 / ISSUE-006）：featured_ids 由 rewards 的 featured=True 标志聚合
+                featured_ids = {r['card_id'] for r in bp.rewards if r.get('featured')}
+                ssr_ids = set()
+                for r in bp.rewards:
+                    cid = r.get('card_id', '')
+                    # P61（Ph6 / ISSUE-007）：Reward.extra_info['rarity'] 小写回填——
+                    # match='rarity' 的 _check_transitions 唯一数据源（漏注入则 KeyError/恒空）
+                    rwd = Reward(
+                        id=cid, name=cid,
+                        resources_gained=dict(r.get('resources_gained', {}) or {}),
+                        extra_info={'rarity': str(r.get('rarity', 'r')).lower(),
+                                    'featured': r.get('featured', False)},
+                    )
+                    rewards.append((rwd, r.get('probability', 0) / 100.0))
+                    if str(r.get('rarity', '')).upper() == 'SSR' and cid != '_no_card':
+                        ssr_ids.add(cid)
 
-            rewards = []
-            # P60：featured_ids 直接从 PoolEntry.featured_card_ids 读取——覆盖全部 featured 卡
-            featured_ids = set(pe.featured_card_ids)
-            ssr_ids = set()
-            for de in getattr(pe, 'distribution', []):
-                rg = dict(getattr(de, 'resources_gained', {}) or {})
-                rwd = Reward(id=de.card_id, name=getattr(de, 'card_id', ''),
-                             resources_gained=rg,
-                             extra_info={'rarity': de.rarity.lower(),
-                                        'featured': de.featured})
-                rewards.append((rwd, de.probability / 100.0))
-                if de.rarity.upper() == 'SSR' and de.card_id != '_no_card':
-                    ssr_ids.add(de.card_id)
+                if not featured_ids and ssr_ids:
+                    featured_ids = set(ssr_ids)
 
-            if not ssr_ids:
-                logger.warning(
-                    "Pool '%s' has no SSR rewards — "
-                    "SSR pity reset will never trigger for this pool",
-                    pid,
+                qualified_key = f"{be.id}.{bp.id}"
+                pool_featured_map[qualified_key] = featured_ids
+                pool_ssr_map[qualified_key] = ssr_ids
+
+                cost_str = bp.cost or 'draw_resource:160'
+                parsed_cost = parse_cost_string(cost_str) if cost_str else [{'draw_resource': 160}]
+                pool = Pool(
+                    id=bp.id,
+                    name=bp.id,
+                    cost=parsed_cost,
+                    rewards=rewards,
+                    excludes_all_pity=bp.excludes_all_pity,
+                    max_draws=bp.max_draws,
+                    # P61（Ph6 / ISSUE-313）：exchange_card_id 从 BannerPoolEntry 透传——
+                    # smart/pity_reserve/pool_quota/stop_on_target 4 策略以
+                    # pool.is_exchange and pool.exchange_card_id == t.card_id 定位兑换池，
+                    # 漏透传则 banner 模式兑换池匹配静默失效
+                    exchange_card_id=bp.exchange_card_id,
+                    batch_size=bp.batch_size,
+                    epitomizable_cards=list(bp.epitomizable_cards),
                 )
-                # 不注入假 ID——让 ssr_ids 保持空集合
-                # featured_ids 也保持空，无 featured 可回退时不应假装有
-            if not featured_ids and ssr_ids:
-                featured_ids = set(ssr_ids)
+                inner_pools[bp.id] = pool
 
-            pool_featured_map[pid] = featured_ids
-            pool_ssr_map[pid] = ssr_ids
-
-            cost_str = getattr(pe, 'cost', 'draw_resource:160')
-            parsed_cost = parse_cost_string(cost_str) if cost_str else [{'draw_resource': 160}]
-            exchange_cid = getattr(pe, 'exchange_card_id', None)
-            # P61（Ph1）：Pool 已删除 available_from/available_until/is_exchange/pool_type——
-            # 时间窗口语义由 PoolSchedule/end_time 部分保留（ISSUE-102 已声明中间态），
-            # is_exchange/pool_type 改推导属性（§3.13.1）。
-            pool = Pool(
-                id=pid,
-                name=getattr(pe, 'name', pid),
-                cost=parsed_cost,
-                rewards=rewards,
-                exchange_card_id=exchange_cid,
-                batch_size=getattr(pe, 'batch_size', 1),
-                epitomizable_cards=getattr(pe, 'epitomizable_cards', []),
+            # P61（Ph6）：Banner 级时间窗口直接透传（TOML 解析边界已 *DAY 为秒）；
+            # lifecycle 规则经 TransitionRule 承载；max_draws 透传
+            from gacha_simulator.core.banner import Banner, TransitionRule
+            banner = Banner(
+                id=be.id,
+                name=be.name,
+                pools=inner_pools,
+                lifecycle=[
+                    TransitionRule(
+                        condition=lc.condition,
+                        pool=lc.pool,
+                        at_value=lc.at,
+                        match=lc.match,
+                        action=lc.action,
+                        target=lc.target,
+                    )
+                    for lc in be.lifecycle
+                ],
+                max_draws=be.max_draws,
+                available_from=be.available_from,
+                available_until=be.available_until,
             )
-            pools.append(pool)
+            banners.append(banner)
             schedules.append(PoolSchedule(
-                pool_id=pid,
-                available_from=start_day * DAY,
-                available_until=end_day * DAY,
+                pool_id=be.id,
+                available_from=be.available_from,
+                available_until=be.available_until,
             ))
 
         schedule_mgr = PoolScheduleManager(schedules)
-        end_time = max(s.available_until for s in schedules) if schedules else 0
+        # P61（Ph6 / ISSUE-001）：永久 Banner（available_until=None）兜底 21 天，
+        # end_time = max(有效结束时间)——与现状 (start_day + 21) * DAY 秒等价
+        end_time = max(
+            (s.available_until if s.available_until is not None
+             else (s.available_from or 0) + 21 * DAY)
+            for s in schedules
+        ) if schedules else 0
 
         pity_cfg_dict = {'enabled': True, 'pities': [], 'counter_init': {}}
         pc = config_store.pity
@@ -598,7 +640,7 @@ class SimulationEnvBuilder:
 
         rarity_rank = {k.lower(): v for k, v in config_store.rarity_rank.items()}
         pity_engine = _build_pity_engine_from_gui(
-            pity_cfg_dict, pools, pool_featured_map, pool_ssr_map, {},
+            pity_cfg_dict, banners, pool_featured_map, pool_ssr_map, {},
             rarity_rank=rarity_rank)
 
         initial_resources = {}
@@ -644,13 +686,16 @@ class SimulationEnvBuilder:
                 'initial_count': getattr(cd, 'initial_count', 0),
             })
         card_index = {cd['card_id']: i for i, cd in enumerate(card_defs)}
-        for pe in pool_entries:
-            for de in getattr(pe, 'distribution', []):
-                cid = de.card_id
-                if cid in card_index and cid != '_no_card':
-                    idx = card_index[cid]
-                    if pe.pool_id not in card_defs[idx]['pools']:
-                        card_defs[idx]['pools'].append(pe.pool_id)
+        # P61（Ph6）：pools 从 banner 池实时推导（全限定键 {banner_id}.{pool_id} 入 card_defs.pools）
+        for be in banner_entries:
+            for bp in be.pools:
+                qkey = f"{be.id}.{bp.id}"
+                for r in bp.rewards:
+                    cid = r.get('card_id', '')
+                    if cid in card_index and cid != '_no_card':
+                        idx = card_index[cid]
+                        if qkey not in card_defs[idx]['pools']:
+                            card_defs[idx]['pools'].append(qkey)
 
         target_ids = set()
         for tc in getattr(config_store, 'target_cards', []):
@@ -664,7 +709,9 @@ class SimulationEnvBuilder:
             for pid, ssr_set in pool_ssr_map.items():
                 ssr_ids.update(ssr_set)
 
-        all_drawable_ids = [r.id for p in pools for r, _ in p.rewards]
+        # P61（Ph6 / AUDIT-BREAK-5 ①）：all_drawable_ids 遍历 banner 池展开
+        all_drawable_ids = [r.id for b in banners for p in b.pools.values()
+                            for r, _ in p.rewards]
         pool_end_times = {s.pool_id: s.available_until for s in schedules}
 
         from gacha_simulator.core.gdr import GDRContext
@@ -699,7 +746,7 @@ class SimulationEnvBuilder:
         strategy_params = dict(getattr(config_store, 'strategy_params', {}) or {})
 
         return SimulationEnv(
-            pools=pools,
+            pools=banners,
             schedule_mgr=schedule_mgr,
             end_time=end_time,
             pity_engine=pity_engine,
@@ -715,6 +762,8 @@ class SimulationEnvBuilder:
             strategy_key=strategy_key,
             strategy_params=strategy_params,
             card_overflow_map=dict(getattr(config_store, 'card_overflow_map', {})),
+            # P61（Ph6 / ISSUE-011）：Banner 构造定义（与 pools 同对象，_run_single 深拷贝用）
+            banner_defs=banners,
         )
 
     @staticmethod

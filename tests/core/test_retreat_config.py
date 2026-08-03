@@ -1,17 +1,24 @@
 import pytest
 from gacha_simulator.core.config_store import (
-    ConfigStore, PoolEntry, PityConfig, PityDef, GainRule, DayOverride,
-    TargetCardEntry, CardDefEntry,
+    ConfigStore, PityConfig, PityDef, GainRule, DayOverride,
+    TargetCardEntry, CardDefEntry, BannerEntry, BannerPoolEntry, DAY,
 )
 from gacha_simulator.core.retreat_config import RetreatConfigBuilder
 
 
 def _make_store_with_3_pools():
     store = ConfigStore()
-    store.pools = [
-        PoolEntry(pool_id='pool_1', name='池1', start_day=0, end_day=21),
-        PoolEntry(pool_id='pool_2', name='池2', start_day=21, end_day=42),
-        PoolEntry(pool_id='pool_3', name='池3', start_day=42, end_day=63),
+    # P61（§3.9）：写入侧为 store.banner.banners，每个旧池 → 一个 Banner（内层 pool id="main"）
+    store.banner.banners = [
+        BannerEntry(id='pool_1', name='池1',
+                    available_from=0 * DAY, available_until=21 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='pool_2', name='池2',
+                    available_from=21 * DAY, available_until=42 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='pool_3', name='池3',
+                    available_from=42 * DAY, available_until=63 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
     ]
     store.pity = PityConfig(enabled=True, pities=[
         PityDef(name='soft_pity', btype='soft_interval', scope='ssr',
@@ -48,9 +55,10 @@ def test_truncate_removes_earlier_pools():
         pity_counter_init={'soft_pity': 30},
     )
     pool_ids = [p.pool_id for p in truncated.pools]
-    assert 'pool_1' not in pool_ids
-    assert 'pool_2' not in pool_ids
-    assert 'pool_3' in pool_ids
+    # P61：展平视图 pool_id 为全限定键 {banner_id}.main
+    assert 'pool_1.main' not in pool_ids
+    assert 'pool_2.main' not in pool_ids
+    assert 'pool_3.main' in pool_ids
     assert len(truncated.pools) == 1
 
 

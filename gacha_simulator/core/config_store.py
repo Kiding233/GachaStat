@@ -4,6 +4,10 @@ from typing import Dict, List, Optional, Any
 
 from .overflow import OverflowBand
 
+# P61：秒/天换算——Banner 时间窗口（秒，§3.13.4）与展平视图 start_day/end_day（天）换算。
+# 每个模块自带一份（banner.py/resource_gain.py 等同口径），config_store 展平视图消费。
+DAY = 86400
+
 
 class ConfigError(ValueError):
     """配置解析或校验错误。"""
@@ -18,24 +22,94 @@ class PoolDistEntry:
     resources_gained: Dict[str, float] = field(default_factory=dict)
 
 
+def derive_pool_type_from_distribution(dist) -> str:
+    """由展平视图 distribution 推导旧 pool_type 三值（§3.13.1，ISSUE-002）。
+
+    与 core/pool.py 的 output/random 推导语义等价，但消费扁平 PoolEntry.distribution
+    （PoolDistEntry，概率百分制）：
+      output = 'resource' if 全部 card_id == '_no_card' else 'card'（空列表同样视作 resource）
+      random = bool(dist) and (len(dist) > 1 or dist[0].probability < 100.0)
+    output='resource' → '资源'；output='card' and not random → '兑换'；其余 → '角色'。
+    """
+    output = 'resource' if all(d.card_id == '_no_card' for d in dist) else 'card'
+    random = bool(dist) and (len(dist) > 1 or dist[0].probability < 100.0)
+    if output == 'resource':
+        return '资源'
+    if output == 'card' and not random:
+        return '兑换'
+    return '角色'
+
+
 @dataclass
 class PoolEntry:
     enabled: bool = True
     pool_id: str = ''
     name: str = ''
-    pool_type: str = ''
     start_day: int = 0
     end_day: int = 21
     cost: str = 'draw_resource:160'
     distribution_template: str = ''
     bindings: Dict[str, str] = field(default_factory=dict)
     target_specs: List[tuple] = field(default_factory=list)
-    rerun_of: Optional[str] = None
     exchange_card_id: Optional[str] = None
     distribution: List[PoolDistEntry] = field(default_factory=list)
     batch_size: int = 1
     featured_card_ids: List[str] = field(default_factory=list)
     epitomizable_cards: List[str] = field(default_factory=list)      # ← P56
+
+
+# ── P61（Ph3）：Banner 数据模型 ─────────────────────────────────────
+# store.banner 是运行时唯一数据源（D3/D4 裁决）。pool_type/rerun_of 已退役
+# （§3.13.1 类型→推导属性 output/random、§3.13.2 复刻→卡出现时间线），
+# BannerPoolEntry 不建模这两个字段。
+
+@dataclass
+class BannerPoolEntry:
+    """Banner 内部池——从 TOML [[banner.pool]] 解析"""
+    id: str                              # "main" | "free_10pull" | "step2"
+    cost: str                            # TOML 字符串，如 "orundum:600"（必填）
+    batch_size: int = 1                  # 每次抽取连数
+    excludes_all_pity: bool = False
+    max_draws: Optional[int] = None     # None=无上限；TOML/UI 层「0=无限制」在解析边界归一化为 None
+    exchange_card_id: Optional[str] = None                  # 兑换快捷方式（同旧 [[pools]]，写入后生成 100% 单卡分布）
+    epitomizable_cards: List[str] = field(default_factory=list)  # P56 定轨候选卡
+    rewards: List[dict] = field(default_factory=list)       # [[banner.pool.reward]] 解析——元素统一为 dict
+                                                            # （card_id/probability/rarity/featured/resources_gained）；
+                                                            # 一次性迁移后 rewards 统一 dict 表示（ISSUE-304）
+    # output/random 不配置——从 rewards 推导（见 §3.13.1）
+
+
+@dataclass
+class LifecycleRuleEntry:
+    """声明式转换规则——从 TOML [[banner.lifecycle]] 解析"""
+    condition: str                       # "pool_draws" | "banner_draws"
+                                         # | "card_obtained" | "pool_exhausted"
+                                         # | "time_window"
+    pool: Optional[str] = None           # 条件关联的 pool id（card_obtained 时为匹配目标）
+    at: float = 0.0                      # 阈值（pool_draws/banner_draws 为整数抽数；time_window 为浮点【秒】——
+                                         # TOML/UI 层以「模拟内相对天数」书写、解析边界 *DAY 换算为秒）
+    match: str = "card_id"               # card_obtained 的匹配方式："card_id" | "rarity"
+    action: str = "switch_to"            # "switch_to" | "exhaust_banner"
+    target: Optional[str] = None         # 切换目标 pool id（action=switch_to 时必填）
+
+
+@dataclass
+class BannerEntry:
+    """单个 Banner 定义——从 TOML [[banner]] 解析"""
+    id: str
+    name: str
+    enabled: bool = True            # banner 模式 enabled 语义：[[banner]] 的 pool 默认 enabled=True
+    max_draws: Optional[int] = None     # None=无上限；TOML/UI 层「0=无限制」在解析/保存边界归一化为 None
+    available_from: Optional[float] = None
+    available_until: Optional[float] = None
+    pools: List[BannerPoolEntry] = field(default_factory=list)
+    lifecycle: List[LifecycleRuleEntry] = field(default_factory=list)
+
+
+@dataclass
+class BannerConfig:
+    """Banner 配置容器"""
+    banners: List[BannerEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -128,7 +202,7 @@ class CardWeightEntry:
 class ConfigStore:
     card_defs: List[CardDefEntry] = field(default_factory=list)
     resource_defs: Dict[str, str] = field(default_factory=dict)
-    pools: List[PoolEntry] = field(default_factory=list)
+    banner: BannerConfig = field(default_factory=BannerConfig)
     pity: PityConfig = field(default_factory=PityConfig)
     gain_rules: List[GainRule] = field(default_factory=list)
     day_overrides: List[DayOverride] = field(default_factory=list)
@@ -159,7 +233,7 @@ class ConfigStore:
     def clear(self):
         self.card_defs.clear()
         self.resource_defs.clear()
-        self.pools.clear()
+        self.banner.banners.clear()
         self.pity = PityConfig()
         self.gain_rules.clear()
         self.day_overrides.clear()
@@ -181,6 +255,57 @@ class ConfigStore:
         self.rarity_defaults.clear()                                  # ← P63
         self.card_overflow_map.clear()                                # ← P63
         self._migrated_from_legacy = False                            # ← P55
+
+    # ── P61（Ph3/D3 裁决）：store.pools 只读展平视图 ────────────────
+    # store.banner 是运行时唯一数据源；pools 为只读 @property，遍历
+    # banner.banners[*].pools[*] 展平为 PoolEntry 列表，供旧读侧消费方
+    # （analysis_panel/gacha_panel/gdr 等）零改动读取。无 setter——
+    # 写侧统一走 store.banner（config_toml/config_panel/retreat_config）。
+
+    @property
+    def pools(self) -> List[PoolEntry]:
+        """只读展平视图：遍历 banner.banners[*].pools[*] → PoolEntry 列表。
+
+        - pool_id = {banner_id}.{pool_id}（全限定键，与 card_defs.pools 同键空间，ISSUE-310）
+        - name = banner.name（Banner 级 name 唯一，ISSUE-324）
+        - start_day/end_day 由 available_from/until（秒）// DAY 换算（ISSUE-333）；
+          end_day=None 透传（永久 Banner，ISSUE-002）
+        - enabled/distribution/featured_card_ids/epitomizable_cards/exchange_card_id 逐项透传（ISSUE-314）
+        - bindings 不透传（BannerPoolEntry 无该字段，ISSUE-334）
+        """
+        result: List[PoolEntry] = []
+        for b in self.banner.banners:
+            for bp in b.pools:
+                result.append(self._flatten_banner_pool(b, bp))
+        return result
+
+    def _flatten_banner_pool(self, b: BannerEntry, bp: BannerPoolEntry) -> PoolEntry:
+        """单个 banner pool → 展平 PoolEntry。"""
+        return PoolEntry(
+            enabled=b.enabled,
+            pool_id=f"{b.id}.{bp.id}",
+            name=b.name,
+            start_day=int(b.available_from // DAY) if b.available_from is not None else 0,
+            end_day=int(b.available_until // DAY) if b.available_until is not None else None,
+            cost=bp.cost,
+            distribution_template='',
+            bindings={},
+            target_specs=[],
+            exchange_card_id=bp.exchange_card_id,
+            distribution=[
+                PoolDistEntry(
+                    card_id=r['card_id'],
+                    probability=r['probability'],
+                    rarity=r.get('rarity', 'r'),
+                    featured=r.get('featured', False),
+                    resources_gained=dict(r.get('resources_gained', {})),
+                )
+                for r in bp.rewards
+            ],
+            batch_size=bp.batch_size,
+            featured_card_ids=[r['card_id'] for r in bp.rewards if r.get('featured')],
+            epitomizable_cards=list(bp.epitomizable_cards),
+        )
 
     # ── GDR 权重便捷属性 ──────────────────────────────────────────
     # 从 card_weights 提取，供 make_gdr_calculator() 使用。

@@ -24,7 +24,7 @@ from ..core.result_store import (
     ResultStore, StoredDataset, ComparabilityFingerprint, compute_config_hash,
 )
 from .data_manager_panel import DataManagerPanel
-from ..core.config_store import ConfigStore
+from ..core.config_store import ConfigStore, derive_pool_type_from_distribution
 from ..core.config_toml import load_toml, save_toml
 from ..paths import get_config_dir, get_resource
 
@@ -383,10 +383,12 @@ class MainWindow(QMainWindow):
         self.worst_impact_panel._load_last_pool_config()
         self.retreat_panel.set_simulation_results(aggregate_data, target_specs, no_draw_resource=no_draw_resource, no_draw_resources=no_draw_resources, no_draw_pool_resources=no_draw_pool_resources)
 
-        pool_types = {}
-        for pe in self._store.pools:
-            pool_type = pe.pool_type or (pe.bindings.get('type', '角色') if pe.bindings else '角色')
-            pool_types[pe.pool_id] = pool_type
+        # P61（§3.13.1 / ISSUE-002）：pool_type 字段已退役，由 distribution 推导三值，
+        # 键保持全限定 {banner_id}.{pool_id}（process_trace 按此键匹配，GDR 消费端同口径）
+        pool_types = {
+            pe.pool_id: derive_pool_type_from_distribution(pe.distribution)
+            for pe in self._store.pools
+        }
 
         self.process_analysis_panel.update_results(
             aggregate_data,

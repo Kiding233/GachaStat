@@ -399,7 +399,12 @@ class WorstImpactAnalyzer:
 
         self._standard_ssr_ids = self._ssr_ids - self._featured_ids
 
-        pool_duration_days = pe.end_day - pe.start_day
+        # P61（ISSUE-333）：end_day=None（永久 Banner）时展平视图回填 None——
+        # 减法 TypeError；按永久池语义兜底 21 天
+        if pe.end_day is None:
+            pool_duration_days = 21
+        else:
+            pool_duration_days = pe.end_day - pe.start_day
         if pool_duration_days <= 0:
             pool_duration_days = 21
 

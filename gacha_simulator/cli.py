@@ -72,9 +72,12 @@ def main():
         store.pity.enabled = False
 
     # 为 output_data 构造 config 元数据 dict（替代旧 JSON config）
+    # P61（ISSUE-325）：num_pools 为跨 Banner 内层池总数（展平视图口径），
+    # 补 banner_count 反映 Banner 层数量，CLI 输出语义不静默改变。
     config_meta = {
         'path': str(args.config) if args.config else default_toml,
         'num_pools': len(store.pools),
+        'banner_count': len(store.banner.banners),
         'num_cards': len(store.card_defs),
         'pity_enabled': store.pity.enabled,
         'num_targets': len(store.target_cards),
@@ -147,7 +150,10 @@ def main():
 
     actual_target_ids = [t.card_id for t in store.target_cards]
     if not actual_target_ids and store.pools:
-        actual_target_ids = [f"{store.pools[0].pool_id}_ssr"]
+        # P61（ISSUE-003）：展平视图 pool_id 为全限定键 {banner_id}.main——
+        # 直接拼接得 {banner_id}.main_ssr 与真实卡 id 失配、ssr 计数恒 0。
+        # 取 banner 段拼 ssr 目标卡 id。
+        actual_target_ids = [f"{store.pools[0].pool_id.split('.')[0]}_ssr"]
     total_targets = len(actual_target_ids)
 
     total_draws = []

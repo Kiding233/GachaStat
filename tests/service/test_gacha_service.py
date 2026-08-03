@@ -129,25 +129,28 @@ def test_card_defs_none_handled():
 def test_env_builder_from_config_store_smoke():
     """SimulationEnvBuilder.from_config_store() 冒烟测试——模拟 GUI→引擎 实际路径"""
     from gacha_simulator.core.config_store import (
-        ConfigStore, PoolEntry, PoolDistEntry, CardDefEntry,
+        ConfigStore, CardDefEntry, BannerEntry, BannerPoolEntry, DAY,
         PityConfig, GainRule, TargetCardEntry,
     )
     from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
 
     store = ConfigStore()
-    store.pools = [
-        PoolEntry(
+    # P61（§3.9）：写入侧为 store.banner.banners
+    store.banner.banners = [
+        BannerEntry(
             enabled=True,
-            pool_id='pool_draw',
+            id='pool_draw',
             name='测试抽卡池',
-            pool_type='角色',
-            start_day=0,
-            end_day=21,
-            cost='draw_resource:160',
-            distribution=[
-                PoolDistEntry(card_id='card_A', probability=50.0, rarity='SSR', featured=True),
-                PoolDistEntry(card_id='_no_card', probability=50.0, rarity='R'),
-            ],
+            available_from=0 * DAY,
+            available_until=21 * DAY,
+            pools=[BannerPoolEntry(
+                id='main',
+                cost='draw_resource:160',
+                rewards=[
+                    {'card_id': 'card_A', 'probability': 50.0, 'rarity': 'SSR', 'featured': True},
+                    {'card_id': '_no_card', 'probability': 50.0, 'rarity': 'R'},
+                ],
+            )],
         ),
     ]
     store.card_defs = [
@@ -161,7 +164,9 @@ def test_env_builder_from_config_store_smoke():
     env = SimulationEnvBuilder.from_config_store(store)
     assert env is not None
     assert len(env.pools) == 1
-    assert env.pools[0].id == 'pool_draw'
+    # P61（ISSUE-102 中间态）：from_config_store 暂读扁平 store.pools，Pool.id 为全限定键
+    # {banner_id}.{pool_id}；Ph6 改为读 store.banner 后恢复裸 id
+    assert env.pools[0].id == 'pool_draw.main'
     # P61（Ph1a）：Pool.pool_type 已删除——推导属性 is_exchange（output='card' and not random）
     assert env.pools[0].is_exchange is False
     assert env.end_time > 0

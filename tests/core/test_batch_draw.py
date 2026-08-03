@@ -20,8 +20,9 @@ from gacha_simulator.core.state import GachaState
 
 def test_pool_entry_batch_size_default():
     """PoolEntry.batch_size 默认值为 1。"""
+    # P61（§3.13.1）：pool_type 已退役（推导化），扁平视图不再接收该参数
     pe = PoolEntry(
-        pool_id='test', name='test', pool_type='角色',
+        pool_id='test', name='test',
         start_day=0, end_day=21, cost='draw_resource:160',
         distribution=[], distribution_template='',
     )

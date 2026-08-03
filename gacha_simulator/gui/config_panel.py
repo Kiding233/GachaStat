@@ -13,8 +13,9 @@ from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QColor
 
 from ..core.config_store import (
-    CardDefEntry, PoolEntry, PoolDistEntry,
+    CardDefEntry,
     PityDef, PityConfig, GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
+    BannerEntry, BannerPoolEntry, DAY, derive_pool_type_from_distribution,
 )
 from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
@@ -3000,7 +3001,8 @@ class ConfigPanel(QWidget):
         # 检查是否在模拟时间线内
         pools_list = getattr(self._store, 'pools', [])
         if pools_list:
-            max_day = max((p.start_day + (p.end_day - p.start_day)) for p in pools_list)
+            max_day = max((p.start_day + (p.end_day - p.start_day if p.end_day is not None else 0))
+                          for p in pools_list)
         else:
             max_day = 365
 
@@ -3146,7 +3148,8 @@ class ConfigPanel(QWidget):
             pools_list = getattr(self._store, 'pools', [])
             if pools_list:
                 total_days = max(
-                    (p.start_day + (p.end_day - p.start_day)) for p in pools_list
+                    (p.start_day + (p.end_day - p.start_day if p.end_day is not None else 0))
+                    for p in pools_list
                 )
             else:
                 total_days = 365
@@ -3238,9 +3241,9 @@ class ConfigPanel(QWidget):
                 'enabled': p.enabled,
                 'id': p.pool_id,
                 'name': p.name,
-                'type': p.pool_type or (p.bindings.get('type', '角色') if p.bindings else '角色'),
+                'type': derive_pool_type_from_distribution(p.distribution),
                 'start_day': p.start_day,
-                'duration': p.end_day - p.start_day,
+                'duration': (p.end_day - p.start_day) if p.end_day is not None else 0,
                 'cost': p.cost,
                 'note': '',
                 'batch_size': getattr(p, 'batch_size', 1),
@@ -3364,38 +3367,39 @@ class ConfigPanel(QWidget):
         store.clear()
 
         pools_data = config.get('pools', [])
+        banners = []
         for p in pools_data:
-            from ..core.config_store import PoolEntry, PoolDistEntry
-            pid = p.get('id', '')
+            # P61（§3.12 / AUDIT-BREAK-1 修复）：get_config 输出的 pools id 是全限定展平键，
+            # 拆出 banner 段写入 BannerEntry，避免 round-trip 二次限定。
+            pid_raw = p.get('id', '')
+            pid = pid_raw.rsplit('.', 1)[0] if '.' in pid_raw else pid_raw
             dist_data = p.get('distribution')
-            distribution = []
+            rewards = []
             if dist_data:
                 for d in dist_data:
-                    distribution.append(PoolDistEntry(
-                        card_id=d.get('card_id', ''),
-                        probability=d.get('probability', 0),
-                        rarity=d.get('rarity', 'R'),
-                        featured=d.get('featured', False),
-                        resources_gained=d.get('resources_gained', {}),
-                    ))
-            pool_type = p.get('type', '角色')
-            bindings = {}
-            if pool_type:
-                bindings['type'] = pool_type
-            store.pools.append(PoolEntry(
+                    rewards.append({
+                        'card_id': d.get('card_id', ''),
+                        'probability': d.get('probability', 0),
+                        'rarity': d.get('rarity', 'R'),
+                        'featured': d.get('featured', False),
+                        **({'resources_gained': d.get('resources_gained', {})}
+                           if d.get('resources_gained') else {}),
+                    })
+            banners.append(BannerEntry(
                 enabled=p.get('enabled', True),
-                pool_id=pid,
+                id=pid,
                 name=p.get('name', ''),
-                pool_type=pool_type,
-                start_day=p.get('start_day', 0),
-                end_day=p.get('start_day', 0) + p.get('duration', 21),
-                cost=p.get('cost', 'draw_resource:160'),
-                distribution_template="",
-                bindings=bindings,
-                distribution=distribution,
-                batch_size=p.get('batch_size', 1),
-                epitomizable_cards=p.get('epitomizable_cards', []),
+                available_from=p.get('start_day', 0) * DAY,
+                available_until=(p.get('start_day', 0) + p.get('duration', 21)) * DAY,
+                pools=[BannerPoolEntry(
+                    id='main',
+                    cost=p.get('cost', 'draw_resource:160'),
+                    batch_size=p.get('batch_size', 1),
+                    epitomizable_cards=p.get('epitomizable_cards', []),
+                    rewards=rewards,
+                )],
             ))
+        store.banner.banners = banners
 
         pity = config.get('pity', {})
         pities_data = pity.get('pities', [])
@@ -3876,14 +3880,20 @@ class ConfigPanel(QWidget):
         _old_epitomizable = {p.pool_id: getattr(p, 'epitomizable_cards', [])
                              for p in store.pools}
 
-        store.pools = []
+        # P61（§3.12 / AUDIT-BREAK-1）：写入侧迁移到 store.banner——每个 GUI 池行 → 一个
+        # BannerEntry（内层 pool id="main"）。pool_type 字段已退役（§3.13.1 推导化），
+        # 不再写入 bindings['type']；start_day/end_day 以 DAY 换算为 available_from/until（秒）。
+        banners = []
         for i in range(self.pool_table.rowCount()):
             cb = self.pool_table.cellWidget(i, 0)
             def _item(col, default=''):
                 it = self.pool_table.item(i, col)
                 return it.text() if it else default
-            pid = _item(1)
-            pool_type = _item(3, '角色')
+            pid_raw = _item(1)
+            # P61（§3.12 / AUDIT-BREAK-1 修复）：GUI 表格第 1 列是全限定展平键
+            # {banner_id}.{pool_id}，写 BannerEntry 必须拆出 banner 段，否则 round-trip
+            # 二次限定（pool_c1.main.main）。_pool_distributions 的 key 保持全限定口径。
+            pid = pid_raw.rsplit('.', 1)[0] if '.' in pid_raw else pid_raw
             cost_text = _item(6, 'draw_resource:160').strip()
             if ':' not in cost_text:
                 try:
@@ -3906,36 +3916,35 @@ class ConfigPanel(QWidget):
                 except ValueError:
                     batch_size = 1
 
-            dist_data = self._pool_distributions.get(pid)
-            distribution = []
+            dist_data = self._pool_distributions.get(pid_raw)
+            rewards = []
             if dist_data:
                 for d in dist_data:
-                    distribution.append(PoolDistEntry(
-                        card_id=d.get('card_id', ''),
-                        probability=d.get('probability', 0),
-                        rarity=d.get('rarity', 'R'),
-                        featured=d.get('featured', False),
-                        resources_gained=d.get('resources_gained', {}),
-                    ))
+                    rewards.append({
+                        'card_id': d.get('card_id', ''),
+                        'probability': d.get('probability', 0),
+                        'rarity': d.get('rarity', 'R'),
+                        'featured': d.get('featured', False),
+                        **({'resources_gained': d.get('resources_gained', {})}
+                           if d.get('resources_gained') else {}),
+                    })
 
-            bindings = {}
-            if pool_type:
-                bindings['type'] = pool_type
-
-            store.pools.append(PoolEntry(
-                enabled=cb.isChecked() if cb else True,
-                pool_id=pid,
+            banners.append(BannerEntry(
+                id=pid,
                 name=_item(2),
-                pool_type=pool_type,
-                start_day=start_day,
-                end_day=start_day + duration,
-                cost=cost_text,
-                distribution_template="",
-                bindings=bindings,
-                distribution=distribution,
-                batch_size=batch_size,
-                epitomizable_cards=_old_epitomizable.get(pid, []),
+                enabled=cb.isChecked() if cb else True,
+                available_from=start_day * DAY,
+                available_until=(start_day + duration) * DAY,
+                pools=[BannerPoolEntry(
+                    id='main',
+                    cost=cost_text,
+                    batch_size=batch_size,
+                    epitomizable_cards=_old_epitomizable.get(pid_raw, []),
+                    rewards=rewards,
+                )],
             ))
+
+        store.banner.banners = banners
 
         store.pity.enabled = self.pity_enabled.isChecked()
         pities = []
@@ -4056,14 +4065,15 @@ class ConfigPanel(QWidget):
                              for d in p.distribution]
                 self._pool_distributions[p.pool_id] = dist_list
 
-            pool_type = p.pool_type or (p.bindings.get('type', '角色') if p.bindings else '角色')
+            # P61（§3.13.1）：pool_type 已退役，类型列为推导显示（只读，Ph8 卡池管理 Tab 完整实现）
+            pool_type = derive_pool_type_from_distribution(p.distribution)
             pools_data.append({
                 'enabled': p.enabled,
                 'id': p.pool_id,
                 'name': p.name,
                 'type': pool_type,
                 'start_day': p.start_day,
-                'duration': p.end_day - p.start_day,
+                'duration': (p.end_day - p.start_day) if p.end_day is not None else 0,
                 'cost': p.cost,
                 'note': '',
                 'distribution': dist_list,

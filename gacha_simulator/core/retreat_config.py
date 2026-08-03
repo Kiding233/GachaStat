@@ -1,6 +1,12 @@
 import datetime as _dt
 from typing import Dict
-from .config_store import ConfigStore, PoolEntry, PityConfig, PityDef, GainRule, DayOverride, TargetCardEntry, CardDefEntry, PoolDistEntry
+from .config_store import (
+    ConfigStore, PityConfig, PityDef, GainRule, DayOverride,
+    TargetCardEntry, CardDefEntry, BannerEntry, BannerPoolEntry,
+)
+
+# P61：秒/天换算——截断后时间窗口以秒写入 store.banner（与 config_store/config_toml 同口径）
+DAY = 86400
 
 
 class RetreatConfigBuilder:
@@ -16,11 +22,22 @@ class RetreatConfigBuilder:
             if p.pool_id == from_pool_id:
                 from_pool = p
                 break
+        if from_pool is None and '.' not in from_pool_id:
+            # P61（ISSUE-101）兜底：展平视图 pool_id 为全限定键 {banner_id}.main，
+            # 兼容调用方传裸 banner id 的场景
+            for p in original_store.pools:
+                if p.pool_id.split('.')[0] == from_pool_id:
+                    from_pool = p
+                    break
 
         if from_pool is None:
             raise ValueError(f"Pool '{from_pool_id}' not found in config")
 
-        offset_day = from_pool.end_day if from_pool.end_day > 0 else (from_pool.start_day + 21)
+        # P61（ISSUE-333）：end_day=None（永久 Banner）时不能做 `end_day > 0` 比较——
+        # None 比较抛 TypeError，按永久池语义回退 start_day + 21
+        offset_day = (from_pool.end_day
+                      if from_pool.end_day is not None and from_pool.end_day > 0
+                      else (from_pool.start_day + 21))
 
         truncated = ConfigStore()
 
@@ -36,28 +53,39 @@ class RetreatConfigBuilder:
         truncated_start = original_start + _dt.timedelta(days=offset_day)
         truncated.sim_start_date = truncated_start.isoformat()
 
-        truncated.pools = []
+        # P61（Ph3/ISSUE-101）：store.pools 为只读展平视图（无 setter），
+        # 写侧迁移到 truncated.banner.banners——每个展平池重建为一个 BannerEntry
+        # （pool 进 [[banner.pool]]，id="main"，banner_id 取全限定键 {banner_id}.main 的段）。
+        truncated.banner.banners = []
         for p in original_store.pools:
             if p.start_day >= offset_day:
-                truncated.pools.append(PoolEntry(
-                    enabled=p.enabled,
-                    pool_id=p.pool_id,
-                    name=p.name,
-                    start_day=p.start_day - offset_day,
-                    end_day=p.end_day - offset_day,
+                banner_id = p.pool_id.split('.')[0] if '.' in p.pool_id else p.pool_id
+                bp = BannerPoolEntry(
+                    id='main',
                     cost=p.cost,
-                    distribution_template=p.distribution_template,
                     batch_size=p.batch_size,
-                    bindings=dict(p.bindings),
-                    target_specs=list(p.target_specs),
                     exchange_card_id=p.exchange_card_id,
-                    distribution=[PoolDistEntry(
-                        card_id=d.card_id,
-                        probability=d.probability,
-                        rarity=d.rarity,
-                        featured=d.featured,
-                        resources_gained=dict(d.resources_gained),
-                    ) for d in p.distribution],
+                    epitomizable_cards=list(p.epitomizable_cards),
+                    rewards=[
+                        {
+                            'card_id': d.card_id,
+                            'probability': d.probability,
+                            'rarity': d.rarity,
+                            'featured': d.featured,
+                            **({'resources_gained': dict(d.resources_gained)}
+                               if d.resources_gained else {}),
+                        }
+                        for d in p.distribution
+                    ],
+                )
+                truncated.banner.banners.append(BannerEntry(
+                    id=banner_id,
+                    name=p.name,
+                    enabled=p.enabled,
+                    available_from=(p.start_day - offset_day) * DAY,
+                    available_until=((p.end_day - offset_day) * DAY
+                                     if p.end_day is not None else None),
+                    pools=[bp],
                 ))
 
         # P55：PityDef 扁平化——shallow-copy 23 字段（dataclass 字段不可变）

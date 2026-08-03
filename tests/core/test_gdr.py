@@ -5,7 +5,9 @@ from gacha_simulator.core.gdr import (
     GDRDefinition, GDRCalculator, compute_success_probability,
     UNIFIED_GDR_REGISTRY, compute_gdr_from_compact, populate_gdr_combo,
 )
-from gacha_simulator.core.config_store import ConfigStore, CardDefEntry, PoolEntry
+from gacha_simulator.core.config_store import (
+    ConfigStore, CardDefEntry, BannerEntry, BannerPoolEntry, DAY,
+)
 
 
 # ─── P11: target_card_draws GDR ────────────────────────────────────────
@@ -609,16 +611,24 @@ def _make_store_for_p62():
     - pool_disabled: enabled=False，不应使 card_d 变为可达
     """
     store = ConfigStore()
+    # P61（§3.9/§3.12 Ph3）：写入侧为 store.banner.banners；card_defs.pools 为全限定键
+    # （与 _backfill_card_pools 运行时口径一致——Ph3 展平后 pool_id = {banner_id}.main）
     store.card_defs = [
-        CardDefEntry(card_id='card_a', pools=['pool_early']),
-        CardDefEntry(card_id='card_b', pools=['pool_late']),
-        CardDefEntry(card_id='card_c', pools=['pool_early', 'pool_late']),
-        CardDefEntry(card_id='card_d', pools=['pool_disabled']),
+        CardDefEntry(card_id='card_a', pools=['pool_early.main']),
+        CardDefEntry(card_id='card_b', pools=['pool_late.main']),
+        CardDefEntry(card_id='card_c', pools=['pool_early.main', 'pool_late.main']),
+        CardDefEntry(card_id='card_d', pools=['pool_disabled.main']),
     ]
-    store.pools = [
-        PoolEntry(pool_id='pool_early', start_day=0, end_day=10, enabled=True),
-        PoolEntry(pool_id='pool_late', start_day=100, end_day=120, enabled=True),
-        PoolEntry(pool_id='pool_disabled', start_day=0, end_day=10, enabled=False),
+    store.banner.banners = [
+        BannerEntry(id='pool_early', name='早池',
+                    enabled=True, available_from=0 * DAY, available_until=10 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='pool_late', name='晚池',
+                    enabled=True, available_from=100 * DAY, available_until=120 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='pool_disabled', name='禁用池',
+                    enabled=False, available_from=0 * DAY, available_until=10 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
     ]
     return store
 

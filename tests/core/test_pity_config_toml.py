@@ -26,21 +26,23 @@ ranks = [
     ["R"],
 ]
 
-[[pools]]
+[[banner]]
 id = "test_pool"
 name = "测试池"
-pool_type = "角色"
 start_day = 0
 end_day = 21
+
+[[banner.pool]]
+id = "main"
 cost = "draw_resource:160"
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "c1"
 probability = 0.5
 rarity = "SSR"
 featured = true
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "c2"
 probability = 0.5
 rarity = "SSR"
@@ -260,16 +262,18 @@ deactivate_on_early_hit = true
     def test_epitomizable_card_not_in_distribution(self):
         """epitomizable_cards 中 card_id 不在 distribution → ConfigError。"""
         toml = _BASE_TOML.replace('"c2"', '"c3"') + '''
-[[pools]]
+[[banner]]
 id = "bad_pool"
 name = "坏池子"
-pool_type = "武器"
 start_day = 21
 end_day = 42
+
+[[banner.pool]]
+id = "main"
 cost = "draw_resource:160"
 epitomizable_cards = ["nonexistent"]
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "bad"
 probability = 1.0
 rarity = "SSR"

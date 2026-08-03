@@ -27,35 +27,37 @@ ranks = [
     ["R"],
 ]
 
-[[pools]]
+[[banner]]
 id = "weapon_pool"
 name = "武器池"
-pool_type = "武器"
 start_day = 0
 end_day = 21
+
+[[banner.pool]]
+id = "main"
 cost = "draw_resource:160"
 batch_size = 1
 epitomizable_cards = ["f1", "f2"]
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "f1"
 probability = 0.005
 rarity = "SSR"
 featured = true
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "f2"
 probability = 0.005
 rarity = "SSR"
 featured = true
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "s1"
 probability = 0.005
 rarity = "SSR"
 featured = false
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "s2"
 probability = 0.005
 rarity = "SSR"
@@ -115,16 +117,18 @@ ranks = [
     ["R"],
 ]
 
-[[pools]]
+[[banner]]
 id = "weapon_pool"
 name = "武器池"
-pool_type = "武器"
 start_day = 0
 end_day = 21
+
+[[banner.pool]]
+id = "main"
 cost = "draw_resource:160"
 epitomizable_cards = ["nonexistent"]
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "f1"
 probability = 1.0
 rarity = "SSR"
@@ -154,15 +158,17 @@ ranks = [
     ["R"],
 ]
 
-[[pools]]
+[[banner]]
 id = "simple_pool"
 name = "简单池"
-pool_type = "角色"
 start_day = 0
 end_day = 21
+
+[[banner.pool]]
+id = "main"
 cost = "draw_resource:160"
 
-[[pools.distribution]]
+[[banner.pool.reward]]
 card_id = "c1"
 probability = 1.0
 rarity = "SSR"

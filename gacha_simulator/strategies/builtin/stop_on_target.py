@@ -24,9 +24,10 @@ class StopOnTargetStrategy(Strategy):
     def description(cls) -> str:
         return "目标即停：抽到当期up/目标卡就停止"
 
-    def _pool_needs_target(self, pool_id: str, ctx: StrategyContext) -> bool:
+    def _pool_needs_target(self, banner_id: str, ctx: StrategyContext) -> bool:
+        # P61（ISSUE-303/315）：匹配口径为 banner.id
         for t in ctx.target_cards.targets:
-            if pool_id in t.pool_ids and ctx.acquired.get(t.card_id, 0) < t.quantity_needed:
+            if banner_id in t.pool_ids and ctx.acquired.get(t.card_id, 0) < t.quantity_needed:
                 return True
         return False
 
@@ -43,19 +44,21 @@ class StopOnTargetStrategy(Strategy):
         for t in ctx.target_cards.targets:
             if ctx.acquired.get(t.card_id, 0) >= t.quantity_needed:
                 continue
-            for pool in ctx.all_pools:
+            for banner in ctx.all_banners:
+                pool = banner.active_pool
                 if pool.is_exchange and pool.exchange_card_id == t.card_id:
-                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
-                        return DrawAction(pool_id=pool.id)
+                    if banner.is_available(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
+                        return DrawAction(banner_id=banner.id)
 
-        for pool in ctx.current_pools:
-            if not pool.is_exchange and self._pool_needs_target(pool.id, ctx) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
-                return DrawAction(pool_id=pool.id)
+        for banner in ctx.banners:
+            pool = banner.active_pool
+            if not pool.is_exchange and self._pool_needs_target(banner.id, ctx) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
+                return DrawAction(banner_id=banner.id)
 
         wait_time = 86400
-        for pool in ctx.current_pools:
-            if hasattr(pool, 'available_until') and pool.available_until and pool.available_until > ctx.state.real_time:
-                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
+        for banner in ctx.banners:
+            if banner.available_until and banner.available_until > ctx.state.real_time:
+                wait_time = min(wait_time, banner.available_until - ctx.state.real_time)
         if wait_time <= 0:
             wait_time = 3600
         return WaitAction(duration=wait_time)

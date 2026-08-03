@@ -49,7 +49,7 @@ class TestCompactResultRoundtrip:
         original = CompactResult(
             pool_draw_counts={'pool_a': 50, 'pool_b': 30},
             pool_card_counts={'pool_a': {'card_x': 2}, 'pool_b': {}},
-            pool_end_resources={'pool_a': {'draw': 100.0}},
+            banner_end_resources={'pool_a': {'draw': 100.0}},
         )
         d = original.to_dict()
         restored = CompactResult.from_dict(d)

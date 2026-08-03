@@ -105,6 +105,9 @@ class StrategyContext:
     last_draw_pity_triggered: bool = False
     ssr_ids: Set[str] = field(default_factory=set)
     _pity_cache: Dict[str, Dict[str, float]] = field(default_factory=dict, repr=False)
+    # P61（Ph5）：banner 维度——active_banners / 全部 banners（策略迁移主接口，ISSUE-005）
+    banners: List = field(default_factory=list)
+    all_banners: List = field(default_factory=list)
 
     def get_pity_probabilities(self, pool_id: str) -> Dict[str, float]:
         if self._pity_engine is None:
@@ -112,7 +115,17 @@ class StrategyContext:
         cached = self._pity_cache.get(pool_id)
         if cached is not None:
             return cached
-        pool = next((p for p in self.current_pools if p.id == pool_id), None)
+        # P61（ISSUE-305）：pool_id 为全限定键 {banner_id}.{pool_id} 时，经 banners 维度
+        # 拆分定位 banner.active_pool 读 rewards（current_pools 元素 .id 是 Banner 内字典键，
+        # 无法承载全限定键）；裸键则回退 current_pools 旧路径（保留兼容）
+        pool = None
+        if '.' in pool_id:
+            banner_id, pool_key = pool_id.split('.', 1)
+            banner = next((b for b in self.banners if b.id == banner_id), None)
+            if banner is not None and pool_key == banner.active_pool_id:
+                pool = banner.active_pool
+        if pool is None:
+            pool = next((p for p in self.current_pools if p.id == pool_id), None)
         if pool is None or pool.is_exchange:
             return {}
         probs = {r.id: p for r, p in pool.rewards}

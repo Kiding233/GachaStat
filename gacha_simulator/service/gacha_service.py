@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Union
 import time
 import uuid
 from ..core import (
-    GachaState, Pool, DrawAction, WaitAction, NonDrawAction,
+    Banner, GachaState, Pool, DrawAction, WaitAction, NonDrawAction,
     InfoVector, Strategy, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
     build_strategy_context,
     SimulationCollector, InfoVectorCollector, CompactCollector,
@@ -53,10 +53,22 @@ class SimulationStats:
 _EMPTY_DICT = {}
 
 
+def _derive_pool_type(pool) -> str:
+    """由 output/random 推导属性映射回旧 pool_type 三值（§3.13.1，ISSUE-002）。
+
+    output='resource' → '资源'；output='card' and not random → '兑换'；其余 → '角色'。
+    """
+    if pool.output == 'resource':
+        return '资源'
+    if pool.output == 'card' and not pool.random:
+        return '兑换'
+    return '角色'
+
+
 class GachaService:
     def __init__(
         self,
-        pools: List[Pool],
+        pools: List[Union[Pool, Banner]],
         strategy: Strategy,
         stop_condition: StopCondition,
         target_cards: TargetCardSet,
@@ -69,7 +81,22 @@ class GachaService:
         card_overflow_map: Optional[Dict[str, list]] = None,
         notifier: Optional[Notifier] = None,  # P61 Ph0：装配层注入共享实例，None 时服务内 fallback 自建
     ):
-        self.pools = {p.id: p for p in pools}
+        # ── P61（§3.5 要点 10）：构造桥——双型收纳为运行时 Banner 字典 ──
+        # 元素为 Pool → 就地单池包装 Banner(id=p.id, pools={'main': p})（原子提交→Ph6 间
+        #   时间窗口 None 兜底，§3.13.4 / ISSUE-102）；
+        # 元素为 Banner → 直接收纳 {b.id: b}（Ph6 后 from_config_store 构建 List[Banner]）。
+        self._banners: Dict[str, Banner] = {}
+        # 裸 pool_id → Banner 反查表（仅唯一映射时建立——多 Banner 同名池不登记，
+        # banner_id=None 时反查歧义已由 Ph1a 强制双字段规避，ISSUE-316）
+        self._pool_id_to_banner: Dict[str, Banner] = {}
+        for p in pools:
+            if isinstance(p, Banner):
+                self._banners[p.id] = p
+            else:
+                banner = Banner(id=p.id, name=p.name, pools={'main': p})
+                self._banners[p.id] = banner
+                self._pool_id_to_banner[p.id] = banner
+
         self.strategy = strategy
         self.stop_condition = stop_condition
         self.target_cards = target_cards
@@ -82,12 +109,23 @@ class GachaService:
         self.card_overflow_map = card_overflow_map or {}
         self._notifier = notifier or Notifier()
         self.session_id = str(uuid.uuid4())
-        self._pools_list = list(self.pools.values())
+        # ── P61（Ph2）：单抽粒度 after_draw 订阅——生命周期转换唯一触发点之一 ──
+        # priority=1：P58 以 priority=0 订阅（里程碑资源注入先执行），P61 转换后执行。
+        # handler 透传 card_id / state.real_time（card_obtained / time_window 求值输入，ISSUE-001）。
+        self._notifier.subscribe("after_draw", self._on_banner_after_draw, priority=1)
 
-    # ── P55：概率聚合（AUDIT-BREAK-8） ──
+    # ── P61：Banner 生命周期转换订阅 handler（§3.5「Notifier 装配位置」/ ISSUE-001）──
 
+    def _on_banner_after_draw(self, banner_id, card_id, state, **kw):
+        """after_draw 事件订阅——评估该 Banner 的全部 lifecycle 转换（边缘触发）。"""
+        banner = self._banners.get(banner_id)
+        if banner is None:
+            return
+        banner._check_transitions(card_id=card_id, real_time=state.real_time)
 
-    def _apply_non_draw(self, action, pools, pity_engine, pity_state):
+    # ── P56：非抽卡动作（定轨切换/取消） ──
+
+    def _apply_non_draw(self, action, banners, pity_engine, pity_state):
         """P56：执行 NonDrawAction——定轨切换/取消。"""
         from ..core.pity import TargetedBehavior
         if action.action_id not in NON_DRAW_ACTION_REGISTRY:
@@ -95,16 +133,27 @@ class GachaService:
         pool_id = action.params.get('pool_id')
         if not pool_id:
             raise InvalidActionError("NonDrawAction 缺少 'pool_id'")
-        pool = pools.get(pool_id)
-        if pool is None:
+        # P61（§3.5 要点 5 / ISSUE-006）：定位 Banner——banner_id 优先，否则全限定/裸 pool_id 反查
+        banner_id = action.params.get('banner_id')
+        banner = None
+        if banner_id:
+            banner = banners.get(banner_id)
+        elif '.' in pool_id:
+            bid, _key = pool_id.split('.', 1)
+            banner = banners.get(bid)
+        else:
+            banner = self._pool_id_to_banner.get(pool_id)
+        if banner is None:
             raise InvalidActionError(f"NonDrawAction 引用了不存在的池子 '{pool_id}'")
+        pool = banner.active_pool
+        qualified_key = f"{banner.id}.{banner.active_pool_id}"
         targeted_name = None
-        for pname, bh in pity_engine.get_behaviors_for_pool(pool_id):
+        for pname, bh in pity_engine.get_behaviors_for_pool(qualified_key):
             if isinstance(bh, TargetedBehavior):
                 targeted_name = pname
                 break
         if targeted_name is None:
-            raise InvalidActionError(f"池子 '{pool_id}' 未配置 targeted 保底")
+            raise InvalidActionError(f"池子 '{qualified_key}' 未配置 targeted 保底")
         if action.action_id == 'switch_epitomized_target':
             card_id = action.params.get('card_id')
             if not card_id:
@@ -122,56 +171,6 @@ class GachaService:
             pity_state.set(targeted_name, "selected_card", None)
             pity_state.set(targeted_name, "lost_rotating", False)
             pity_state.set(targeted_name, "losses", 0)
-
-    def _aggregate_probs_by_rarity(self, pool_id: str, pool, pity_spec) -> Dict[str, float]:
-        """将 {card_id: prob} 聚合为槽位级别概率。
-
-        P55 feature-slot 分离：若 PoolPitySpec.featured_cards 存在，
-        则将 featured 卡牌的概率拆入独立槽位（如 'ssr_featured'），
-        而非与 standard 卡牌共享同一 'ssr' 槽位。
-        """
-        result: Dict[str, float] = {}
-        rarity_cache: Dict[str, Optional[str]] = {}
-
-        # 预构建 card_id → rarity 映射（仅 standard 卡——featured 单独处理）
-        featured_ids: set = set()
-        if pity_spec and pity_spec.featured_cards:
-            for rarity, cards in pity_spec.featured_cards.items():
-                for cid in cards:
-                    featured_ids.add(cid)
-        if pity_spec and pity_spec.scope_cards:
-            for rarity, cards in pity_spec.scope_cards.items():
-                for cid in cards:
-                    if cid not in featured_ids:
-                        rarity_cache[cid] = rarity
-
-        for rwd, prob in pool.rewards:
-            cid = rwd.id
-            if cid in featured_ids:
-                # featured → 独立槽位
-                rarity = self._infer_rarity_from_spec(cid, pity_spec) or 'ssr'
-                slot = f'{rarity}_featured'
-            else:
-                rarity = rarity_cache.get(cid)
-                if rarity is None and pity_spec:
-                    rarity = self._infer_rarity_from_spec(cid, pity_spec)
-                if rarity:
-                    slot = rarity.lower()
-                else:
-                    continue
-            result[slot] = result.get(slot, 0.0) + prob
-
-        return result
-
-    @staticmethod
-    def _infer_rarity_from_spec(card_id: str, pity_spec) -> Optional[str]:
-        """从 PoolPitySpec 推断卡牌稀有度（大小写归一化）。"""
-        cid = card_id.lower()
-        if pity_spec.ssr_ids and cid in {c.lower() for c in pity_spec.ssr_ids}:
-            return 'ssr'
-        if pity_spec.featured_ids and cid in {c.lower() for c in pity_spec.featured_ids}:
-            return 'ssr'
-        return None
 
     def run_simulation(
         self,
@@ -194,14 +193,14 @@ class GachaService:
             if ic > 0:
                 cid = cd['card_id'] if isinstance(cd, dict) else cd.card_id
                 _initial_counts[cid] = ic
-        pools_list = self._pools_list
+        banners = self._banners
+        notifier = self._notifier
         real_time = state.real_time
         resources = state.resources
         _check = self.stop_condition.check
         _strategy = self.strategy
         _target_cards = self.target_cards
         _stop = self.stop_condition
-        _pools = self.pools
         _schedule_mgr = self.schedule_manager
         _lookahead = self.strategy.lookahead
         _resource_gain = self.resource_gain
@@ -211,11 +210,12 @@ class GachaService:
         _WaitAction = WaitAction
         _is_compact = isinstance(collector, CompactCollector)
 
-        pool_end_times_sorted = sorted(
-            [(p.id, p.available_until) for p in pools_list if p.available_until],
+        # P61（§3.5 要点 6 / ISSUE-003）：banner 结束快照——banner 级 available_until（秒）
+        banner_end_times_sorted = sorted(
+            [(b.id, b.available_until) for b in banners.values() if b.available_until],
             key=lambda x: x[1]
         ) if _is_compact else []
-        recorded_pool_ends = set() if _is_compact else None
+        recorded_banner_ends = set() if _is_compact else None
         _pending_wait_gains = {} if _is_compact else None
         total_consumed = {} if _is_compact else None
         total_gained = {} if _is_compact else None
@@ -224,14 +224,16 @@ class GachaService:
             if _check(state, [], stats):
                 break
 
-            current_pools = [p for p in pools_list
-                           if (p.available_from is None or real_time >= p.available_from)
-                           and (p.available_until is None or real_time <= p.available_until)]
+            # P61（§3.5）：可用性过滤——Banner 级 is_available(real_time)，
+            # 时间窗口未开/已关/已 exhausted 的 Banner 在此被排除（旧 current_pools 逐池过滤语义）
+            active_banners = [b for b in banners.values() if b.is_available(state.real_time)]
 
             ctx = build_strategy_context(
                 state=state,
-                current_pools=current_pools,
-                all_pools=pools_list,
+                banners=active_banners,
+                all_banners=list(banners.values()),
+                current_pools=[b.active_pool for b in active_banners],
+                all_pools=[b.active_pool for b in banners.values()],
                 real_time=real_time,
                 target_cards=_target_cards,
                 stop_condition=_stop,
@@ -249,86 +251,43 @@ class GachaService:
             action = _strategy.select_action(ctx)
 
             if _isinstance(action, _DrawAction):
-                pool = _pools.get(action.pool_id)
-                if not pool:
-                    raise ValueError(f"Pool not found: {action.pool_id}")
+                # P61（§3.5 要点 5 / ISSUE-006）：banner_id 优先；None 时按 pool_id 反查唯一 Banner
+                banner = banners.get(action.banner_id)
+                if banner is None and action.banner_id is None and action.pool_id:
+                    banner = (self._pool_id_to_banner.get(action.pool_id)
+                              or ('.' in action.pool_id
+                                  and banners.get(action.pool_id.split('.', 1)[0])))
+                if banner is None:
+                    raise ValueError(f"Pool not found: {action.banner_id or action.pool_id}")
 
+                pool = banner.active_pool
                 batch_size = max(getattr(pool, 'batch_size', 1), 1)
 
-                # ── 原子预检查：batch_size 发可负担性 ──
+                # ── 原子预检查：batch_size 发可负担性（优化项——mid-batch 成本剧变
+                # 由 per-draw 扣费检查兜底，ISSUE-002）──
                 if not state.can_afford_batch(pool.cost, batch_size):
                     continue
 
-                # ── 批次逐发执行 ──
+                # ── 批次逐发执行（batch 循环保留在 gacha_service，ISSUE-003）──
                 for _ in range(batch_size):
-                    cost = pool.cost
-                    spent = state.spend(cost)
+                    pool = banner.active_pool          # 每次重读活跃池（上一抽可能已 switch_to）
+                    # ── 批次中途耗尽守卫（ISSUE-302）──
+                    if banner.is_exhausted:
+                        break
+                    spent = state.spend(pool.cost)
                     if spent is None:
-                        # 防御性：can_afford_batch 已预检查，不应发生
-                        # 极端情况（奖励扣减导致中途枯竭）→ 停止本批次
                         break
 
-                    probabilities = {r.id: p for r, p in pool.rewards}
-                    if _pity_engine:
-                        # P55：按稀有度聚合概率（AUDIT-BREAK-8）
-                        pity_spec = _pity_engine.get_spec(pool.id)
-                        rarity_probs = self._aggregate_probs_by_rarity(
-                            pool.id, pool, pity_spec
-                        ) if pity_spec else probabilities
-                        # 使用聚合后的概率传给 engine
-                        adjusted_rarity = _pity_engine.before_draw(
-                            pool.id, pity_state, rarity_probs
-                        )
-                        # 从聚合概率还原为卡牌级别概率
-                        if rarity_probs is not probabilities:
-                            scale_factors = {}
-                            for slot, new_total in adjusted_rarity.items():
-                                old_total = rarity_probs.get(slot, 0)
-                                if old_total > 0 and new_total != old_total:
-                                    scale_factors[slot] = new_total / old_total
-                            # 应用缩放因子到原始卡牌概率——区分 featured/standard 槽位
-                            pity_spec = pity_spec or _pity_engine.get_spec(pool.id)
-                            featured_ids = set()
-                            if pity_spec and pity_spec.featured_cards:
-                                for cards in pity_spec.featured_cards.values():
-                                    featured_ids.update(cards)
-                            for rwd_id in probabilities:
-                                if rwd_id in featured_ids:
-                                    slot = f'{self._infer_rarity_from_spec(rwd_id, pity_spec) or "ssr"}_featured'
-                                else:
-                                    rarity = self._infer_rarity_from_spec(rwd_id, pity_spec)
-                                    slot = rarity.lower() if rarity else None
-                                if slot and slot in scale_factors:
-                                    probabilities[rwd_id] *= scale_factors[slot]
-                        pool._apply_probabilities(probabilities)
-                    else:
-                        pool._apply_probabilities(probabilities)
+                    # Banner.draw：路由到活跃池 + P55 聚合/调整/还原 + 保底旁路 + after_draw，
+                    # 【不】评估 _check_transitions（单一触发点，ISSUE-001）
+                    out = banner.draw(state, _pity_engine, pity_state, pool)
+                    reward = out.reward
+                    draw_pool_key = f"{banner.id}.{out.pool_id}"   # 全限定统计键（ISSUE-021）
+                    pity_triggered = out.pity_triggered
+                    triggered_pity_name = out.triggered_pity_name
 
-                    reward = pool.draw()
-
-                    # P55：pity_triggered 检测——基于 after_draw 的实际触发结果
-                    # （使用 featured_ids 判定——等价于 CounterBasedBehavior._should_reset）
-                    pity_triggered = False
-                    triggered_pity_name = None
-
-                    if _pity_engine:
-                        _pity_engine.after_draw(pool.id, pity_state, reward.id)
-                        # 保底触发判定：本次抽到的卡满足重置条件（featured SSR）
-                        spec = _pity_engine.get_spec(pool.id)
-                        if spec and reward.id in spec.featured_ids and spec.pity_names:
-                            pity_triggered = True
-                            triggered_pity_name = ','.join(spec.pity_names)
-
-                    # 池级保底计数器最大值（供 collector 记录）
-                    pool_spec = _pity_engine.get_spec(pool.id) if _pity_engine else None
-                    pool_counter_max = 0
-                    if pool_spec:
-                        for pname in pool_spec.pity_names:
-                            cv = _pity_engine.get_counter(pname) if _pity_engine else pity_state.get(pname, 'counter', 0)
-                            pool_counter_max = max(pool_counter_max, cv)
-
-                    stats.on_draw(reward.id, pool.id, pity_triggered)
-
+                    # ── 逐抽结算（stats/collector 键统一为全限定，ISSUE-002）──
+                    stats.on_draw(reward.id, draw_pool_key, pity_triggered)
                     if pity_triggered:
                         stats.pity_triggers += 1
 
@@ -345,6 +304,15 @@ class GachaService:
                     if rg:
                         for k, v in rg.items():
                             resources[k] = resources.get(k, 0) + v
+
+                    # 池级保底计数器最大值（供 collector 记录）
+                    pool_counter_max = 0
+                    if _pity_engine:
+                        pool_spec = _pity_engine.get_spec(draw_pool_key)
+                        if pool_spec:
+                            for pname in pool_spec.pity_names:
+                                cv = _pity_engine.get_counter(pname) if _pity_engine else pity_state.get(pname, 'counter', 0)
+                                pool_counter_max = max(pool_counter_max, cv)
 
                     if _is_compact:
                         for k, v in spent.items():
@@ -366,10 +334,23 @@ class GachaService:
                         pity_counter_max=pool_counter_max,
                         real_time=real_time, pity_state=pity_state,
                         combined_gained=combined_gained,
+                        pool_key=draw_pool_key,
                     )
 
+                    # ── 单抽粒度 emit——batch 内每抽一次（ISSUE-004）──
+                    # 事件契约（§3.5 唯一真相）：banner_id / pool_id=全限定键 / card_id /
+                    # pity_triggered / draw_index=stats.total_draws / state / collector
+                    notifier.emit("after_draw",
+                                  banner_id=banner.id,
+                                  pool_id=draw_pool_key,
+                                  card_id=reward.id,
+                                  pity_triggered=pity_triggered,
+                                  draw_index=stats.total_draws,
+                                  state=state,
+                                  collector=collector)
+
             elif _isinstance(action, NonDrawAction):
-                self._apply_non_draw(action, _pools, _pity_engine, pity_state)
+                self._apply_non_draw(action, banners, _pity_engine, pity_state)
 
             elif _isinstance(action, _WaitAction):
                 rt_before = real_time
@@ -386,11 +367,18 @@ class GachaService:
                             total_gained[k] = total_gained.get(k, 0) + v
                             _pending_wait_gains[k] = _pending_wait_gains.get(k, 0) + v
 
+                # ── 等待期纯时间条件评估（ISSUE-003）：仅 time_window 可能在此满足 ──
+                for b in active_banners:
+                    b._check_transitions(real_time=state.real_time)
+
                 if _is_compact:
-                    for pid, pet in pool_end_times_sorted:
-                        if pid not in recorded_pool_ends and real_time >= pet:
-                            collector.on_pool_end(pid, dict(resources), pity_state.to_dict())
-                            recorded_pool_ends.add(pid)
+                    for bid, bet in banner_end_times_sorted:
+                        if bid not in recorded_banner_ends and real_time >= bet:
+                            banner_obj = banners.get(bid)
+                            if banner_obj is not None:
+                                banner_obj._exhaust()      # 时间窗口过期即永久关闭（ISSUE-001）
+                            collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
+                            recorded_banner_ends.add(bid)
 
                 stats.on_wait(action.duration)
 
@@ -403,19 +391,25 @@ class GachaService:
                 raise ValueError(f"Unknown action type: {action}")
 
             if _is_compact:
-                for pid, pet in pool_end_times_sorted:
-                    if pid not in recorded_pool_ends and real_time >= pet:
-                        collector.on_pool_end(pid, dict(resources), pity_state.to_dict())
-                        recorded_pool_ends.add(pid)
+                for bid, bet in banner_end_times_sorted:
+                    if bid not in recorded_banner_ends and real_time >= bet:
+                        banner_obj = banners.get(bid)
+                        if banner_obj is not None:
+                            banner_obj._exhaust()
+                        collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
+                        recorded_banner_ends.add(bid)
 
         state.real_time = real_time
         state.resources = resources
 
         if _is_compact:
-            for pid, pet in pool_end_times_sorted:
-                if pid not in recorded_pool_ends and real_time >= pet:
-                    collector.on_pool_end(pid, dict(resources), pity_state.to_dict())
-                    recorded_pool_ends.add(pid)
+            for bid, bet in banner_end_times_sorted:
+                if bid not in recorded_banner_ends and real_time >= bet:
+                    banner_obj = banners.get(bid)
+                    if banner_obj is not None:
+                        banner_obj._exhaust()
+                    collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
+                    recorded_banner_ends.add(bid)
 
             result = collector.get_result()
             result.total_consumed = total_consumed
@@ -425,7 +419,12 @@ class GachaService:
             result.pity_triggers = stats.pity_triggers
             result.final_resources = dict(resources)
             result.final_time = real_time
-            result.pool_types = {pid: p.pool_type for pid, p in self.pools.items()}
+            # P61（§3.13.1 / ISSUE-002）：pool_types 由推导属性填充，键为全限定 {banner_id}.{pool_id}
+            result.pool_types = {
+                f"{b.id}.{pk}": _derive_pool_type(p)
+                for b in banners.values()
+                for pk, p in b.pools.items()
+            }
             result.strategy_name = type(self.strategy).__name__
             result.strategy_key = getattr(
                 type(self.strategy), '_strategy_key',

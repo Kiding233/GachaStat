@@ -11,14 +11,17 @@ from gacha_simulator.core import (
 from gacha_simulator.service.gacha_service import GachaService
 
 
-def _make_pool(pool_id="test_pool", available_until=100.0):
+def _make_pool(pool_id="test_pool"):
+    # P61（Ph1a）：Pool 已删除 available_from/available_until——时间窗口移至 Banner。
+    # 裸 Pool 经构造桥包装为 Banner 后无窗口（永不关闭），停止由 AllPoolsEndCondition 决定。
+    # P61（Ph1a/ISSUE-319）：100% 单卡池被推导属性判定为兑换池（random=False），
+    # exchange_card_id 对齐目标卡，SmartStrategy 走兑换分支完成抽卡。
     return Pool(
         id=pool_id,
         name="Test Pool",
         cost=[{"draw_resource": 160}],
         rewards=[(Reward(id="card_A", name="Card A"), 1.0)],
-        available_from=0.0,
-        available_until=available_until,
+        exchange_card_id="card_A",
     )
 
 
@@ -65,8 +68,6 @@ def test_initial_count_multiple_cards():
         name="Multi",
         cost=[{"draw_resource": 160}],
         rewards=[(Reward(id="card_A", name="A"), 0.5), (Reward(id="card_B", name="B"), 0.5)],
-        available_from=0.0,
-        available_until=1000.0,
     )
     strategy = SmartStrategy()
     stop_cond = AllPoolsEndCondition(1000.0)
@@ -161,5 +162,6 @@ def test_env_builder_from_config_store_smoke():
     assert env is not None
     assert len(env.pools) == 1
     assert env.pools[0].id == 'pool_draw'
-    assert env.pools[0].pool_type == '角色'
+    # P61（Ph1a）：Pool.pool_type 已删除——推导属性 is_exchange（output='card' and not random）
+    assert env.pools[0].is_exchange is False
     assert env.end_time > 0

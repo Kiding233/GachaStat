@@ -140,19 +140,41 @@ class Reward:
 
 @dataclass
 class Pool:
+    """Banner 内部的独立抽取单元——自包含，不引用外部。
+
+    P61（§3.13.1）：output / random / is_exchange 为推导 property（从 rewards 计算），
+    非配置字段。tuple 表示假定概率已归一化 0-1（ISSUE-319）。
+    """
+
     id: str
     name: str
     cost: PoolCost
     rewards: List[Tuple[Reward, float]]
-    available_from: Optional[float] = None
-    available_until: Optional[float] = None
-    is_exchange: bool = False
-    is_rerun: bool = False
-    original_pool_id: Optional[str] = None
+    excludes_all_pity: bool = False   # ← P61：完全旁路保底引擎
+    max_draws: Optional[int] = None   # ← P61：该 pool 最大抽取次数（引擎自动执行耗尽）；None=无上限
     exchange_card_id: Optional[str] = None
-    pool_type: str = ''
     batch_size: int = 1
     epitomizable_cards: list = field(default_factory=list)           # ← P56
+
+    @property
+    def output(self) -> str:
+        """产出类型：'card'（抽卡）| 'resource'（产出资源）。"""
+        return 'resource' if all(r.id == NO_CARD_ID for r, _ in self.rewards) else 'card'
+
+    @property
+    def random(self) -> bool:
+        """产出是否随机：True（概率抽取）| False（确定性兑换/固定产出）。
+
+        空 rewards 显式短路为 False，避免 rewards[0] 对空列表索引抛 IndexError。
+        """
+        if not self.rewards:
+            return False
+        return len(self.rewards) > 1 or self.rewards[0][1] < 1.0
+
+    @property
+    def is_exchange(self) -> bool:
+        """兑换池：output='card' 且确定性（100% 指定卡）。"""
+        return self.output == 'card' and not self.random
 
     def __post_init__(self):
         if not self.is_exchange and self.rewards:
@@ -205,9 +227,57 @@ class Pool:
             idx = len(self._reward_list) - 1
         return self._reward_list[idx]
 
-    def is_available_at(self, time: float) -> bool:
-        if self.available_from is not None and time < self.available_from:
-            return False
-        if self.available_until is not None and time > self.available_until:
-            return False
-        return True
+
+# ── P61：P55 概率聚合模块级函数（下沉自 GachaService 方法，ISSUE-004）──
+# Banner.draw 与 gacha_service 共用，只依赖 pool.rewards + PoolPitySpec 结构。
+
+def infer_rarity_from_spec(card_id: str, pity_spec) -> Optional[str]:
+    """从 PoolPitySpec 推断卡牌稀有度（大小写归一化）。"""
+    cid = card_id.lower()
+    if pity_spec.ssr_ids and cid in {c.lower() for c in pity_spec.ssr_ids}:
+        return 'ssr'
+    if pity_spec.featured_ids and cid in {c.lower() for c in pity_spec.featured_ids}:
+        return 'ssr'
+    return None
+
+
+def aggregate_probs_by_rarity(pool: 'Pool', pity_spec) -> Dict[str, float]:
+    """将 {card_id: prob} 聚合为槽位级别概率。
+
+    P55 feature-slot 分离：若 PoolPitySpec.featured_cards 存在，
+    则将 featured 卡牌的概率拆入独立槽位（如 'ssr_featured'），
+    而非与 standard 卡牌共享同一 'ssr' 槽位。
+    """
+    result: Dict[str, float] = {}
+    rarity_cache: Dict[str, Optional[str]] = {}
+
+    # 预构建 card_id → rarity 映射（仅 standard 卡——featured 单独处理）
+    featured_ids: set = set()
+    if pity_spec and pity_spec.featured_cards:
+        for rarity, cards in pity_spec.featured_cards.items():
+            for cid in cards:
+                featured_ids.add(cid)
+    if pity_spec and pity_spec.scope_cards:
+        for rarity, cards in pity_spec.scope_cards.items():
+            for cid in cards:
+                if cid not in featured_ids:
+                    rarity_cache[cid] = rarity
+
+    for rwd, prob in pool.rewards:
+        cid = rwd.id
+        if cid in featured_ids:
+            # featured → 独立槽位
+            rarity = infer_rarity_from_spec(cid, pity_spec) or 'ssr'
+            slot = f'{rarity}_featured'
+        else:
+            rarity = rarity_cache.get(cid)
+            if rarity is None and pity_spec:
+                rarity = infer_rarity_from_spec(cid, pity_spec)
+            if rarity:
+                slot = rarity.lower()
+            else:
+                continue
+        result[slot] = result.get(slot, 0.0) + prob
+
+    return result
+

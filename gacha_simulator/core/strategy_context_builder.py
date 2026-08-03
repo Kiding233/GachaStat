@@ -43,6 +43,8 @@ def build_strategy_context(
     lookahead: Optional[float] = None,
     resource_gain: Optional['ResourceGainFunction'] = None,
     time_discount: float = 1.0,
+    banners: Optional[List] = None,         # P61（Ph5）：active banners（策略迁移主接口）
+    all_banners: Optional[List] = None,     # P61（Ph5）：全部 banners
 ) -> StrategyContext:
     """构建完整的 StrategyContext，含派生字段。
 
@@ -115,4 +117,6 @@ def build_strategy_context(
         time_discount=time_discount,
         last_draw_pity_triggered=last_draw_pity_triggered,
         ssr_ids=ssr_ids,
+        banners=banners if banners is not None else [],
+        all_banners=all_banners if all_banners is not None else [],
     )

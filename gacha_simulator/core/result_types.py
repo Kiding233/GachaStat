@@ -31,8 +31,8 @@ class CompactResult:
     final_resources: Dict[str, float] = field(default_factory=dict)
     final_time: float = 0.0
     final_pity_state: Dict[str, Any] = field(default_factory=dict)
-    pool_end_resources: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    pool_end_pity_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    banner_end_resources: Dict[str, Dict[str, float]] = field(default_factory=dict)      # ← P61（Ph2）：键为 banner_id
+    banner_end_pity_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)      # ← P61（Ph2）
     pool_types: Dict[str, str] = field(default_factory=dict)
     strategy_name: str = ''
     strategy_key: str = ''                 # P69 ISSUE-002：策略注册 key（如 'smart'），与类名 strategy_name 互补

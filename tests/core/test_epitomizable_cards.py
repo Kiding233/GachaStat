@@ -186,11 +186,10 @@ class TestEpitomizableCardsPropagation:
     def test_pool_entry_to_pool_propagation(self):
         """PoolEntry.epitomizable_cards 正确传播到 Pool 对象。"""
         pool = Pool(
-            id='weapon_pool', name='武器池', pool_type='武器',
+            id='weapon_pool', name='武器池',
             cost={'draw_resource': 160},
             rewards=[(Reward(id='f1', name='F1'), 0.5),
                      (Reward(id='f2', name='F2'), 0.5)],
-            available_from=0, available_until=21,
             epitomizable_cards=['f1', 'f2'],
         )
 
@@ -199,9 +198,8 @@ class TestEpitomizableCardsPropagation:
     def test_pool_default_epitomizable_cards(self):
         """未指定 epitomizable_cards 时默认为空列表。"""
         pool = Pool(
-            id='simple_pool', name='简单池', pool_type='角色',
+            id='simple_pool', name='简单池',
             cost={'draw_resource': 160},
             rewards=[(Reward(id='c1', name='C1'), 1.0)],
-            available_from=0, available_until=21,
         )
         assert pool.epitomizable_cards == []

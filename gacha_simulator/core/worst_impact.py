@@ -5,6 +5,7 @@ from collections import defaultdict
 
 from .distribution import EmpiricalDistribution
 from .pool import Pool, Reward, parse_cost_string
+from .banner import Banner
 from .pity import (
     PityEngine, PoolPitySpec, PityState,
     compute_scope_mappings,
@@ -192,15 +193,23 @@ class WorstImpactAnalyzer:
             start_time = i * self._pool_duration
             end_time = (i + 1) * self._pool_duration
 
+            # P61（Ph1a / ISSUE-302）：from_dict 直构 List[Banner]——99 池错峰时间窗口
+            # 由 Banner 级 available_from/available_until 承载（构造桥对 Banner 直接收纳、窗口保留）；
+            # Pool 已删除 available_from/available_until，窗口不再放池上。
             pool = Pool(
                 id=pid,
                 name=f'新池子#{i}',
                 cost=self._parsed_cost,
                 rewards=new_rewards,
+            )
+            banner = Banner(
+                id=pid,
+                name=f'新池子#{i}',
+                pools={'main': pool},
                 available_from=start_time,
                 available_until=end_time,
             )
-            pools.append(pool)
+            pools.append(banner)
             schedules.append(PoolSchedule(
                 pool_id=pid,
                 available_from=start_time,
@@ -363,7 +372,10 @@ class WorstImpactAnalyzer:
                     resources_gained=dict(de.resources_gained) if de.resources_gained else {},
                     extra_info={'rarity': de.rarity, 'featured': de.featured},
                 )
-                prob = de.probability
+                # P61（Ph1a / ISSUE-319）：概率归一化——Pool.random 推导假定 0-1
+                # （与 from_config_store de.probability/100.0 同口径），百分制会误判
+                # 单卡 100% 池 is_exchange=True → draw() 恒返回首卡、连续目标判定被绕过
+                prob = de.probability / 100.0
                 rewards.append((r, prob))
 
         self._featured_ids = set()
@@ -416,7 +428,8 @@ class WorstImpactAnalyzer:
                 resources_gained=d.get('resources_gained', {}),
                 extra_info={'rarity': d.get('rarity', 'R'), 'featured': d.get('featured', False)},
             )
-            rewards.append((r, d.get('probability', 0.0)))
+            # P61（Ph1a / ISSUE-319）：概率归一化（0-1），同 _prepare_pool_info 口径
+            rewards.append((r, d.get('probability', 0.0) / 100.0))
 
         self._featured_ids = set()
         self._ssr_ids = set()
@@ -485,16 +498,20 @@ class WorstImpactAnalyzer:
             pool_specs = {}
             for pool_idx in range(MAX_POOLS):
                 pid = f'_worst_impact_pool_{pool_idx}'
+                # P61（Ph1a / ISSUE-301）：pool_specs 键全限定 {pid}.main（单池包装口径），
+                # pdef.pools 的 fnmatch 按全限定键匹配——否则 gacha_service 查询键
+                # '_worst_impact_pool_0.main' 查裸键引擎为 None、before_draw 保底调整静默跳过
+                qualified_key = f"{pid}.main"
                 matching = []
                 for pdef in pity_defs_list:
                     pools_ptn = getattr(pdef, 'pools', ('*',))
-                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(pid, ptn) for ptn in pools_ptn):
+                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
                         matching.append(pdef.name)
 
                 pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
                 pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
 
-                pool_specs[pid] = PoolPitySpec(
+                pool_specs[qualified_key] = PoolPitySpec(
                     pity_names=matching,
                     featured_ids=pool_featured,
                     ssr_ids=pool_ssr,
@@ -502,7 +519,7 @@ class WorstImpactAnalyzer:
                     featured_cards=featured_cards,
                     scope_slots=scope_slots,
                     featured_slots=featured_slots,
-                card_to_slot=card_to_slot,
+                    card_to_slot=card_to_slot,
                 )
 
             rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}

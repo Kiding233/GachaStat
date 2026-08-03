@@ -22,6 +22,6 @@ class FixedCountStrategy(Strategy):
         from gacha_simulator.core.action import WaitAction, DrawAction
         if ctx.total_draws >= self.count:
             return WaitAction(duration=0)
-        if not ctx.current_pools:
+        if not ctx.banners:
             return WaitAction(duration=1)
-        return DrawAction(pool_id=ctx.current_pools[0].id)
+        return DrawAction(banner_id=ctx.banners[0].id)

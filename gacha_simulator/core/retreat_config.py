@@ -47,11 +47,9 @@ class RetreatConfigBuilder:
                     end_day=p.end_day - offset_day,
                     cost=p.cost,
                     distribution_template=p.distribution_template,
-                    pool_type=p.pool_type,
                     batch_size=p.batch_size,
                     bindings=dict(p.bindings),
                     target_specs=list(p.target_specs),
-                    rerun_of=p.rerun_of,
                     exchange_card_id=p.exchange_card_id,
                     distribution=[PoolDistEntry(
                         card_id=d.card_id,

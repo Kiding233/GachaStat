@@ -1,8 +1,9 @@
 from .result_types import CompactResult
 from .collector import SimulationCollector, InfoVectorCollector, CompactCollector
-from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string
+from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, aggregate_probs_by_rarity, infer_rarity_from_spec  # ← P61（Ph1）
 from .notifier import Notifier
 from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
+from .banner import Banner, DrawOutcome, TransitionRule, TransitionPreview  # ← P61（Ph1c）
 from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
 from .info_vector import InfoVector
@@ -102,8 +103,10 @@ __all__ = [
     'CompactResult',
     'SimulationCollector', 'InfoVectorCollector', 'CompactCollector',
     'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
+    'aggregate_probs_by_rarity', 'infer_rarity_from_spec',
     'Notifier',
     'OverflowBand', 'match_overflow_bands', 'expand_sugar_to_bands',
+    'Banner', 'DrawOutcome', 'TransitionRule', 'TransitionPreview',
     'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
     'InfoVector',

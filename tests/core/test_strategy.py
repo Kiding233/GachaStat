@@ -5,9 +5,12 @@ from gacha_simulator.core.action import DrawAction, WaitAction
 from gacha_simulator.core.state import GachaState
 from gacha_simulator.core.stop_condition import FixedActionCountCondition
 from gacha_simulator.core.target_card import TargetCardSet
+from gacha_simulator.core.banner import Banner
 
 
 def _make_ctx(state, pools, total_draws=0, stop_condition=None):
+    # P61（Ph1a）：策略消费 ctx.banners——裸 Pool 经单池包装为 Banner 传入
+    banners = [Banner(id=p.id, name=p.name, pools={'main': p}) for p in pools]
     return StrategyContext(
         state=state,
         current_pools=pools,
@@ -16,6 +19,8 @@ def _make_ctx(state, pools, total_draws=0, stop_condition=None):
         target_cards=TargetCardSet([]),
         stop_condition=stop_condition or FixedActionCountCondition(100),
         total_draws=total_draws,
+        banners=banners,
+        all_banners=banners,
     )
 
 
@@ -42,4 +47,5 @@ def test_target_hunting_strategy():
     ctx = _make_ctx(state, pools)
     action = strategy.select_action(ctx)
     assert isinstance(action, DrawAction)
-    assert action.pool_id == 'standard'
+    # P61（Ph1a）：策略返回 DrawAction(banner_id=...)，pool_id 仅供反查
+    assert action.banner_id == 'standard'

@@ -17,10 +17,6 @@ class NoDrawStrategy(Strategy):
 
     def select_action(self, ctx: StrategyContext) -> Action:
         from gacha_simulator.core.action import WaitAction
-        wait_time = 86400
-        for pool in ctx.current_pools:
-            if hasattr(pool, 'available_until') and pool.available_until and pool.available_until > ctx.state.real_time:
-                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
-        if wait_time <= 0:
-            wait_time = 3600
-        return WaitAction(duration=wait_time)
+        # P61：等待下一个活动池开启。banner 维度不可用性由 gacha_service 层过滤，
+        # 此处仅需返回固定等待（无具体 banner 目标，始终等待 86400s 由模拟层拆分为 WaitAction）。
+        return WaitAction(duration=86400)

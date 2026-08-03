@@ -101,7 +101,7 @@ def test_gdr_flags_all_targets_cumulative():
 # ─── 完整管线：DrawSequenceExtractor → 转变分析 ────────────────────────
 
 def _make_compact(pool_ids, card_ids, times, pool_end_times,
-                  pool_end_resources=None):
+                  banner_end_resources=None):
     """构造最小 CompactResult 用于测试管线。"""
     return CompactResult(
         draw_pool_ids=pool_ids,
@@ -112,7 +112,7 @@ def _make_compact(pool_ids, card_ids, times, pool_end_times,
         draw_pity_counter_max=[0] * len(pool_ids),
         draw_resources_consumed=[{'draw_resource': 160}] * len(pool_ids),
         draw_resources_gained=[{}] * len(pool_ids),
-        pool_end_resources=pool_end_resources or {},
+        banner_end_resources=banner_end_resources or {},
     )
 
 
@@ -135,7 +135,7 @@ def test_extractor_to_transition_pipeline():
             ['card_A', 'card_B', 'card_A', 'card_B'],
             [5.0, 8.0, 12.0, 18.0],
             pool_end_times,
-            pool_end_resources={
+            banner_end_resources={
                 'pool_A': {'draw_resource': 5000},
                 'pool_B': {'draw_resource': 4000},
             },

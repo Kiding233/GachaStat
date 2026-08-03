@@ -65,9 +65,11 @@ class _FakeState:
 
 def test_strategy_draws_from_any_pool_when_pool_id_empty():
     """pool_id='' 时，从当前任意可用池子抽卡"""
+    from gacha_simulator.core.banner import Banner
     strategy = DrawTargetStrategy(target_card_ids=[], pool_id='')
 
     pool_a = _FakePool('pool_a', {'draw_resource': 160})
+    banner_a = Banner(id='pool_a', name='pool_a', pools={'main': pool_a})
     state = _FakeState({'draw_resource': 1000})
 
     ctx = StrategyContext(
@@ -84,19 +86,23 @@ def test_strategy_draws_from_any_pool_when_pool_id_empty():
         last_draw_pity_triggered=False,
         ssr_ids=set(),
         _pity_cache={},
+        banners=[banner_a], all_banners=[banner_a],
     )
 
     action = strategy.select_action(ctx)
     assert isinstance(action, DrawAction), f"应返回 DrawAction，实际: {type(action)}"
-    assert action.pool_id == 'pool_a', f"应从 pool_a 抽卡，实际: {action.pool_id}"
+    assert action.banner_id == 'pool_a', f"应从 pool_a 抽卡，实际: {action.banner_id}"
 
 
 def test_strategy_draws_from_specific_pool_when_pool_id_set():
     """pool_id 指定时，只从指定池子抽卡"""
+    from gacha_simulator.core.banner import Banner
     strategy = DrawTargetStrategy(target_card_ids=[], pool_id='pool_b')
 
     pool_a = _FakePool('pool_a', {'draw_resource': 160})
     pool_b = _FakePool('pool_b', {'draw_resource': 160})
+    banner_a = Banner(id='pool_a', name='pool_a', pools={'main': pool_a})
+    banner_b = Banner(id='pool_b', name='pool_b', pools={'main': pool_b})
     state = _FakeState({'draw_resource': 1000})
 
     ctx = StrategyContext(
@@ -113,11 +119,12 @@ def test_strategy_draws_from_specific_pool_when_pool_id_set():
         last_draw_pity_triggered=False,
         ssr_ids=set(),
         _pity_cache={},
+        banners=[banner_a, banner_b], all_banners=[banner_a, banner_b],
     )
 
     action = strategy.select_action(ctx)
     assert isinstance(action, DrawAction)
-    assert action.pool_id == 'pool_b', f"应从 pool_b 抽卡，实际: {action.pool_id}"
+    assert action.banner_id == 'pool_b', f"应从 pool_b 抽卡，实际: {action.banner_id}"
 
 
 def test_strategy_waits_when_cannot_afford():

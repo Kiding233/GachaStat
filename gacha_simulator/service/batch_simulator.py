@@ -134,19 +134,22 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
         if rarity_rank is None:
             rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
 
-        # 构建 PoolPitySpec
+        # 构建 PoolPitySpec——pool_specs 键全限定 {pool.id}.main（单池包装口径，ISSUE-021/AUDIT-BREAK-3）
         pool_specs = {}
         for pool in pools:
+            qualified_key = f"{pool.id}.main"
             spec_pity_names = []
             for pdef in pity_defs_list:
                 pools_ptn = pdef.pools
-                if pools_ptn == ('*',) or any(fnmatch.fnmatch(pool.id, ptn) for ptn in pools_ptn):
+                if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
                     spec_pity_names.append(pdef.name)
 
-            featured = pool_featured_map.get(pool.id, set()) if pool_featured_map else set()
-            ssr = pool_ssr_map.get(pool.id, set()) if pool_ssr_map else set()
+            featured = (pool_featured_map.get(qualified_key) or pool_featured_map.get(pool.id, set())
+                        if pool_featured_map else set())
+            ssr = (pool_ssr_map.get(qualified_key) or pool_ssr_map.get(pool.id, set())
+                   if pool_ssr_map else set())
             scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(pool)
-            pool_specs[pool.id] = PoolPitySpec(
+            pool_specs[qualified_key] = PoolPitySpec(
                 pity_names=spec_pity_names,
                 featured_ids=featured,
                 ssr_ids=ssr,
@@ -482,20 +485,6 @@ def run_batch_parallel(
 
 class SimulationEnvBuilder:
     @staticmethod
-    def _infer_pool_type(pool_id: str, pool_type: str = '') -> str:
-        """根据 pool_id 推断池子类型：角色/武器/兑换/资源。"""
-        if pool_type and pool_type in ('角色', '武器', '兑换', '资源'):
-            return pool_type
-        pid = pool_id.lower()
-        if '武器' in pid or 'weapon' in pid or pid.startswith('pool_w'):
-            return '武器'
-        if '兑换' in pid or 'exchange' in pid or pid.startswith('pool_e'):
-            return '兑换'
-        if '资源' in pid or 'resource' in pid:
-            return '资源'
-        return pool_type or '角色'
-
-    @staticmethod
     def from_config_store(config_store) -> SimulationEnv:
         from gacha_simulator.core.pool import Pool, Reward, parse_cost_string
         from gacha_simulator.core.schedule import PoolScheduleManager, PoolSchedule
@@ -547,17 +536,15 @@ class SimulationEnvBuilder:
             cost_str = getattr(pe, 'cost', 'draw_resource:160')
             parsed_cost = parse_cost_string(cost_str) if cost_str else [{'draw_resource': 160}]
             exchange_cid = getattr(pe, 'exchange_card_id', None)
-            ptype = getattr(pe, 'pool_type', '') or SimulationEnvBuilder._infer_pool_type(pid, '')
+            # P61（Ph1）：Pool 已删除 available_from/available_until/is_exchange/pool_type——
+            # 时间窗口语义由 PoolSchedule/end_time 部分保留（ISSUE-102 已声明中间态），
+            # is_exchange/pool_type 改推导属性（§3.13.1）。
             pool = Pool(
                 id=pid,
                 name=getattr(pe, 'name', pid),
                 cost=parsed_cost,
                 rewards=rewards,
-                available_from=start_day * DAY,
-                available_until=end_day * DAY,
-                is_exchange=bool(exchange_cid),
                 exchange_card_id=exchange_cid,
-                pool_type=ptype,
                 batch_size=getattr(pe, 'batch_size', 1),
                 epitomizable_cards=getattr(pe, 'epitomizable_cards', []),
             )

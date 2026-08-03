@@ -10,6 +10,7 @@ from ..core import (
 from ..core.action import NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from ..core.pity import PityEngine, PityState
 from ..core.pool import NO_CARD_ID as _NO_CARD_ID
+from ..core.notifier import Notifier
 
 
 class SimulationStats:
@@ -66,6 +67,7 @@ class GachaService:
         ssr_ids: Optional[set] = None,
         card_defs: Optional[List] = None,
         card_overflow_map: Optional[Dict[str, list]] = None,
+        notifier: Optional[Notifier] = None,  # P61 Ph0：装配层注入共享实例，None 时服务内 fallback 自建
     ):
         self.pools = {p.id: p for p in pools}
         self.strategy = strategy
@@ -78,6 +80,7 @@ class GachaService:
         self.ssr_ids = ssr_ids or set()
         self.card_defs = card_defs or []
         self.card_overflow_map = card_overflow_map or {}
+        self._notifier = notifier or Notifier()
         self.session_id = str(uuid.uuid4())
         self._pools_list = list(self.pools.values())
 

@@ -210,6 +210,7 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
     """执行一次模拟。env 和 target_set 通过参数显式传入，不依赖全局变量。"""
     from gacha_simulator.core import GachaState
     from gacha_simulator.service import GachaService
+    from gacha_simulator.core.notifier import Notifier
 
     random.seed(seed)
 
@@ -225,6 +226,8 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
         # P60：from_dict 已内置旧格式自动升级（检测 'counters' 键自动迁移）
         pity_state = PityState.from_dict(env.pity_state_init)
 
+    # P61 Ph0：装配层创建共享 Notifier 实例，与模拟循环 emit 同一实例（§3.5「Notifier 装配位置」）
+    notifier = Notifier()
     service = GachaService(
         env.pools, strategy, stop_cond, target_set,
         schedule_manager=env.schedule_mgr,
@@ -234,6 +237,7 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
         ssr_ids=env.ssr_ids,
         card_defs=env.card_defs,
         card_overflow_map=env.card_overflow_map,
+        notifier=notifier,
     )
     state = GachaState(resources=dict(initial_resources))
     return service.run_simulation_compact(state)

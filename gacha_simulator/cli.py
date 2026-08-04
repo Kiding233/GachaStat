@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(mess
 sys.path.insert(0, str(Path(__file__).parent))
 
 from gacha_simulator._version import __version__  # noqa: E402
-from gacha_simulator.core.config_toml import load_toml, save_toml  # noqa: E402
+from gacha_simulator.core.config_toml import load_toml  # noqa: E402
 from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
 from gacha_simulator.paths import get_config_dir  # noqa: E402
 
@@ -57,13 +57,15 @@ def main():
         default_toml = os.path.join(get_config_dir(), 'config.toml')
         store = load_toml(default_toml)
 
-    # P55：--migrate——检测旧格式迁移标记 → save_toml 覆盖
+    # P61（Ph4 / ISSUE-004）：--migrate 依赖已移除的 _build_pools/_migrated_from_legacy
+    # （旧 [[pools]] 格式自动迁移随 P61 一次性迁移完成，不再支持）。
+    # 空 banner（旧格式残留被解析忽略）→ 显式报错提示手工迁移；非空 → 提示已为新格式。
     if args.migrate:
-        if store._migrated_from_legacy:
-            config_path = args.config if args.config else default_toml
-            save_toml(store, config_path)
-            print(f"TOML 已从旧格式迁移并保存至: {config_path}")
-            sys.exit(0)
+        if not store.banner.banners:
+            print("错误：当前配置不含任何 Banner（旧 [[pools]] 格式已不支持自动迁移）。\n"
+                  "请按 P61 迁移规则手工改写为 [[banner]] 格式（见 P61 计划 §3.4 迁移规则）。",
+                  file=sys.stderr)
+            sys.exit(1)
         else:
             print("TOML 已为新格式，无需迁移。")
             sys.exit(0)

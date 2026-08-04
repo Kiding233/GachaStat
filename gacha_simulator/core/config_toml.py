@@ -666,7 +666,9 @@ def _pitydef_to_toml(p) -> dict:
         entry['target_featured'] = True
     if p.reset:
         entry['reset'] = p.reset
-    if p.pools and p.pools != ('*',):
+    if p.pools != ('*',):
+        # P61（ISSUE-328）：pools=()（空勾选 = 不绑定任何池）必须显式写出 pools = []
+        # ——否则重载默认 ('*',) 语义反转（不绑定 → 绑定全部池）
         entry['pools'] = list(p.pools)
 
     # 语法糖参数（优先写出直观形式，否则写出 deltas）
@@ -975,10 +977,18 @@ def _days_to_sec(value) -> Optional[float]:
 
 
 def _lifecycle_at(lc: dict) -> float:
-    """lifecycle 阈值解析：time_window 条件以「模拟内相对天数」书写 → 秒（*DAY）。"""
+    """lifecycle 阈值解析：time_window 条件以「模拟内相对天数」书写 → 秒（*DAY）。
+
+    P61（ISSUE-009）：抽数条件（pool_draws / banner_draws）的 at 必须为整数——
+    浮点阈值会在 int() 截断处产生 1 抽偏差（at=10.5 实际 11 抽才满足、
+    pending_transitions 却 int() 截断显示 10），配置错误显式报错而非静默漂移。
+    """
     at = lc.get('at', 0.0)
     if lc.get('condition') == 'time_window':
         return float(at) * DAY
+    if isinstance(at, float) and not at.is_integer():
+        raise ValueError(
+            f"lifecycle {lc.get('condition', '')} 的阈值必须为整数抽数，实际 {at}")
     return float(at)
 
 

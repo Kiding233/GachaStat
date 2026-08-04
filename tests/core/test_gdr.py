@@ -648,14 +648,26 @@ class TestFilterTargetSpecsByObtainable:
         assert 'card_b' not in result
 
     def test_all_obtainable_when_long_run(self):
-        """final_time=110: 两个池子均开放 → 全部可达"""
+        """final_time 越过晚池开放时刻（秒）→ 全部可达"""
         from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
         store = _make_store_for_p62()
         result = filter_target_specs_by_obtainable(
             {'card_a': 1, 'card_b': 1, 'card_c': 2},
-            store, final_time=110.0,
+            store, final_time=120 * DAY,  # ISSUE-307：final_time 为秒，晚池 100 天=8640000s 后开放
         )
         assert result == {'card_a': 1, 'card_b': 1, 'card_c': 2}
+
+    def test_late_pool_not_obtainable_early_stop(self):
+        """ISSUE-307：晚开池（available_from 秒）在早停/截断时间线（final_time < 其开放时刻）判不可达。"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        # final_time = 第 50 天秒值：晚池（100 天=8640000s）未开 → card_b 不可达
+        result = filter_target_specs_by_obtainable(
+            {'card_a': 1, 'card_b': 1, 'card_c': 2},
+            store, final_time=50 * DAY,
+        )
+        assert result == {'card_a': 1, 'card_c': 2}
+        assert 'card_b' not in result
 
     def test_none_obtainable(self):
         """final_time=-1: 无任何池子开放 → 返回空 dict"""

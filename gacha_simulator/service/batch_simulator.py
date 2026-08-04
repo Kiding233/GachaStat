@@ -73,6 +73,10 @@ class SimulationEnv:
     # （与 pools 同对象）。_run_single 每次从它（或 pools）深拷贝重建，隔离 Banner
     # 运行时状态跨模拟泄漏（ISSUE-312）。带默认值保证跨进程 pickle 兼容。
     banner_defs: list = dc_field(default_factory=list)
+    # P61（Ph0 / ISSUE-329）：P58 里程碑 engine 跨进程来源契约——装配层（_run_single）
+    # 构造 GachaService 前从本字段取出注入 register_milestone_engine（priority=0 订阅）。
+    # P58 未实施时恒 None（带默认值保证 pickle 兼容，与 banner_defs 同机制）。
+    milestone_engine: Any = None
 
 
 def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None, rarity_rank=None):
@@ -251,6 +255,17 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
 
     # P61 Ph0：装配层创建共享 Notifier 实例，与模拟循环 emit 同一实例（§3.5「Notifier 装配位置」）
     notifier = Notifier()
+    # P61（Ph0 / ISSUE-329）：P58 装配优先——priority=0 订阅先于 GachaService 的
+    # P61 priority=1 转换订阅注册（§5.2 装配顺序）。P58 未实施时 env.milestone_engine
+    # 恒 None，防御跳过；P58 落地后提供 register_milestone_engine 即可启用。
+    if env.milestone_engine is not None:
+        try:
+            from gacha_simulator.service.milestone import register_milestone_engine
+            register_milestone_engine(notifier, env.milestone_engine)
+        except ImportError:
+            logging.warning(
+                'SimulationEnv.milestone_engine 已设置但 register_milestone_engine '
+                '未提供（P58 未落地）——里程碑装配被跳过')
     # P61（Ph6 / ISSUE-312，阻塞）：Banner 运行时状态跨模拟隔离——env.pools 承载
     # List[Banner]，直接传入则 draw/_check_transitions 修改的 _pool_draws/_exhausted/
     # _active_pool_id 等泄漏到下次模拟（固定种子不可复现）。每次构造 GachaService 前

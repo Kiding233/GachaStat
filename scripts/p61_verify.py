@@ -34,13 +34,13 @@ TIME_WINDOW_FIELDS = {'pool_end_resources', 'banner_end_resources',
                       'pool_end_pity_states', 'banner_end_pity_states'}
 # 不可比字段（时间戳）
 SKIP_FIELDS = {'generated_at'}
-# ISSUE-102 中间态分歧字段（Ph6 后复验结果）：
+# ISSUE-102 已知分歧字段（Ph6 后已复验收敛）：
 #   Ph6 已恢复时间窗口（ISSUE-001）：draw_times/wait/final_time 与 golden 全一致，
 #   故 draw_times 移出本集合——再现时间差异将按严格 DIFF 报 FAIL。
 #   剩余 draw_resources_gained 归属偏移（exchange_currency 50 在相邻 wait 间偏移
 #   一次，抽次间资源总量一致）：由 Ph2 gacha_service 收入结算边界引入（Ph6 未触碰
 #   该文件），batch 聚合统计（抽数/池抽数/卡计数/保底触发）是其投影，幅度 <0.5%。
-#   保留本集合仅用于打印，供 ISSUE-102 后续收敛复验。
+#   已确认为 Ph2 收入结算边界分歧（非 P61 时间窗口回归），保留本集合仅用于打印。
 MIDSTATE_FIELDS = {'draw_resources_gained'}
 
 
@@ -174,7 +174,7 @@ def main():
             print(f'  golden: {g}')
             print(f'  new:    {n}')
         if midstates:
-            print(f'中间态分歧（ISSUE-102，Ph6 前允许，Ph6 后复验）: {midstates}')
+            print(f'ISSUE-102 已知分歧（Ph2 收入结算边界，Ph6 已确认非时间窗口回归）: {midstates}')
 
     print(f'\n=== batch 聚合对比（n={N}）===')
     new_b = aggregate_batch(batch.results)
@@ -182,7 +182,7 @@ def main():
     if not bmid:
         print('batch：全部可比字段一致 ✓')
     else:
-        print(f'中间态分歧（ISSUE-102，Ph6 前允许，Ph6 后复验）: {bmid}')
+        print(f'ISSUE-102 已知分歧（Ph2 收入结算边界，Ph6 已确认非时间窗口回归）: {bmid}')
         for k in bmid:
             g = golden['batch_aggregate'][k]
             n = new_b[k]
@@ -193,7 +193,8 @@ def main():
             print(f'  {k}: golden={g} new={n} Δ={delta}')
 
     ok = not diffs
-    print(f'\n等价对照结果：{"PASS" if ok else "FAIL"}（非时间窗口字段严格一致；时间窗口分歧待 Ph6 复验）')
+    print(f'\n等价对照结果：{"PASS" if ok else "FAIL"}（非时间窗口字段严格一致；'
+          f'ISSUE-102 已知分歧已确认——Ph2 收入结算边界的 draw_resources_gained 偏移）')
     sys.exit(0 if ok else 1)
 
 

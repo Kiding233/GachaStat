@@ -33,6 +33,20 @@ class PoolQuotaStrategy(Strategy):
         # P61（ISSUE-327）：pool_quotas 参数键全限定 {banner_id}.{pool_id}——多 Banner 同名 main 配额不串池
         return f"{banner.id}.{banner.active_pool_id}"
 
+    def _quota_for(self, banner) -> Optional[int]:
+        """配额查询——全限定键优先，单 Banner 单池场景裸键兼容回退（ISSUE-327）。
+
+        全限定键 {banner_id}.{pool_id} 命中（多 Banner 同名池配额不串池）；未配置时
+        回退裸 pool id / 裸 banner id，兼容用户旧配置（{main: 100}）。多 Banner 场景
+        用户须写全限定键——裸键回退仅作单 Banner 便利，不改变 ISSUE-327 主裁决。
+        """
+        quota = self.pool_quotas.get(self._qualified_key(banner))
+        if quota is None:
+            quota = self.pool_quotas.get(banner.active_pool_id)
+        if quota is None:
+            quota = self.pool_quotas.get(banner.id)
+        return quota
+
     def select_action(self, ctx: StrategyContext) -> Action:
         from gacha_simulator.core.action import DrawAction, WaitAction
 
@@ -49,8 +63,7 @@ class PoolQuotaStrategy(Strategy):
             pool = banner.active_pool
             if pool.is_exchange or not ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 continue
-            pid = self._qualified_key(banner)
-            quota = self.pool_quotas.get(pid)
+            quota = self._quota_for(banner)
             # P61（ISSUE-002）：配额抽数改读 banner.pool_draws（裸池字典键），
             # 不再用 ctx.pool_draw_counts（其键已全限定化、裸键查询恒 0）
             drawn = banner.pool_draws.get(banner.active_pool_id, 0)
@@ -61,8 +74,7 @@ class PoolQuotaStrategy(Strategy):
         for banner in ctx.banners:
             pool = banner.active_pool
             if not pool.is_exchange and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
-                pid = self._qualified_key(banner)
-                quota = self.pool_quotas.get(pid)
+                quota = self._quota_for(banner)
                 drawn = banner.pool_draws.get(banner.active_pool_id, 0)
                 if quota is None or drawn < quota:
                     return DrawAction(banner_id=banner.id)

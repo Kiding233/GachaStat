@@ -507,3 +507,275 @@ class TestCostPerDraw:
         env = SimulationEnvBuilder.from_config_store(store)
         cost = get_cost_per_draw(env.pools)
         assert cost == 600, f'cost_per_draw 应为 600，实际 {cost}'
+
+
+# ══════════════════════════════════════════════════════════════════
+# Ph9 补充回归（对照 §3.12 Ph9 全量清单，补足 Ph8 首批遗漏项）
+# ══════════════════════════════════════════════════════════════════
+
+class TestGiftPoolInsertion:
+    """送抽插入组合流程：main 30 抽 → switch free_10pull → pool_exhausted → 切回 main（§七 验收）。
+
+    main 无目标卡（r1/r2），smart 因 banner.id 命中 target 而抽 main 30 发触发
+    pool_draws 切换；free_10pull 为插入池（ticket 成本、90% 目标卡），抽到后达成。
+    """
+
+    def test_insertion_then_back(self):
+        b = BannerEntry(id='gift', name='送抽', enabled=True,
+                        available_from=0.0, available_until=40 * DAY,
+                        pools=[
+                            _pool('main', rewards=[_reward('r1', 50.0, 'R'),
+                                                   _reward('r2', 50.0, 'R')]),
+                            _pool('free_10pull', cost='ticket:1', max_draws=10,
+                                  rewards=[_reward('ssr_a', 90.0, 'SSR', featured=True),
+                                           _reward('r3', 10.0, 'R')]),
+                        ],
+                        lifecycle=[
+                            _lc('pool_draws', pool='main', at=30,
+                                action='switch_to', target='free_10pull'),
+                            _lc('pool_exhausted', pool='free_10pull',
+                                action='switch_to', target='main'),
+                        ])
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)],
+                            initial={'draw_resource': 100000, 'ticket': 100})
+        result = _run(store, num=5, seed=42).results[0]
+        pool_draws = result.get('pool_draw_counts', {})
+        # main 抽满 30 触发切换 → free_10pull 被抽（插入池生效）
+        assert pool_draws.get('gift.main', 0) >= 30, \
+            f'main 应抽满 30 触发 pool_draws 切换，实际 {pool_draws}'
+        assert pool_draws.get('gift.free_10pull', 0) >= 1, \
+            f'free_10pull 插入池应被抽（切换已触发），实际 {pool_draws}'
+
+
+class TestMultiBannerSameNameQuota:
+    """多 Banner 同名池配额不串池（ISSUE-327）。"""
+
+    def test_quota_not_shared_across_banners(self):
+        b1 = _ssr_only_banner('b1')
+        b2 = _ssr_only_banner('b2')
+        store = _make_store([b1, b2],
+                            target_cards=[TargetCardEntry(card_id='ssr_a', quantity=99)])
+        result = _run(store, num=5, seed=42, strategy_key='pool_quota',
+                      strategy_params={'pool_quotas': {'b1.main': 5}}).results[0]
+        pool_draws = result.get('pool_draw_counts', {})
+        b1_draws = pool_draws.get('b1.main', 0)
+        b2_draws = pool_draws.get('b2.main', 0)
+        assert b1_draws <= 5, f'b1.main 配额 5，实际 {b1_draws}'
+        assert b2_draws > 0, f'b2.main 不受 b1 配额约束（不串池），实际 {b2_draws}'
+
+
+class TestExplicitPoolIdDispatch:
+    """banner_id=None + 裸 pool_id 反查唯一 Banner 单池路径（ISSUE-316）。
+
+    用自定义策略返回 DrawAction(banner_id=None, pool_id='b1.main') 跑真实模拟——
+    验证 gacha_service 派发逻辑（:256-259 反查）真实命中 b1，而非重抄表达式。
+    """
+
+    def test_banner_id_none_pool_id_dispatch(self):
+        import copy
+        from gacha_simulator.service import GachaService
+        from gacha_simulator.core.notifier import Notifier
+        from gacha_simulator.core import GachaState
+        from gacha_simulator.core.stop_condition import AllPoolsEndCondition
+        from gacha_simulator.core.action import DrawAction, WaitAction
+        from gacha_simulator.core.strategy import Strategy
+        from gacha_simulator.service.batch_simulator import _build_target_set
+        b = _ssr_only_banner('b1')
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
+        env = SimulationEnvBuilder.from_config_store(store)
+
+        class _OnlyPoolIdStrategy(Strategy):
+            """只返回 banner_id=None + 裸 pool_id 的 DrawAction（3 次后 Wait 结束）。"""
+
+            @classmethod
+            def description(cls) -> str:
+                return "测试策略：banner_id=None + 裸 pool_id 派发"
+
+            def __init__(self, pool_id):
+                self.pool_id = pool_id
+
+            def select_action(self, ctx):
+                if ctx.total_draws < 3:
+                    return DrawAction(banner_id=None, pool_id=self.pool_id)
+                return WaitAction(duration=1)
+
+        service = GachaService(
+            copy.deepcopy(env.pools), _OnlyPoolIdStrategy('b1.main'),
+            AllPoolsEndCondition(env.end_time),
+            _build_target_set(env.card_defs, {'ssr_a': 1}),
+            notifier=Notifier(),
+        )
+        state = GachaState(resources=dict(env.initial_resources))
+        result = service.run_simulation_compact(state)
+        # banner_id=None + pool_id='b1.main' 应真实派发到 b1 并抽 3 次（不抛 ValueError）
+        assert result.total_draws >= 3, \
+            f'banner_id=None + pool_id 应成功反查 b1 并抽卡，实际 total_draws={result.total_draws}'
+
+
+class TestMultiStrategyTargetHunting:
+    """其余 3 策略目标追卡回归（ISSUE-303/315）——smart 已由
+    TestStrategyBannerMode.test_pool_needs_target_hits_banner_id 覆盖。"""
+
+    def test_other_strategies_hunt_target(self):
+        b = _ssr_only_banner('b1')
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
+        for key in ['pity_reserve', 'pool_quota', 'stop_on_target']:
+            result = _run(store, num=8, seed=42, strategy_key=key).results[0]
+            assert result['total_draws'] > 0, f'{key} 应抽卡追目标（banner.id 命中）'
+
+
+class TestMultiStrategyExchange:
+    """其余 3 策略兑换池定位回归（ISSUE-313）——smart 已由
+    TestStrategyBannerMode.test_exchange_pool_location 覆盖。"""
+
+    def test_other_strategies_locate_exchange(self):
+        b = BannerEntry(id='ex', name='兑换', enabled=True,
+                        available_from=0.0, available_until=21 * DAY,
+                        pools=[_pool('main', cost='exchange_currency:5',
+                                     exchange_card_id='card_ex',
+                                     rewards=[_reward('card_ex', 100.0, 'SSR')])])
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='card_ex', quantity=1)],
+                            initial={'draw_resource': 100000, 'exchange_currency': 1000})
+        for key in ['pity_reserve', 'pool_quota', 'stop_on_target']:
+            result = _run(store, num=5, seed=42, strategy_key=key).results[0]
+            assert result['card_counts'].get('card_ex', 0) >= 1, \
+                f'{key} 应经 exchange_card_id 命中兑换池'
+
+
+class TestNoDrawBannerEnd:
+    """no_draw + 多池 Banner 的 banner_end_resources 键（ISSUE-323）。"""
+
+    def test_no_draw_banner_end_resources_banner_key(self):
+        b = BannerEntry(id='b1', name='多池', enabled=True,
+                        available_from=0.0, available_until=21 * DAY,
+                        pools=[_pool('main'), _pool('free', cost='ticket:1')])
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
+        result = _run(store, num=3, seed=42, strategy_key='no_draw').results[0]
+        snap = result.get('banner_end_resources', {})
+        assert 'b1' in snap, \
+            f'no_draw banner_end_resources 键应为 banner 级，实际 {list(snap.keys())}'
+
+
+class TestWorstImpactPityEngine:
+    """最差影响分析保底触发（ISSUE-301）——pool_specs 键 {pid}.main 时 before_draw 不静默跳过。"""
+
+    def test_pity_engine_qualified_key(self):
+        from gacha_simulator.core.worst_impact import WorstImpactAnalyzer
+        b = _ssr_only_banner('b1')  # ssr_a featured
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)],
+                            pity_enabled=True,
+                            pity_defs=[PityDef(name='soft', btype='soft_interval', scope='ssr',
+                                               target_featured=True, pools=('*',))])
+        analyzer = WorstImpactAnalyzer([], {'ssr_a': 1}, store)
+        analyzer._prepare_pool_info()
+        engine = analyzer._build_pity_engine()
+        assert engine is not None
+        spec_keys = set(engine.pool_specs.keys())
+        assert any(k.endswith('.main') for k in spec_keys), \
+            f'pool_specs 键应为 {{pid}}.main，实际 {list(spec_keys)[:3]}'
+        # 全限定键查询命中——before_draw 保底调整不静默跳过（裸键查询为 None 会退化）
+        spec = engine.get_spec('_worst_impact_pool_0.main')
+        assert spec is not None, '全限定键查询应命中（soft pity 不静默退化）'
+
+
+class TestWorstImpactAnalyzeExpectedPools:
+    """最差影响分析 analyze() 冒烟 + 99 池错峰窗口保留（ISSUE-302）。
+
+    注：expected_pools ≈ MAX_POOLS 依赖 draw_target 目标感知（达成当前池目标后等待
+    下一池窗口），而 draw_target 无该机制（P61 前后一致，resource_gain=None 时
+    real_time 不推进、抽卡卡首池）——属既有行为而非 P61 退化。本测试锁定
+    Ph1a 已落地的「99 池错峰窗口由 Banner 级 available_from/until 承载」+ analyze 可跑。
+    """
+
+    def test_staggered_windows_preserved(self):
+        from gacha_simulator.core.worst_impact import WorstImpactAnalyzer, MAX_POOLS
+        from gacha_simulator.core.banner import Banner
+        b = _ssr_only_banner('b1')
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
+        analyzer = WorstImpactAnalyzer([], {'ssr_a': 1}, store)
+        cfg = analyzer.prepare_simulation_config(50000)
+        assert len(cfg['pools']) == MAX_POOLS
+        banners = [p for p in cfg['pools'] if isinstance(p, Banner)]
+        assert len(banners) == MAX_POOLS, '99 池均为 Banner（窗口承载）'
+        windows = [(p.id, p.available_from, p.available_until) for p in banners]
+        assert all(w[1] is not None and w[2] is not None for w in windows), \
+            '99 池均带 Banner 级 available_from/until（错峰窗口保留）'
+        assert windows[0][1] < windows[1][1] < windows[-1][1], '错峰窗口依次递增'
+
+    def test_analyze_smoke(self):
+        """analyze() 冒烟：custom_resource 跳过条件分布，不崩、产出 expected_pools。"""
+        from gacha_simulator.core.worst_impact import WorstImpactAnalyzer
+        b = _ssr_only_banner('b1')
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
+        analyzer = WorstImpactAnalyzer([], {'ssr_a': 1}, store)
+        result = analyzer.analyze(num_simulations=2, custom_resource=50000)
+        assert result.expected_pools >= 1
+        assert result.worst_resource == 50000
+
+
+class TestCliFallbackTarget:
+    """CLI 无 [[targets]] 兜底目标取 banner 段（ISSUE-003）。"""
+
+    def test_fallback_target_is_real_card(self):
+        b = BannerEntry(id='b1', name='池', enabled=True,
+                        available_from=0.0, available_until=21 * DAY,
+                        pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
+                                                      _reward('r1', 50.0, 'R')])])
+        store = _make_store([b])  # 无 target_cards
+        # cli.py:156 兜底：store.pools[0].pool_id.split('.')[0] + '_ssr'（Ph3 ISSUE-003）
+        fallback = f"{store.pools[0].pool_id.split('.')[0]}_ssr"
+        assert fallback == 'b1_ssr', \
+            f'兜底目标应取 banner 段（非全限定 banner.main_ssr），实际 {fallback}'
+        card_ids = {c.card_id for c in store.card_defs}
+        assert fallback in card_ids, f'兜底目标 {fallback} 应为真实卡，实际卡集 {card_ids}'
+
+
+class TestCliMigrateDisposition:
+    """CLI --migrate 处置（ISSUE-004）：空 banner 报错提示手工迁移；新格式提示已迁移。"""
+
+    def test_migrate_new_format(self):
+        import subprocess
+        import sys
+        import os
+        cfg = os.path.join(os.path.dirname(__file__), '..', 'gacha_simulator', 'config', 'config.toml')
+        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        result = subprocess.run(
+            [sys.executable, '-m', 'gacha_simulator.cli', '-c', cfg, '--migrate'],
+            capture_output=True, text=True, timeout=120, env=env,
+            encoding='utf-8', errors='replace',
+        )
+        assert '已为新格式' in result.stdout, f'新格式应提示已为新格式，输出: {result.stdout}'
+        assert result.returncode == 0
+
+    def test_migrate_empty_banner_errors(self, tmp_path):
+        """旧格式（[[pools]] 无 [[banner]]）经 -c 传入 --migrate → 显式报错而非误导提示。"""
+        import subprocess
+        import sys
+        import os
+        old_toml = tmp_path / 'old_pools.toml'
+        old_toml.write_text(
+            '# 旧格式残留\n[[pools]]\npool_id = "p1"\nname = "旧池"\ncost = "draw_resource:160"\n',
+            encoding='utf-8',
+        )
+        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        result = subprocess.run(
+            [sys.executable, '-m', 'gacha_simulator.cli', '-c', str(old_toml), '--migrate'],
+            capture_output=True, text=True, timeout=120, env=env,
+            encoding='utf-8', errors='replace',
+        )
+        combined = result.stdout + (result.stderr or '')
+        assert '不含任何 Banner' in combined, f'空 banner 应显式报错，输出: {combined}'
+        assert result.returncode == 1
+
+
+class TestObtainablePermanentBanner:
+    """永久 Banner（available_from=None）目标卡可达（B1 修复：None 归一 0.0 不误伤永久池）。"""
+
+    def test_permanent_banner_obtainable(self):
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        b = BannerEntry(id='perm', name='永久', enabled=True,
+                        available_from=None, available_until=None,
+                        pools=[_pool('main', rewards=[_reward('ssr_a', 50.0, 'SSR', featured=True)])])
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
+        result = filter_target_specs_by_obtainable({'ssr_a': 1}, store, final_time=100.0)
+        assert result == {'ssr_a': 1}, f'永久 Banner 目标卡应可达，实际 {result}'

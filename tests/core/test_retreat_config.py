@@ -225,6 +225,7 @@ def test_truncate_multi_pool_banner_preserved():
                     pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
         BannerEntry(id='multi', name='多池',
                     available_from=30 * DAY, available_until=60 * DAY,
+                    max_draws=20,  # banner 级抽数上限（新手池自动 exhaust）
                     pools=[
                         BannerPoolEntry(id='main', cost='draw_resource:160'),
                         BannerPoolEntry(id='free', cost='ticket:1'),
@@ -245,6 +246,7 @@ def test_truncate_multi_pool_banner_preserved():
     assert len(multi) == 1, '多池 Banner 不应拆成重复 id（构造桥收纳丢池）'
     assert [p.id for p in multi[0].pools] == ['main', 'free'], '多池不丢'
     assert len(multi[0].lifecycle) == 1, 'lifecycle 规则应复制'
+    assert multi[0].max_draws == 20, 'banner 级 max_draws 应透传（复审查修复）'
 
 
 def test_truncate_after_normalized_permanent():

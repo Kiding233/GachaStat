@@ -185,3 +185,43 @@ class TestPityBindTableRoundtripP61:
                 panel.pity_bind_table.cellWidget(i, 0).setChecked(True)
         patterns = panel._read_pity_bind_patterns()
         assert patterns == (f"{bid}.*",), f'同 banner 全池勾选应压缩为 {{banner}}.*，实际 {patterns}'
+
+
+class TestValidateBanners:
+    """保存校验（§3.10.2 + 2026-08-04 全永久检查）。"""
+
+    def test_empty_banner_defs_no_errors(self, qapp):
+        """空 _banner_defs 返回空错误列表（不误拦）。"""
+        from gacha_simulator.gui.config_panel import ConfigPanel
+        panel = ConfigPanel()
+        panel._banner_defs = []
+        assert panel.validate_banners() == []
+
+    def test_all_permanent_detected(self, qapp):
+        """全 banner 永久（无结束时间）→ 校验拦截（2026-08-04 决策）。"""
+        from gacha_simulator.gui.config_panel import ConfigPanel
+        panel = ConfigPanel()
+        panel._banner_defs = [
+            {'id': 'p1', 'name': '永久1', 'available_from': 0.0,
+             'available_until': None, 'pools': [
+                 {'id': 'main', 'cost': 'draw_resource:160', 'rewards': []}]},
+            {'id': 'p2', 'name': '永久2', 'available_from': 0.0,
+             'available_until': None, 'pools': [
+                 {'id': 'main', 'cost': 'draw_resource:160', 'rewards': []}]},
+        ]
+        errors = panel.validate_banners()
+        assert any('均为永久' in e for e in errors), f'应拦截全永久，实际 {errors}'
+
+    def test_mixed_permanent_pass(self, qapp):
+        """混存（一个永久 + 一个有结束时间）→ 通过（归一在解析边界处理）。"""
+        from gacha_simulator.gui.config_panel import ConfigPanel
+        panel = ConfigPanel()
+        panel._banner_defs = [
+            {'id': 'perm', 'name': '永久', 'available_from': 0.0,
+             'available_until': None, 'pools': [
+                 {'id': 'main', 'cost': 'draw_resource:160', 'rewards': []}]},
+            {'id': 'act', 'name': '活动', 'available_from': 0.0,
+             'available_until': 21.0, 'pools': [
+                 {'id': 'main', 'cost': 'draw_resource:160', 'rewards': []}]},
+        ]
+        assert panel.validate_banners() == []

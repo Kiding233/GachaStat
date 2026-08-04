@@ -6,8 +6,8 @@ from PyQt6.QtWidgets import (
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget,
     QLabel, QCheckBox, QScrollArea, QSplitter,
-    QListWidget, QDialog, QDialogButtonBox, QMessageBox, QAbstractItemView,
-    QDateEdit, QCalendarWidget,
+    QListWidget, QListWidgetItem, QDialog, QDialogButtonBox, QMessageBox, QAbstractItemView,
+    QDateEdit, QCalendarWidget, QInputDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -15,7 +15,7 @@ from PyQt6.QtGui import QFont, QColor
 from ..core.config_store import (
     CardDefEntry,
     PityDef, PityConfig, GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
-    BannerEntry, BannerPoolEntry, DAY, derive_pool_type_from_distribution,
+    BannerEntry, BannerPoolEntry, LifecycleRuleEntry, DAY, derive_pool_type_from_distribution,
 )
 from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
@@ -254,29 +254,6 @@ class ConfigPanel(QWidget):
 
     config_changed = pyqtSignal(dict)
 
-    @staticmethod
-    def _infer_pool_type(pool_id, pool_type, note=''):
-        if pool_type and pool_type not in ('角色', ''):
-            return pool_type
-        pid = pool_id.lower()
-        if pid.startswith('pool_w') or '武器' in pid or 'weapon' in pid:
-            return '武器'
-        if pid.startswith('pool_e') or '兑换' in pid or 'exchange' in pid:
-            return '兑换'
-        if '复刻' in note:
-            return '复刻'
-        return pool_type or '角色'
-
-    @staticmethod
-    def _pool_row_bg(pool_type, note=''):
-        if pool_type == '兑换':
-            return QColor(255, 245, 220)
-        if pool_type == '武器':
-            return QColor(220, 240, 255)
-        if pool_type == '复刻' or '复刻' in note:
-            return QColor(240, 255, 240)
-        return None
-
     def __init__(self):
         super().__init__()
         self._store = None
@@ -323,7 +300,7 @@ class ConfigPanel(QWidget):
         self._setup_pool_config(pool_tab_layout)
         pool_tab_layout.addStretch()
         pool_tab_scroll.setWidget(pool_tab_content)
-        self.left_tabs.addTab(pool_tab_scroll, "卡池配置")
+        self.left_tabs.addTab(pool_tab_scroll, "卡池管理")
 
         pity_tab_scroll = QScrollArea()
         pity_tab_scroll.verticalScrollBar().setSingleStep(15)
@@ -386,493 +363,1173 @@ class ConfigPanel(QWidget):
         splitter.setSizes([880, 320])
 
     def _setup_pool_config(self, parent):
-        template_group = QGroupBox("池子模板")
-        template_layout = QVBoxLayout(template_group)
+        """「卡池管理」Tab——P61 Ph8 重写（§3.10）。
 
-        self.pool_template_table = QTableWidget()
-        self.pool_template_table.setColumnCount(6)
-        self.pool_template_table.setHorizontalHeaderLabels(["模板ID", "类型", "持续(天)", "单抽消耗", "分布", "分布编辑"])
-        t_header = self.pool_template_table.horizontalHeader()
-        t_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        t_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        t_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        t_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        t_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.pool_template_table.setColumnWidth(1, 70)
-        self.pool_template_table.setColumnWidth(2, 70)
-        self.pool_template_table.setColumnWidth(3, 160)
-        self.pool_template_table.setColumnWidth(5, 80)
-        self.pool_template_table.verticalHeader().setVisible(False)
-        self.pool_template_table.setAlternatingRowColors(True)
-        self.pool_template_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.pool_template_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.pool_template_table.setMinimumHeight(120)
-        self.pool_template_table.cellDoubleClicked.connect(self._edit_template_distribution)
-        template_layout.addWidget(self.pool_template_table)
+        替换旧「卡池配置」Tab（扁平池表格 + 池子模板）。新结构：
+        左栏 Banner 列表（筛选 + 添加/移除/复制/批量创建）；
+        右栏 Banner 详情（基础字段 4 个 + 两子标签页「池」/「生命周期」）。
+        Banner 是用户配置的一等单位——内含若干 Pool（cost/batch/rewards 内联），
+        Pool 之间经 Lifecycle 规则自动切换。池子模板系统移除（§3.10.6），
+        由「复制 Banner」与「批量创建」替代。
+        """
+        self._banner_defs = []
+        self._current_banner_row: int = -1
 
-        tmpl_btn_layout = QHBoxLayout()
-        add_tmpl_btn = QPushButton("添加模板")
-        add_tmpl_btn.clicked.connect(self._add_pool_template)
-        remove_tmpl_btn = QPushButton("移除选中")
-        remove_tmpl_btn.clicked.connect(self._remove_pool_template)
-        tmpl_btn_layout.addWidget(add_tmpl_btn)
-        tmpl_btn_layout.addWidget(remove_tmpl_btn)
-        tmpl_btn_layout.addStretch()
-        template_layout.addLayout(tmpl_btn_layout)
+        main_layout = QHBoxLayout()
 
-        add_from_tmpl_layout = QHBoxLayout()
-        add_from_tmpl_layout.addWidget(QLabel("从模板批量添加:"))
-        self.tmpl_count_spin = QSpinBox()
-        self.tmpl_count_spin.setRange(1, 50)
-        self.tmpl_count_spin.setValue(8)
-        add_from_tmpl_layout.addWidget(QLabel("数量:"))
-        add_from_tmpl_layout.addWidget(self.tmpl_count_spin)
-        self.tmpl_id_prefix = QLineEdit()
-        self.tmpl_id_prefix.setPlaceholderText("ID前缀(如pool_c)")
-        add_from_tmpl_layout.addWidget(self.tmpl_id_prefix)
-        self.tmpl_name_prefix = QLineEdit()
-        self.tmpl_name_prefix.setPlaceholderText("名称前缀(如角色池)")
-        add_from_tmpl_layout.addWidget(self.tmpl_name_prefix)
-        self.tmpl_start_day = QSpinBox()
-        self.tmpl_start_day.setRange(0, 9999)
-        self.tmpl_start_day.setValue(0)
-        add_from_tmpl_layout.addWidget(QLabel("起始天:"))
-        add_from_tmpl_layout.addWidget(self.tmpl_start_day)
-        self.tmpl_interval = QSpinBox()
-        self.tmpl_interval.setRange(0, 9999)
-        self.tmpl_interval.setValue(21)
-        add_from_tmpl_layout.addWidget(QLabel("间隔天:"))
-        add_from_tmpl_layout.addWidget(self.tmpl_interval)
-        add_from_tmpl_btn = QPushButton("添加")
-        add_from_tmpl_btn.clicked.connect(self._add_pools_from_template)
-        add_from_tmpl_layout.addWidget(add_from_tmpl_btn)
-        add_from_tmpl_layout.addStretch()
-        template_layout.addLayout(add_from_tmpl_layout)
+        # ── 左栏：Banner 列表 ──
+        left_layout = QVBoxLayout()
+        self.banner_filter = QLineEdit()
+        self.banner_filter.setPlaceholderText("筛选 Banner 名或 ID...")
+        self.banner_filter.textChanged.connect(self._filter_banners)
+        left_layout.addWidget(self.banner_filter)
 
-        parent.addWidget(template_group)
+        self.banner_list = QListWidget()
+        self.banner_list.currentRowChanged.connect(self._on_banner_selected)
+        self.banner_list.itemChanged.connect(self._on_banner_item_changed)
+        left_layout.addWidget(self.banner_list, 1)
 
-        group = QGroupBox("卡池配置")
-        layout = QVBoxLayout(group)
+        banner_btn_layout = QHBoxLayout()
+        add_banner_btn = QPushButton("添加")
+        add_banner_btn.clicked.connect(self._add_banner)
+        remove_banner_btn = QPushButton("移除")
+        remove_banner_btn.clicked.connect(self._remove_banner)
+        duplicate_banner_btn = QPushButton("复制")
+        duplicate_banner_btn.clicked.connect(self._duplicate_banner)
+        batch_banner_btn = QPushButton("批量创建...")
+        batch_banner_btn.clicked.connect(self._batch_create_banners)
+        banner_btn_layout.addWidget(add_banner_btn)
+        banner_btn_layout.addWidget(remove_banner_btn)
+        banner_btn_layout.addWidget(duplicate_banner_btn)
+        banner_btn_layout.addWidget(batch_banner_btn)
+        left_layout.addLayout(banner_btn_layout)
+        main_layout.addLayout(left_layout, 1)
 
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("筛选:"))
+        # ── 右栏：Banner 详情 ──
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.pool_filter = QComboBox()
-        self.pool_filter.addItems(["全部", "角色池", "武器池", "兑换池", "复刻池", "普通池"])
-        self.pool_filter.currentIndexChanged.connect(self._filter_pools)
-        filter_layout.addWidget(self.pool_filter)
+        detail_group = QGroupBox("Banner 详情")
+        detail_group.setEnabled(False)
+        self._banner_detail_group = detail_group
+        detail_form = QFormLayout(detail_group)
 
-        self.pool_search = QLineEdit()
-        self.pool_search.setPlaceholderText("搜索池子ID或名称...")
-        self.pool_search.textChanged.connect(self._search_pools)
-        filter_layout.addWidget(self.pool_search)
+        self.banner_name_edit = QLineEdit()
+        self.banner_name_edit.setPlaceholderText("显示名称")
+        self.banner_name_edit.textChanged.connect(self._flush_banner_current_detail)
+        detail_form.addRow("名称:", self.banner_name_edit)
 
-        layout.addLayout(filter_layout)
+        self.banner_id_edit = QLineEdit()
+        self.banner_id_edit.setPlaceholderText("唯一标识符")
+        self.banner_id_edit.textChanged.connect(self._flush_banner_current_detail)
+        detail_form.addRow("ID:", self.banner_id_edit)
 
-        self.pool_table = QTableWidget()
-        self.pool_table.setColumnCount(10)
-        self.pool_table.setHorizontalHeaderLabels([
-            "启用", "ID", "名称", "类型", "开始(天)", "持续(天)", "单抽消耗", "批次大小", "备注", "分布编辑"
-        ])
-        header = self.pool_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
-        self.pool_table.setColumnWidth(0, 40)
-        self.pool_table.setColumnWidth(3, 70)
-        self.pool_table.setColumnWidth(4, 70)
-        self.pool_table.setColumnWidth(5, 70)
-        self.pool_table.setColumnWidth(6, 160)
-        self.pool_table.setColumnWidth(7, 60)
-        self.pool_table.setColumnWidth(9, 80)
-        self.pool_table.verticalHeader().setVisible(False)
-        self.pool_table.setAlternatingRowColors(True)
-        self.pool_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.pool_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.pool_table.setMinimumHeight(250)
-        self.pool_table.cellDoubleClicked.connect(self._edit_pool_distribution)
-        self.pool_table.cellChanged.connect(self._on_pool_cell_changed)
-        layout.addWidget(self.pool_table)
+        self.banner_max_draws_spin = QSpinBox()
+        self.banner_max_draws_spin.setRange(0, 1000000)
+        self.banner_max_draws_spin.setValue(0)
+        self.banner_max_draws_spin.setSpecialValueText("无限制")
+        self.banner_max_draws_spin.setToolTip("Banner 级硬上限抽数；0 = 无限制")
+        self.banner_max_draws_spin.valueChanged.connect(self._flush_banner_current_detail)
+        detail_form.addRow("最大抽数:", self.banner_max_draws_spin)
 
-        btn_layout = QHBoxLayout()
-        add_btn = QPushButton("添加")
-        add_btn.clicked.connect(self._add_pool)
-        remove_btn = QPushButton("移除选中")
-        remove_btn.clicked.connect(self._remove_pool)
-        duplicate_btn = QPushButton("复制选中")
-        duplicate_btn.clicked.connect(self._duplicate_pool)
-        clear_btn = QPushButton("清空")
-        clear_btn.clicked.connect(self._clear_pools)
-        btn_layout.addWidget(add_btn)
-        btn_layout.addWidget(remove_btn)
-        btn_layout.addWidget(duplicate_btn)
-        btn_layout.addWidget(clear_btn)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        window_layout = QHBoxLayout()
+        window_layout.addWidget(QLabel("从"))
+        self.banner_from_spin = QDoubleSpinBox()
+        self.banner_from_spin.setRange(0.0, 99999.0)
+        self.banner_from_spin.setDecimals(1)
+        self.banner_from_spin.setValue(0.0)
+        self.banner_from_spin.valueChanged.connect(self._flush_banner_current_detail)
+        window_layout.addWidget(self.banner_from_spin)
+        window_layout.addWidget(QLabel("到"))
+        self.banner_until_spin = QDoubleSpinBox()
+        self.banner_until_spin.setRange(0.0, 99999.0)
+        self.banner_until_spin.setDecimals(1)
+        self.banner_until_spin.setValue(21.0)
+        self.banner_until_spin.valueChanged.connect(self._flush_banner_current_detail)
+        window_layout.addWidget(self.banner_until_spin)
+        self.banner_permanent_cb = QCheckBox("永久")
+        self.banner_permanent_cb.setToolTip("勾选 = available_until=None（永久开放）")
+        self.banner_permanent_cb.stateChanged.connect(self._on_banner_permanent_toggled)
+        window_layout.addWidget(self.banner_permanent_cb)
+        detail_form.addRow("时间窗口(天):", window_layout)
+        right_layout.addWidget(detail_group)
 
-        hint_label = QLabel("提示：类型列只有「角色」「武器」「兑换」「资源」四种类型会被后续分析识别。批次大小设 10 即一次抽卡行动只能十连。")
-        hint_label.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
-        layout.addWidget(hint_label)
+        # ── 两子标签页：池 / 生命周期 ──
+        self.pool_sub_tabs = QTabWidget()
 
-        parent.addWidget(group)
-        self._all_pool_rows = []
-        self._pool_distributions = {}
-        self._pool_templates = {}
-        self._set_default_templates()
+        pool_tab = QWidget()
+        pool_layout = QVBoxLayout(pool_tab)
+        pool_layout.setContentsMargins(0, 0, 0, 0)
 
-    def _set_default_templates(self):
-        default_templates = {
-            '角色池': {
-                'type': '角色',
-                'duration': 21,
-                'cost': 'draw_resource:160',
-                'distribution': [
-                    {'card_id': '{id}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
-                    {'card_id': '{id}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
-                    {'card_id': '{id}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
-                ],
-            },
-            '武器池': {
-                'type': '武器',
-                'duration': 21,
-                'cost': 'draw_resource:160',
-                'distribution': [
-                    {'card_id': '{id}_ssr', 'probability': 0.7, 'rarity': 'SSR', 'featured': True},
-                    {'card_id': '{id}_sr', 'probability': 6.3, 'rarity': 'SR', 'featured': False},
-                    {'card_id': '{id}_r', 'probability': 93.0, 'rarity': 'R', 'featured': False},
-                ],
-            },
-            '兑换池': {
-                'type': '兑换',
-                'duration': 21,
-                'cost': 'exchange_currency:5',
-                'distribution': [
-                    {'card_id': '{id}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
-                    {'card_id': '{id}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
-                    {'card_id': '{id}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
-                ],
-            },
-        }
-        self._pool_templates = default_templates
-        self._refresh_template_table()
+        # 上半：Pool 列表（5 列，删除卡牌摘要——奖励表下半内联）
+        pool_list_group = QGroupBox("Pool 列表")
+        pool_list_layout = QVBoxLayout(pool_list_group)
+        self.banner_pool_table = QTableWidget()
+        self.banner_pool_table.setColumnCount(5)
+        self.banner_pool_table.setHorizontalHeaderLabels(["ID", "成本", "批次", "一次性", "不计保底"])
+        pool_header = self.banner_pool_table.horizontalHeader()
+        pool_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        pool_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        pool_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        pool_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        pool_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.banner_pool_table.setColumnWidth(2, 55)
+        self.banner_pool_table.setColumnWidth(3, 55)
+        self.banner_pool_table.setColumnWidth(4, 75)
+        self.banner_pool_table.verticalHeader().setVisible(False)
+        self.banner_pool_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.banner_pool_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.banner_pool_table.setMinimumHeight(110)
+        self.banner_pool_table.itemChanged.connect(self._on_pool_table_item_changed)
+        self.banner_pool_table.itemSelectionChanged.connect(self._on_pool_selected)
+        pool_list_layout.addWidget(self.banner_pool_table)
+        pool_btn_layout = QHBoxLayout()
+        add_pool_btn = QPushButton("添加")
+        add_pool_btn.clicked.connect(self._add_pool_to_banner)
+        remove_pool_btn = QPushButton("移除选中")
+        remove_pool_btn.clicked.connect(self._remove_pool_from_banner)
+        pool_btn_layout.addWidget(add_pool_btn)
+        pool_btn_layout.addWidget(remove_pool_btn)
+        pool_btn_layout.addStretch()
+        pool_list_layout.addLayout(pool_btn_layout)
+        pool_layout.addWidget(pool_list_group)
 
-    def _refresh_template_table(self):
-        self.pool_template_table.blockSignals(True)
-        self.pool_template_table.setRowCount(len(self._pool_templates))
-        for i, (tid, tmpl) in enumerate(self._pool_templates.items()):
-            self.pool_template_table.setItem(i, 0, QTableWidgetItem(tid))
-            self.pool_template_table.setItem(i, 1, QTableWidgetItem(tmpl.get('type', '角色')))
-            self.pool_template_table.setItem(i, 2, QTableWidgetItem(str(tmpl.get('duration', 21))))
-            self.pool_template_table.setItem(i, 3, QTableWidgetItem(tmpl.get('cost', 'draw_resource:160')))
-            dist = tmpl.get('distribution', [])
-            dist_str = ', '.join(f"{d['card_id']}({d['probability']}%)" for d in dist) if dist else '(空)'
-            self.pool_template_table.setItem(i, 4, QTableWidgetItem(dist_str))
-            edit_item = QTableWidgetItem("...双击编辑")
-            edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_template_table.setItem(i, 5, edit_item)
-        self.pool_template_table.blockSignals(False)
+        # 下半：选中池 rewards 表（5 列）
+        reward_group = QGroupBox("选中池奖励")
+        reward_layout = QVBoxLayout(reward_group)
+        self.reward_table = QTableWidget()
+        self.reward_table.setColumnCount(5)
+        self.reward_table.setHorizontalHeaderLabels(["卡ID", "概率(%)", "稀有度", "Featured", "资源获取"])
+        reward_header = self.reward_table.horizontalHeader()
+        reward_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        reward_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        reward_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        reward_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        reward_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.reward_table.setColumnWidth(1, 90)
+        self.reward_table.setColumnWidth(2, 60)
+        self.reward_table.setColumnWidth(3, 60)
+        self.reward_table.verticalHeader().setVisible(False)
+        self.reward_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.reward_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.reward_table.setMinimumHeight(130)
+        reward_layout.addWidget(self.reward_table)
+        reward_btn_layout = QHBoxLayout()
+        add_reward_btn = QPushButton("添加")
+        add_reward_btn.clicked.connect(self._add_reward_row)
+        remove_reward_btn = QPushButton("移除选中")
+        remove_reward_btn.clicked.connect(self._remove_reward_rows)
+        scale_reward_btn = QPushButton("缩放至100%")
+        scale_reward_btn.clicked.connect(self._scale_rewards_to_100)
+        import_reward_btn = QPushButton("从其他池导入...")
+        import_reward_btn.clicked.connect(self._import_rewards_from_pool)
+        self._reward_total_label = QLabel("合计: 0%")
+        self._reward_total_label.setStyleSheet("color: #888;")
+        reward_btn_layout.addWidget(add_reward_btn)
+        reward_btn_layout.addWidget(remove_reward_btn)
+        reward_btn_layout.addWidget(scale_reward_btn)
+        reward_btn_layout.addWidget(import_reward_btn)
+        reward_btn_layout.addStretch()
+        reward_btn_layout.addWidget(self._reward_total_label)
+        reward_layout.addLayout(reward_btn_layout)
+        pool_layout.addWidget(reward_group)
+        self.pool_sub_tabs.addTab(pool_tab, "池")
 
-    def _add_pool_template(self):
-        row = self.pool_template_table.rowCount()
-        tid = f'模板{row+1}'
-        while tid in self._pool_templates:
-            row += 1
-            tid = f'模板{row+1}'
-        self._pool_templates[tid] = {
-            'type': '角色',
-            'duration': 21,
-            'cost': 'draw_resource:160',
-            'distribution': [
-                {'card_id': '{id}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
-                {'card_id': '{id}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
-                {'card_id': '{id}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
-            ],
-        }
-        self._refresh_template_table()
+        # 生命周期子标签页（5 列）
+        lifecycle_tab = QWidget()
+        lifecycle_layout = QVBoxLayout(lifecycle_tab)
+        lifecycle_layout.setContentsMargins(0, 0, 0, 0)
+        self.lifecycle_table = QTableWidget()
+        self.lifecycle_table.setColumnCount(5)
+        self.lifecycle_table.setHorizontalHeaderLabels(["关联池", "条件", "阈值", "动作", "目标"])
+        lc_header = self.lifecycle_table.horizontalHeader()
+        for ci in range(5):
+            lc_header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Stretch)
+        self.lifecycle_table.verticalHeader().setVisible(False)
+        self.lifecycle_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.lifecycle_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.lifecycle_table.itemChanged.connect(self._on_lifecycle_item_changed)
+        lifecycle_layout.addWidget(self.lifecycle_table)
+        lc_btn_layout = QHBoxLayout()
+        add_lc_btn = QPushButton("添加")
+        add_lc_btn.clicked.connect(self._add_lifecycle_row)
+        remove_lc_btn = QPushButton("移除选中")
+        remove_lc_btn.clicked.connect(self._remove_lifecycle_rows)
+        lc_btn_layout.addWidget(add_lc_btn)
+        lc_btn_layout.addWidget(remove_lc_btn)
+        lc_btn_layout.addStretch()
+        lifecycle_layout.addLayout(lc_btn_layout)
+        self.pool_sub_tabs.addTab(lifecycle_tab, "生命周期")
 
-    def _remove_pool_template(self):
-        rows = sorted([r.row() for r in self.pool_template_table.selectionModel().selectedRows()], reverse=True)
-        tids = []
-        for row in rows:
-            tid_item = self.pool_template_table.item(row, 0)
-            if tid_item:
-                tids.append(tid_item.text())
-        for tid in tids:
-            self._pool_templates.pop(tid, None)
-        self._refresh_template_table()
+        right_layout.addWidget(self.pool_sub_tabs, 1)
+        main_layout.addWidget(right_widget, 2)
 
-    def _edit_template_distribution(self, row, col):
-        if col != 5:
-            return
-        tid_item = self.pool_template_table.item(row, 0)
-        if not tid_item:
-            return
-        tid = tid_item.text()
-        tmpl = self._pool_templates.get(tid)
-        if not tmpl:
-            return
-        dist = tmpl.get('distribution', [])
-        dialog = PoolDistributionDialog(tid, dist, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            result = dialog.get_distribution()
-            tmpl['distribution'] = result
-            for item in result:
-                rg = item.get('resources_gained', {})
-                if isinstance(rg, dict):
-                    for rid in rg.keys():
-                        self._ensure_resource_registered(rid)
-            self._refresh_template_table()
-
-    def _add_pools_from_template(self):
-        rows = self.pool_template_table.selectionModel().selectedRows()
-        if not rows:
-            QMessageBox.warning(self, "提示", "请先在模板表中选择一个模板")
-            return
-        row = rows[0].row()
-        tid_item = self.pool_template_table.item(row, 0)
-        if not tid_item:
-            return
-        tid = tid_item.text()
-        tmpl = self._pool_templates.get(tid)
-        if not tmpl:
-            return
-
-        count = self.tmpl_count_spin.value()
-        id_prefix = self.tmpl_id_prefix.text().strip() or tid
-        name_prefix = self.tmpl_name_prefix.text().strip() or tid
-        start_day = self.tmpl_start_day.value()
-        interval = self.tmpl_interval.value()
-
-        pools = []
-        for i in range(count):
-            pid = f'{id_prefix}{i+1}'
-            dist = []
-            for d in tmpl.get('distribution', []):
-                item = dict(d)
-                item['card_id'] = item['card_id'].replace('{id}', pid)
-                dist.append(item)
-            pool = {
-                'enabled': True,
-                'id': pid,
-                'name': f'{name_prefix}{i+1}',
-                'type': tmpl.get('type', '角色'),
-                'start_day': start_day + i * interval,
-                'duration': tmpl.get('duration', 21),
-                'cost': tmpl.get('cost', 'draw_resource:160'),
-                'note': '复刻池' if i > 0 and interval > 0 else '',
-                'distribution': dist,
-                'batch_size': 1,
-            }
-            pools.append(pool)
-
-        existing_count = self.pool_table.rowCount()
-        self.pool_table.blockSignals(True)
-        self.pool_table.setRowCount(existing_count + count)
-        for i, p in enumerate(pools):
-            r = existing_count + i
-            enabled_cb = QCheckBox()
-            enabled_cb.setChecked(p['enabled'])
-            self.pool_table.setCellWidget(r, 0, enabled_cb)
-            self.pool_table.setItem(r, 1, QTableWidgetItem(p['id']))
-            self.pool_table.setItem(r, 2, QTableWidgetItem(p['name']))
-            self.pool_table.setItem(r, 3, QTableWidgetItem(p['type']))
-            self.pool_table.setItem(r, 4, QTableWidgetItem(str(p['start_day'])))
-            self.pool_table.setItem(r, 5, QTableWidgetItem(str(p['duration'])))
-            self.pool_table.setItem(r, 6, QTableWidgetItem(p['cost']))
-            self.pool_table.setItem(r, 7, QTableWidgetItem(str(p.get('batch_size', 1))))
-            self.pool_table.setItem(r, 8, QTableWidgetItem(p.get('note', '')))
-            edit_item = QTableWidgetItem("...双击编辑")
-            edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(r, 9, edit_item)
-            self._pool_distributions[p['id']] = p['distribution']
-
-            inferred = self._infer_pool_type(p['id'], p['type'], p.get('note', ''))
-            row_bg = self._pool_row_bg(inferred, p.get('note', ''))
-            if row_bg:
-                for col in range(10):
-                    item = self.pool_table.item(r, col)
-                    if item:
-                        item.setBackground(row_bg)
-
-        self.pool_table.blockSignals(False)
-        self._sync_card_defs_from_pools()
-        self._register_resources_from_pools(pools)
-        self._update_preview()
-
-    def _set_pool_table(self, pools):
-        self.pool_table.blockSignals(True)
-        self.pool_table.setRowCount(len(pools))
-        self._all_pool_rows = list(range(len(pools)))
-        self._pool_distributions = {}
-
-        for i, p in enumerate(pools):
-            enabled_cb = QCheckBox()
-            enabled_cb.setChecked(p.get('enabled', True))
-            self.pool_table.setCellWidget(i, 0, enabled_cb)
-
-            pool_id = p.get('id', '')
-            self.pool_table.setItem(i, 1, QTableWidgetItem(pool_id))
-            self.pool_table.setItem(i, 2, QTableWidgetItem(p.get('name', '')))
-            self.pool_table.setItem(i, 3, QTableWidgetItem(p.get('type', '角色')))
-            self.pool_table.setItem(i, 4, QTableWidgetItem(str(p.get('start_day', 0))))
-            self.pool_table.setItem(i, 5, QTableWidgetItem(str(p.get('duration', 21))))
-
-            cost = p.get('cost', 160)
-            if isinstance(cost, int):
-                cost_text = f'draw_resource:{cost}'
-            else:
-                cost_text = str(cost)
-            self.pool_table.setItem(i, 6, QTableWidgetItem(cost_text))
-
-            dist = p.get('distribution')
-            if dist is not None:
-                self._pool_distributions[pool_id] = dist
-                note = f"{len(dist)}卡"
-            else:
-                note = p.get('note', '')
-            batch_size = p.get('batch_size', 1)
-            self.pool_table.setItem(i, 7, QTableWidgetItem(str(batch_size)))
-            self.pool_table.setItem(i, 8, QTableWidgetItem(note))
-            edit_item = QTableWidgetItem("...双击编辑")
-            edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(i, 9, edit_item)
-
-            inferred = self._infer_pool_type(pool_id, p.get('type', ''), note)
-            row_bg = self._pool_row_bg(inferred, note)
-            if row_bg:
-                for col in range(10):
-                    item = self.pool_table.item(i, col)
-                    if item:
-                        item.setBackground(row_bg)
-
-        self._sync_card_defs_from_pools()
-        self._register_resources_from_pools(pools)
-        self.pool_table.blockSignals(False)
-        self._update_preview()
-
-    def _filter_pools(self):
-        filter_type = self.pool_filter.currentText()
-        for i in range(self.pool_table.rowCount()):
-            if filter_type == "全部":
-                self.pool_table.setRowHidden(i, False)
-            else:
-                type_col = self.pool_table.item(i, 3)
-                hidden = type_col.text() != filter_type if type_col else True
-                self.pool_table.setRowHidden(i, hidden)
-
-    def _search_pools(self, text):
-        text = text.lower()
-        for i in range(self.pool_table.rowCount()):
-            if not text:
-                self.pool_table.setRowHidden(i, False)
-                continue
-            id_item = self.pool_table.item(i, 1)
-            name_item = self.pool_table.item(i, 2)
-            id_match = id_item.text().lower().find(text) >= 0 if id_item else False
-            name_match = name_item.text().lower().find(text) >= 0 if name_item else False
-            self.pool_table.setRowHidden(i, not (id_match or name_match))
-
-    def _add_pool(self):
-        row = self.pool_table.rowCount()
-        self.pool_table.insertRow(row)
-        enabled_cb = QCheckBox()
-        enabled_cb.setChecked(True)
-        self.pool_table.setCellWidget(row, 0, enabled_cb)
-        self.pool_table.setItem(row, 1, QTableWidgetItem(f"pool_{row+1}"))
-        self.pool_table.setItem(row, 2, QTableWidgetItem(f"池子{row+1}"))
-        self.pool_table.setItem(row, 3, QTableWidgetItem("角色"))
-        self.pool_table.setItem(row, 4, QTableWidgetItem("0"))
-        self.pool_table.setItem(row, 5, QTableWidgetItem("21"))
-        self.pool_table.setItem(row, 6, QTableWidgetItem("draw_resource:160"))
-        self.pool_table.setItem(row, 7, QTableWidgetItem("1"))
-        self.pool_table.setItem(row, 8, QTableWidgetItem(""))
-        edit_item = QTableWidgetItem("...双击编辑")
-        edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.pool_table.setItem(row, 9, edit_item)
-        self._all_pool_rows.append(row)
-        self._ensure_resource_registered('draw_resource', '抽卡资源')
-        self._sync_card_defs_from_pools()
-        self._update_preview()
-
-    def _remove_pool(self):
-        rows = sorted([r.row() for r in self.pool_table.selectionModel().selectedRows()], reverse=True)
-        for row in rows:
-            id_item = self.pool_table.item(row, 1)
-            if id_item:
-                self._pool_distributions.pop(id_item.text().strip(), None)
-            self.pool_table.removeRow(row)
-        self._sync_card_defs_from_pools()
-        self._update_preview()
-
-    def _duplicate_pool(self):
-        rows = [r.row() for r in self.pool_table.selectionModel().selectedRows()]
-        for row in rows:
-            new_row = self.pool_table.rowCount()
-            self.pool_table.insertRow(new_row)
-            for col in range(10):
-                if col == 0:
-                    enabled_cb = QCheckBox()
-                    enabled_cb.setChecked(True)
-                    self.pool_table.setCellWidget(new_row, 0, enabled_cb)
-                else:
-                    src_item = self.pool_table.item(row, col)
-                    if src_item:
-                        new_item = QTableWidgetItem(src_item.text())
-                        new_item.setBackground(src_item.background())
-                        self.pool_table.setItem(new_row, col, new_item)
-            edit_item = QTableWidgetItem("...双击编辑")
-            edit_item.setFlags(edit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pool_table.setItem(new_row, 9, edit_item)
-            id_item = self.pool_table.item(new_row, 1)
-            if id_item:
-                id_item.setText(f"{id_item.text()}_copy")
-        self._update_preview()
-
-    def _clear_pools(self):
-        self.pool_table.setRowCount(0)
-        self._all_pool_rows = []
-        self._pool_distributions = {}
-        self._sync_card_defs_from_pools()
-        self._update_preview()
-
-    def _edit_pool_distribution(self, row, col):
-        if col != 9:
-            return
-        pool_id_item = self.pool_table.item(row, 1)
-        if not pool_id_item:
-            return
-        pool_id = pool_id_item.text()
-
-        distribution = self._pool_distributions.get(pool_id)
-        if distribution is None:
-            distribution = [
-                {'card_id': f'{pool_id}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
-                {'card_id': f'{pool_id}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
-                {'card_id': f'{pool_id}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
-            ]
-
-        dialog = PoolDistributionDialog(pool_id, distribution, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            result = dialog.get_distribution()
-            self._pool_distributions[pool_id] = result
-            for item in result:
-                rg = item.get('resources_gained', {})
-                if isinstance(rg, dict):
-                    for rid in rg.keys():
-                        self._ensure_resource_registered(rid)
-            note_item = self.pool_table.item(row, 8)
-            if note_item:
-                note_item.setText(f"{len(result)}卡")
-            self._sync_card_defs_from_pools()
+        parent.addLayout(main_layout)
 
     # ══════════════════════════════════════════════════════════════════
+    # P61 Ph8：卡池管理 Tab —— Banner / Pool / Rewards / Lifecycle 操作
+    # （替换旧「卡池配置」扁平池表格 + 池子模板系统，§3.10）
+    # ══════════════════════════════════════════════════════════════════
+
+    def _iter_pool_rewards(self):
+        """遍历所有 Banner 的所有 Pool 的所有 rewards（§3.10.7 正向同步统一入口）。
+
+        返回 (full_key, reward) 生成器——full_key = {banner_id}.{pool_id} 全限定键
+        （与逐池统计键/`card_defs[].pools` 键空间同口径，Ph3 展平视图）。
+        替代旧 pool_table 行遍历，供 _sync_card_defs_from_pools /
+        _register_resources_from_pools / _compute_pools_map 等消费。
+        """
+        for b in self._banner_defs:
+            bid = b.get('id', '')
+            for p in b.get('pools', []):
+                full_key = f"{bid}.{p.get('id', '')}"
+                for r in p.get('rewards', []) or []:
+                    yield full_key, r
+
+    def _selected_banner_idx(self):
+        """当前选中 Banner 在 _banner_defs 的下标；无选中返回 -1。"""
+        row = self.banner_list.currentRow()
+        if row < 0 or row >= self.banner_list.count():
+            return -1
+        item = self.banner_list.item(row)
+        if item is None:
+            return -1
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _refresh_banner_list(self, select_idx=-1):
+        self.banner_list.blockSignals(True)
+        self.banner_list.clear()
+        for i, b in enumerate(self._banner_defs):
+            item = QListWidgetItem(b.get('name', '') or b.get('id', ''))
+            item.setData(Qt.ItemDataRole.UserRole, i)
+            # §3.10.1 列表行 enabled 勾选开关（不勾选 = 该 Banner 不参与模拟）
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if b.get('enabled', True)
+                               else Qt.CheckState.Unchecked)
+            self.banner_list.addItem(item)
+        if select_idx >= 0 and select_idx < len(self._banner_defs):
+            self.banner_list.setCurrentRow(select_idx)
+        self.banner_list.blockSignals(False)
+
+    def _on_banner_item_changed(self, item):
+        """Banner 列表行勾选状态 → 写回 _banner_defs[idx]['enabled']。"""
+        bidx = item.data(Qt.ItemDataRole.UserRole)
+        if 0 <= bidx < len(self._banner_defs):
+            self._banner_defs[bidx]['enabled'] = \
+                item.checkState() == Qt.CheckState.Checked
+
+    def _filter_banners(self, text):
+        text = text.lower()
+        for i in range(self.banner_list.count()):
+            item = self.banner_list.item(i)
+            bidx = item.data(Qt.ItemDataRole.UserRole)
+            b = self._banner_defs[bidx] if 0 <= bidx < len(self._banner_defs) else {}
+            match = (text in b.get('id', '').lower()) or (text in b.get('name', '').lower())
+            item.setHidden(not match)
+
+    def _add_banner(self):
+        self._flush_banner_current_detail()
+        existing_ids = {b['id'] for b in self._banner_defs}
+        idx = 1
+        while f'banner_{idx}' in existing_ids:
+            idx += 1
+        banner = {
+            'id': f'banner_{idx}',
+            'name': f'Banner {idx}',
+            'enabled': True,
+            'max_draws': None,
+            'available_from': 0.0,
+            'available_until': 21.0,
+            'pools': [{
+                'id': 'main',
+                'cost': 'draw_resource:160',
+                'batch_size': 1,
+                'excludes_all_pity': False,
+                'max_draws': None,
+                'exchange_card_id': None,
+                'epitomizable_cards': [],
+                'rewards': [
+                    {'card_id': f'banner_{idx}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
+                    {'card_id': f'banner_{idx}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
+                    {'card_id': f'banner_{idx}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
+                ],
+            }],
+            'lifecycle': [],
+        }
+        self._banner_defs.append(banner)
+        self._refresh_banner_list(len(self._banner_defs) - 1)
+        self._on_banner_selected(len(self._banner_defs) - 1)
+        # §3.10.7：新增 Banner 的默认奖励卡注册进「卡牌定义」Tab
+        self._sync_card_defs_from_pools()
+        self._update_preview()
+
+    def _remove_banner(self):
+        bidx = self._selected_banner_idx()
+        if bidx < 0:
+            QMessageBox.information(self, "提示", "请先选择一个 Banner")
+            return
+        # §3.10.2 移除安全检查：检查保底绑定引用
+        refs = self._collect_banner_references(bidx)
+        if refs:
+            resp = QMessageBox.question(
+                self, "Banner 被引用",
+                "该 Banner 的 Pool 被以下保底规则绑定，删除后将自动解除绑定：\n\n"
+                + '\n'.join(f"  · {r}" for r in refs[:10])
+                + ("\n  ..." if len(refs) > 10 else "") + "\n\n确认删除？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
+        banner_id = self._banner_defs[bidx].get('id', '')
+        self._unbind_pity_pools_for_banner(banner_id)
+        del self._banner_defs[bidx]
+        self._refresh_banner_list()
+        self._clear_banner_detail()
+        self._update_preview()
+
+    def _duplicate_banner(self):
+        bidx = self._selected_banner_idx()
+        if bidx < 0:
+            QMessageBox.information(self, "提示", "请先选择一个 Banner")
+            return
+        import copy
+        src = self._banner_defs[bidx]
+        new_banner = copy.deepcopy(src)
+        new_banner['id'] = f"{src['id']}_copy"
+        new_banner['name'] = f"{src['name']} 副本"
+        self._banner_defs.append(new_banner)
+        self._refresh_banner_list(len(self._banner_defs) - 1)
+        self._on_banner_selected(len(self._banner_defs) - 1)
+        self._sync_card_defs_from_pools()
+        self._update_preview()
+
+    def _batch_create_banners(self):
+        """§3.10.6 批量创建对话框：模板 Banner / 数量 / ID前缀 / 名称前缀 / 起始/间隔。"""
+        if not self._banner_defs:
+            QMessageBox.information(self, "提示", "请先创建一个 Banner 作为模板")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("批量创建 Banner")
+        form = QFormLayout(dialog)
+
+        tmpl_combo = QComboBox()
+        for b in self._banner_defs:
+            tmpl_combo.addItem(f"{b.get('name', '')} ({b.get('id', '')})")
+        form.addRow("模板 Banner:", tmpl_combo)
+
+        count_spin = QSpinBox()
+        count_spin.setRange(1, 50)
+        count_spin.setValue(8)
+        form.addRow("数量:", count_spin)
+
+        id_prefix = QLineEdit('banner_')
+        form.addRow("ID前缀:", id_prefix)
+        name_prefix = QLineEdit('角色池')
+        form.addRow("名称前缀:", name_prefix)
+        start_spin = QDoubleSpinBox()
+        start_spin.setRange(0.0, 99999.0)
+        start_spin.setDecimals(1)
+        start_spin.setValue(0.0)
+        form.addRow("起始时间(天):", start_spin)
+        interval_spin = QDoubleSpinBox()
+        interval_spin.setRange(0.0, 9999.0)
+        interval_spin.setDecimals(1)
+        interval_spin.setValue(21.0)
+        form.addRow("间隔(天):", interval_spin)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        import copy
+        src = copy.deepcopy(self._banner_defs[tmpl_combo.currentIndex()])
+        existing_ids = {b['id'] for b in self._banner_defs}
+        n = count_spin.value()
+        start = start_spin.value()
+        interval = interval_spin.value()
+        pfx = id_prefix.text().strip() or 'banner_'
+        npfx = name_prefix.text().strip() or '池'
+        for i in range(n):
+            bid = f"{pfx}{i+1}"
+            while bid in existing_ids:
+                i += 1
+                bid = f"{pfx}{i+1}"
+            existing_ids.add(bid)
+            b = copy.deepcopy(src)
+            b['id'] = bid
+            b['name'] = f"{npfx}{i+1}"
+            b['available_from'] = round(start + i * interval, 1)
+            b['available_until'] = round(start + (i + 1) * interval, 1)
+            for pool in b.get('pools', []):
+                for r in pool.get('rewards', []):
+                    cid = r.get('card_id', '')
+                    if '{id}' in cid:
+                        r['card_id'] = cid.replace('{id}', bid)
+            self._banner_defs.append(b)
+        self._refresh_banner_list(len(self._banner_defs) - 1)
+        self._sync_card_defs_from_pools()
+        self._update_preview()
+
+    def _collect_banner_references(self, bidx):
+        """收集引用该 Banner Pool 的保底规则（§3.10.2 移除安全检查）。"""
+        banner = self._banner_defs[bidx]
+        banner_id = banner.get('id', '')
+        pool_ids = [p.get('id', '') for p in banner.get('pools', [])]
+        full_keys = {f"{banner_id}.{pid}" for pid in pool_ids}
+        refs = []
+        for pd in getattr(self, '_pity_defs', []):
+            pools = pd.get('pools', ('*',))
+            if not pools or pools == ('*',):
+                continue
+            import fnmatch as _fn
+            for key in full_keys:
+                if any(_fn.fnmatch(key, ptn) for ptn in pools):
+                    refs.append(f"保底「{pd.get('name', '')}」")
+                    break
+        return refs
+
+    def _unbind_pity_pools_for_banner(self, banner_id):
+        """删除 Banner 前解除其 Pool 上的精确保底绑定（§3.10.2；* 通配绑定保留）。"""
+        for pd in getattr(self, '_pity_defs', []):
+            pools = list(pd.get('pools', ('*',)))
+            if pools == ['*'] or not pools:
+                continue
+            kept = [p for p in pools if not p.startswith(banner_id + '.')]
+            if kept != pools:
+                pd['pools'] = tuple(kept) if kept else []
+
+    def _clear_banner_detail(self):
+        self._current_banner_row = -1
+        self._banner_detail_group.setEnabled(False)
+        self.banner_name_edit.setText('')
+        self.banner_id_edit.setText('')
+        self.banner_max_draws_spin.setValue(0)
+        self.banner_from_spin.setValue(0.0)
+        self.banner_until_spin.setValue(0.0)
+        self.banner_permanent_cb.setChecked(True)
+        self.banner_pool_table.setRowCount(0)
+        self.reward_table.setRowCount(0)
+        self.lifecycle_table.setRowCount(0)
+
+    def _on_banner_selected(self, row):
+        self._flush_banner_current_detail()
+        bidx = self._selected_banner_idx()
+        if bidx < 0:
+            self._clear_banner_detail()
+            return
+        self._current_banner_row = bidx
+        self._banner_detail_group.setEnabled(True)
+        b = self._banner_defs[bidx]
+
+        self.banner_name_edit.blockSignals(True)
+        self.banner_id_edit.blockSignals(True)
+        self.banner_max_draws_spin.blockSignals(True)
+        self.banner_from_spin.blockSignals(True)
+        self.banner_until_spin.blockSignals(True)
+        self.banner_permanent_cb.blockSignals(True)
+        self.banner_name_edit.setText(b.get('name', ''))
+        self.banner_id_edit.setText(b.get('id', ''))
+        self.banner_max_draws_spin.setValue(int(b.get('max_draws') or 0))
+        self.banner_from_spin.setValue(float(b.get('available_from') or 0.0))
+        until = b.get('available_until')
+        permanent = until is None
+        self.banner_permanent_cb.setChecked(permanent)
+        self.banner_until_spin.setValue(float(until) if not permanent else 0.0)
+        self.banner_until_spin.setEnabled(not permanent)
+        self.banner_name_edit.blockSignals(False)
+        self.banner_id_edit.blockSignals(False)
+        self.banner_max_draws_spin.blockSignals(False)
+        self.banner_from_spin.blockSignals(False)
+        self.banner_until_spin.blockSignals(False)
+        self.banner_permanent_cb.blockSignals(False)
+
+        self._refresh_pool_table()
+
+    def _on_banner_permanent_toggled(self, checked):
+        self.banner_until_spin.setEnabled(not checked)
+        self._flush_banner_current_detail()
+
+    def _flush_banner_current_detail(self):
+        """从右栏基础字段读取 → 写回 _banner_defs[current]（仿 _flush_pity_current_detail）。"""
+        bidx = self._current_banner_row
+        if bidx < 0 or bidx >= len(self._banner_defs):
+            return
+        b = self._banner_defs[bidx]
+        b['name'] = self.banner_name_edit.text().strip()
+        new_id = self.banner_id_edit.text().strip() or b.get('id', '')
+        if new_id != b.get('id', ''):
+            # §3.10.3 id 变更 → 级联更新保底绑定/卡牌归属中的全限定键
+            self._rename_banner_references(b.get('id', ''), new_id)
+        b['id'] = new_id
+        md = self.banner_max_draws_spin.value()
+        b['max_draws'] = int(md) if md > 0 else None
+        b['available_from'] = self.banner_from_spin.value()
+        b['available_until'] = None if self.banner_permanent_cb.isChecked() \
+            else self.banner_until_spin.value()
+        item = self.banner_list.currentItem()
+        if item is not None:
+            item.setText(b.get('name', '') or b.get('id', ''))
+        self._update_preview()
+
+    def _rename_banner_references(self, old_id, new_id):
+        """Banner id 变更 → 级联更新 _pity_defs 绑定与 card_defs 归属中的全限定键。
+
+        §3.10.3：id 可编辑，变更时更新引用，避免保底绑定/目标归属指向旧 id 静默失配。
+        """
+        if not old_id or old_id == new_id:
+            return
+        for pd in getattr(self, '_pity_defs', []):
+            pools = list(pd.get('pools', ('*',)))
+            if pools == ['*'] or not pools:
+                continue
+            pools = [f"{new_id}.{p.split('.', 1)[1]}" if p.startswith(old_id + '.') else p
+                     for p in pools]
+            pd['pools'] = tuple(pools)
+        # card_defs pools 全限定键同步（Ph3 展平视图口径）
+        existing = self.get_card_defs()
+        changed = False
+        for cd in existing:
+            pools = cd.get('pools', [])
+            pools = [f"{new_id}.{p.split('.', 1)[1]}" if p.startswith(old_id + '.') else p
+                     for p in pools]
+            if pools != cd.get('pools', []):
+                cd['pools'] = pools
+                changed = True
+        if changed:
+            self.set_card_defs(existing)
+
+    # ── Pool 操作 ──
+
+    def _selected_pool_idx(self):
+        """当前选中 Pool 在 _banner_defs[bidx]['pools'] 的下标；无选中返回 -1。"""
+        bidx = self._current_banner_row
+        if bidx < 0 or bidx >= len(self._banner_defs):
+            return -1
+        rows = self.banner_pool_table.selectionModel().selectedRows()
+        if not rows:
+            return -1
+        row = rows[0].row()
+        pools = self._banner_defs[bidx].get('pools', [])
+        if row < 0 or row >= len(pools):
+            return -1
+        return row
+
+    def _refresh_pool_table(self):
+        bidx = self._current_banner_row
+        self.banner_pool_table.blockSignals(True)
+        self.banner_pool_table.setRowCount(0)
+        if bidx < 0 or bidx >= len(self._banner_defs):
+            self.banner_pool_table.blockSignals(False)
+            self.reward_table.setRowCount(0)
+            self.lifecycle_table.setRowCount(0)
+            return
+        pools = self._banner_defs[bidx].get('pools', [])
+        self.banner_pool_table.setRowCount(len(pools))
+        for i, p in enumerate(pools):
+            self.banner_pool_table.setItem(i, 0, QTableWidgetItem(p.get('id', '')))
+            self.banner_pool_table.setItem(i, 1, QTableWidgetItem(p.get('cost', 'draw_resource:160')))
+            batch_spin = QSpinBox()
+            batch_spin.setRange(1, 100)
+            batch_spin.setValue(int(p.get('batch_size', 1)))
+            batch_spin.valueChanged.connect(
+                lambda val, r=i: self._on_pool_batch_changed(r, val))
+            self.banner_pool_table.setCellWidget(i, 2, batch_spin)
+            once_cb = QCheckBox()
+            once_cb.setChecked(p.get('max_draws') is not None
+                               and p.get('max_draws') == p.get('batch_size', 1))
+            once_cb.setToolTip("一次性池（max_draws=batch_size，DECISION-1）")
+            once_cb.stateChanged.connect(
+                lambda ch, r=i: self._on_pool_once_toggled(r, ch))
+            self.banner_pool_table.setCellWidget(i, 3, once_cb)
+            excl_cb = QCheckBox()
+            excl_cb.setChecked(p.get('excludes_all_pity', False))
+            excl_cb.setToolTip("excludes_all_pity——不计保底")
+            excl_cb.stateChanged.connect(
+                lambda ch, r=i: self._on_pool_excl_toggled(r, ch))
+            self.banner_pool_table.setCellWidget(i, 4, excl_cb)
+        self.banner_pool_table.blockSignals(False)
+        if pools:
+            self.banner_pool_table.selectRow(0)
+        else:
+            self.reward_table.setRowCount(0)
+            self.lifecycle_table.setRowCount(0)
+        self._refresh_lifecycle_table()
+
+    def _on_pool_table_item_changed(self, item):
+        """Pool ID / 成本内联编辑 → 写回（§3.10.4）。"""
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        row = item.row()
+        pools = self._banner_defs[bidx].get('pools', [])
+        if row < 0 or row >= len(pools):
+            return
+        if item.column() == 0:
+            old_id = pools[row].get('id', '')
+            new_id = item.text().strip()
+            if new_id != old_id:
+                # §3.10.4 id 变更 → 级联更新 lifecycle 规则引用与保底绑定全限定键
+                self._rename_pool_references(bidx, old_id, new_id)
+            pools[row]['id'] = new_id
+            self._refresh_lifecycle_table()  # 关联池/目标下拉同步
+        elif item.column() == 1:
+            pools[row]['cost'] = item.text().strip()
+            # §3.10.7 正向同步：成本资源注册
+            for part in item.text().strip().split('&'):
+                part = part.strip()
+                if ':' in part:
+                    self._ensure_resource_registered(part.split(':')[0].strip())
+
+    def _rename_pool_references(self, bidx, old_id, new_id):
+        """Pool id 变更 → 级联更新 lifecycle 规则（pool/target）与保底绑定。
+
+        §3.10.4：id 内联编辑，变更时更新引用，杜绝悬空 pool_draws 规则 / switch_to 指向旧 id。
+        """
+        if not old_id or old_id == new_id or bidx < 0 or bidx >= len(self._banner_defs):
+            return
+        b = self._banner_defs[bidx]
+        for rule in b.get('lifecycle', []):
+            if rule.get('pool') == old_id:
+                rule['pool'] = new_id
+            if rule.get('target') == old_id:
+                rule['target'] = new_id
+        # 保底绑定全限定键 {banner}.{old_id} → {banner}.{new_id}
+        bid = b.get('id', '')
+        for pd in getattr(self, '_pity_defs', []):
+            pools = list(pd.get('pools', ('*',)))
+            if pools == ['*'] or not pools:
+                continue
+            pools = [f"{bid}.{new_id}" if p == f"{bid}.{old_id}" else p for p in pools]
+            pd['pools'] = tuple(pools)
+
+    def _on_pool_batch_changed(self, row, val):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        pools = self._banner_defs[bidx].get('pools', [])
+        if row < 0 or row >= len(pools):
+            return
+        pools[row]['batch_size'] = int(val)
+        # 一次性池语义联动：max_draws 随 batch_size 同步（DECISION-1）
+        if pools[row].get('max_draws') is not None:
+            pools[row]['max_draws'] = int(val)
+
+    def _on_pool_once_toggled(self, row, checked):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        pools = self._banner_defs[bidx].get('pools', [])
+        if row < 0 or row >= len(pools):
+            return
+        if checked:
+            pools[row]['max_draws'] = int(pools[row].get('batch_size', 1))
+        else:
+            pools[row]['max_draws'] = None
+
+    def _on_pool_excl_toggled(self, row, checked):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        pools = self._banner_defs[bidx].get('pools', [])
+        if row < 0 or row >= len(pools):
+            return
+        pools[row]['excludes_all_pity'] = bool(checked)
+
+    def _on_pool_selected(self):
+        self._refresh_reward_table()
+
+    def _add_pool_to_banner(self):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            QMessageBox.information(self, "提示", "请先选择一个 Banner")
+            return
+        pools = self._banner_defs[bidx].get('pools', [])
+        used = {p.get('id', '') for p in pools}
+        n = 1
+        new_id = 'pool_1'
+        while new_id in used:
+            n += 1
+            new_id = f'pool_{n}'
+        bid = self._banner_defs[bidx].get('id', '')
+        pools.append({
+            'id': new_id,
+            'cost': 'draw_resource:160',
+            'batch_size': 1,
+            'excludes_all_pity': False,
+            'max_draws': None,
+            'exchange_card_id': None,
+            'epitomizable_cards': [],
+            'rewards': [
+                {'card_id': f'{bid}_{new_id}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
+                {'card_id': f'{bid}_{new_id}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
+                {'card_id': f'{bid}_{new_id}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
+            ],
+        })
+        self._refresh_pool_table()
+        self.banner_pool_table.selectRow(len(pools) - 1)
+        # §3.10.7：新增 Pool 的默认奖励卡注册进「卡牌定义」Tab
+        self._sync_card_defs_from_pools()
+        self._update_preview()
+
+    def _remove_pool_from_banner(self):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        pools = self._banner_defs[bidx].get('pools', [])
+        rows = self.banner_pool_table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.information(self, "提示", "请先选择要移除的 Pool")
+            return
+        row = rows[0].row()
+        if row < 0 or row >= len(pools):
+            return
+        del pools[row]
+        self._refresh_pool_table()
+        self._update_preview()
+
+    # ── Rewards 操作（§3.10.5） ──
+
+    def _current_reward_pool(self):
+        """返回 (bidx, pool dict) 或 (None, None)。"""
+        bidx = self._current_banner_row
+        pidx = self._selected_pool_idx()
+        if bidx < 0 or pidx < 0:
+            return None, None
+        pools = self._banner_defs[bidx].get('pools', [])
+        if pidx >= len(pools):
+            return None, None
+        return bidx, pools[pidx]
+
+    def _refresh_reward_table(self):
+        self.reward_table.blockSignals(True)
+        self.reward_table.setRowCount(0)
+        bidx, pool = self._current_reward_pool()
+        if pool is None:
+            self.reward_table.blockSignals(False)
+            self._reward_total_label.setText("合计: 0%")
+            return
+        rewards = pool.get('rewards', [])
+        self.reward_table.setRowCount(len(rewards))
+        for i, r in enumerate(rewards):
+            self._set_reward_row(i, r)
+        self.reward_table.blockSignals(False)
+        self._update_reward_total()
+
+    def _set_reward_row(self, row, r):
+        card_combo = QComboBox()
+        card_combo.setEditable(True)
+        card_combo.addItems(self._registered_card_labels())
+        card_combo.setCurrentText(r.get('card_id', ''))
+        card_combo.currentTextChanged.connect(
+            lambda text, rr=row: self._on_reward_card_changed(rr, text))
+        self.reward_table.setCellWidget(row, 0, card_combo)
+
+        prob_spin = QDoubleSpinBox()
+        prob_spin.setRange(0.0, 100.0)
+        prob_spin.setDecimals(3)
+        prob_spin.setSingleStep(0.1)
+        prob_spin.setValue(float(r.get('probability', 0.0)))
+        prob_spin.valueChanged.connect(
+            lambda val, rr=row: self._on_reward_prob_changed(rr, val))
+        self.reward_table.setCellWidget(row, 1, prob_spin)
+
+        rarity_label = QLabel(r.get('rarity', ''))
+        rarity_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        rarity_label.setStyleSheet("color: #888; background: #f0f0f0;")
+        self.reward_table.setCellWidget(row, 2, rarity_label)
+
+        featured_cb = QCheckBox()
+        featured_cb.setChecked(bool(r.get('featured', False)))
+        featured_cb.stateChanged.connect(
+            lambda ch, rr=row: self._on_reward_featured_toggled(rr, ch))
+        self.reward_table.setCellWidget(row, 3, featured_cb)
+
+        res_edit = QLineEdit()
+        rg = r.get('resources_gained', {}) or {}
+        res_edit.setText(','.join(f"{k}:{v}" for k, v in rg.items()))
+        res_edit.textChanged.connect(
+            lambda text, rr=row: self._on_reward_resources_changed(rr, text))
+        self.reward_table.setCellWidget(row, 4, res_edit)
+
+    def _registered_card_labels(self):
+        """「卡牌定义」Tab 已注册卡牌 → 显示格式 card_id（名称）。"""
+        labels = []
+        for d in self.get_card_defs():
+            cid = d.get('card_id', '')
+            name = d.get('name', '')
+            labels.append(f"{cid}（{name}）" if name and name != cid else cid)
+        return labels
+
+    @staticmethod
+    def _card_id_from_label(text):
+        return text.split('（')[0].strip()
+
+    def _current_reward(self, rr):
+        bidx, pool = self._current_reward_pool()
+        if pool is None:
+            return None
+        rewards = pool.get('rewards', [])
+        if rr < 0 or rr >= len(rewards):
+            return None
+        return rewards[rr]
+
+    def _on_reward_card_changed(self, row, text):
+        r = self._current_reward(row)
+        if r is None:
+            return
+        cid = self._card_id_from_label(text)
+        r['card_id'] = cid
+        # 稀有度自动解析：从卡牌定义查找（§3.10.5）
+        for d in self.get_card_defs():
+            if d.get('card_id') == cid:
+                r['rarity'] = d.get('rarity', '')
+                break
+        widget = self.reward_table.cellWidget(row, 2)
+        if widget is not None:
+            widget.setText(r.get('rarity', ''))
+
+    def _on_reward_prob_changed(self, row, val):
+        r = self._current_reward(row)
+        if r is not None:
+            r['probability'] = float(val)
+        self._update_reward_total()
+
+    def _on_reward_featured_toggled(self, row, checked):
+        r = self._current_reward(row)
+        if r is not None:
+            r['featured'] = bool(checked)
+
+    def _on_reward_resources_changed(self, row, text):
+        r = self._current_reward(row)
+        if r is None:
+            return
+        rg = {}
+        for part in text.split(','):
+            part = part.strip()
+            if ':' in part:
+                rid, _, amt = part.partition(':')
+                try:
+                    rg[rid.strip()] = float(amt)
+                except ValueError:
+                    continue
+                self._ensure_resource_registered(rid.strip())
+        r['resources_gained'] = rg
+
+    def _update_reward_total(self):
+        total = 0.0
+        for i in range(self.reward_table.rowCount()):
+            spin = self.reward_table.cellWidget(i, 1)
+            if spin is not None and hasattr(spin, 'value'):
+                total += spin.value()
+        total = round(total, 3)
+        color = "#2e7d32" if 99.9 <= total <= 100.1 else "#c62828"
+        self._reward_total_label.setText(f"合计: {total}%")
+        self._reward_total_label.setStyleSheet(f"color: {color};")
+
+    def _add_reward_row(self):
+        bidx, pool = self._current_reward_pool()
+        if pool is None:
+            QMessageBox.information(self, "提示", "请先选择一个 Pool")
+            return
+        pool.setdefault('rewards', []).append({
+            'card_id': '',
+            'probability': 0.0,
+            'rarity': '',
+            'featured': False,
+            'resources_gained': {},
+        })
+        row = len(pool['rewards']) - 1
+        self.reward_table.setRowCount(len(pool['rewards']))
+        self._set_reward_row(row, pool['rewards'][row])
+        self._update_reward_total()
+
+    def _remove_reward_rows(self):
+        bidx, pool = self._current_reward_pool()
+        if pool is None:
+            return
+        rows = sorted([r.row() for r in self.reward_table.selectionModel().selectedRows()],
+                      reverse=True)
+        if not rows:
+            QMessageBox.information(self, "提示", "请先选择要移除的奖励行")
+            return
+        rewards = pool.get('rewards', [])
+        for row in rows:
+            if 0 <= row < len(rewards):
+                del rewards[row]
+        self._refresh_reward_table()
+
+    def _scale_rewards_to_100(self):
+        """§3.10.5 缩放至 100%：按比例调整所有行概率。"""
+        bidx, pool = self._current_reward_pool()
+        if pool is None:
+            return
+        rewards = pool.get('rewards', [])
+        total = sum(r.get('probability', 0.0) for r in rewards)
+        if total <= 0:
+            return
+        for r in rewards:
+            r['probability'] = round(r.get('probability', 0.0) / total * 100.0, 3)
+        self._refresh_reward_table()
+
+    def _import_rewards_from_pool(self):
+        """§3.10.6 从其他池导入 rewards：一键填入当前池。"""
+        bidx, pool = self._current_reward_pool()
+        if pool is None:
+            QMessageBox.information(self, "提示", "请先选择一个 Pool")
+            return
+        candidates = []
+        for bi, b in enumerate(self._banner_defs):
+            for pi, p in enumerate(b.get('pools', [])):
+                key = f"{b.get('id', '')}.{p.get('id', '')}"
+                if (bi, pi) == (bidx, self._selected_pool_idx()):
+                    continue
+                candidates.append((key, bi, pi))
+        if not candidates:
+            QMessageBox.information(self, "提示", "没有其他可导入的池")
+            return
+        keys = [c[0] for c in candidates]
+        choice, ok = QInputDialog.getItem(self, "从其他池导入", "选择来源池:", keys, 0, False)
+        if not ok:
+            return
+        src = next(c for c in candidates if c[0] == choice)
+        src_pool = self._banner_defs[src[1]]['pools'][src[2]]
+        pool['rewards'] = [dict(r) for r in src_pool.get('rewards', [])]
+        self._refresh_reward_table()
+        self._sync_card_defs_from_pools()
+        self._update_preview()
+
+    # ── Lifecycle 操作（§3.10.5） ──
+
+    def _current_banner_pool_ids(self):
+        """当前 Banner 的 Pool ID 列表（供关联池/目标下拉动态填充）。"""
+        bidx = self._current_banner_row
+        if bidx < 0 or bidx >= len(self._banner_defs):
+            return []
+        return [p.get('id', '') for p in self._banner_defs[bidx].get('pools', [])]
+
+    def _refresh_lifecycle_table(self):
+        self.lifecycle_table.blockSignals(True)
+        self.lifecycle_table.setRowCount(0)
+        bidx = self._current_banner_row
+        if bidx < 0 or bidx >= len(self._banner_defs):
+            self.lifecycle_table.blockSignals(False)
+            return
+        rules = self._banner_defs[bidx].get('lifecycle', [])
+        pool_ids = self._current_banner_pool_ids()
+        self.lifecycle_table.setRowCount(len(rules))
+        for i, rule in enumerate(rules):
+            self._set_lifecycle_row(i, rule, pool_ids)
+        self.lifecycle_table.blockSignals(False)
+
+    def _set_lifecycle_row(self, row, rule, pool_ids):
+        cond = rule.get('condition', 'pool_draws')
+        # 关联池列：card_obtained / time_window 时禁用（匹配目标/时间条件是 Banner 级）；
+        # 空项「(未选择)」data='' 保持显示与数据一致（新规则 pool='' 不误显第一池）
+        pool_combo = QComboBox()
+        pool_combo.addItem("(未选择)", "")
+        for pid in pool_ids:
+            pool_combo.addItem(pid, pid)
+        cur_pool = rule.get('pool', '') if cond in ('pool_draws', 'pool_exhausted') else ''
+        pidx = pool_combo.findData(cur_pool)
+        pool_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
+        pool_combo.setEnabled(cond in ('pool_draws', 'pool_exhausted'))
+        pool_combo.currentTextChanged.connect(
+            lambda text, rr=row: self._on_lifecycle_pool_changed(rr, text))
+        self.lifecycle_table.setCellWidget(row, 0, pool_combo)
+
+        cond_combo = QComboBox()
+        cond_combo.addItems(['pool_draws', 'banner_draws', 'card_obtained',
+                             'pool_exhausted', 'time_window'])
+        cond_combo.setCurrentText(cond)
+        cond_combo.currentTextChanged.connect(
+            lambda text, rr=row: self._on_lifecycle_condition_changed(rr, text))
+        self.lifecycle_table.setCellWidget(row, 1, cond_combo)
+
+        at_widget = self._build_lifecycle_at_widget(row, rule, cond)
+        self.lifecycle_table.setCellWidget(row, 2, at_widget)
+
+        action_combo = QComboBox()
+        action_combo.addItems(['switch_to', 'exhaust_banner'])
+        action_combo.setCurrentText(rule.get('action', 'switch_to'))
+        action_combo.currentTextChanged.connect(
+            lambda text, rr=row: self._on_lifecycle_action_changed(rr, text))
+        self.lifecycle_table.setCellWidget(row, 3, action_combo)
+
+        target_combo = QComboBox()
+        target_combo.addItem("(未选择)", "")
+        for pid in pool_ids:
+            target_combo.addItem(pid, pid)
+        tidx = target_combo.findData(rule.get('target', ''))
+        target_combo.setCurrentIndex(tidx if tidx >= 0 else 0)
+        target_combo.currentTextChanged.connect(
+            lambda text, rr=row: self._on_lifecycle_target_changed(rr, text))
+        self.lifecycle_table.setCellWidget(row, 4, target_combo)
+        target_combo.setEnabled(rule.get('action', 'switch_to') == 'switch_to')
+
+    def _build_lifecycle_at_widget(self, row, rule, cond):
+        """§3.10.5 阈值列控件。
+        pool_draws/banner_draws → 整数抽数；time_window → QDoubleSpinBox（天，UI/存储层
+        天数、保存 *DAY 转秒，ISSUE-001）；card_obtained → 二级匹配控件（match + 取值，
+        取值写 rule['pool']——引擎字段：card_obtained 匹配目标存在 pool，见 banner.py:29）；
+        pool_exhausted → 禁用。"""
+        if cond in ('pool_draws', 'banner_draws'):
+            spin = QSpinBox()
+            spin.setRange(0, 1000000)
+            spin.setValue(int(rule.get('at', 0)))
+            spin.valueChanged.connect(
+                lambda val, rr=row: self._on_lifecycle_at_changed(rr, val))
+            return spin
+        if cond == 'time_window':
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 99999.0)
+            spin.setDecimals(2)
+            spin.setValue(float(rule.get('at', 0.0)) / DAY)  # 秒 → 天（显示）
+            spin.valueChanged.connect(
+                lambda val, rr=row: self._on_lifecycle_at_changed(rr, val * DAY))
+            return spin
+        if cond == 'card_obtained':
+            w = QWidget()
+            lay = QHBoxLayout(w)
+            lay.setContentsMargins(0, 0, 0, 0)
+            match_combo = QComboBox()
+            match_combo.addItems(['card_id', 'rarity'])
+            match_combo.setCurrentText(rule.get('match', 'card_id'))
+            lay.addWidget(match_combo)
+            val_combo = QComboBox()
+            val_combo.setEditable(True)
+            match_mode = rule.get('match', 'card_id')
+            if match_mode == 'card_id':
+                val_combo.addItems(self._registered_card_labels())
+                cur = rule.get('pool', '')
+                val_combo.setCurrentText(
+                    next((lab for lab in self._registered_card_labels()
+                          if self._card_id_from_label(lab) == cur), cur))
+            else:
+                val_combo.addItems(['SSR', 'SR', 'R'])
+                val_combo.setCurrentText(rule.get('pool', '') or 'SSR')
+            lay.addWidget(val_combo, 1)
+
+            def _on_match(idx, mc=match_combo, vc=val_combo, rr=row):
+                mode = mc.currentText()
+                self._set_lifecycle_rule(rr, 'match', mode)
+                vc.blockSignals(True)
+                vc.clear()
+                if mode == 'card_id':
+                    vc.addItems(self._registered_card_labels())
+                else:
+                    vc.addItems(['SSR', 'SR', 'R'])
+                    vc.setCurrentText('SSR')
+                vc.blockSignals(False)
+
+            def _on_val(text, rr=row):
+                # card_obtained 匹配值存 rule['pool']（引擎字段语义，banner.py:29）
+                cid = self._card_id_from_label(text)
+                self._set_lifecycle_rule(rr, 'pool', cid)
+
+            match_combo.currentIndexChanged.connect(_on_match)
+            val_combo.currentTextChanged.connect(_on_val)
+            return w
+        # pool_exhausted：阈值禁用
+        label = QLabel("—")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("color: #aaa;")
+        return label
+
+    def _on_lifecycle_pool_changed(self, row, text):
+        # 空项「(未选择)」data=''——取 currentData 而非显示文本
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        rules = self._banner_defs[bidx].get('lifecycle', [])
+        if row < 0 or row >= len(rules):
+            return
+        combo = self.lifecycle_table.cellWidget(row, 0)
+        data = combo.currentData() if combo is not None else ''
+        rules[row]['pool'] = data
+
+    def _on_lifecycle_condition_changed(self, row, text):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        rules = self._banner_defs[bidx].get('lifecycle', [])
+        if row < 0 or row >= len(rules):
+            return
+        rules[row]['condition'] = text
+        pool_ids = self._current_banner_pool_ids()
+        self.lifecycle_table.blockSignals(True)
+        self._set_lifecycle_row(row, rules[row], pool_ids)
+        self.lifecycle_table.blockSignals(False)
+
+    def _on_lifecycle_at_changed(self, row, val):
+        self._set_lifecycle_rule(row, 'at', float(val))
+
+    def _on_lifecycle_action_changed(self, row, text):
+        self._set_lifecycle_rule(row, 'action', text)
+        tgt = self.lifecycle_table.cellWidget(row, 4)
+        if tgt is not None:
+            tgt.setEnabled(text == 'switch_to')
+
+    def _on_lifecycle_target_changed(self, row, text):
+        # 空项「(未选择)」data=''——取 currentData 而非显示文本
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        rules = self._banner_defs[bidx].get('lifecycle', [])
+        if row < 0 or row >= len(rules):
+            return
+        combo = self.lifecycle_table.cellWidget(row, 4)
+        data = combo.currentData() if combo is not None else ''
+        rules[row]['target'] = data
+
+    def _set_lifecycle_rule(self, row, key, value):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        rules = self._banner_defs[bidx].get('lifecycle', [])
+        if row < 0 or row >= len(rules):
+            return
+        rules[row][key] = value
+
+    def _on_lifecycle_item_changed(self, item):
+        # 生命周期表为 cellWidget 驱动，无文本 item——此回调保留占位
+        pass
+
+    def _add_lifecycle_row(self):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            QMessageBox.information(self, "提示", "请先选择一个 Banner")
+            return
+        self._banner_defs[bidx].setdefault('lifecycle', []).append({
+            'condition': 'pool_draws',
+            'pool': '',
+            'at': 0.0,
+            'match': 'card_id',
+            'action': 'switch_to',
+            'target': '',
+        })
+        self._refresh_lifecycle_table()
+        self.lifecycle_table.selectRow(len(self._banner_defs[bidx]['lifecycle']) - 1)
+
+    def _remove_lifecycle_rows(self):
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        rules = self._banner_defs[bidx].get('lifecycle', [])
+        rows = sorted([r.row() for r in self.lifecycle_table.selectionModel().selectedRows()],
+                      reverse=True)
+        if not rows:
+            QMessageBox.information(self, "提示", "请先选择要移除的规则")
+            return
+        for row in rows:
+            if 0 <= row < len(rules):
+                del rules[row]
+        self._refresh_lifecycle_table()
+
     # P55 阶段十一：保底配置 UI——BEHAVIOR_REGISTRY 元数据驱动
     # ══════════════════════════════════════════════════════════════════
 
@@ -1007,10 +1664,37 @@ class ConfigPanel(QWidget):
         detail_form.addRow(self._pity_cr_probs_group)
         self._pity_cr_probs_group.setVisible(False)
 
-        # ── 池子 + 初始值 ──
-        self.pity_pools_edit = QLineEdit()
-        self.pity_pools_edit.setPlaceholderText("* (全部池子)")
-        detail_form.addRow("适用池子:", self.pity_pools_edit)
+        # ── 绑定池（P61 Ph8b，§3.11.2）：替代手写 fnmatch 文本框 ──
+        bind_group = QGroupBox("绑定池")
+        bind_layout = QVBoxLayout(bind_group)
+        bind_filter_row = QHBoxLayout()
+        self.pity_bind_filter = QLineEdit()
+        self.pity_bind_filter.setPlaceholderText("筛选 Banner 名或 Pool ID...")
+        self.pity_bind_filter.textChanged.connect(self._filter_pity_bind_rows)
+        bind_filter_row.addWidget(self.pity_bind_filter, 1)
+        sel_all_btn = QPushButton("全选")
+        sel_all_btn.clicked.connect(lambda: self._set_pity_bind_all(True))
+        sel_none_btn = QPushButton("全不选")
+        sel_none_btn.clicked.connect(lambda: self._set_pity_bind_all(False))
+        bind_filter_row.addWidget(sel_all_btn)
+        bind_filter_row.addWidget(sel_none_btn)
+        bind_layout.addLayout(bind_filter_row)
+
+        self.pity_bind_table = QTableWidget()
+        self.pity_bind_table.setColumnCount(4)
+        self.pity_bind_table.setHorizontalHeaderLabels(["☑", "Banner", "Pool", "说明"])
+        bind_header = self.pity_bind_table.horizontalHeader()
+        bind_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        bind_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        bind_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        bind_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.pity_bind_table.setColumnWidth(0, 30)
+        self.pity_bind_table.setColumnWidth(2, 90)
+        self.pity_bind_table.verticalHeader().setVisible(False)
+        self.pity_bind_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.pity_bind_table.setMinimumHeight(120)
+        bind_layout.addWidget(self.pity_bind_table)
+        detail_form.addRow(bind_group)
 
         self.pity_init_spin = QSpinBox()
         self.pity_init_spin.setRange(0, 200)
@@ -1052,7 +1736,6 @@ class ConfigPanel(QWidget):
         self.pity_type_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_scope_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_target_featured_cb.stateChanged.connect(self._flush_pity_current_detail)
-        self.pity_pools_edit.textChanged.connect(self._flush_pity_current_detail)
         self.pity_init_spin.valueChanged.connect(self._flush_pity_current_detail)
         self.pity_deactivate_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_guaranteed_init_cb.stateChanged.connect(self._flush_pity_current_detail)
@@ -1339,6 +2022,13 @@ class ConfigPanel(QWidget):
         self._pity_detail_group.setEnabled(True)
         pd = self._pity_defs[row]
 
+        # P61 Ph8b：先填充绑定池勾选表格——后续 detail 控件 setText/setChecked 触发
+        # flush 时 _read_pity_bind_patterns 读到的是本规则的新勾选状态，而非旧/空表格
+        pools = pd.get('pools', ('*',))
+        if isinstance(pools, str):
+            pools = (pools,) if pools else ()
+        self._refresh_pity_bind_table(pools)
+
         # 阻断信号避免级联触发
         self.pity_name_edit.blockSignals(True)
         self.pity_type_combo.blockSignals(True)
@@ -1370,11 +2060,6 @@ class ConfigPanel(QWidget):
         if is_soft_step:
             self._populate_deltas_table(pd.get('deltas'))
 
-        # 池子 / 初始值
-        pools = pd.get('pools', '*')
-        if isinstance(pools, (tuple, list)):
-            pools = ','.join(pools)
-        self.pity_pools_edit.setText(pools if pools != '*' else '')
         self.pity_init_spin.setValue(pd.get('counter_init', 0))
 
         # 生命周期
@@ -1398,6 +2083,103 @@ class ConfigPanel(QWidget):
         self.pity_scope_combo.blockSignals(False)
 
         self._on_pity_type_changed(type_idx)
+
+    # ── P61 Ph8b：绑定池勾选表格（§3.11.2，替代手写 fnmatch 文本框） ──
+
+    def _refresh_pity_bind_table(self, patterns=None):
+        """填充绑定池勾选表格。数据源 = _banner_defs（兜底 store.banner.banners）。
+
+        patterns 语义（ISSUE-328）：('*',) → 全选；空/[] → 全不选（不绑定任何池）；
+        其余 → 对每个全限定键 fnmatch 命中即勾选（D4 一次性迁移后 PityDef.pools
+        均为全限定键，无三路兼容）。
+        """
+        import fnmatch as _fn
+        if patterns is None:
+            row = self._current_pity_row
+            patterns = self._pity_defs[row].get('pools', ('*',)) \
+                if 0 <= row < len(self._pity_defs) else ('*',)
+        banners = getattr(self, '_banner_defs', None) or []
+        if not banners and self._store is not None:
+            # 兜底：store.banner.banners → _banner_defs 等价 dict
+            banners = [{
+                'id': b.id, 'name': b.name,
+                'pools': [{'id': p.id, 'excludes_all_pity': p.excludes_all_pity,
+                           'max_draws': p.max_draws, 'batch_size': p.batch_size}
+                          for p in b.pools],
+            } for b in self._store.banner.banners]
+        if isinstance(patterns, str):
+            patterns = (patterns,) if patterns else ()
+
+        self.pity_bind_table.blockSignals(True)
+        self.pity_bind_table.setRowCount(0)
+        rows_data = []
+        for b in banners:
+            for p in b.get('pools', []):
+                full_key = f"{b.get('id', '')}.{p.get('id', '')}"
+                note = []
+                if p.get('excludes_all_pity'):
+                    note.append('不计保底')
+                md = p.get('max_draws')
+                if md is not None and md == p.get('batch_size', 1):
+                    note.append('一次性')
+                rows_data.append((full_key, b.get('name', ''), p.get('id', ''), '、'.join(note)))
+        self._pity_bind_keys = [r[0] for r in rows_data]
+        self.pity_bind_table.setRowCount(len(rows_data))
+        is_all = patterns == ('*',)
+        for i, (full_key, bname, pid, note) in enumerate(rows_data):
+            cb = QCheckBox()
+            checked = is_all or any(_fn.fnmatch(full_key, ptn) for ptn in patterns)
+            cb.blockSignals(True)
+            cb.setChecked(checked)
+            cb.blockSignals(False)
+            cb.stateChanged.connect(lambda ch, rr=i: self._on_pity_bind_toggled(rr, ch))
+            self.pity_bind_table.setCellWidget(i, 0, cb)
+            self.pity_bind_table.setItem(i, 1, QTableWidgetItem(bname))
+            self.pity_bind_table.setItem(i, 2, QTableWidgetItem(pid))
+            self.pity_bind_table.setItem(i, 3, QTableWidgetItem(note))
+        self.pity_bind_table.blockSignals(False)
+        self._update_preview()
+
+    def _read_pity_bind_patterns(self):
+        """从勾选表格生成 pools pattern（§3.11.2 / ISSUE-328）。
+
+        全选 → ('*',)；全不选 → ()（不绑定任何池，区别于旧空文本 → ('*',)）；
+        部分勾选 → 精确全限定键元组（fnmatch 可解析，D4 一次性迁移后无三路兼容）。
+        """
+        checked = []
+        for i in range(self.pity_bind_table.rowCount()):
+            cb = self.pity_bind_table.cellWidget(i, 0)
+            if cb is not None and cb.isChecked():
+                keys = getattr(self, '_pity_bind_keys', [])
+                if i < len(keys):
+                    checked.append(keys[i])
+        total = self.pity_bind_table.rowCount()
+        if total > 0 and len(checked) == total:
+            return ('*',)
+        return tuple(checked)
+
+    def _on_pity_bind_toggled(self, row, checked):
+        """勾选变化 → 实时写回 _pity_defs[current]['pools']。"""
+        self._flush_pity_current_detail()
+
+    def _filter_pity_bind_rows(self, text):
+        text = text.lower()
+        for i in range(self.pity_bind_table.rowCount()):
+            bname = self.pity_bind_table.item(i, 1)
+            pid = self.pity_bind_table.item(i, 2)
+            bname_text = bname.text() if bname else ''
+            pid_text = pid.text() if pid else ''
+            match = (text in bname_text.lower()) or (text in pid_text.lower()) if text else True
+            self.pity_bind_table.setRowHidden(i, not match)
+
+    def _set_pity_bind_all(self, checked):
+        for i in range(self.pity_bind_table.rowCount()):
+            cb = self.pity_bind_table.cellWidget(i, 0)
+            if cb is not None:
+                cb.blockSignals(True)
+                cb.setChecked(checked)
+                cb.blockSignals(False)
+        self._flush_pity_current_detail()
 
     # Registry 参数名 → PityDef 标准字段名映射
     _PARAM_TO_FIELD = {'start': 'soft_start', 'end': 'soft_end', 'increment': 'soft_increment'}
@@ -1488,9 +2270,8 @@ class ConfigPanel(QWidget):
             pd['soft_start'] = pd.get('start')
             pd['soft_increment'] = pd.get('increment')
 
-        # 池子 / 初始值
-        pools_text = self.pity_pools_edit.text().strip()
-        pd['pools'] = tuple(pools_text.split(',')) if pools_text else ('*',)
+        # 绑定池（P61 Ph8b：勾选表格 → patterns）
+        pd['pools'] = self._read_pity_bind_patterns()
         pd['counter_init'] = self.pity_init_spin.value()
 
         # 生命周期
@@ -1571,9 +2352,8 @@ class ConfigPanel(QWidget):
             pd['soft_start'] = pd.get('start')
             pd['soft_increment'] = pd.get('increment')
 
-        # 池子 / 初始值
-        pools_text = self.pity_pools_edit.text().strip()
-        pd['pools'] = tuple(pools_text.split(',')) if pools_text else ('*',)
+        # 绑定池（P61 Ph8b：勾选表格 → patterns）
+        pd['pools'] = self._read_pity_bind_patterns()
         pd['counter_init'] = self.pity_init_spin.value()
 
         # 生命周期
@@ -2744,28 +3524,20 @@ class ConfigPanel(QWidget):
         self._current_card_idx = -1
         self._card_detail_group.setEnabled(False)
 
-        # ── 从池子分布收集卡片 ──
+        # ── 从池子分布收集卡片（P61 Ph8：读 banner 视图）──
         pool_cards: dict[str, dict] = {}  # card_id → {rarity, pools}
-        for i in range(self.pool_table.rowCount()):
-            pool_id_item = self.pool_table.item(i, 1)
-            if not pool_id_item or not pool_id_item.text():
+        for full_key, d in self._iter_pool_rewards():
+            cid = d.get('card_id', '')
+            if not cid or cid == '_no_card':
                 continue
-            pid = pool_id_item.text()
-            dist = self._pool_distributions.get(pid)
-            if not dist:
-                continue
-            for d in dist:
-                cid = d.get('card_id', '')
-                if not cid or cid == '_no_card':
-                    continue
-                if cid not in pool_cards:
-                    pool_cards[cid] = {
-                        'rarity': d.get('rarity', 'R'),
-                        'pools': [pid],
-                    }
-                else:
-                    if pid not in pool_cards[cid]['pools']:
-                        pool_cards[cid]['pools'].append(pid)
+            if cid not in pool_cards:
+                pool_cards[cid] = {
+                    'rarity': d.get('rarity', 'R'),
+                    'pools': [full_key],
+                }
+            else:
+                if full_key not in pool_cards[cid]['pools']:
+                    pool_cards[cid]['pools'].append(full_key)
 
         # ── 合并：已有卡片保留数据和位置 ──
         merged = []
@@ -2793,13 +3565,12 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _compute_pools_map(self):
-        """从池子分布实时推导每张卡的池子归属。"""
+        """从池子分布实时推导每张卡的池子归属（P61 Ph8：读 banner 视图）。"""
         result = {}
-        for pid, dist_list in self._pool_distributions.items():
-            for d in dist_list:
-                cid = d.get('card_id', '')
-                if cid and cid != '_no_card':
-                    result.setdefault(cid, []).append(pid)
+        for full_key, d in self._iter_pool_rewards():
+            cid = d.get('card_id', '')
+            if cid and cid != '_no_card':
+                result.setdefault(cid, []).append(full_key)
         return result
 
     def _setup_preview(self, parent):
@@ -2860,13 +3631,12 @@ class ConfigPanel(QWidget):
             cid = cd.get('card_id', '')
             if cid:
                 card_pools_map[cid] = cd.get('pools', [])
-        for pid, dist in self._pool_distributions.items():
-            for d in dist:
-                cid = d.get('card_id', '')
-                if cid and cid not in card_pools_map:
-                    card_pools_map[cid] = [pid]
-                elif cid and pid not in card_pools_map[cid]:
-                    card_pools_map[cid].append(pid)
+        for full_key, d in self._iter_pool_rewards():
+            cid = d.get('card_id', '')
+            if cid and cid not in card_pools_map:
+                card_pools_map[cid] = [full_key]
+            elif cid and full_key not in card_pools_map[cid]:
+                card_pools_map[cid].append(full_key)
         for cd in card_defs:
             card_id = cd['card_id']
             name = cd.get('name', '')
@@ -2919,13 +3689,12 @@ class ConfigPanel(QWidget):
             cid = cd.get('card_id', '')
             if cid:
                 card_pools_map[cid] = cd.get('pools', [])
-        for pid, dist in self._pool_distributions.items():
-            for d in dist:
-                cid = d.get('card_id', '')
-                if cid and cid not in card_pools_map:
-                    card_pools_map[cid] = [pid]
-                elif cid and pid not in card_pools_map[cid]:
-                    card_pools_map[cid].append(pid)
+        for full_key, d in self._iter_pool_rewards():
+            cid = d.get('card_id', '')
+            if cid and cid not in card_pools_map:
+                card_pools_map[cid] = [full_key]
+            elif cid and full_key not in card_pools_map[cid]:
+                card_pools_map[cid].append(full_key)
         for i in range(self.target_table.rowCount()):
             id_item = self.target_table.item(i, 0)
             if not id_item or not id_item.text().strip():
@@ -3190,25 +3959,23 @@ class ConfigPanel(QWidget):
     def _set_defaults(self):
         self._auto_generate_resource_defs()
 
-    def _register_resources_from_pools(self, pools):
-        for p in pools:
-            cost = p.get('cost', 160)
-            if isinstance(cost, int):
-                self._ensure_resource_registered('draw_resource', '抽卡资源')
-            else:
-                cost_text = str(cost)
+    def _register_resources_from_pools(self):
+        """从 Banner 视图注册资源（§3.10.7 正向同步）：Pool cost + rewards resources_gained。
+
+        P61 Ph8 改写：原遍历 pool_table 行（pools 参数），现遍历 _banner_defs
+        （banner → pools[*]）自动补全「资源管理」Tab 的资源定义。
+        """
+        for b in self._banner_defs:
+            for p in b.get('pools', []):
+                cost_text = str(p.get('cost', 'draw_resource:160'))
                 for part in cost_text.split('&'):
                     part = part.strip()
                     if ':' in part:
-                        rid = part.split(':')[0].strip()
+                        self._ensure_resource_registered(part.split(':')[0].strip())
+                for r in p.get('rewards', []) or []:
+                    rg = r.get('resources_gained', {}) or {}
+                    for rid in rg:
                         self._ensure_resource_registered(rid)
-            dist = p.get('distribution')
-            if dist:
-                for item in dist:
-                    rg = item.get('resources_gained', {})
-                    if isinstance(rg, dict):
-                        for rid in rg.keys():
-                            self._ensure_resource_registered(rid)
 
     def _ensure_resource_registered(self, resource_id, display_name=''):
         if not resource_id:
@@ -3301,6 +4068,27 @@ class ConfigPanel(QWidget):
             'max_workers': max_workers,
             'seed': seed,
             'pools': pools,
+            # P61（Ph8c）：追加完整 Banner 结构（秒），供预览面板合成 Banner 摘要（§3.10.7）。
+            # pools 展平视图保留供旧消费方（预览/导出摘要）兼容。
+            'banner': [{
+                'id': b.id,
+                'name': b.name,
+                'enabled': b.enabled,
+                'max_draws': b.max_draws,
+                'available_from': b.available_from,
+                'available_until': b.available_until,
+                'pools': [{
+                    'id': p.id, 'cost': p.cost, 'batch_size': p.batch_size,
+                    'excludes_all_pity': p.excludes_all_pity, 'max_draws': p.max_draws,
+                    'exchange_card_id': p.exchange_card_id,
+                    'epitomizable_cards': list(p.epitomizable_cards),
+                    'rewards': [dict(r) for r in p.rewards],
+                } for p in b.pools],
+                'lifecycle': [{
+                    'condition': lc.condition, 'pool': lc.pool, 'at': lc.at,
+                    'match': lc.match, 'action': lc.action, 'target': lc.target,
+                } for lc in b.lifecycle],
+            } for b in store.banner.banners],
             'pity': {
                 'enabled': store.pity.enabled,
                 'pities': [{
@@ -3366,39 +4154,80 @@ class ConfigPanel(QWidget):
         store = self._store
         store.clear()
 
-        pools_data = config.get('pools', [])
+        # P61（Ph8c）：优先从 config['banner']（完整 Banner 结构，秒）加载；
+        # 旧 config['pools'] 展平视图（一池一 banner）回退保留。
         banners = []
-        for p in pools_data:
-            # P61（§3.12 / AUDIT-BREAK-1 修复）：get_config 输出的 pools id 是全限定展平键，
-            # 拆出 banner 段写入 BannerEntry，避免 round-trip 二次限定。
-            pid_raw = p.get('id', '')
-            pid = pid_raw.rsplit('.', 1)[0] if '.' in pid_raw else pid_raw
-            dist_data = p.get('distribution')
-            rewards = []
-            if dist_data:
-                for d in dist_data:
-                    rewards.append({
-                        'card_id': d.get('card_id', ''),
-                        'probability': d.get('probability', 0),
-                        'rarity': d.get('rarity', 'R'),
-                        'featured': d.get('featured', False),
-                        **({'resources_gained': d.get('resources_gained', {})}
-                           if d.get('resources_gained') else {}),
-                    })
-            banners.append(BannerEntry(
-                enabled=p.get('enabled', True),
-                id=pid,
-                name=p.get('name', ''),
-                available_from=p.get('start_day', 0) * DAY,
-                available_until=(p.get('start_day', 0) + p.get('duration', 21)) * DAY,
-                pools=[BannerPoolEntry(
-                    id='main',
-                    cost=p.get('cost', 'draw_resource:160'),
-                    batch_size=p.get('batch_size', 1),
-                    epitomizable_cards=p.get('epitomizable_cards', []),
-                    rewards=rewards,
-                )],
-            ))
+        banner_cfg = config.get('banner')
+        if banner_cfg:
+            for b in banner_cfg:
+                pools = []
+                for p in b.get('pools', []):
+                    pools.append(BannerPoolEntry(
+                        id=p.get('id', 'main'),
+                        cost=p.get('cost', 'draw_resource:160'),
+                        batch_size=p.get('batch_size', 1),
+                        excludes_all_pity=p.get('excludes_all_pity', False),
+                        max_draws=p.get('max_draws'),
+                        exchange_card_id=p.get('exchange_card_id'),
+                        epitomizable_cards=p.get('epitomizable_cards', []) or [],
+                        rewards=[dict(r) for r in p.get('rewards', []) or []],
+                    ))
+                lifecycle = []
+                for lc in b.get('lifecycle', []) or []:
+                    condition = lc.get('condition', 'pool_draws')
+                    at = lc.get('at', 0)
+                    # P61 Ph8c：get_config 输出的 banner.at 已是秒（apply_to_store 后
+                    # store.banner 的 lc.at 为秒）——透传，不再 * DAY（避免 86400 倍二次换算）。
+                    lifecycle.append(LifecycleRuleEntry(
+                        condition=condition,
+                        pool=lc.get('pool'),
+                        at=float(at),
+                        match=lc.get('match', 'card_id'),
+                        action=lc.get('action', 'switch_to'),
+                        target=lc.get('target'),
+                    ))
+                banners.append(BannerEntry(
+                    id=b.get('id', ''),
+                    name=b.get('name', ''),
+                    enabled=b.get('enabled', True),
+                    max_draws=b.get('max_draws'),
+                    available_from=b.get('available_from'),
+                    available_until=b.get('available_until'),
+                    pools=pools,
+                    lifecycle=lifecycle,
+                ))
+        else:
+            pools_data = config.get('pools', [])
+            for p in pools_data:
+                # 旧格式：get_config 输出的 pools id 为全限定展平键，拆出 banner 段。
+                pid_raw = p.get('id', '')
+                pid = pid_raw.rsplit('.', 1)[0] if '.' in pid_raw else pid_raw
+                dist_data = p.get('distribution')
+                rewards = []
+                if dist_data:
+                    for d in dist_data:
+                        rewards.append({
+                            'card_id': d.get('card_id', ''),
+                            'probability': d.get('probability', 0),
+                            'rarity': d.get('rarity', 'R'),
+                            'featured': d.get('featured', False),
+                            **({'resources_gained': d.get('resources_gained', {})}
+                               if d.get('resources_gained') else {}),
+                        })
+                banners.append(BannerEntry(
+                    enabled=p.get('enabled', True),
+                    id=pid,
+                    name=p.get('name', ''),
+                    available_from=p.get('start_day', 0) * DAY,
+                    available_until=(p.get('start_day', 0) + p.get('duration', 21)) * DAY,
+                    pools=[BannerPoolEntry(
+                        id='main',
+                        cost=p.get('cost', 'draw_resource:160'),
+                        batch_size=p.get('batch_size', 1),
+                        epitomizable_cards=p.get('epitomizable_cards', []),
+                        rewards=rewards,
+                    )],
+                ))
         store.banner.banners = banners
 
         pity = config.get('pity', {})
@@ -3555,79 +4384,46 @@ class ConfigPanel(QWidget):
         self.refresh_from_store()
 
     def _sync_card_defs_from_pools(self):
+        """池 rewards → 「卡牌定义」Tab pools 字段正向同步（§3.10.7 / ISSUE-016）。
+
+        P61 Ph8 改写：原遍历 pool_table 行，现遍历 _banner_defs（banner → pools[*]），
+        pools 键用全限定 {banner_id}.{pool_id}（与 Ph3 展平视图 card_defs[].pools
+        同口径，ISSUE-310）。新 UI 下每个 Pool 必带 rewards（内联），不再有
+        「无分布 → 默认 _ssr/_sr/_r」分支。
+        """
         existing_defs = self.get_card_defs()
         existing_map = {d['card_id']: d for d in existing_defs}
 
-        for i in range(self.pool_table.rowCount()):
-            id_item = self.pool_table.item(i, 1)
-            if not id_item or not id_item.text().strip():
+        for full_key, d in self._iter_pool_rewards():
+            cid = d.get('card_id', '')
+            if not cid:
                 continue
-            pid = id_item.text().strip()
-            dist = self._pool_distributions.get(pid)
-
-            if dist:
-                for d in dist:
-                    cid = d.get('card_id', '')
-                    if not cid:
-                        continue
-                    if cid in existing_map:
-                        pools = existing_map[cid].get('pools', [])
-                        if pid not in pools:
-                            pools.append(pid)
-                        existing_map[cid]['pools'] = pools
-                    else:
-                        base = {'tags': {}, 'list_tags': {}, 'initial_count': 0}
-                        if cid == '_no_card':
-                            existing_map[cid] = {
-                                'card_id': '_no_card',
-                                'name': '空抽(仅资源)',
-                                'rarity': '无',
-                                'pools': [pid],
-                                **base,
-                            }
-                        else:
-                            existing_map[cid] = {
-                                'card_id': cid,
-                                'name': cid,
-                                'rarity': d.get('rarity', 'R'),
-                                'pools': [pid],
-                                **base,
-                            }
+            if cid in existing_map:
+                pools = existing_map[cid].get('pools', [])
+                if full_key not in pools:
+                    pools.append(full_key)
+                existing_map[cid]['pools'] = pools
             else:
-                for suffix, rarity in [('_ssr', 'SSR'), ('_sr', 'SR'), ('_r', 'R')]:
-                    cid = f"{pid}{suffix}"
-                    if cid in existing_map:
-                        pools = existing_map[cid].get('pools', [])
-                        if pid not in pools:
-                            pools.append(pid)
-                        existing_map[cid]['pools'] = pools
-                    else:
-                        existing_map[cid] = {
-                            'card_id': cid,
-                            'name': cid,
-                            'rarity': rarity,
-                            'pools': [pid],
-                            'tags': {},
-                            'list_tags': {},
-                            'initial_count': 0,
-                        }
+                base = {'tags': {}, 'list_tags': {}, 'initial_count': 0}
+                if cid == '_no_card':
+                    existing_map[cid] = {
+                        'card_id': '_no_card',
+                        'name': '空抽(仅资源)',
+                        'rarity': '无',
+                        'pools': [full_key],
+                        **base,
+                    }
+                else:
+                    existing_map[cid] = {
+                        'card_id': cid,
+                        'name': cid,
+                        'rarity': d.get('rarity', 'R'),
+                        'pools': [full_key],
+                        **base,
+                    }
 
         merged = list(existing_map.values())
         self.set_card_defs(merged)
-
-    def _on_pool_cell_changed(self, row, col):
-        if col == 6:
-            cost_item = self.pool_table.item(row, 6)
-            if cost_item:
-                cost_text = cost_item.text().strip()
-                for part in cost_text.split('&'):
-                    part = part.strip()
-                    if ':' in part:
-                        rid = part.split(':')[0].strip()
-                        self._ensure_resource_registered(rid)
-        self._update_preview()
-        if col == 3:
-            self._sync_card_defs_from_pools()
 
     # _filter_card_defs / _search_card_defs / _on_card_def_changed 已由
     # P65 的 _filter_card_list 替代——见 _setup_card_def_tab 区域
@@ -3876,72 +4672,57 @@ class ConfigPanel(QWidget):
         from gacha_simulator.core.strategy import strategy_type_to_key
         store = self._store
 
-        # P56：保存旧池子的 epitomizable_cards 映射，避免 apply_to_store 中失丢
-        _old_epitomizable = {p.pool_id: getattr(p, 'epitomizable_cards', [])
-                             for p in store.pools}
-
-        # P61（§3.12 / AUDIT-BREAK-1）：写入侧迁移到 store.banner——每个 GUI 池行 → 一个
-        # BannerEntry（内层 pool id="main"）。pool_type 字段已退役（§3.13.1 推导化），
-        # 不再写入 bindings['type']；start_day/end_day 以 DAY 换算为 available_from/until（秒）。
+        # P61（Ph8）：写入侧遍历 _banner_defs → store.banner.banners。
+        # BannerEntry 全字段（id/name/enabled/max_draws/available_from/until/pools/lifecycle）；
+        # 时间窗口经 *DAY 换算为秒（ISSUE-001，UI/存储层为天）；max_draws 0→None 归一化
+        # （ISSUE-331）；card_obtained 的匹配值存 pool 字段（引擎语义，banner.py:29）。
         banners = []
-        for i in range(self.pool_table.rowCount()):
-            cb = self.pool_table.cellWidget(i, 0)
-            def _item(col, default=''):
-                it = self.pool_table.item(i, col)
-                return it.text() if it else default
-            pid_raw = _item(1)
-            # P61（§3.12 / AUDIT-BREAK-1 修复）：GUI 表格第 1 列是全限定展平键
-            # {banner_id}.{pool_id}，写 BannerEntry 必须拆出 banner 段，否则 round-trip
-            # 二次限定（pool_c1.main.main）。_pool_distributions 的 key 保持全限定口径。
-            pid = pid_raw.rsplit('.', 1)[0] if '.' in pid_raw else pid_raw
-            cost_text = _item(6, 'draw_resource:160').strip()
-            if ':' not in cost_text:
-                try:
-                    cost_text = f"draw_resource:{int(cost_text or 160)}"
-                except ValueError:
-                    cost_text = "draw_resource:160"
-
-            start_day = int(_item(4, '0') or 0)
-            duration = int(_item(5, '21') or 21)
-
-            batch_size = 1
-            batch_text = _item(7, '1').strip()
-            if batch_text:
-                try:
-                    batch_size = int(batch_text)
-                    if batch_size < 1:
-                        batch_size = 1
-                    elif batch_size > 1000:
-                        batch_size = 1000
-                except ValueError:
-                    batch_size = 1
-
-            dist_data = self._pool_distributions.get(pid_raw)
-            rewards = []
-            if dist_data:
-                for d in dist_data:
-                    rewards.append({
-                        'card_id': d.get('card_id', ''),
-                        'probability': d.get('probability', 0),
-                        'rarity': d.get('rarity', 'R'),
-                        'featured': d.get('featured', False),
-                        **({'resources_gained': d.get('resources_gained', {})}
-                           if d.get('resources_gained') else {}),
-                    })
-
-            banners.append(BannerEntry(
-                id=pid,
-                name=_item(2),
-                enabled=cb.isChecked() if cb else True,
-                available_from=start_day * DAY,
-                available_until=(start_day + duration) * DAY,
-                pools=[BannerPoolEntry(
-                    id='main',
-                    cost=cost_text,
+        for b in self._banner_defs:
+            pools = []
+            for p in b.get('pools', []):
+                batch_size = int(p.get('batch_size', 1) or 1)
+                md = p.get('max_draws')
+                pools.append(BannerPoolEntry(
+                    id=p.get('id', ''),
+                    cost=str(p.get('cost', 'draw_resource:160')),
                     batch_size=batch_size,
-                    epitomizable_cards=_old_epitomizable.get(pid_raw, []),
-                    rewards=rewards,
-                )],
+                    excludes_all_pity=bool(p.get('excludes_all_pity', False)),
+                    max_draws=None if md is None else int(md),
+                    exchange_card_id=p.get('exchange_card_id'),
+                    epitomizable_cards=list(p.get('epitomizable_cards', []) or []),
+                    rewards=[{
+                        'card_id': r.get('card_id', ''),
+                        'probability': float(r.get('probability', 0)),
+                        'rarity': r.get('rarity', 'R'),
+                        'featured': bool(r.get('featured', False)),
+                        **({'resources_gained': r.get('resources_gained', {})}
+                           if r.get('resources_gained') else {}),
+                    } for r in p.get('rewards', []) or []],
+                ))
+            lifecycle = []
+            for lc in b.get('lifecycle', []) or []:
+                condition = lc.get('condition', 'pool_draws')
+                at = lc.get('at', 0.0)
+                lifecycle.append(LifecycleRuleEntry(
+                    condition=condition,
+                    pool=lc.get('pool') or None,
+                    at=float(at) * DAY if condition == 'time_window' else float(at),
+                    match=lc.get('match', 'card_id'),
+                    action=lc.get('action', 'switch_to'),
+                    target=lc.get('target') or None,
+                ))
+            b_from = b.get('available_from')
+            b_until = b.get('available_until')
+            b_md = b.get('max_draws')
+            banners.append(BannerEntry(
+                id=b.get('id', ''),
+                name=b.get('name', ''),
+                enabled=bool(b.get('enabled', True)),
+                max_draws=None if not b_md else int(b_md),
+                available_from=float(b_from) * DAY if b_from is not None else None,
+                available_until=float(b_until) * DAY if b_until is not None else None,
+                pools=pools,
+                lifecycle=lifecycle,
             ))
 
         store.banner.banners = banners
@@ -4054,40 +4835,54 @@ class ConfigPanel(QWidget):
     def _refresh_from_store_impl(self):
         store = self._store
 
-        pools_data = []
-        self._pool_distributions = {}
-        for p in store.pools:
-            dist_list = None
-            if p.distribution:
-                dist_list = [{'card_id': d.card_id, 'probability': d.probability,
-                              'rarity': d.rarity, 'featured': d.featured,
-                              'resources_gained': d.resources_gained,}
-                             for d in p.distribution]
-                self._pool_distributions[p.pool_id] = dist_list
-
-            # P61（§3.13.1）：pool_type 已退役，类型列为推导显示（只读，Ph8 卡池管理 Tab 完整实现）
-            pool_type = derive_pool_type_from_distribution(p.distribution)
-            pools_data.append({
-                'enabled': p.enabled,
-                'id': p.pool_id,
-                'name': p.name,
-                'type': pool_type,
-                'start_day': p.start_day,
-                'duration': (p.end_day - p.start_day) if p.end_day is not None else 0,
-                'cost': p.cost,
-                'note': '',
-                'distribution': dist_list,
-                'batch_size': getattr(p, 'batch_size', 1),
+        # P61（Ph8）：从 store.banner.banners 填充 _banner_defs（读侧 Banner 适配）。
+        # 时间窗口秒 → 天（// DAY，ISSUE-001）；max_draws None → 0（UI 无限制语义）；
+        # lifecycle at 秒 → 天（time_window）；card_obtained 匹配值取自 pool 字段。
+        self._banner_defs = []
+        for b in store.banner.banners:
+            pools = []
+            for p in b.pools:
+                pools.append({
+                    'id': p.id,
+                    'cost': p.cost,
+                    'batch_size': getattr(p, 'batch_size', 1),
+                    'excludes_all_pity': getattr(p, 'excludes_all_pity', False),
+                    'max_draws': getattr(p, 'max_draws', None),
+                    'exchange_card_id': getattr(p, 'exchange_card_id', None),
+                    'epitomizable_cards': list(getattr(p, 'epitomizable_cards', []) or []),
+                    'rewards': [dict(r) for r in (p.rewards or [])],
+                })
+            lifecycle = []
+            for lc in b.lifecycle or []:
+                lifecycle.append({
+                    'condition': lc.condition,
+                    'pool': lc.pool,
+                    'at': lc.at / DAY if lc.condition == 'time_window' else lc.at,
+                    'match': getattr(lc, 'match', 'card_id'),
+                    'action': lc.action,
+                    'target': lc.target,
+                })
+            self._banner_defs.append({
+                'id': b.id,
+                'name': b.name,
+                'enabled': getattr(b, 'enabled', True),
+                'max_draws': getattr(b, 'max_draws', None),
+                'available_from': b.available_from / DAY if b.available_from is not None else None,
+                'available_until': b.available_until / DAY if b.available_until is not None else None,
+                'pools': pools,
+                'lifecycle': lifecycle,
             })
-        self._set_pool_table(pools_data)
+        self._refresh_banner_list(0 if self._banner_defs else -1)
+        self._register_resources_from_pools()
 
         self.pity_enabled.setChecked(store.pity.enabled)
         self._pity_defs = []
         for p in store.pity.pities:
             # P55：扁平化字段
             pools_val = getattr(p, 'pools', ('*',))
-            if isinstance(pools_val, tuple):
-                pools_val = ','.join(pools_val) if pools_val != ('*',) else '*'
+            # P61 Ph8b（ISSUE-328）：保留 tuple 原形——多 pattern（如 ('b1.main','b2.main')）
+            # 逗号拼接成字符串后勾选表格对单 pattern fnmatch 恒失配、绑定静默清空。
+            # 绑定勾选表格直接消费 tuple（逐 pattern fnmatch）。
             self._pity_defs.append({
                 'name': p.name,
                 'btype': p.btype,

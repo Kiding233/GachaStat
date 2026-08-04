@@ -1,8 +1,8 @@
-"""P61 Ph3 交付：ConfigPanel 写侧迁移 store.banner 后的 pool_id round-trip 稳定性测试。
+"""P61 Ph8 交付：ConfigPanel「卡池管理」Tab 的 Banner round-trip 稳定性测试。
 
 覆盖目标：
-  1. 表格第 1 列保持全限定 {banner_id}.{pool_id} 展平键
-  2. apply_to_store 写 BannerEntry 时拆出裸 banner id，杜绝二次限定（pool_c1.main.main）
+  1. refresh_from_store 填充 _banner_defs（含内层 pools/rewards）
+  2. apply_to_store 写 store.banner.banners 与 _banner_defs 一致（id 不二次限定）
   3. 展平视图 pool_id 仍为全限定，round-trip 稳定
 """
 
@@ -40,42 +40,114 @@ def _make_panel():
     return p
 
 
-class TestPoolIdRoundtripP61:
-    """apply_to_store 后 banner/pool 键空间稳定。"""
+class TestBannerRoundtripP61:
+    """Ph8 后 apply_to_store / refresh_from_store 的 Banner 键空间稳定。"""
 
-    def test_table_first_column_is_qualified(self, qapp):
-        """表格第 1 列为全限定 {banner_id}.{pool_id} 键。"""
+    def test_refresh_fills_banner_defs(self, qapp):
+        """refresh_from_store 后 _banner_defs 与 Banner 列表一致，id 为裸段。"""
         panel = _make_panel()
-        assert panel.pool_table.rowCount() >= 1
-        cell = panel.pool_table.item(0, 1)
-        assert cell is not None and cell.text().strip()
-        assert '.' in cell.text().strip(), \
-            f"表格第 1 列应为全限定键，实际: {cell.text().strip()!r}"
+        assert len(panel._banner_defs) >= 1
+        assert panel.banner_list.count() == len(panel._banner_defs)
+        for b in panel._banner_defs:
+            assert '.' not in b['id'], f"banner id 不应含 '.': {b['id']!r}"
+            assert b['pools'], f"banner {b['id']} 应至少一个 pool"
 
     def test_apply_to_store_no_double_qualification(self, qapp):
         """apply_to_store 后 banner id 为裸段，展平视图保持全限定。"""
         panel = _make_panel()
-        qualified = panel.pool_table.item(0, 1).text().strip()
-        banner_id = qualified.rsplit('.', 1)[0]
+        banner_ids_defs = {b['id'] for b in panel._banner_defs}
 
         panel.apply_to_store()
         store = panel._store
 
-        # banner id 拆为裸段——不存在二次限定
         banner_ids = {b.id for b in store.banner.banners}
-        assert banner_id in banner_ids, f"banner id 应含裸段 {banner_id!r}，实际: {banner_ids}"
+        assert banner_ids == banner_ids_defs
         assert not any('.' in b.id for b in store.banner.banners), \
             "banner id 不应含 '.'（二次限定 pool_c1.main.main）"
 
         # 展平视图 pool_id 仍为全限定——round-trip 稳定
         pool_ids = {p.pool_id for p in store.pools}
-        assert qualified in pool_ids, f"扁平 pool_id 应含 {qualified!r}，实际: {pool_ids}"
+        for b in store.banner.banners:
+            for p in b.pools:
+                assert f"{b.id}.{p.id}" in pool_ids, \
+                    f"展平 pool_id 应含全限定键 {b.id}.{p.id}"
 
-    def test_apply_to_store_preserves_inner_pool_id_main(self, qapp):
-        """apply_to_store 后每个 banner 的内层池 id 固定为 main。"""
+    def test_apply_to_store_preserves_pools_and_rewards(self, qapp):
+        """apply_to_store 后内层池/奖励结构与 _banner_defs 一致。"""
         panel = _make_panel()
         panel.apply_to_store()
         store = panel._store
-        for b in store.banner.banners:
-            assert len(b.pools) == 1
-            assert b.pools[0].id == 'main'
+        assert len(store.banner.banners) == len(panel._banner_defs)
+        for b_def, b_entry in zip(panel._banner_defs, store.banner.banners):
+            assert len(b_entry.pools) == len(b_def['pools'])
+            if b_def['pools']:
+                p0 = b_entry.pools[0]
+                p0_def = b_def['pools'][0]
+                assert p0.id == p0_def['id']
+                assert p0.cost == p0_def['cost']
+                assert len(p0.rewards) == len(p0_def['rewards'])
+
+
+class TestPityBindTableRoundtripP61:
+    """Ph8b 保底「绑定池」勾选表格 round-trip（ISSUE-328）。
+
+    空勾选 → pools=[]（不绑定任何池，不沿用旧空文本→('*',) 反转语义）；
+    全选 → ('*',)；多 pattern → 逐键 fnmatch 勾选且 round-trip 保留。
+    """
+
+    def test_empty_selection_persists_as_empty(self, qapp):
+        """全不选保存 pools=[]，加载不勾选任何行、保底规则不触发。"""
+        panel = _make_panel()
+        assert panel._pity_defs, '应有至少一条保底'
+        panel.pity_list.setCurrentRow(0)
+        panel._set_pity_bind_all(False)
+        assert panel._read_pity_bind_patterns() == ()
+        panel.apply_to_store()
+        store_pools = panel._store.pity.pities[0].pools
+        assert store_pools == (), f'空勾选应保存 pools=[]，实际 {store_pools}'
+        # 重新加载：不勾选任何行
+        panel._pity_defs[0]['pools'] = ()
+        panel._on_pity_selected(0)
+        checked = [i for i in range(panel.pity_bind_table.rowCount())
+                   if panel.pity_bind_table.cellWidget(i, 0).isChecked()]
+        assert checked == [], f'空勾选加载后应无勾选行，实际 {checked}'
+
+    def test_select_all_persists_as_wildcard(self, qapp):
+        """全选保存 pools=('*',)，加载全勾选。"""
+        panel = _make_panel()
+        panel.pity_list.setCurrentRow(0)
+        panel._set_pity_bind_all(True)
+        assert panel._read_pity_bind_patterns() == ('*',)
+        panel.apply_to_store()
+        assert panel._store.pity.pities[0].pools == ('*',)
+        panel._pity_defs[0]['pools'] = ('*',)
+        panel._on_pity_selected(0)
+        rows = panel.pity_bind_table.rowCount()
+        assert rows >= 1
+        checked = sum(1 for i in range(rows)
+                      if panel.pity_bind_table.cellWidget(i, 0).isChecked())
+        assert checked == rows, f'全选加载后应全勾选，实际 {checked}/{rows}'
+
+    def test_multi_pattern_survives_roundtrip(self, qapp):
+        """部分勾选（多池）保存后 round-trip 保留，不丢失为 () 或误扩为 ('*',)。"""
+        panel = _make_panel()
+        banners = panel._store.banner.banners
+        assert len(banners) >= 2, '需要至少 2 个 banner'
+        p0 = f"{banners[0].id}.{banners[0].pools[0].id}"
+        p1 = f"{banners[1].id}.{banners[1].pools[0].id}"
+        panel.pity_list.setCurrentRow(0)
+        # 先全不选，再模拟用户勾选前 2 行（对应 p0、p1）
+        panel._set_pity_bind_all(False)
+        panel.pity_bind_table.cellWidget(0, 0).setChecked(True)
+        panel.pity_bind_table.cellWidget(1, 0).setChecked(True)
+        patterns = panel._read_pity_bind_patterns()
+        assert set(patterns) == {p0, p1}, f'部分勾选应生成精确键，实际 {patterns}'
+        panel.apply_to_store()
+        pools = panel._store.pity.pities[0].pools
+        assert set(pools) == {p0, p1}, f'多 pattern 应保留，实际 {pools}'
+        # 加载：对应行勾选（不误扩全选、不清空）
+        panel._pity_defs[0]['pools'] = (p0, p1)
+        panel._refresh_pity_bind_table((p0, p1))
+        checked = [i for i in range(panel.pity_bind_table.rowCount())
+                   if panel.pity_bind_table.cellWidget(i, 0).isChecked()]
+        assert checked == [0, 1], f'多 pattern 加载应勾选 2 行，实际 {checked}'

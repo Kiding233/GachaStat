@@ -272,14 +272,9 @@ class MainWindow(QMainWindow):
             try:
                 self.config_panel.apply_to_store()
                 save_toml(self._store, path)
-                # 模板匹配失败提示
-                inline_count = sum(1 for p in self._store.pools
-                                   if not p.distribution_template)
-                if inline_count > 0:
-                    self.status_bar.showMessage(
-                        f"配置已保存。{inline_count} 个池子使用内联分布（模板不匹配）。", 8000)
-                else:
-                    self.status_bar.showMessage(f"配置已导出: {path}")
+                # P61（Ph8c / ISSUE-005）：池子模板已移除，内联分布统计失去语义——
+                # 展平视图无 distribution_template 字段、提示恒显示（误导），删除。
+                self.status_bar.showMessage(f"配置已导出: {path}")
             except Exception as e:
                 traceback.print_exc()
                 QMessageBox.warning(self, "导出失败", str(e))

@@ -5,7 +5,7 @@
 
 # P58 累抽奖励引擎——独立 MilestoneEngine 实现
 
-> 日期：2026-06-19 | 更新：2026-08-05 | 状态：**已实施（M1-M9 全部落地，950 passed）**——见「九、实施记录」
+> 日期：2026-06-19 | 更新：2026-08-05 | 状态：**已实施（M1-M9 全部落地 + 2 轮核查闭环，964 passed）**——见「九、实施记录」
 > **2026-06-20 架构决策：** milestone 不作为保底 type 实现——独立 `MilestoneEngine` + `[[milestone]]` TOML 段。理由：milestone 不操作概率、不参与 PityEngine 管道、语义与「保底」（运气保护）正交。独立方案代码量不增反减（~97 vs ~110 行），且零侵入 PityEngine / BEHAVIOR_REGISTRY。
 > **2026-07-29 UI 审查修正：** ConfigPanel 右侧仅为全局 `preview_text` QLabel——无独立 TOML 预览区。Tab 命名「累抽奖励」（玩家社区有机术语，NGA/贴吧通用，语义精准：累计抽取→赠送）。P58 信号连接复用已有 `_update_preview()` 全局方法，仅在 `_do_update_preview()` 追加累抽摘要段。UI 整体方案确认：与保底编辑器统一模式（总闸→左列表右详情→底部按钮），随机卡采用摘要行+弹窗编辑（`RandomCardPoolDialog`，四列勾选/卡/稀有度/权重），权重为每卡独立列。
 
@@ -2147,10 +2147,18 @@ P58 已实施落地（M1-M9 全部完成）。核心变更文件：
 
 **实施决策（2026-08-05，与计划 §3.5「P61 协作」一致）：** M9 的订阅装配作为最终态直接落地（P61 已归档），M4 inline 过渡形态未引入（计划明确「最终态以 M9 订阅装配为准」）。`register_milestone_engine` 扩展接收 `card_overflow_map`/`initial_counts` 参数（M9 订阅 handler 拿不到 GachaService 内部 self，装配点透传——独立审查发现 2 的落地）。
 
-**验证：** 959 passed（920 既有 + 39 新增）、ruff 全部通过、M9 banner 过滤端到端验证通过。
+**验证：** 964 passed（920 既有 + 44 新增）、ruff 全部通过、M9 banner 过滤端到端验证通过。
 
 **独立 fidelity 审查（2026-08-05，2 个阻塞级缺陷已修复）：**
 1. **转变标记 draw-only 键空间分裂（ISSUE-307/313 实际未生效）**——`streaming.py` 减赠卡循环用 `bonus_events[].pool_id == pool_id` 直接比较，但 `pool_end_times` 键为 banner_id、`bonus_events[].pool_id` 为全限定 `{banner_id}.{pool_id}`，恒 False。修正为取 banner_id 段（`split('.')[0]`）匹配（`_check_success_draw_only` + `_update_transition`）。
 2. **`infer_events` / `_resolve_skip_ignore` 减赠卡未实施（ISSUE-007）**——新增 `process_trace.py::_subtract_gift_cards()`：`infer_events` 双路径判定前按 `compact['bonus_events']` 从 `pool_card_counts` 减赠卡恢复 draw-only 口径（数据源已由 `extract_aggregate` 透传就绪，旧数据集无键 → 保守回退不减）。
 
 **审计补齐用例（+9）：** banner 过滤集成测试（M9 验收）、shipped config.toml 示例段加载 + round-trip、清空名称 round-trip、StrategyContext 查询 + 安全默认值、ConfigStore.clear() 重置、get_config milestone 键、转变标记 draw-only 回归（含赠卡目标卡场景）。
+
+**第 2 轮独立核查（2026-08-05，计划波及项补齐）：**
+1. **ISSUE-312——`compute_transition_flags_from_gdr` 回退路径 draw-only 口径**：`per_pool_analysis.py` 新增 `bonus_events: List[List[Dict]] = None` 参数（判定前按该 sim 该 pool 赠卡减 `cumulative_card_counts`/`agg['card_counts']` 恢复 draw-only，banner_id 段匹配与 streaming 同口径；`None` 保守回退不减）+ `analysis_panel.py` 两处调用透传 `[r.get('bonus_events', []) for r in self.results]`（数据通道已由 extract_aggregate 透传就绪）。
+2. **ISSUE-005/306——`RetreatConfigBuilder.build` 透传 milestone + 溢出数据**：`retreat_config.py` 透传 `original_store.milestone` + `card_overflow_map` + `rarity_defaults` + `CardDefEntry.overflow_bands`——截断模式（from_pool_id 指定）与完整时间线模式 GDR/最少资源/Pareto 数值一致。
+3. **ISSUE-008——`compute_config_hash` 纳入 milestone**：`result_store.py` 新增 `milestone_config` 参数（hash 覆盖 name/threshold/repeat/max_triggers/banner/bonus_reward/enabled）+ `main_window.py` 调用处透传 `store.milestone`——仅 milestone 不同的数据集判「配置: 不同」。
+4. **CLAUDE.md 同步（§八验收）**：扩展指南表新增「新里程碑」行 + 架构分层注释新增 `core/milestone.py` 条目。
+
+**第 2 轮补齐用例（+5）：** `compute_transition_flags_from_gdr` draw-only（含 None 回退/多赠卡）、`RetreatConfigBuilder` 透传、`compute_config_hash` 纳入 milestone。

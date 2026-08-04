@@ -441,7 +441,8 @@ class MainWindow(QMainWindow):
         # 仅含 pool_id/cost 会漏掉 Banner 级差异致指纹误判可比
         config_hash = compute_config_hash(
             self._store.banner.banners, getattr(self._store, 'pity', None),
-            getattr(self._store, 'schedules', [])
+            getattr(self._store, 'schedules', []),
+            milestone_config=getattr(self._store, 'milestone', None),   # P58（ISSUE-008）：里程碑配置纳入可比性指纹
         )
 
         aggregate_count = len(aggregate_data) if isinstance(aggregate_data, list) else 0

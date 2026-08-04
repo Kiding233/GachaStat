@@ -18,7 +18,8 @@ pytest --cov=gacha_simulator                         # 测试
 **架构分层：**
 ```
 gacha_simulator/
-├── core/       # 引擎：池子、状态、策略、保底、GDR、溢出、分析算法（无 GUI 依赖）
+├── core/       # 引擎：池子、状态、策略、保底、GDR、溢出、里程碑、分析算法（无 GUI 依赖）
+│               #   milestone.py — 累抽奖励引擎（P58，独立于 PityEngine，旁路注入）
 ├── service/    # GachaService + batch_simulator
 ├── gui/        # PyQt6 面板（Tab 列表见 main.py，C1 cron 自动同步）
 │               # wheel_blocker.py — QApplication 全局事件过滤器，统一拦截
@@ -143,6 +144,7 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 | 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |
+| 新里程碑 | `core/milestone.py` → `MilestoneEngine` 计数器引擎 + `[[milestone]]` TOML 段（P58）——`threshold`/`repeat`/`max_triggers`/`banner`/`bonus_reward`（cards/resources/random_cards 三字段任意组合）；`register_milestone_engine(notifier, engine)` 订阅 `after_draw` 事件（priority=0，P61 装配点） |
 | 新卡片维度 | `CardDefEntry.tags`（单值）/`CardDefEntry.list_tags`（多值）——TOML 中 `[card.tags]` 加一行即可，无需改代码（P65） |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
 | 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |

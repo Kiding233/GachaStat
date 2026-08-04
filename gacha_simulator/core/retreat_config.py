@@ -3,7 +3,7 @@ from typing import Dict
 from .config_store import (
     ConfigStore, PityConfig, PityDef, GainRule, DayOverride,
     TargetCardEntry, CardDefEntry, BannerEntry, BannerPoolEntry,
-    LifecycleRuleEntry,
+    LifecycleRuleEntry, MilestoneConfig, MilestoneDef,   # P58（ISSUE-005/306）：里程碑透传
 )
 
 # P61：秒/天换算——截断后时间窗口以秒写入 store.banner（与 config_store/config_toml 同口径）
@@ -176,6 +176,7 @@ class RetreatConfigBuilder:
                 initial_count=cd.initial_count,
                 tags=dict(cd.tags),
                 list_tags={k: list(v) for k, v in cd.list_tags.items()},
+                overflow_bands=list(cd.overflow_bands) if cd.overflow_bands is not None else None,  # P58（ISSUE-306）：截断模式赠卡溢出不丢失
             )
             for cd in original_store.card_defs
         ]
@@ -183,5 +184,23 @@ class RetreatConfigBuilder:
         truncated.resource_defs = dict(original_store.resource_defs)
         truncated.strategy_key = original_store.strategy_key
         truncated.auto_wait = original_store.auto_wait
+
+        # P58（REVIEW-R1-FIX: ISSUE-005 + ISSUE-306）：截断模式透传 milestone + 溢出数据——
+        # 否则截断分支（from_pool_id 指定）truncated_store 恒空 milestone，与完整时间线分支
+        # （含 milestone）GDR/最少资源/Pareto 搜索结果不一致；空 card_overflow_map 下赠卡溢出
+        # 资源不触发，「截断与完整模式一致」验收项不成立。
+        truncated.milestone = MilestoneConfig(
+            enabled=original_store.milestone.enabled,
+            milestones=[
+                MilestoneDef(
+                    name=m.name, threshold=m.threshold, repeat=m.repeat,
+                    max_triggers=m.max_triggers, bonus_reward=dict(m.bonus_reward),
+                    banner=m.banner,
+                )
+                for m in original_store.milestone.milestones
+            ],
+        )
+        truncated.card_overflow_map = dict(original_store.card_overflow_map)
+        truncated.rarity_defaults = dict(original_store.rarity_defaults)
 
         return truncated

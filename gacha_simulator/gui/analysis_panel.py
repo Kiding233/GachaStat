@@ -1298,6 +1298,7 @@ class AnalysisWorker(QThread):
                         desire_weights=self._store.desire_weights if self._store else None,
                         miss_cost_weights=self._store.miss_cost_weights if self._store else None,
                         card_value_weights=self._store.card_value_weights if self._store else None,
+                        bonus_events=[r.get('bonus_events', []) for r in self.results],   # P58（ISSUE-312）：per-sim 赠卡透传，draw-only 口径
                     )
                     success_flags = [flags[pool_idx] for flags in all_flags]
                     ok = True
@@ -1372,6 +1373,7 @@ class AnalysisWorker(QThread):
                         desire_weights=self._store.desire_weights if self._store else None,
                         miss_cost_weights=self._store.miss_cost_weights if self._store else None,
                         card_value_weights=self._store.card_value_weights if self._store else None,
+                        bonus_events=[r.get('bonus_events', []) for r in self.results],   # P58（ISSUE-312）：per-sim 赠卡透传，draw-only 口径
                     )
                 else:
                     self._emit('警告: 转变分析缺少数据——transition_flags 和 cumulative_snapshots 均为空',

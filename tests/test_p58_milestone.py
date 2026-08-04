@@ -752,3 +752,96 @@ class TestTransitionDrawOnly:
         assert snaps and snaps[0]['cumulative_draws'] == 8
         # cumulative_card_counts 含赠卡贡献
         assert snaps[0]['cumulative_card_counts']['target_x'] == 2
+
+
+# ══════════════════════════════════════════════════════════════════
+# D. 独立核查缺口补齐（2026-08-05 第 2 轮）
+# ══════════════════════════════════════════════════════════════════
+
+class TestTransitionFlagsFromGdrDrawOnly:
+    """ISSUE-312——compute_transition_flags_from_gdr 回退路径 draw-only 口径。"""
+
+    def _snap(self, counts):
+        return {'b1': [{'cumulative_card_counts': dict(counts), 'cumulative_draws': 5,
+                        'cumulative_pity_draws': 0, 'cumulative_consumed': {},
+                        'cumulative_gained': {}}]}
+
+    def test_draw_only_subtracts_gift(self):
+        from gacha_simulator.core.per_pool_analysis import compute_transition_flags_from_gdr
+        snaps = self._snap({'r1': 5, 'target_x': 1})
+        bonus = [[{'pool_id': 'b1.main', 'card_ids': ['target_x']}]]
+        flags = compute_transition_flags_from_gdr(
+            snaps, ['b1'], {'target_x': 1}, gdr_key='all_targets',
+            threshold=1.0, scope='cumulative', bonus_events=bonus)
+        assert flags == [[False]], f'draw-only 应判 False（赠卡不计），实际 {flags}'
+
+    def test_none_bonus_falls_back_to_full(self):
+        from gacha_simulator.core.per_pool_analysis import compute_transition_flags_from_gdr
+        snaps = self._snap({'r1': 5, 'target_x': 1})
+        flags = compute_transition_flags_from_gdr(
+            snaps, ['b1'], {'target_x': 1}, gdr_key='all_targets',
+            threshold=1.0, scope='cumulative', bonus_events=None)
+        assert flags == [[True]], f'None 保守回退应含赠卡判 True，实际 {flags}'
+
+    def test_multi_gift_events(self):
+        from gacha_simulator.core.per_pool_analysis import compute_transition_flags_from_gdr
+        snaps = self._snap({'r1': 5, 'target_x': 2})
+        bonus = [[{'pool_id': 'b1.main', 'card_ids': ['target_x']},
+                  {'pool_id': 'b1.main', 'card_ids': ['target_x']}]]
+        flags = compute_transition_flags_from_gdr(
+            snaps, ['b1'], {'target_x': 1}, gdr_key='all_targets',
+            threshold=1.0, scope='cumulative', bonus_events=bonus)
+        assert flags == [[False]], f'多赠卡事件应全减，实际 {flags}'
+
+
+class TestRetreatConfigMilestonePassthrough:
+    """ISSUE-005/306——RetreatConfigBuilder.build 透传 milestone + 溢出数据。"""
+
+    def test_passthrough_milestone_and_overflow(self):
+        from gacha_simulator.core.retreat_config import RetreatConfigBuilder
+        store = ConfigStore()
+        store.banner.banners = [
+            BannerEntry(id='b1', name='B1', enabled=True, available_from=0.0,
+                        available_until=30 * DAY,
+                        pools=[BannerPoolEntry(id='main', cost='draw_resource:160', batch_size=1,
+                                               rewards=[_reward('ssr_a', 1.0, 'SSR'),
+                                                        _reward('r_b', 99.0)])],
+                        lifecycle=[]),
+        ]
+        store.card_defs = [CardDefEntry(
+            card_id='ssr_a', name='a', rarity='ssr', pools=['b1.main'],
+            overflow_bands=[OverflowBand(1, None, {'star': 5})])]
+        store.milestone = MilestoneConfig(enabled=True, milestones=[
+            MilestoneDef(name='m1', threshold=10, bonus_reward={'resources': {'coin': 5}}),
+        ])
+        store.card_overflow_map = {'ssr_a': [OverflowBand(1, None, {'star': 5})]}
+        store.rarity_defaults = {'ssr': {'overflow_bands': []}}
+        truncated = RetreatConfigBuilder.build(store, 'b1', {'draw_resource': 1000}, {})
+        assert truncated.milestone.milestones[0].name == 'm1'
+        assert truncated.milestone.enabled is True
+        assert truncated.card_overflow_map.get('ssr_a')
+        assert truncated.rarity_defaults == {'ssr': {'overflow_bands': []}}
+        assert truncated.card_defs[0].overflow_bands is not None
+
+
+class TestConfigHashIncludesMilestone:
+    """ISSUE-008——compute_config_hash 纳入 milestone（可比性指纹）。"""
+
+    def test_milestone_changes_hash(self):
+        from gacha_simulator.core.result_store import compute_config_hash
+        store = ConfigStore()
+        store.banner.banners = [
+            BannerEntry(id='b1', name='B1', enabled=True, available_from=0.0,
+                        available_until=30 * DAY, pools=[], lifecycle=[]),
+        ]
+        m1 = MilestoneConfig(enabled=True, milestones=[
+            MilestoneDef(name='m1', threshold=10, bonus_reward={'resources': {'coin': 5}}),
+        ])
+        m2 = MilestoneConfig(enabled=True, milestones=[
+            MilestoneDef(name='m2', threshold=99, bonus_reward={'resources': {'coin': 99}}),
+        ])
+        h_none = compute_config_hash(store.banner.banners, None, [])
+        h_m1 = compute_config_hash(store.banner.banners, None, [], milestone_config=m1)
+        h_m2 = compute_config_hash(store.banner.banners, None, [], milestone_config=m2)
+        assert h_none != h_m1, '无 milestone 与含 milestone 应不同 hash'
+        assert h_m1 != h_m2, 'milestone 内容不同应不同 hash'

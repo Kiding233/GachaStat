@@ -423,7 +423,8 @@ def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dic
 
 
 def compute_config_hash(pools_config: List[Any], pity_config: Any,
-                        schedules_config: List[Any]) -> str:
+                        schedules_config: List[Any],
+                        milestone_config: Any = None) -> str:
     """计算配置的确定性 hash（用于可比性判断）。
 
     P61（Ph7 / ISSUE-013）：纳入 Banner 级配置。pools_config 现为
@@ -432,6 +433,10 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
     rewards 分布（featured/rarity/probability）；对旧 List[PoolEntry] 展平
     视图保留兼容分支（仅 hash pool_id/cost，不覆盖 Banner 级字段——时间
     窗口/lifecycle 差异时指纹会误判可比，主路径不得再走该分支）。
+
+    P58（REVIEW-R1-FIX: ISSUE-008）：milestone_config（store.milestone）纳入
+    hash——仅 milestone 不同的数据集判「配置: 不同」（否则 only_strategy_differs()
+    / mode_label() 误判纯策略比较）。None（调用方未传）→ 不纳入，兼容旧调用方。
     """
     h = hashlib.sha256()
 
@@ -474,4 +479,14 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
         h.update(getattr(s, 'pool_id', '').encode())
         h.update(str(getattr(s, 'available_from', 0)).encode())
         h.update(str(getattr(s, 'available_until', 0)).encode())
+    # 里程碑配置（P58 ISSUE-008——仅 milestone 不同的数据集判「配置: 不同」）
+    if milestone_config is not None and hasattr(milestone_config, 'milestones'):
+        _update(str(getattr(milestone_config, 'enabled', True)))
+        for md in sorted(milestone_config.milestones, key=lambda x: getattr(x, 'name', '')):
+            _update(md.name)
+            _update(str(md.threshold))
+            _update(str(md.repeat))
+            _update(str(md.max_triggers))
+            _update(str(md.banner))
+            _update(str(md.bonus_reward))
     return h.hexdigest()[:16]

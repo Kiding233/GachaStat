@@ -1254,3 +1254,27 @@ card_value = 0.0
 # [card.overflow]
 # first_time_bonus = { exchange_currency = 10 }
 # excess_bonus = { threshold = 7, resources = { exchange_currency = 25 } }
+
+# ── P58：累抽奖励（独立于保底体系——不修改概率、旁路注入） ──────
+# bonus_reward 三字段可任意组合——cards + resources + random_cards 并行。
+# at=N：一次性（repeat=false）；every=N：周期（repeat=true，触发后归零继续）。
+# banner：精确指向一个 Banner（空字符串 = 全部 Banner）。
+# 示例引用现有卡（limited_ssr_1）与现有资源（exchange_currency），可直接加载。
+
+# every=N：每 10 抽赠送 1 兑换货币，无限重复（火影忍者碎片模型）
+[[milestone]]
+name = "milestone_example_every"
+threshold = 10
+repeat = true
+max_triggers = 0
+banner = ""
+bonus_reward = { resources = { exchange_currency = 1 } }
+
+# at=N：300 抽赠送当期限定卡 + 补偿资源，仅一次（明日方舟 300 井模型）
+[[milestone]]
+name = "milestone_example_at"
+threshold = 300
+repeat = false
+max_triggers = 1
+banner = ""
+bonus_reward = { cards = ["limited_ssr_1"], resources = { exchange_currency = 300 } }

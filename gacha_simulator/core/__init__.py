@@ -20,6 +20,7 @@ from .pity import (
     TargetedBehavior, TargetedSoftBehavior,
     SoftPityMixin, _redistribute_scope,
 )
+from .milestone import MilestoneEngine, MilestoneDef, MilestoneConfig, register_milestone_engine  # P58
 from .strategy import (
     Strategy, StrategyContext, StrategyMeta, register_strategy,
     SmartStrategy, PoolQuotaStrategy, PityReserveStrategy, StopOnTargetStrategy,
@@ -121,6 +122,7 @@ __all__ = [
     'RotatingCRBehavior', 'RotatingCRSoftBehavior',
     'TargetedBehavior', 'TargetedSoftBehavior',
     'SoftPityMixin', '_redistribute_scope',
+    'MilestoneEngine', 'MilestoneDef', 'MilestoneConfig', 'register_milestone_engine',
     'Strategy', 'StrategyContext', 'StrategyMeta', 'register_strategy',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',

@@ -160,6 +160,29 @@ class PityConfig:
 
 
 @dataclass
+class MilestoneDef:
+    """单条里程碑定义——从 TOML [[milestone]] 解析（P58）。
+
+    threshold 触发阈值（抽数）；repeat=False 一次性（at=N）、repeat=True 周期（every=N）；
+    max_triggers 最大触发次数（0=无限）；bonus_reward 三字段任意组合
+    （cards / resources / random_cards）；banner 精确指向一个 Banner（空 = 全部，P61 协作）。
+    """
+    name: str
+    threshold: int = 40
+    repeat: bool = False
+    max_triggers: int = 0
+    bonus_reward: dict = field(default_factory=dict)
+    banner: str = ""
+
+
+@dataclass
+class MilestoneConfig:
+    """里程碑配置容器（P58）。"""
+    enabled: bool = True
+    milestones: List[MilestoneDef] = field(default_factory=list)
+
+
+@dataclass
 class GainRule:
     rule_type: str = 'every_n_days'
     param: str = '1'
@@ -204,6 +227,7 @@ class ConfigStore:
     resource_defs: Dict[str, str] = field(default_factory=dict)
     banner: BannerConfig = field(default_factory=BannerConfig)
     pity: PityConfig = field(default_factory=PityConfig)
+    milestone: MilestoneConfig = field(default_factory=MilestoneConfig)  # ← P58
     gain_rules: List[GainRule] = field(default_factory=list)
     day_overrides: List[DayOverride] = field(default_factory=list)
     initial_resources: Dict[str, float] = field(default_factory=dict)
@@ -235,6 +259,7 @@ class ConfigStore:
         self.resource_defs.clear()
         self.banner.banners.clear()
         self.pity = PityConfig()
+        self.milestone = MilestoneConfig()                            # ← P58
         self.gain_rules.clear()
         self.day_overrides.clear()
         self.initial_resources.clear()

@@ -23,6 +23,8 @@ from .config_store import (
     DayOverride,
     GainRule,
     LifecycleRuleEntry,
+    MilestoneConfig,
+    MilestoneDef,
     PityConfig,
     PityDef,
     TargetCardEntry,
@@ -65,6 +67,7 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     _build_gain_rules(data, store)
     _build_day_overrides(data, store)
     _build_pity(data, store)        # 依赖 rarity_rank 完成 scope 校验
+    _build_milestone(data, store)   # P58：[[milestone]] 累抽奖励段（依赖 card_defs 做引用校验）
     _build_targets(data, store)
     _build_weights(data, store)
 
@@ -158,6 +161,20 @@ def save_toml(store: ConfigStore, path: str) -> None:
     # pity（P55 扁平化格式）
     if store.pity.enabled and store.pity.pities:
         data['pity'] = [_pitydef_to_toml(p) for p in store.pity.pities]
+
+    # milestone（P58：[[milestone]] 累抽奖励段——独立于保底体系）
+    if store.milestone.enabled and store.milestone.milestones:
+        data['milestone'] = [
+            {
+                'name': m.name,
+                'threshold': m.threshold,
+                'repeat': m.repeat,
+                'max_triggers': m.max_triggers,
+                'banner': m.banner,
+                'bonus_reward': m.bonus_reward,
+            }
+            for m in store.milestone.milestones
+        ]
 
     # strategy（P69：key + params 格式）
     if store.strategy_key:
@@ -579,6 +596,126 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
         ))
 
     store.pity = PityConfig(enabled=True, pities=pities)
+
+
+def _build_milestone(data: dict, store: ConfigStore) -> None:
+    """[[milestone]] → store.milestone（P58 累抽奖励段）。
+
+    独立于保底体系——milestone 不操作概率、旁路注入。依赖 store.card_defs
+    （_build_cards 已先执行）做 cards/random_cards 引用存在性校验。
+    """
+    ml_list = data.get('milestone', [])
+    if not ml_list:
+        store.milestone = MilestoneConfig(enabled=True)
+        return
+
+    # card_id 引用校验集合（ISSUE-101：store.card_defs 是 List[CardDefEntry]，
+    # 禁止 `cid not in store.card_defs`——str in 列表恒 False）
+    known_card_ids = {c.card_id for c in store.card_defs}
+
+    seen_names: set = set()
+    milestones = []
+    for m in ml_list:
+        # ISSUE-012：全部输入校验统一走 ConfigError 通道（禁止裸 KeyError/ValueError）
+        name = m.get('name', '').strip()
+        if not name:
+            raise ConfigError("里程碑缺少 name 字段")
+        if name in seen_names:
+            raise ConfigError(f"里程碑名称重复: '{name}'")
+        seen_names.add(name)
+
+        try:
+            threshold = int(m.get('threshold', 40))
+            max_triggers = int(m.get('max_triggers', 0))
+        except (TypeError, ValueError):
+            raise ConfigError(f"里程碑 '{name}' threshold/max_triggers 必须为整数")
+
+        if threshold < 1:
+            raise ConfigError(f"里程碑 '{name}' 阈值必须 ≥ 1，当前为 {threshold}")
+
+        br = m.get('bonus_reward', {})
+
+        # ── cards 校验（存在性 + 类型）──
+        cards = br.get('cards', [])
+        if not isinstance(cards, list):
+            raise ConfigError(
+                f"里程碑 '{name}' bonus_reward.cards 必须是数组，当前为 {type(cards).__name__}")
+        for cid in cards:
+            if cid not in known_card_ids:
+                raise ConfigError(
+                    f"里程碑 '{name}' bonus_reward.cards 引用不存在的 card_id: '{cid}'")
+
+        # ── resources 校验（类型 + 值数值——ISSUE-303）──
+        resources = br.get('resources', {})
+        if not isinstance(resources, dict):
+            raise ConfigError(
+                f"里程碑 '{name}' bonus_reward.resources 必须是键值对，当前为 {type(resources).__name__}")
+        for _rk, _rv in resources.items():
+            if not isinstance(_rv, (int, float)) or isinstance(_rv, bool):
+                raise ConfigError(
+                    f"里程碑 '{name}' bonus_reward.resources['{_rk}'] 值必须为数值（int/float），"
+                    f"当前为 {type(_rv).__name__}")
+
+        # ── random_cards 校验（类型 + candidates 存在性 + weights 数值 + count ≥1）──
+        random_cards = br.get('random_cards', [])
+        if not isinstance(random_cards, list):
+            raise ConfigError(
+                f"里程碑 '{name}' bonus_reward.random_cards 必须是数组，当前为 {type(random_cards).__name__}")
+        for i, rc in enumerate(random_cards):
+            candidates = rc.get('candidates', [])
+            if not candidates:
+                raise ConfigError(f"里程碑 '{name}' random_cards[{i}].candidates 不得为空")
+            for cid in candidates:
+                if cid not in known_card_ids:
+                    raise ConfigError(
+                        f"里程碑 '{name}' random_cards[{i}].candidates 引用不存在的 card_id: '{cid}'")
+            if 'weights' in rc and len(rc['weights']) != len(candidates):
+                raise ConfigError(
+                    f"里程碑 '{name}' random_cards[{i}].weights 长度({len(rc['weights'])})"
+                    f"与 candidates({len(candidates)})不匹配")
+            # ISSUE-302：权重逐项 float 数值校验 + 规范化写回（非数字 → ConfigError，不靠 all() 短路）
+            wlist = rc.get('weights', [1.0] * len(candidates))
+            w_norm: list = []
+            for w in wlist:
+                try:
+                    w_norm.append(float(w))
+                except (TypeError, ValueError):
+                    raise ConfigError(
+                        f"里程碑 '{name}' random_cards[{i}].weights 含非数字值 '{w}'"
+                        f"（类型 {type(w).__name__}）——必须为数值")
+            if w_norm and all(w == 0.0 for w in w_norm):
+                raise ConfigError(
+                    f"里程碑 '{name}' random_cards[{i}].weights 全为零——random.choices 无法抽样，至少一个权重 > 0")
+            rc['weights'] = w_norm
+            # ISSUE-301：count 解析期校验（负数/非整数 → ConfigError）
+            try:
+                count = int(rc.get('count', 1))
+            except (TypeError, ValueError):
+                raise ConfigError(f"里程碑 '{name}' random_cards[{i}].count 必须为整数")
+            if count < 1:
+                raise ConfigError(
+                    f"里程碑 '{name}' random_cards[{i}].count 必须 ≥ 1（正整数），当前为 {count}")
+            rc['count'] = count
+
+        # ── banner 过滤（类型检查；存在性校验推迟到 M9——P61 已落地，见计划）──
+        raw_banner = m.get('banner', '')
+        if not isinstance(raw_banner, str):
+            raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
+
+        milestones.append(MilestoneDef(
+            name=name,
+            threshold=threshold,
+            repeat=m.get('repeat', False),
+            max_triggers=max_triggers,
+            bonus_reward={
+                'cards': list(cards),
+                'resources': dict(resources),
+                'random_cards': list(random_cards),
+            },
+            banner=raw_banner,
+        ))
+
+    store.milestone = MilestoneConfig(enabled=True, milestones=milestones)
 
 
 def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linear') -> tuple:

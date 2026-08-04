@@ -43,6 +43,23 @@ class SimulationCollector(ABC):
                       pity_state_dict: Dict[str, Any]) -> None:   # ← P61（Ph2）：原 on_pool_end
         pass
 
+    def on_bonus(self, milestone_name: str, card_ids: List[str],
+                 resources: Dict[str, float], pool_id: str, real_time: float,
+                 draw_index: int) -> None:
+        """milestone 注入事件（P58）——记录归因元数据并源头合并卡/资源。
+
+        具体 no-op 默认实现（【不可】标 @abstractmethod——InfoVectorCollector 不重写则
+        无法实例化；M4 前置，REVIEW-R2-FIX: GATE-依赖顺序）。M5-serial 实现
+        CompactCollector.on_bonus 具体合并逻辑。InfoVectorCollector 继承空实现 →
+        历史路径静默丢弃 milestone 产出（已知限制）。
+
+        pool_id 用于 per-pool GDR 分析归因。draw_index 为 0-based 本抽索引（归因钥匙）。
+        方案 C（2026-08-03）：milestone 资源注入 state.resources（当抽末可用）、【不并入】
+        当抽 combined_gained；on_bonus 在 collector.on_draw【之后】调用，把 resources 源头
+        并入 draw_resources_gained[draw_index] 与 total_gained——对象与 to_dict() 产物一致。
+        """
+        pass
+
     @abstractmethod
     def get_result(self) -> Any:
         pass
@@ -127,6 +144,40 @@ class CompactCollector(SimulationCollector):
     def on_banner_end(self, banner_id, resources, pity_state_dict):
         self._result.banner_end_resources[banner_id] = dict(resources)
         self._result.banner_end_pity_states[banner_id] = pity_state_dict
+
+    def on_bonus(self, milestone_name, card_ids, resources, pool_id, real_time,
+                 draw_index):
+        """CompactCollector.on_bonus——记录归因元数据 + 源头合并卡/资源（P58 方案 A + C）。
+
+        方案 A（源头合并卡）：milestone 卡直接并入 card_counts / pool_card_counts——
+        to_dict() 产物已含合并后全量统计，SharedResultCollector/extract_aggregate
+        零改动即含 milestone 产出。
+        方案 C（源头合并资源）：on_bonus 在 collector.on_draw【之后】调用（此时
+        draw_resources_gained 已 append 本抽），按 draw_index 直接把资源并入该抽
+        产出与 total_gained——对象与 to_dict() 产物一致，流式/主路径均覆盖。
+        """
+        r = self._result
+        r.bonus_events.append({
+            'milestone_name': milestone_name,
+            'card_ids': list(card_ids),
+            'resources': dict(resources),
+            'pool_id': pool_id,
+            'real_time': real_time,
+            'draw_index': draw_index,
+        })
+        # 源头合并卡（方案 A）
+        for cid in card_ids:
+            r.card_counts[cid] = r.card_counts.get(cid, 0) + 1
+            if pool_id:
+                pcc = r.pool_card_counts.get(pool_id, {})
+                pcc[cid] = pcc.get(cid, 0) + 1
+                r.pool_card_counts[pool_id] = pcc
+        # 源头合并资源（方案 C）——前置：on_bonus 在 on_draw 之后，draw_index 处元素存在
+        if resources and 0 <= draw_index < len(r.draw_resources_gained):
+            dpg = r.draw_resources_gained[draw_index]
+            for k, v in resources.items():
+                dpg[k] = dpg.get(k, 0) + v
+                r.total_gained[k] = r.total_gained.get(k, 0) + v
 
     def get_result(self) -> 'CompactResult':
         return self._result

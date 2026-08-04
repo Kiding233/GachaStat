@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .stop_condition import StopCondition
     from .pity import PityEngine, PityState
     from .param_descriptor import ParamDescriptor
+    from .milestone import MilestoneEngine, MilestoneDef   # P58（M4a）：策略层里程碑查询
 
 
 # ── 策略注册表元数据 ──────────────────────────────────────────────
@@ -108,6 +109,26 @@ class StrategyContext:
     # P61（Ph5）：banner 维度——active_banners / 全部 banners（策略迁移主接口，ISSUE-005）
     banners: List = field(default_factory=list)
     all_banners: List = field(default_factory=list)
+    # P58（M4a）：里程碑引擎（代理查询，只读——策略不可修改计数器）
+    _milestone_engine: Optional['MilestoneEngine'] = field(default=None, repr=False)
+
+    def get_milestone_counter(self, name: str) -> int:
+        """当前累计抽数（已抽次数），不存在 → 0。余量 = md.threshold - get_milestone_counter(name)。"""
+        if self._milestone_engine is None:
+            return 0
+        return self._milestone_engine.get_counter(name)
+
+    def is_milestone_active(self, name: str) -> bool:
+        """该里程碑是否仍在生效（at=N 触发后停用）。"""
+        if self._milestone_engine is None:
+            return False
+        return self._milestone_engine.is_active(name)
+
+    def get_milestone_defs(self) -> Dict[str, 'MilestoneDef']:
+        """返回全部里程碑定义——含 threshold / bonus_reward。"""
+        if self._milestone_engine is None:
+            return {}
+        return self._milestone_engine.get_all_defs()
 
     def get_pity_probabilities(self, pool_id: str) -> Dict[str, float]:
         if self._pity_engine is None:

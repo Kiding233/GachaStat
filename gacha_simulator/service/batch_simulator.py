@@ -7,6 +7,8 @@
 动态参数（target_specs, initial_resources）通过任务参数传入。
 """
 
+from __future__ import annotations   # P58（ISSUE-303）：dataclass 字段注解延迟求值——milestone_defs: List[MilestoneDef] 免模块导入即 NameError
+
 import fnmatch
 import logging
 import random
@@ -73,9 +75,15 @@ class SimulationEnv:
     # （与 pools 同对象）。_run_single 每次从它（或 pools）深拷贝重建，隔离 Banner
     # 运行时状态跨模拟泄漏（ISSUE-312）。带默认值保证跨进程 pickle 兼容。
     banner_defs: list = dc_field(default_factory=list)
+    # P58（M4b，P61 落点 #1 纠正——2026-08-05）：里程碑配置定义（List[MilestoneDef]），
+    # 非 MilestoneEngine 实例——_run_single 内按 per-simulation seed 延迟构造，保证
+    # 计数器/RNG 状态每次模拟独立、固定种子可复现。P61 落地的 milestone_engine 字段
+    # （传实例）保留 None 兜底不激活（见下方 milestone_engine 字段）。
+    milestone_defs: list = dc_field(default_factory=list)
     # P61（Ph0 / ISSUE-329）：P58 里程碑 engine 跨进程来源契约——装配层（_run_single）
     # 构造 GachaService 前从本字段取出注入 register_milestone_engine（priority=0 订阅）。
-    # P58 未实施时恒 None（带默认值保证 pickle 兼容，与 banner_defs 同机制）。
+    # ⚠ P58 纠正（P61 落点 #1）：本字段保留 None 兜底【不激活】——配置由 milestone_defs 承接。
+    # 装配块条件由 `env.milestone_engine is not None` 改写为 `env.milestone_defs`（M4b）。
     milestone_engine: Any = None
 
 
@@ -255,17 +263,31 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
 
     # P61 Ph0：装配层创建共享 Notifier 实例，与模拟循环 emit 同一实例（§3.5「Notifier 装配位置」）
     notifier = Notifier()
-    # P61（Ph0 / ISSUE-329）：P58 装配优先——priority=0 订阅先于 GachaService 的
-    # P61 priority=1 转换订阅注册（§5.2 装配顺序）。P58 未实施时 env.milestone_engine
-    # 恒 None，防御跳过；P58 落地后提供 register_milestone_engine 即可启用。
-    if env.milestone_engine is not None:
-        try:
-            from gacha_simulator.service.milestone import register_milestone_engine
-            register_milestone_engine(notifier, env.milestone_engine)
-        except ImportError:
-            logging.warning(
-                'SimulationEnv.milestone_engine 已设置但 register_milestone_engine '
-                '未提供（P58 未落地）——里程碑装配被跳过')
+    # P58（M4b，P61 落点 #1/#2/#3 纠正——2026-08-05）：装配优先——priority=0 订阅先于
+    # GachaService 的 P61 priority=1 转换订阅注册（§5.2 装配顺序）。
+    # - 落点 #1：配置经 env.milestone_defs（非 P61 的 milestone_engine 实例字段）——
+    #   per-simulation seed 延迟构造，计数器/RNG 状态每次模拟独立、固定种子可复现；
+    # - 落点 #2：register_milestone_engine 定义于 core/milestone.py，装配块 import 顺手指向它；
+    # - 落点 #3：闭包捕获（非模块级全局——Windows spawn 下 worker 模块全局重置为 None）。
+    # - 独立审查发现 2（2026-08-05）：engine 须【两处接线】——注册订阅 + 传入 GachaService
+    #   （M4a 策略查询用），否则 build_strategy_context 传 self.milestone_engine 恒为 None、
+    #   策略层里程碑查询静默退化（结算仍走订阅路径，不崩溃）。
+    _milestone_engine = None
+    if env.milestone_defs:
+        from gacha_simulator.core.milestone import MilestoneEngine, register_milestone_engine
+        _milestone_engine = MilestoneEngine(env.milestone_defs, seed=seed)
+        # initial_counts 由 env.card_defs 推导（与 GachaService.run_simulation 内同源）
+        _ms_initial = {}
+        for _cd in env.card_defs:
+            _ic = _cd.get('initial_count', 0) if isinstance(_cd, dict) else getattr(_cd, 'initial_count', 0)
+            if _ic > 0:
+                _cid = _cd['card_id'] if isinstance(_cd, dict) else _cd.card_id
+                _ms_initial[_cid] = _ic
+        register_milestone_engine(
+            notifier, _milestone_engine,
+            card_overflow_map=env.card_overflow_map,
+            initial_counts=_ms_initial,
+        )
     # P61（Ph6 / ISSUE-312，阻塞）：Banner 运行时状态跨模拟隔离——env.pools 承载
     # List[Banner]，直接传入则 draw/_check_transitions 修改的 _pool_draws/_exhausted/
     # _active_pool_id 等泄漏到下次模拟（固定种子不可复现）。每次构造 GachaService 前
@@ -282,6 +304,7 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
         card_defs=env.card_defs,
         card_overflow_map=env.card_overflow_map,
         notifier=notifier,
+        milestone_engine=_milestone_engine,   # P58（M4b）：策略层查询 + M4a 传参（None 时无里程碑行为）
     )
     state = GachaState(resources=dict(initial_resources))
     return service.run_simulation_compact(state)
@@ -760,6 +783,13 @@ class SimulationEnvBuilder:
         strategy_key = getattr(config_store, 'strategy_key', 'smart') or 'smart'
         strategy_params = dict(getattr(config_store, 'strategy_params', {}) or {})
 
+        # P58（M4b）：里程碑配置提取——enabled 总闸门控（REVIEW-R1-FIX: ISSUE-302）。
+        # enabled=False 时 milestone_defs 为空列表——与 pity 路径 _build_pity_engine_from_gui 的
+        # enabled 语义对齐（『禁用=无效+保存即删除』闭环的 runtime 侧修复）。
+        from gacha_simulator.core.config_store import MilestoneConfig
+        _ms_cfg = getattr(config_store, 'milestone', MilestoneConfig())
+        _milestone_defs = list(_ms_cfg.milestones) if _ms_cfg.enabled else []
+
         return SimulationEnv(
             pools=banners,
             schedule_mgr=schedule_mgr,
@@ -779,6 +809,10 @@ class SimulationEnvBuilder:
             card_overflow_map=dict(getattr(config_store, 'card_overflow_map', {})),
             # P61（Ph6 / ISSUE-011）：Banner 构造定义（与 pools 同对象，_run_single 深拷贝用）
             banner_defs=banners,
+            # P58：里程碑配置——_run_single 内延迟构造 MilestoneEngine（enabled=False 时为空列表）
+            milestone_defs=_milestone_defs,
+            # P61 已落地的 milestone_engine 字段传 None（不激活）——由 milestone_defs 承接
+            milestone_engine=None,
         )
 
     @staticmethod
@@ -798,6 +832,7 @@ class SimulationEnvBuilder:
             strategy_params=config.get('strategy_params', {}),
             stop_condition=config.get('stop_condition'),
             card_overflow_map=config.get('card_overflow_map', {}),
+            milestone_defs=config.get('milestone_defs', []),   # ← P58：worst_impact 等非 ConfigStore 调用方不丢失
         )
 
     @staticmethod

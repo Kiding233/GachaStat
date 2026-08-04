@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .resource_gain import ResourceGainFunction
     from .stop_condition import StopCondition
     from .target_card import TargetCardSet
+    from .milestone import MilestoneEngine   # P58（M4a）：策略层里程碑查询
 
 # 秒/天换算常量（与 resource_gain.py ScheduleResourceGain.DAY 一致）
 DAY = 86400
@@ -45,6 +46,7 @@ def build_strategy_context(
     time_discount: float = 1.0,
     banners: Optional[List] = None,         # P61（Ph5）：active banners（策略迁移主接口）
     all_banners: Optional[List] = None,     # P61（Ph5）：全部 banners
+    _milestone_engine: Optional['MilestoneEngine'] = None,   # P58（M4a）：里程碑引擎（策略查询）
 ) -> StrategyContext:
     """构建完整的 StrategyContext，含派生字段。
 
@@ -119,4 +121,5 @@ def build_strategy_context(
         ssr_ids=ssr_ids,
         banners=banners if banners is not None else [],
         all_banners=all_banners if all_banners is not None else [],
+        _milestone_engine=_milestone_engine,
     )

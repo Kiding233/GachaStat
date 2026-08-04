@@ -6,6 +6,7 @@ from ..core import (
     InfoVector, Strategy, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
     build_strategy_context,
     SimulationCollector, InfoVectorCollector, CompactCollector,
+    MilestoneEngine,   # P58（M4a）：里程碑引擎类型注解
 )
 from ..core.action import NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from ..core.pity import PityEngine, PityState
@@ -80,6 +81,7 @@ class GachaService:
         card_defs: Optional[List] = None,
         card_overflow_map: Optional[Dict[str, list]] = None,
         notifier: Optional[Notifier] = None,  # P61 Ph0：装配层注入共享实例，None 时服务内 fallback 自建
+        milestone_engine: Optional['MilestoneEngine'] = None,  # P58：里程碑引擎（策略层查询 + M4 inline 消费），None 时无里程碑行为
     ):
         # ── P61（§3.5 要点 10）：构造桥——双型收纳为运行时 Banner 字典 ──
         # 元素为 Pool → 就地单池包装 Banner(id=p.id, pools={'main': p})（原子提交→Ph6 间
@@ -107,6 +109,7 @@ class GachaService:
         self.ssr_ids = ssr_ids or set()
         self.card_defs = card_defs or []
         self.card_overflow_map = card_overflow_map or {}
+        self.milestone_engine = milestone_engine or None   # P58：None 时无里程碑行为
         self._notifier = notifier or Notifier()
         self.session_id = str(uuid.uuid4())
         # ── P61（Ph2）：单抽粒度 after_draw 订阅——生命周期转换唯一触发点之一 ──
@@ -246,6 +249,7 @@ class GachaService:
                 schedule_mgr=_schedule_mgr,
                 lookahead=_lookahead,
                 resource_gain=_resource_gain,
+                _milestone_engine=self.milestone_engine,   # P58（M4a）：里程碑查询
             )
 
             action = _strategy.select_action(ctx)
@@ -413,7 +417,13 @@ class GachaService:
 
             result = collector.get_result()
             result.total_consumed = total_consumed
-            result.total_gained = total_gained
+            # P58（M5-serial，方案 C）：on_bonus 已把 milestone 资源并入 result.total_gained
+            # （对象字段），此处须【合并】而非覆盖——局部 total_gained（仅正常产出 + 等待收益）
+            # 直接赋值会整体覆盖、丢失 milestone 资源。
+            merged = dict(total_gained)
+            for k, v in result.total_gained.items():
+                merged[k] = merged.get(k, 0) + v
+            result.total_gained = merged
             result.total_draws = stats.total_draws
             result.total_waits = stats.total_waits
             result.pity_triggers = stats.pity_triggers

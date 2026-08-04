@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
-_RESULT_VERSION = 1
+_RESULT_VERSION = 2  # P58（M5-serial）：新增 bonus_events 字段——1→2 反映序列化格式演进
 
 
 @dataclass
@@ -33,6 +33,7 @@ class CompactResult:
     final_pity_state: Dict[str, Any] = field(default_factory=dict)
     banner_end_resources: Dict[str, Dict[str, float]] = field(default_factory=dict)      # ← P61（Ph2）：键为 banner_id
     banner_end_pity_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)      # ← P61（Ph2）
+    bonus_events: List[Dict[str, Any]] = field(default_factory=list)                     # ← P58（M5-serial）：milestone 赠礼归因事件
     pool_types: Dict[str, str] = field(default_factory=dict)
     strategy_name: str = ''
     strategy_key: str = ''                 # P69 ISSUE-002：策略注册 key（如 'smart'），与类名 strategy_name 互补

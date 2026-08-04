@@ -71,7 +71,8 @@ class TestCompactResultRoundtrip:
         original = CompactResult()
         d = original.to_dict()
         assert 'result_version' in d
-        assert d['result_version'] == 1
+        # P58（M5-serial / ISSUE-106）：新增 bonus_events 字段——序列化格式演进 1 → 2
+        assert d['result_version'] == 2
 
 
 class TestCompactResultAccess:

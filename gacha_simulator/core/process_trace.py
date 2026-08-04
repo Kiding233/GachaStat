@@ -39,6 +39,17 @@ def infer_events(compact: Dict, target_ids: Set[str],
     pool_counter_max = compact.get('pool_counter_max', {})
     pool_pity_names = compact.get('pool_pity_names', {})
 
+    # P58（§3.6b ISSUE-007）：池成败/事件分类只认 draw 序列——pool_card_counts 经
+    # on_bonus 源头合并后含 milestone 赠卡（方案 A），判定前按 bonus_events 减去赠卡
+    # 恢复 draw-only 口径。数据源 = compact['bonus_events']（M5-serial 后 to_dict 产物含该键；
+    # process_analysis_panel aggregate 路径经 extract_aggregate 透传；旧数据集无键 → 空列表
+    # → 保守回退不减，向后兼容）。
+    # 键空间：pool_card_counts 键为全限定 {banner_id}.{pool_id}（draw_pool_key），
+    # bonus_events[].pool_id 同为全限定键（emit 契约）——直接匹配。
+    bonus_events = compact.get('bonus_events', [])
+    if bonus_events:
+        pool_card_counts = _subtract_gift_cards(pool_card_counts, bonus_events)
+
     if pool_ids_list:
         return _infer_from_draw_sequence(
             pool_ids_list, card_ids, pity_flags, pity_names,
@@ -51,6 +62,24 @@ def infer_events(compact: Dict, target_ids: Set[str],
             pool_counter_max, pool_types=pool_types,
             pool_pity_names=pool_pity_names, pool_target_map=pool_target_map,
         )
+
+
+def _subtract_gift_cards(pool_card_counts, bonus_events) -> Dict[str, Dict[str, int]]:
+    """P58（§3.6b ISSUE-007）——从 pool_card_counts 减去 milestone 赠卡恢复 draw-only 口径。
+
+    pool_card_counts 是 on_bonus 源头合并后的全量计数（含赠卡，方案 A）；
+    bonus_events[].pool_id 与 pool_card_counts 键同键空间（全限定 {banner_id}.{pool_id}），
+    直接按池减赠卡。返回深拷贝视图，不修改原 compact。
+    """
+    draw_only = {pid: dict(cc) for pid, cc in pool_card_counts.items()}
+    for ev in bonus_events:
+        pid = ev.get('pool_id', '')
+        if not pid or pid not in draw_only:
+            continue
+        for cid in ev.get('card_ids', []):
+            if cid in draw_only[pid]:
+                draw_only[pid][cid] = max(0, draw_only[pid][cid] - 1)
+    return draw_only
 
 
 def _resolve_skip_ignore(pool_id, pool_card_counts, target_ids, pool_target_map):

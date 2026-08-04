@@ -151,3 +151,37 @@ class TestPityBindTableRoundtripP61:
         checked = [i for i in range(panel.pity_bind_table.rowCount())
                    if panel.pity_bind_table.cellWidget(i, 0).isChecked()]
         assert checked == [0, 1], f'多 pattern 加载应勾选 2 行，实际 {checked}'
+
+    def test_partial_select_same_banner_not_compressed(self, qapp):
+        """B3 修复：同一 Banner 多池仅勾选部分池时保留精确键（防 {banner}.* 误绑未勾选池）。"""
+        from gacha_simulator.core.config_store import BannerPoolEntry
+        panel = _make_panel()
+        banners = panel._store.banner.banners
+        # 给 banner0 追加 free 池（构造多池场景）
+        banners[0].pools.append(BannerPoolEntry(id='free', cost='ticket:1'))
+        panel._refresh_from_store_impl()
+        panel.pity_list.setCurrentRow(0)
+        panel._set_pity_bind_all(False)
+        main_idx = next(i for i in range(panel.pity_bind_table.rowCount())
+                        if panel._pity_bind_keys[i] == f"{banners[0].id}.main")
+        panel.pity_bind_table.cellWidget(main_idx, 0).setChecked(True)
+        patterns = panel._read_pity_bind_patterns()
+        # 只勾 1 池（banner 有 2 池）→ 保留精确键，不压缩为 {banner}.* 误绑未勾选的 free
+        assert patterns == (f"{banners[0].id}.main",), \
+            f'部分勾选不应压缩误绑未勾选池，实际 {patterns}'
+
+    def test_all_select_same_banner_compressed(self, qapp):
+        """B3：同一 Banner 全部池勾选时压缩为 {banner}.*（紧凑，fnmatch 命中全部）。"""
+        from gacha_simulator.core.config_store import BannerPoolEntry
+        panel = _make_panel()
+        banners = panel._store.banner.banners
+        banners[0].pools.append(BannerPoolEntry(id='free', cost='ticket:1'))
+        panel._refresh_from_store_impl()
+        panel.pity_list.setCurrentRow(0)
+        panel._set_pity_bind_all(False)
+        bid = banners[0].id
+        for i in range(panel.pity_bind_table.rowCount()):
+            if panel._pity_bind_keys[i].split('.', 1)[0] == bid:
+                panel.pity_bind_table.cellWidget(i, 0).setChecked(True)
+        patterns = panel._read_pity_bind_patterns()
+        assert patterns == (f"{bid}.*",), f'同 banner 全池勾选应压缩为 {{banner}}.*，实际 {patterns}'

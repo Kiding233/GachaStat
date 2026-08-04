@@ -173,7 +173,12 @@ class TestLifecycleRules:
                                        action='switch_to', target='step2')])
         store = _make_store([b], target_cards=[TargetCardEntry(card_id='card_s2', quantity=1)])
         result = _run(store, num=10, seed=42).results[0]
-        assert result['total_draws'] > 0
+        pool_draws = result.get('pool_draw_counts', {})
+        # 锁真实行为：step1 抽满 30 触发 pool_draws 切换、step2 被抽（非仅 total_draws>0）
+        assert pool_draws.get('step.step1', 0) >= 30, \
+            f'step1 应抽满 30 触发 pool_draws 切换，实际 {pool_draws}'
+        assert pool_draws.get('step.step2', 0) >= 1, \
+            f'step2 应被抽（切换已发生），实际 {pool_draws}'
 
     def test_pool_exhausted_switch(self):
         """池 max_draws 达 → exhausted → switch_to（一次池）"""
@@ -190,43 +195,88 @@ class TestLifecycleRules:
                                        action='switch_to', target='next')])
         store = _make_store([b], target_cards=[TargetCardEntry(card_id='c2', quantity=1)])
         result = _run(store, num=10, seed=42).results[0]
-        assert result['total_draws'] > 0
+        pool_draws = result.get('pool_draw_counts', {})
+        # 锁真实行为：main 抽满 max_draws=10 耗尽、pool_exhausted 切换后 next 被抽
+        assert pool_draws.get('step.main', 0) >= 10, \
+            f'main 应抽满 max_draws=10 耗尽，实际 {pool_draws}'
+        assert pool_draws.get('step.next', 0) >= 1, \
+            f'next 应被抽（pool_exhausted 切换），实际 {pool_draws}'
 
     def test_time_window_switch_no_draw(self):
         """无抽卡跨 time_window：等待分支触发 time_window 转换、目标池可达（ISSUE-003）。
 
-        构造：池 main 在 0-10 天，time_window 第 11 天 switch 到 free（送抽期）→ main 恢复。
-        验证模拟不因等待死锁、正常完成。
+        构造：main 无 draw_resource 可抽（smart 只能等待），free 含目标卡（ticket 成本），
+        time_window 第 11 天 switch 到 free——验证等待期 time_window 转换触发、目标池可达不死锁。
         """
         b = BannerEntry(id='gift', name='送抽', enabled=True,
                         available_from=0.0, available_until=40 * DAY,
                         pools=[
-                            _pool('main', rewards=[_reward('ssr_a', 50.0, 'SSR', featured=True),
-                                                   _reward('r_b', 50.0, 'R')]),
-                            _pool('free', cost='ticket:1', rewards=[_reward('ssr_a', 100.0, 'SSR')]),
+                            _pool('main', rewards=[_reward('r1', 50.0, 'R'),
+                                                   _reward('r2', 50.0, 'R')]),
+                            _pool('free', cost='ticket:1', rewards=[_reward('ssr_a', 90.0, 'SSR', featured=True),
+                                                                    _reward('r3', 10.0, 'R')]),
                         ],
                         lifecycle=[_lc('time_window', at=11 * DAY,
                                        action='switch_to', target='free')])
-        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
+        store = _make_store(
+            [b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)],
+            initial={'draw_resource': 0, 'ticket': 100},
+            gains=[GainRule(rule_type='every_n_days', param='1',
+                            gains={'exchange_currency': 1})],  # 不产生 draw_resource → main 抽不起
+        )
         result = _run(store, num=5, seed=42).results[0]
-        assert result['total_draws'] >= 0
+        pool_draws = result.get('pool_draw_counts', {})
+        # 锁真实行为：等待期 time_window 转换触发 → free 池被抽、目标卡达成（不死锁）
+        assert pool_draws.get('gift.free', 0) >= 1, \
+            f'无抽卡跨 time_window 应经等待触发切换并抽 free，实际 {pool_draws}'
+        assert pool_draws.get('gift.main', 0) == 0, \
+            f'main 应不可抽（draw_resource 0），实际 {pool_draws}'
+        assert result['card_counts'].get('ssr_a', 0) >= 1
 
     def test_card_obtained_rarity_newbie_close(self):
         """终末地新手池「出任意 SSR 即关闭」——card_obtained + match=rarity（ISSUE-306/007）。
 
-        exhaust_banner 后 banner 不可再抽；模拟完成后 total_draws 有限（关闭生效）。
+        池含两张 SSR（目标 ssr_x + 非目标 ssr_other），目标 qty=2。若关闭生效，
+        抽到任意 SSR（合计 5%）即 exhaust_banner，未达成 ssr_x×2 也停；若关闭失效
+        会继续抽到 2 张 ssr_x（期望 ~400 抽）。锁「抽到 SSR 即关、未达目标也停」。
         """
         b = BannerEntry(id='newbie', name='新手', enabled=True,
                         available_from=0.0, available_until=21 * DAY,
                         pools=[_pool('main', rewards=[
-                            _reward('ssr_x', 1.0, 'SSR', featured=True),
-                            _reward('r_y', 99.0, 'R'),
+                            _reward('ssr_x', 0.5, 'SSR', featured=True),       # 目标卡（低概率）
+                            _reward('ssr_other', 4.5, 'SSR', featured=True),   # 非目标 SSR
+                            _reward('r_y', 95.0, 'R'),
                         ])],
                         lifecycle=[_lc('card_obtained', at=0.0, match='rarity',
                                        pool='ssr', action='exhaust_banner')])
-        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_x', quantity=1)])
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_x', quantity=2)])
         result = _run(store, num=10, seed=42).results[0]
-        assert result['total_draws'] > 0
+        # 关闭生效：抽到任意 SSR 即 exhaust，ssr_x 未达成 ×2（<2）——区分「关闭失效时
+        # 继续抽到 2 张 ssr_x」的回归（子代理 B1：原单 SSR 配置移除规则结果相同、空转）
+        assert result['card_counts'].get('ssr_x', 0) < 2, \
+            f'关闭应阻止达成 ssr_x×2 目标，实际 card_counts={result["card_counts"]}'
+        assert result['total_draws'] < 100, \
+            f'「抽到任意 SSR 即关闭」应限制抽数（~20 抽期望，非 400 达成抽数），实际 {result["total_draws"]}'
+
+    def test_banner_draws_switch(self):
+        """banner_draws 条件：Banner 总抽数达阈值 → 切换（补充 Ph9 缺失用例）。"""
+        b = BannerEntry(id='bd', name='抽数', enabled=True,
+                        available_from=0.0, available_until=30 * DAY,
+                        pools=[
+                            _pool('main', rewards=[_reward('c1', 50.0, 'SSR', featured=True),
+                                                   _reward('r1', 50.0, 'R')]),
+                            _pool('alt', rewards=[_reward('c2', 50.0, 'SSR', featured=True),
+                                                  _reward('r2', 50.0, 'R')]),
+                        ],
+                        lifecycle=[_lc('banner_draws', at=20,
+                                       action='switch_to', target='alt')])
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='c2', quantity=1)])
+        result = _run(store, num=10, seed=42).results[0]
+        pool_draws = result.get('pool_draw_counts', {})
+        assert pool_draws.get('bd.main', 0) >= 20, \
+            f'main 应抽满 banner_draws=20 触发切换，实际 {pool_draws}'
+        assert pool_draws.get('bd.alt', 0) >= 1, \
+            f'alt 应被抽（banner_draws 切换），实际 {pool_draws}'
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -379,6 +429,19 @@ class TestMaxDraws:
                       strategy_params={'count': 20}).results[0]
         assert result['total_draws'] >= 15
 
+    def test_banner_max_draws_auto_exhaust(self):
+        """新手池：Banner 级 max_draws 正数达到后自动 exhaust（ISSUE-303，补充缺失用例）。"""
+        b = BannerEntry(id='newbie', name='新手', enabled=True,
+                        available_from=0.0, available_until=30 * DAY,
+                        max_draws=20,
+                        pools=[_pool('main', rewards=[_reward('ssr_a', 50.0, 'SSR', featured=True),
+                                                      _reward('r1', 50.0, 'R')])])
+        store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=99)])
+        result = _run(store, num=5, seed=42, strategy_key='fixed_count',
+                      strategy_params={'count': 50}).results[0]
+        assert result['total_draws'] == 20, \
+            f'Banner max_draws=20 应自动 exhaust，总抽数恒 20，实际 {result["total_draws"]}'
+
     def test_max_draws_partial_batch_mid(self):
         """max_draws=15, batch=10 非倍数：批次中途耗尽总抽数恒 15（ISSUE-302）。"""
         b = _ssr_only_banner('b1', max_draws=None)
@@ -414,6 +477,33 @@ class TestPermanentBanner:
         analyzer = WorstImpactAnalyzer([], {}, store)
         analyzer._prepare_pool_info()
         assert analyzer._pool_duration == 21 * DAY
+
+    def test_all_permanent_raises_config_error(self):
+        """全永久组合（无任何有结束时间的 Banner）解析报 ConfigError（2026-08-04 决策）。"""
+        from gacha_simulator.core.config_store import ConfigError
+        from gacha_simulator.core.config_toml import _normalize_permanent_banners
+        store = _make_store([
+            _ssr_only_banner('p1', available_from=0.0, available_until=None),
+            _ssr_only_banner('p2', available_from=0.0, available_until=None),
+        ])
+        try:
+            _normalize_permanent_banners(store.banner.banners)
+            assert False, '全永久组合应抛 ConfigError'
+        except ConfigError:
+            pass
+
+    def test_normalize_idempotent(self):
+        """归一幂等：二次归一结果不变（load→save→load 后 hash 稳定）。"""
+        from gacha_simulator.core.config_toml import _normalize_permanent_banners
+        store = _make_store([
+            _ssr_only_banner('perm', available_from=0.0, available_until=None),
+            _ssr_only_banner('act', available_from=0.0, available_until=42 * DAY),
+        ])
+        _normalize_permanent_banners(store.banner.banners)
+        first = store.banner.banners[0].available_until
+        assert first == 42 * DAY
+        _normalize_permanent_banners(store.banner.banners)  # 幂等
+        assert store.banner.banners[0].available_until == first
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -457,9 +547,10 @@ class TestPendingTransitions:
 
 class TestBannerEndSnapshot:
     def test_banner_end_resources_at_window_close(self):
-        """窗口过期（real_time >= available_until）触发 on_banner_end，写 banner_end_resources。
+        """banner_end_resources 键为 banner 级（ISSUE-323）。
 
-        构造 0-1 天超短窗口 + 等待策略，验证模拟推进越过 until 后快照键为 banner 级。
+        无论快照由结束路径（目标达成/窗口过期 on_banner_end）哪条写入，
+        键语义必须是 banner 级——锁定 Ph2/Ph7 迁移后的键空间。
         """
         b = BannerEntry(id='b_end', name='快照', enabled=True,
                         available_from=0.0, available_until=1 * DAY,
@@ -722,12 +813,14 @@ class TestCliFallbackTarget:
                         pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
                                                       _reward('r1', 50.0, 'R')])])
         store = _make_store([b])  # 无 target_cards
-        # cli.py:156 兜底：store.pools[0].pool_id.split('.')[0] + '_ssr'（Ph3 ISSUE-003）
-        fallback = f"{store.pools[0].pool_id.split('.')[0]}_ssr"
-        assert fallback == 'b1_ssr', \
-            f'兜底目标应取 banner 段（非全限定 banner.main_ssr），实际 {fallback}'
+        # P61（ISSUE-003）：调用 cli 真实兜底函数（非重抄表达式）——取 banner 段拼 _ssr
+        from gacha_simulator.cli import _fallback_target_ids
+        fallback_ids = _fallback_target_ids(store)
+        assert fallback_ids == ['b1_ssr'], \
+            f'兜底目标应取 banner 段（非全限定 banner.main_ssr），实际 {fallback_ids}'
         card_ids = {c.card_id for c in store.card_defs}
-        assert fallback in card_ids, f'兜底目标 {fallback} 应为真实卡，实际卡集 {card_ids}'
+        assert fallback_ids[0] in card_ids, \
+            f'兜底目标 {fallback_ids[0]} 应为真实卡，实际卡集 {card_ids}'
 
 
 class TestCliMigrateDisposition:

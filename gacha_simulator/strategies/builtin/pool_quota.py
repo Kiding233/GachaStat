@@ -34,17 +34,15 @@ class PoolQuotaStrategy(Strategy):
         return f"{banner.id}.{banner.active_pool_id}"
 
     def _quota_for(self, banner) -> Optional[int]:
-        """配额查询——全限定键优先，单 Banner 单池场景裸键兼容回退（ISSUE-327）。
+        """配额查询——全限定键优先，单 Banner 单池场景裸 pool id 兼容回退（ISSUE-327）。
 
         全限定键 {banner_id}.{pool_id} 命中（多 Banner 同名池配额不串池）；未配置时
-        回退裸 pool id / 裸 banner id，兼容用户旧配置（{main: 100}）。多 Banner 场景
-        用户须写全限定键——裸键回退仅作单 Banner 便利，不改变 ISSUE-327 主裁决。
+        回退裸 pool id（如 'main'），兼容用户旧配置（{main: 100}）。多 Banner 场景
+        用户须写全限定键——裸键回退仅作单 Banner 便利。
         """
         quota = self.pool_quotas.get(self._qualified_key(banner))
         if quota is None:
             quota = self.pool_quotas.get(banner.active_pool_id)
-        if quota is None:
-            quota = self.pool_quotas.get(banner.id)
         return quota
 
     def select_action(self, ctx: StrategyContext) -> Action:

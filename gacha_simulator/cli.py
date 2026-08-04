@@ -19,6 +19,20 @@ from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_ba
 from gacha_simulator.paths import get_config_dir  # noqa: E402
 
 
+def _fallback_target_ids(store) -> list:
+    """CLI 无 [[targets]] 时的兜底目标 id（ISSUE-003）。
+
+    展平视图 pool_id 为全限定键 {banner_id}.{pool_id}——直接拼接会生成
+    {banner_id}.main_ssr 与真实卡 id 失配、ssr 计数恒 0。取 banner 段拼 _ssr。
+    """
+    actual = [t.card_id for t in store.target_cards]
+    if actual:
+        return actual
+    if store.pools:
+        return [f"{store.pools[0].pool_id.split('.')[0]}_ssr"]
+    return []
+
+
 def main():
     parser = argparse.ArgumentParser(description='GachaStat CLI')
     parser.add_argument('-c', '--config', default=None,
@@ -150,12 +164,8 @@ def main():
 
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
 
-    actual_target_ids = [t.card_id for t in store.target_cards]
-    if not actual_target_ids and store.pools:
-        # P61（ISSUE-003）：展平视图 pool_id 为全限定键 {banner_id}.main——
-        # 直接拼接得 {banner_id}.main_ssr 与真实卡 id 失配、ssr 计数恒 0。
-        # 取 banner 段拼 ssr 目标卡 id。
-        actual_target_ids = [f"{store.pools[0].pool_id.split('.')[0]}_ssr"]
+    # P61（ISSUE-003）：无 [[targets]] 时兜底目标取 banner 段拼 _ssr（模块级函数，可测）
+    actual_target_ids = _fallback_target_ids(store)
     total_targets = len(actual_target_ids)
 
     total_draws = []

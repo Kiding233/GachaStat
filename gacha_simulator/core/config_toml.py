@@ -957,6 +957,31 @@ def _build_banners(data: dict, store: ConfigStore) -> None:
 
         store.banner.banners.append(banner_entry)
 
+    # P61（2026-08-04 用户决策）：永久 Banner（available_until=None）解析归一为有限池，
+    # 运行时不再出现 None（消除 streaming/pool_end_times/worst_impact_panel 的 None 守卫族）。
+    _normalize_permanent_banners(store.banner.banners)
+
+
+def _normalize_permanent_banners(banners) -> None:
+    """永久 Banner（available_until=None）解析归一为有限池（2026-08-04 用户决策）。
+
+    把 available_until=None 的 Banner 归一为「最后一个有结束时间的 Banner 的
+    available_until」——运行时按有限池处理，无 None、无需额外守卫。
+    全永久组合（无任何有结束时间的 Banner）无法确定模拟期参照 → 拒绝加载。
+    空配置（无 banner）跳过——由 load_toml 的空 banner 旧格式警告处理。
+    """
+    if not banners:
+        return
+    finite_ends = [b.available_until for b in banners if b.available_until is not None]
+    if not finite_ends:
+        raise ConfigError(
+            "配置中所有 Banner 均为永久（无结束时间 end_day），至少需要一个有 "
+            "available_until 的 Banner 作为模拟期参照。")
+    last_end = max(finite_ends)
+    for b in banners:
+        if b.available_until is None:
+            b.available_until = last_end
+
 
 def _normalize_max_draws(value) -> Optional[int]:
     """TOML/UI 层「0=无限制」归一化为运行时 None 哨兵（ISSUE-331）。

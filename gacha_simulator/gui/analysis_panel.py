@@ -1609,11 +1609,27 @@ class AnalysisPanel(QWidget):
             self._rebuild_checkbox_group(self._cum_widget, self._cumulative_by_pool_checks, '分析')
 
     def _get_pool_names(self):
-        """构建 {pool_id: pool_name} 映射。"""
+        """构建 {pool_id: pool_name} 映射。
+
+        P61（2026-08-04 修复 D5 / ISSUE-324）：多池 Banner 时 label 按 banner_id.pool_id
+        拆分区分——同一 Banner 的 main/free_10pull 若共用相同中文名则图表标签歧义，
+        多池场景 label 用「banner 中文名.裸池 id」。
+        """
         names = {}
         if self._store and hasattr(self._store, 'pools'):
+            banner_pool_count = {}
+            pool_ids = []
             for pe in self._store.pools:
-                names[pe.pool_id] = getattr(pe, 'name', pe.pool_id)
+                banner_id = pe.pool_id.split('.')[0] if '.' in pe.pool_id else pe.pool_id
+                banner_pool_count[banner_id] = banner_pool_count.get(banner_id, 0) + 1
+                pool_ids.append((pe, banner_id))
+            for pe, banner_id in pool_ids:
+                name = getattr(pe, 'name', pe.pool_id)
+                if banner_pool_count.get(banner_id, 0) > 1:
+                    pool_part = pe.pool_id.split('.', 1)[1] if '.' in pe.pool_id else pe.pool_id
+                    names[pe.pool_id] = f"{name}.{pool_part}"
+                else:
+                    names[pe.pool_id] = name
         return names
 
     def _extract_cost_per_draw(self):

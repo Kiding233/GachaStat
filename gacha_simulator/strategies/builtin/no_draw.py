@@ -17,6 +17,11 @@ class NoDrawStrategy(Strategy):
 
     def select_action(self, ctx: StrategyContext) -> Action:
         from gacha_simulator.core.action import WaitAction
-        # P61：等待下一个活动池开启。banner 维度不可用性由 gacha_service 层过滤，
-        # 此处仅需返回固定等待（无具体 banner 目标，始终等待 86400s 由模拟层拆分为 WaitAction）。
-        return WaitAction(duration=86400)
+        # P61（§3.4 迁移方案 / ISSUE-001）：取最近关闭时刻（banner.available_until -
+        # real_time，秒减秒），等待到最近关闭时刻推进 real_time。不抽卡基线：始终等待，
+        # 用于计算不抽卡资源基线。
+        wait_time = 86400
+        for banner in ctx.banners:
+            if banner.available_until and banner.available_until > ctx.state.real_time:
+                wait_time = min(wait_time, banner.available_until - ctx.state.real_time)
+        return WaitAction(duration=wait_time)

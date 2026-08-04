@@ -270,6 +270,15 @@ class MainWindow(QMainWindow):
         )
         if path:
             try:
+                # P61（2026-08-04 用户决策）：保存校验——Banner id 唯一/Pool id 唯一/
+                # cost 必填，违反时拦截保存并提示（§3.10.2）
+                errors = self.config_panel.validate_banners()
+                if errors:
+                    QMessageBox.warning(
+                        self, "配置校验失败",
+                        "以下问题需修正后才能保存：\n\n"
+                        + '\n'.join(f"  · {e}" for e in errors))
+                    return
                 self.config_panel.apply_to_store()
                 save_toml(self._store, path)
                 # P61（Ph8c / ISSUE-005）：池子模板已移除，内联分布统计失去语义——

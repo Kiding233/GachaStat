@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """配置面板"""
 
+from typing import List
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget,
     QLabel, QCheckBox, QScrollArea, QSplitter,
     QListWidget, QListWidgetItem, QDialog, QDialogButtonBox, QMessageBox, QAbstractItemView,
-    QDateEdit, QCalendarWidget, QInputDialog,
+    QDateEdit, QCalendarWidget, QInputDialog, QCompleter,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -463,20 +465,25 @@ class ConfigPanel(QWidget):
         pool_layout.setContentsMargins(0, 0, 0, 0)
 
         # 上半：Pool 列表（5 列，删除卡牌摘要——奖励表下半内联）
-        pool_list_group = QGroupBox("Pool 列表")
+        pool_list_group = QGroupBox("池子列表")
         pool_list_layout = QVBoxLayout(pool_list_group)
         self.banner_pool_table = QTableWidget()
-        self.banner_pool_table.setColumnCount(5)
-        self.banner_pool_table.setHorizontalHeaderLabels(["ID", "成本", "批次", "一次性", "不计保底"])
+        self.banner_pool_table.setColumnCount(6)
+        self.banner_pool_table.setHorizontalHeaderLabels(["ID", "成本", "批次", "最大抽数", "一次性", "不计保底"])
         pool_header = self.banner_pool_table.horizontalHeader()
-        pool_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        pool_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         pool_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         pool_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         pool_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         pool_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.banner_pool_table.setColumnWidth(2, 55)
-        self.banner_pool_table.setColumnWidth(3, 55)
-        self.banner_pool_table.setColumnWidth(4, 75)
+        pool_header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        # P61（2026-08-04）：成本列 Stretch 自适应（占固定列后的剩余空间，
+        # 不挤压批次/最大抽数等 Fixed 列）；ID 缩 1/2、批次/最大抽数加宽
+        self.banner_pool_table.setColumnWidth(0, 55)
+        self.banner_pool_table.setColumnWidth(2, 80)
+        self.banner_pool_table.setColumnWidth(3, 115)
+        self.banner_pool_table.setColumnWidth(4, 55)
+        self.banner_pool_table.setColumnWidth(5, 75)
         self.banner_pool_table.verticalHeader().setVisible(False)
         self.banner_pool_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.banner_pool_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -496,7 +503,7 @@ class ConfigPanel(QWidget):
         pool_layout.addWidget(pool_list_group)
 
         # 下半：选中池 rewards 表（5 列）
-        reward_group = QGroupBox("选中池奖励")
+        reward_group = QGroupBox("选中池分布")
         reward_layout = QVBoxLayout(reward_group)
         self.reward_table = QTableWidget()
         self.reward_table.setColumnCount(5)
@@ -649,11 +656,8 @@ class ConfigPanel(QWidget):
                 'max_draws': None,
                 'exchange_card_id': None,
                 'epitomizable_cards': [],
-                'rewards': [
-                    {'card_id': f'banner_{idx}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
-                    {'card_id': f'banner_{idx}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
-                    {'card_id': f'banner_{idx}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
-                ],
+                # P61（2026-08-04 用户决策）：无默认3卡——奖励表为空，每池独立配置
+                'rewards': [],
             }],
             'lifecycle': [],
         }
@@ -696,7 +700,15 @@ class ConfigPanel(QWidget):
         import copy
         src = self._banner_defs[bidx]
         new_banner = copy.deepcopy(src)
-        new_banner['id'] = f"{src['id']}_copy"
+        # P61（2026-08-04 用户决策）：复制 id 去重——连续复制不产出重复 id（B2）
+        base = f"{src['id']}_copy"
+        existing = {b['id'] for b in self._banner_defs}
+        new_id = base
+        n = 2
+        while new_id in existing:
+            new_id = f"{base}_{n}"
+            n += 1
+        new_banner['id'] = new_id
         new_banner['name'] = f"{src['name']} 副本"
         self._banner_defs.append(new_banner)
         self._refresh_banner_list(len(self._banner_defs) - 1)
@@ -737,6 +749,37 @@ class ConfigPanel(QWidget):
         interval_spin.setDecimals(1)
         interval_spin.setValue(21.0)
         form.addRow("间隔(天):", interval_spin)
+
+        # P61（2026-08-04 用户决策）：批量创建加预览（A3 / §3.10.6）
+        preview_list = QListWidget()
+        preview_list.setMaximumHeight(140)
+        form.addRow("预览:", preview_list)
+
+        def _update_batch_preview():
+            preview_list.clear()
+            pfx = id_prefix.text().strip() or 'banner_'
+            npfx = name_prefix.text().strip() or '池'
+            n = count_spin.value()
+            start = start_spin.value()
+            interval = interval_spin.value()
+            # D-2（2026-08-04）：预览反映 id 去重——与生成逻辑一致的跳号
+            existing = {b['id'] for b in self._banner_defs}
+            for i in range(n):
+                bid = f"{pfx}{i+1}"
+                while bid in existing:
+                    i += 1
+                    bid = f"{pfx}{i+1}"
+                existing.add(bid)
+                preview_list.addItem(
+                    f"{bid}  {npfx}{i+1}  "
+                    f"[{round(start + i * interval, 1)}, {round(start + (i + 1) * interval, 1)}]")
+
+        count_spin.valueChanged.connect(lambda *_: _update_batch_preview())
+        id_prefix.textChanged.connect(lambda *_: _update_batch_preview())
+        name_prefix.textChanged.connect(lambda *_: _update_batch_preview())
+        start_spin.valueChanged.connect(lambda *_: _update_batch_preview())
+        interval_spin.valueChanged.connect(lambda *_: _update_batch_preview())
+        _update_batch_preview()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
@@ -871,9 +914,14 @@ class ConfigPanel(QWidget):
         b['available_from'] = self.banner_from_spin.value()
         b['available_until'] = None if self.banner_permanent_cb.isChecked() \
             else self.banner_until_spin.value()
-        item = self.banner_list.currentItem()
-        if item is not None:
-            item.setText(b.get('name', '') or b.get('id', ''))
+        # 更新列表项文本：按 bidx 的 UserRole 定位，不用 currentItem()——切换选中时
+        # currentItem 已是用户新点击的项而 bidx 仍是旧选中值，会把旧 banner 名写到
+        # 新点击项上（点击 banner 名字随机变化的 bug）
+        for i in range(self.banner_list.count()):
+            it = self.banner_list.item(i)
+            if it is not None and it.data(Qt.ItemDataRole.UserRole) == bidx:
+                it.setText(b.get('name', '') or b.get('id', ''))
+                break
         self._update_preview()
 
     def _rename_banner_references(self, old_id, new_id):
@@ -939,25 +987,34 @@ class ConfigPanel(QWidget):
             batch_spin.valueChanged.connect(
                 lambda val, r=i: self._on_pool_batch_changed(r, val))
             self.banner_pool_table.setCellWidget(i, 2, batch_spin)
+            # 最大抽数（列 3）：0 = 无限制；一次性时禁用（max_draws 由 batch_size 决定）
+            md = p.get('max_draws')
+            is_once = md is not None and md == p.get('batch_size', 1)
+            md_spin = QSpinBox()
+            md_spin.setRange(0, 1000000)
+            md_spin.setSpecialValueText("无限制")
+            md_spin.setValue(int(md) if md is not None else 0)
+            md_spin.setEnabled(not is_once)
+            md_spin.setToolTip("池级硬上限抽数，抽满自动关闭；0 = 无限制")
+            md_spin.valueChanged.connect(
+                lambda val, r=i: self._on_pool_max_draws_changed(r, val))
+            self.banner_pool_table.setCellWidget(i, 3, md_spin)
             once_cb = QCheckBox()
-            once_cb.setChecked(p.get('max_draws') is not None
-                               and p.get('max_draws') == p.get('batch_size', 1))
+            once_cb.setChecked(is_once)
             once_cb.setToolTip("一次性池（max_draws=batch_size，DECISION-1）")
             once_cb.stateChanged.connect(
                 lambda ch, r=i: self._on_pool_once_toggled(r, ch))
-            self.banner_pool_table.setCellWidget(i, 3, once_cb)
+            self.banner_pool_table.setCellWidget(i, 4, once_cb)
             excl_cb = QCheckBox()
             excl_cb.setChecked(p.get('excludes_all_pity', False))
             excl_cb.setToolTip("excludes_all_pity——不计保底")
             excl_cb.stateChanged.connect(
                 lambda ch, r=i: self._on_pool_excl_toggled(r, ch))
-            self.banner_pool_table.setCellWidget(i, 4, excl_cb)
+            self.banner_pool_table.setCellWidget(i, 5, excl_cb)
         self.banner_pool_table.blockSignals(False)
-        if pools:
-            self.banner_pool_table.selectRow(0)
-        else:
-            self.reward_table.setRowCount(0)
-            self.lifecycle_table.setRowCount(0)
+        # P61（2026-08-04 用户决策）：默认不选中任何池——分布表不显示（选中后经
+        # _on_pool_selected 显示）；lifecycle 表为 Banner 级规则、保持显示。
+        self.reward_table.setRowCount(0)
         self._refresh_lifecycle_table()
 
     def _on_pool_table_item_changed(self, item):
@@ -1015,9 +1072,39 @@ class ConfigPanel(QWidget):
         if row < 0 or row >= len(pools):
             return
         pools[row]['batch_size'] = int(val)
-        # 一次性池语义联动：max_draws 随 batch_size 同步（DECISION-1）
+        # 一次性池语义联动：max_draws 随 batch_size 同步（DECISION-1），最大抽数 spin 跟随
         if pools[row].get('max_draws') is not None:
             pools[row]['max_draws'] = int(val)
+            md_spin = self.banner_pool_table.cellWidget(row, 3)
+            if md_spin is not None:
+                md_spin.blockSignals(True)
+                md_spin.setValue(int(val))
+                md_spin.blockSignals(False)
+        # D-1（2026-08-04）：同步一次性勾选显示——max_draws == batch_size 时勾选，
+        # 避免改批次使 max_draws 恰好等于 batch_size 时勾选状态陈旧
+        once_cb = self.banner_pool_table.cellWidget(row, 4)
+        if once_cb is not None:
+            once_cb.blockSignals(True)
+            once_cb.setChecked(pools[row].get('max_draws') is not None
+                               and pools[row].get('max_draws') == pools[row].get('batch_size', 1))
+            once_cb.blockSignals(False)
+
+    def _on_pool_max_draws_changed(self, row, val):
+        """最大抽数（列 3）变更 → 写回 max_draws（0=无限制），联动一次性勾选。"""
+        bidx = self._current_banner_row
+        if bidx < 0:
+            return
+        pools = self._banner_defs[bidx].get('pools', [])
+        if row < 0 or row >= len(pools):
+            return
+        pools[row]['max_draws'] = None if int(val) == 0 else int(val)
+        # 联动一次性勾选：max_draws == batch_size → 勾选；否则不勾选
+        once_cb = self.banner_pool_table.cellWidget(row, 4)
+        if once_cb is not None:
+            once_cb.blockSignals(True)
+            once_cb.setChecked(pools[row]['max_draws'] is not None
+                               and pools[row]['max_draws'] == pools[row].get('batch_size', 1))
+            once_cb.blockSignals(False)
 
     def _on_pool_once_toggled(self, row, checked):
         bidx = self._current_banner_row
@@ -1030,6 +1117,14 @@ class ConfigPanel(QWidget):
             pools[row]['max_draws'] = int(pools[row].get('batch_size', 1))
         else:
             pools[row]['max_draws'] = None
+        # 最大抽数 spin 联动：一次性时禁用并显示 batch_size
+        md_spin = self.banner_pool_table.cellWidget(row, 3)
+        if md_spin is not None:
+            md_spin.blockSignals(True)
+            md_spin.setValue(int(pools[row]['max_draws'])
+                             if pools[row]['max_draws'] is not None else 0)
+            md_spin.setEnabled(not checked)
+            md_spin.blockSignals(False)
 
     def _on_pool_excl_toggled(self, row, checked):
         bidx = self._current_banner_row
@@ -1055,7 +1150,6 @@ class ConfigPanel(QWidget):
         while new_id in used:
             n += 1
             new_id = f'pool_{n}'
-        bid = self._banner_defs[bidx].get('id', '')
         pools.append({
             'id': new_id,
             'cost': 'draw_resource:160',
@@ -1064,15 +1158,11 @@ class ConfigPanel(QWidget):
             'max_draws': None,
             'exchange_card_id': None,
             'epitomizable_cards': [],
-            'rewards': [
-                {'card_id': f'{bid}_{new_id}_ssr', 'probability': 0.6, 'rarity': 'SSR', 'featured': True},
-                {'card_id': f'{bid}_{new_id}_sr', 'probability': 5.1, 'rarity': 'SR', 'featured': False},
-                {'card_id': f'{bid}_{new_id}_r', 'probability': 94.3, 'rarity': 'R', 'featured': False},
-            ],
+            # P61（2026-08-04 用户决策）：无默认3卡——奖励表为空，每池独立配置
+            'rewards': [],
         })
         self._refresh_pool_table()
-        self.banner_pool_table.selectRow(len(pools) - 1)
-        # §3.10.7：新增 Pool 的默认奖励卡注册进「卡牌定义」Tab
+        # P61（2026-08-04 用户决策）：默认不选中新池
         self._sync_card_defs_from_pools()
         self._update_preview()
 
@@ -1124,6 +1214,11 @@ class ConfigPanel(QWidget):
         card_combo = QComboBox()
         card_combo.setEditable(True)
         card_combo.addItems(self._registered_card_labels())
+        # P61（2026-08-04 用户决策）：QCompleter 前缀搜索（§3.10.5 / A2）
+        completer = QCompleter(self._registered_card_labels(), card_combo)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        card_combo.setCompleter(completer)
         card_combo.setCurrentText(r.get('card_id', ''))
         card_combo.currentTextChanged.connect(
             lambda text, rr=row: self._on_reward_card_changed(rr, text))
@@ -1150,6 +1245,8 @@ class ConfigPanel(QWidget):
         self.reward_table.setCellWidget(row, 3, featured_cb)
 
         res_edit = QLineEdit()
+        # P61（2026-08-04 用户决策）：补回灰字提示（旧分布表有，新奖励表丢失）
+        res_edit.setPlaceholderText("resource_id:amount,...")
         rg = r.get('resources_gained', {}) or {}
         res_edit.setText(','.join(f"{k}:{v}" for k, v in rg.items()))
         res_edit.textChanged.connect(
@@ -1164,6 +1261,22 @@ class ConfigPanel(QWidget):
             name = d.get('name', '')
             labels.append(f"{cid}（{name}）" if name and name != cid else cid)
         return labels
+
+    def _registered_rarities(self) -> List[str]:
+        """「卡牌定义」Tab 已使用的稀有度列表（去重，大写；SSR/SR/R 优先排序）。
+
+        P61（2026-08-04 用户决策）：card_obtained rarity 取值控件动态填充（A4）。
+        """
+        seen: List[str] = []
+        for d in self.get_card_defs():
+            r = str(d.get('rarity', '')).upper()
+            if r and r not in seen:
+                seen.append(r)
+        for r in ['SSR', 'SR', 'R']:
+            if r in seen:
+                seen.remove(r)
+                seen.insert(0, r)
+        return seen or ['SSR', 'SR', 'R']
 
     @staticmethod
     def _card_id_from_label(text):
@@ -1410,7 +1523,8 @@ class ConfigPanel(QWidget):
                     next((lab for lab in self._registered_card_labels()
                           if self._card_id_from_label(lab) == cur), cur))
             else:
-                val_combo.addItems(['SSR', 'SR', 'R'])
+                # P61（2026-08-04 用户决策）：rarity 从已注册稀有度动态填充（A4）
+                val_combo.addItems(self._registered_rarities())
                 val_combo.setCurrentText(rule.get('pool', '') or 'SSR')
             lay.addWidget(val_combo, 1)
 
@@ -1422,7 +1536,7 @@ class ConfigPanel(QWidget):
                 if mode == 'card_id':
                     vc.addItems(self._registered_card_labels())
                 else:
-                    vc.addItems(['SSR', 'SR', 'R'])
+                    vc.addItems(self._registered_rarities())
                     vc.setCurrentText('SSR')
                 vc.blockSignals(False)
 
@@ -1682,7 +1796,8 @@ class ConfigPanel(QWidget):
 
         self.pity_bind_table = QTableWidget()
         self.pity_bind_table.setColumnCount(4)
-        self.pity_bind_table.setHorizontalHeaderLabels(["☑", "Banner", "Pool", "说明"])
+        # P61（2026-08-04 用户决策）：第一列头 ☑ 删除（勾选列保留空列头）
+        self.pity_bind_table.setHorizontalHeaderLabels(["", "Banner", "Pool", "说明"])
         bind_header = self.pity_bind_table.horizontalHeader()
         bind_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         bind_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -1694,7 +1809,9 @@ class ConfigPanel(QWidget):
         self.pity_bind_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.pity_bind_table.setMinimumHeight(120)
         bind_layout.addWidget(self.pity_bind_table)
-        detail_form.addRow(bind_group)
+        # P61（2026-08-04 用户决策）：绑定池移至表单最底部（依赖之后）——
+        # 保持「定义规则 → 配置参数 → 指定作用范围」逻辑流，绑定池为最后一段。
+        self._pity_bind_group = bind_group
 
         self.pity_init_spin = QSpinBox()
         self.pity_init_spin.setRange(0, 200)
@@ -1726,6 +1843,9 @@ class ConfigPanel(QWidget):
         self.pity_depends_combo.addItem("(无依赖)", "")
         self.pity_depends_combo.setToolTip("依赖的 behavior——该 behavior 首次触发后本保底才激活")
         detail_form.addRow("依赖:", self.pity_depends_combo)
+
+        # P61（2026-08-04 用户决策）：绑定池在表单最底部（初始水位/依赖之后）
+        detail_form.addRow(self._pity_bind_group)
 
         main_layout.addWidget(detail_group, 2)
         parent.addLayout(main_layout)
@@ -2144,7 +2264,8 @@ class ConfigPanel(QWidget):
         """从勾选表格生成 pools pattern（§3.11.2 / ISSUE-328）。
 
         全选 → ('*',)；全不选 → ()（不绑定任何池，区别于旧空文本 → ('*',)）；
-        部分勾选 → 精确全限定键元组（fnmatch 可解析，D4 一次性迁移后无三路兼容）。
+        部分勾选 → 紧凑 fnmatch pattern（B3）：同一 Banner 的勾选池缩写为
+        {banner}.*（引擎对全限定键 fnmatch 命中）；跨 Banner 保留精确键。
         """
         checked = []
         for i in range(self.pity_bind_table.rowCount()):
@@ -2156,6 +2277,18 @@ class ConfigPanel(QWidget):
         total = self.pity_bind_table.rowCount()
         if total > 0 and len(checked) == total:
             return ('*',)
+        if not checked:
+            return ()
+        # B3：仅当某 banner 的【全部】池都被勾选时才缩写为 {banner}.*——
+        # 部分勾选缩写会让引擎 fnmatch 误绑该 banner 未勾选的池（复审查发现）
+        banners = {k.split('.', 1)[0] for k in checked}
+        if len(banners) == 1:
+            banner_id = next(iter(banners))
+            all_keys = getattr(self, '_pity_bind_keys', [])
+            banner_pool_total = sum(1 for k in all_keys
+                                    if k.split('.', 1)[0] == banner_id)
+            if banner_pool_total == len(checked):
+                return (f"{banner_id}.*",)
         return tuple(checked)
 
     def _on_pity_bind_toggled(self, row, checked):
@@ -4229,6 +4362,9 @@ class ConfigPanel(QWidget):
                     )],
                 ))
         store.banner.banners = banners
+        # P61（2026-08-04 用户决策）：GUI 编辑路径同样归一永久 Banner（无 None）
+        from ..core.config_toml import _normalize_permanent_banners
+        _normalize_permanent_banners(store.banner.banners)
 
         pity = config.get('pity', {})
         pities_data = pity.get('pities', [])
@@ -4666,6 +4802,41 @@ class ConfigPanel(QWidget):
             self.day_overrides_table.removeRow(row)
         self._update_preview()
 
+    def validate_banners(self) -> List[str]:
+        """§3.10.2 保存校验：Banner id 全局唯一 / Pool id 唯一 / Pool cost 必填 / 非全永久。
+
+        返回错误列表（空 = 通过）。由保存入口（main_window.export_config）与模拟启动
+        （gacha_panel.start_simulation）在 apply_to_store 前调用——校验失败时拦截并提示。
+        """
+        errors: List[str] = []
+        seen_banner_ids = set()
+        has_finite_end = False
+        for b in self._banner_defs:
+            bid = b.get('id', '')
+            if not bid:
+                errors.append("存在空 Banner id")
+            elif bid in seen_banner_ids:
+                errors.append(f"Banner id 重复: {bid}")
+            seen_banner_ids.add(bid)
+            if b.get('available_until') is not None:
+                has_finite_end = True
+            seen_pool_ids = set()
+            for p in b.get('pools', []):
+                pid = p.get('id', '')
+                if not pid:
+                    errors.append(f"Banner「{bid or '?'}」存在空 Pool id")
+                elif pid in seen_pool_ids:
+                    errors.append(f"Banner「{bid}」Pool id 重复: {pid}")
+                seen_pool_ids.add(pid)
+                cost = str(p.get('cost', '')).strip()
+                if not cost:
+                    errors.append(f"Banner「{bid}」Pool「{pid or '?'}」缺少成本(cost)")
+        # 全永久组合（2026-08-04 用户决策：禁止）——apply_to_store 归一时会抛
+        # ConfigError，此处提前拦截给出明确提示（复审查发现）
+        if self._banner_defs and not has_finite_end:
+            errors.append("所有 Banner 均为永久（无结束时间），至少需要一个有结束时间的 Banner")
+        return errors
+
     def apply_to_store(self):
         if self._store is None or self._refreshing:
             return
@@ -4726,6 +4897,9 @@ class ConfigPanel(QWidget):
             ))
 
         store.banner.banners = banners
+        # P61（2026-08-04 用户决策）：GUI 编辑写回同样归一永久 Banner（无 None）
+        from ..core.config_toml import _normalize_permanent_banners
+        _normalize_permanent_banners(store.banner.banners)
 
         store.pity.enabled = self.pity_enabled.isChecked()
         pities = []

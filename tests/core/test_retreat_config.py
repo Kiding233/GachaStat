@@ -1,7 +1,8 @@
 import pytest
 from gacha_simulator.core.config_store import (
     ConfigStore, PityConfig, PityDef, GainRule, DayOverride,
-    TargetCardEntry, CardDefEntry, BannerEntry, BannerPoolEntry, DAY,
+    TargetCardEntry, CardDefEntry, BannerEntry, BannerPoolEntry,
+    LifecycleRuleEntry, DAY,
 )
 from gacha_simulator.core.retreat_config import RetreatConfigBuilder
 
@@ -160,3 +161,113 @@ def test_truncate_invalid_pool_raises():
             initial_resources={'draw_resource': 5000},
             pity_counter_init={},
         )
+
+
+def test_truncate_permanent_banner_offset():
+    """退避点为永久 Banner（end_day=None）时 offset_day 不抛 TypeError（ISSUE-002）。
+
+    offset_day 兜底 start_day+21；永久 Banner 在退避点之前被截断，之后池保留。
+    """
+    store = ConfigStore()
+    store.banner.banners = [
+        BannerEntry(id='perm', name='永久',
+                    available_from=0 * DAY, available_until=None,  # 永久池
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='after', name='之后',
+                    available_from=21 * DAY, available_until=42 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+    ]
+    store.pity = PityConfig(enabled=False)
+    store.gain_rules = []
+    store.initial_resources = {'draw_resource': 5000}
+    # 从永久池退避——offset_day 兜底 start_day+21=21，不抛 TypeError
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='perm.main',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init={},
+    )
+    # 永久池在退避点之前被截断；之后池保留
+    assert [b.id for b in truncated.banner.banners] == ['after']
+
+
+def test_truncate_permanent_pool_preserved_none():
+    """永久 Banner 在退避点之后保留时，重建写侧 end_day 保持 None（ISSUE-002 写侧分支）。"""
+    store = ConfigStore()
+    store.banner.banners = [
+        BannerEntry(id='early', name='早池',
+                    available_from=0 * DAY, available_until=21 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='perm', name='永久',
+                    available_from=21 * DAY, available_until=None,  # 永久池，在退避点之后
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+    ]
+    store.pity = PityConfig(enabled=False)
+    store.gain_rules = []
+    store.initial_resources = {'draw_resource': 5000}
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='early.main',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init={},
+    )
+    # 永久池保留（from=21 >= offset=21）且写侧 available_until 保持 None（不抛 TypeError）
+    perm = [b for b in truncated.banner.banners if b.id == 'perm']
+    assert perm and perm[0].available_until is None
+
+
+def test_truncate_multi_pool_banner_preserved():
+    """多池 Banner 退避不丢池 + lifecycle 规则复制（D3/D4 修复）。"""
+    store = ConfigStore()
+    store.banner.banners = [
+        BannerEntry(id='early', name='早池',
+                    available_from=0 * DAY, available_until=30 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='multi', name='多池',
+                    available_from=30 * DAY, available_until=60 * DAY,
+                    pools=[
+                        BannerPoolEntry(id='main', cost='draw_resource:160'),
+                        BannerPoolEntry(id='free', cost='ticket:1'),
+                    ],
+                    lifecycle=[LifecycleRuleEntry(condition='pool_draws', pool='main',
+                                                  at=30, action='switch_to', target='free')]),
+    ]
+    store.pity = PityConfig(enabled=False)
+    store.gain_rules = []
+    store.initial_resources = {'draw_resource': 5000}
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='early.main',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init={},
+    )
+    multi = [b for b in truncated.banner.banners if b.id == 'multi']
+    assert len(multi) == 1, '多池 Banner 不应拆成重复 id（构造桥收纳丢池）'
+    assert [p.id for p in multi[0].pools] == ['main', 'free'], '多池不丢'
+    assert len(multi[0].lifecycle) == 1, 'lifecycle 规则应复制'
+
+
+def test_truncate_after_normalized_permanent():
+    """生产路径（load_toml 归一后）从「原永久」池退避：offset_day 用归一后的 end_day，不崩。"""
+    store = ConfigStore()
+    # 模拟归一后：原永久池 available_until 已是具体值（最后一个有结束时间的池）
+    store.banner.banners = [
+        BannerEntry(id='perm', name='永久',
+                    available_from=0 * DAY, available_until=42 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='after', name='之后',
+                    available_from=42 * DAY, available_until=63 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+    ]
+    store.pity = PityConfig(enabled=False)
+    store.gain_rules = []
+    store.initial_resources = {'draw_resource': 5000}
+    # 从归一后的「永久」池退避（offset_day = 42）
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='perm.main',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init={},
+    )
+    # perm 在退避点前截断；after 保留
+    assert [b.id for b in truncated.banner.banners] == ['after']

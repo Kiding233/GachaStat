@@ -274,6 +274,17 @@ class GachaPanel(QWidget):
             self._log("错误: 无法获取配置面板")
             return
 
+        # P61（2026-08-04 保存校验覆盖模拟启动路径，D-3）：重复 Banner id / Pool id /
+        # 空 cost 会致引擎 PityEngine 全限定键撞车（保底串池）或静默写错，开始模拟前拦截
+        errors = config_panel.validate_banners()
+        if errors:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "配置校验失败",
+                "以下问题需修正后才能开始模拟：\n\n"
+                + '\n'.join(f"  · {e}" for e in errors))
+            return
+
         config_panel.apply_to_store()
         config_store = config_panel.get_store()
         if config_store is None:

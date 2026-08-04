@@ -3,6 +3,7 @@ from typing import Dict
 from .config_store import (
     ConfigStore, PityConfig, PityDef, GainRule, DayOverride,
     TargetCardEntry, CardDefEntry, BannerEntry, BannerPoolEntry,
+    LifecycleRuleEntry,
 )
 
 # P61：秒/天换算——截断后时间窗口以秒写入 store.banner（与 config_store/config_toml 同口径）
@@ -53,40 +54,59 @@ class RetreatConfigBuilder:
         truncated_start = original_start + _dt.timedelta(days=offset_day)
         truncated.sim_start_date = truncated_start.isoformat()
 
-        # P61（Ph3/ISSUE-101）：store.pools 为只读展平视图（无 setter），
-        # 写侧迁移到 truncated.banner.banners——每个展平池重建为一个 BannerEntry
-        # （pool 进 [[banner.pool]]，id="main"，banner_id 取全限定键 {banner_id}.main 的段）。
+        # P61（2026-08-04 修复 D3/D4）：遍历 store.banner.banners 保持多池结构——
+        # 不遍历展平视图（否则多池 banner 拆出重复 id，GachaService 构造桥 dict 收纳
+        # 后者覆盖前者、丢池）；同时复制原 banner 的 lifecycle 规则（D4）。
         truncated.banner.banners = []
-        for p in original_store.pools:
-            if p.start_day >= offset_day:
-                banner_id = p.pool_id.split('.')[0] if '.' in p.pool_id else p.pool_id
-                bp = BannerPoolEntry(
-                    id='main',
+        for b in original_store.banner.banners:
+            b_from_day = b.available_from // DAY if b.available_from is not None else 0
+            if b_from_day < offset_day:
+                continue  # 该 banner 在退避点之前，截断
+            pools = [
+                BannerPoolEntry(
+                    id=p.id,
                     cost=p.cost,
                     batch_size=p.batch_size,
+                    excludes_all_pity=p.excludes_all_pity,
+                    max_draws=p.max_draws,
                     exchange_card_id=p.exchange_card_id,
                     epitomizable_cards=list(p.epitomizable_cards),
                     rewards=[
                         {
-                            'card_id': d.card_id,
-                            'probability': d.probability,
-                            'rarity': d.rarity,
-                            'featured': d.featured,
-                            **({'resources_gained': dict(d.resources_gained)}
-                               if d.resources_gained else {}),
+                            'card_id': d.get('card_id', ''),
+                            'probability': d.get('probability', 0),
+                            'rarity': d.get('rarity', 'R'),
+                            'featured': d.get('featured', False),
+                            **({'resources_gained': dict(d.get('resources_gained', {}))}
+                               if d.get('resources_gained') else {}),
                         }
-                        for d in p.distribution
+                        for d in p.rewards
                     ],
                 )
-                truncated.banner.banners.append(BannerEntry(
-                    id=banner_id,
-                    name=p.name,
-                    enabled=p.enabled,
-                    available_from=(p.start_day - offset_day) * DAY,
-                    available_until=((p.end_day - offset_day) * DAY
-                                     if p.end_day is not None else None),
-                    pools=[bp],
-                ))
+                for p in b.pools
+            ]
+            # D4：复制 lifecycle 规则（截断配置的 switch_to/exhaust 转换不丢失）。
+            # D3（2026-08-04）：time_window 条件 at 为绝对秒时刻，随窗口整体 -offset_day
+            # 偏移（保持相对 banner 开池时机不变）；pool_draws 等抽数条件 at 是计数、原样复制。
+            lifecycle = [
+                LifecycleRuleEntry(
+                    condition=lc.condition, pool=lc.pool,
+                    at=(lc.at - offset_day * DAY) if lc.condition == 'time_window' else lc.at,
+                    match=lc.match, action=lc.action, target=lc.target,
+                )
+                for lc in (b.lifecycle or [])
+            ]
+            truncated.banner.banners.append(BannerEntry(
+                id=b.id,
+                name=b.name,
+                enabled=b.enabled,
+                max_draws=b.max_draws,  # 复审查发现：banner 级抽数上限（新手池自动 exhaust）不丢失
+                available_from=(b_from_day - offset_day) * DAY,
+                available_until=((b.available_until // DAY - offset_day) * DAY
+                                 if b.available_until is not None else None),
+                pools=pools,
+                lifecycle=lifecycle,
+            ))
 
         # P55：PityDef 扁平化——shallow-copy 23 字段（dataclass 字段不可变）
         pities = []

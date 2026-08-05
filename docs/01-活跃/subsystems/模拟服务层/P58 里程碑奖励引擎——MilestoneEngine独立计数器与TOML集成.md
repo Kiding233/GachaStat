@@ -2162,3 +2162,8 @@ P58 已实施落地（M1-M9 全部完成）。核心变更文件：
 4. **CLAUDE.md 同步（§八验收）**：扩展指南表新增「新里程碑」行 + 架构分层注释新增 `core/milestone.py` 条目。
 
 **第 2 轮补齐用例（+5）：** `compute_transition_flags_from_gdr` draw-only（含 None 回退/多赠卡）、`RetreatConfigBuilder` 透传、`compute_config_hash` 纳入 milestone。
+
+**第 3 轮核查（2026-08-05，用户决定 + 独立占位计划）：**
+- **用户决定（UI 偏离）：** `config_panel.py` 中 `RandomCardPoolDialog` 与 `_populate_milestone_cards_list` 的「稀有度着色」（`color_map` + `setForeground`，计划 §3.8.3/3.8.5 描述）**删除**——用户确认保留删除，记为用户决定（配置面板 UI 简化，不影响功能）。
+- **N1/N2/N3 及统计层键层级问题归入独立计划：** 第 3 轮独立核查发现 `compute_transition_flags_from_gdr` 单池回退减赠卡改错字段（N1）、streaming 全累计判池成败的跨 banner 赠卡残留（N2）、`pool_ids_ordered` banner 键查全限定表的键层级错配（N3，P61 迁移既有问题）——连同「截止每池 GDR」「process_analysis 累积模式」同类键层级消费点，归入 **P72 统计层池级键层级修复**（占位计划）。
+- **「累抽得」事件分类归入独立计划：** 事件系统只有 pity_hit/early_hit/miss 三路径、无「累抽得」路径，GDR 含送卡但事件分类 draw-only 的矛盾（累抽保底被判 miss），归入 **P71 过程事件系统设计评审**（占位计划）。

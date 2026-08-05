@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QApplication,
 )
 from PyQt6.QtCore import pyqtSignal, QThread, Qt
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtGui import QAction, QIcon, QShortcut, QKeySequence
 
 from .config_panel import ConfigPanel
 from .gacha_panel import GachaPanel
@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
 
     simulation_requested = pyqtSignal(dict)
     batch_simulation_requested = pyqtSignal(dict, int)
+    restart_requested = pyqtSignal()   # Ps03：Ctrl+R 重启快捷键
 
     def __init__(self):
         super().__init__()
@@ -65,6 +66,9 @@ class MainWindow(QMainWindow):
         self._setup_menu()
         self._connect_signals()
         self._load_default_config()
+        # Ps03：Ctrl+R 重启快捷键（开发调试用，防抖）
+        self._restarting = False
+        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._request_restart)
 
     def _setup_ui(self):
         central_widget = QWidget()
@@ -603,7 +607,22 @@ class MainWindow(QMainWindow):
         dialog = AboutDialog(self)
         dialog.exec()
 
+    def _request_restart(self):
+        """Ps03：Ctrl+R 触发重启（防抖——重启中忽略后续触发）。"""
+        if self._restarting:
+            return
+        self._restarting = True
+        self.restart_requested.emit()
+
+    def cancel_restart(self):
+        """Ps03：取消重启（main.py 重启失败路径调用，复位防抖标记）。"""
+        self._restarting = False
+
     def closeEvent(self, event):
+        if self._restarting:
+            # Ps03：重启路径跳过「确定要退出吗」确认框（一键重启）
+            event.accept()
+            return
         reply = QMessageBox.question(
             self, "确认退出",
             "确定要退出吗？",

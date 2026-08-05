@@ -1,4 +1,4 @@
-<!-- META: P72 | module:统计分析 | status:draft | last:2026-08-05 | depends:P61✅,P58✅ | priority:medium -->
+<!-- META: P72 | module:panels/统计分析 | status:draft | last:2026-08-05 | depends:P61✅,P58✅ | priority:medium -->
 # P72 每池分析语义界定——banner 与 pool 双层结构的组合与拆分模式
 
 > 日期：2026-08-05 | 更新：2026-08-05 | 状态：占位（设计待启动）| 优先级：中

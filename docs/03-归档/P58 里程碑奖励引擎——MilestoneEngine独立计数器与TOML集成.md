@@ -1,4 +1,4 @@
-<!-- META: P58 | module:模拟服务层 | status:implemented | last:2026-08-05 | depends:P60✅,P63✅,P61✅ -->
+<!-- META: P58 | module:模拟服务层 | status:archived | last:2026-08-05 | depends:P60✅,P63✅,P61✅ -->
 <!-- ⚠ R2 审查编号冲突已按预见处理：本次 R2 审查问题列表实际编号为 ISSUE-310..314（全局唯一，与既有 R1 的
      REVIEW-R1-FIX: ISSUE-301..309 指代内容不重叠），修复标注统一用 REVIEW-R1-FIX: ISSUE-310..314 并附内容描述；
      如需彻底全局唯一前缀命名空间，仍须人工裁决 R2 前缀（如 REVIEW-R2-FIX）后全局替换。 -->

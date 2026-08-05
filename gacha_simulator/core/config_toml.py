@@ -617,23 +617,42 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
     milestones = []
     for m in ml_list:
         # ISSUE-012：全部输入校验统一走 ConfigError 通道（禁止裸 KeyError/ValueError）
-        name = m.get('name', '').strip()
+        # 代码审查 F1（2026-08-05）：m 非 dict / name 非 str → ConfigError 而非裸 AttributeError
+        if not isinstance(m, dict):
+            raise ConfigError(f"里程碑配置项必须是表（dict），当前为 {type(m).__name__}")
+        raw_name = m.get('name', '')
+        if not isinstance(raw_name, str):
+            raise ConfigError(
+                f"里程碑 name 字段必须是字符串，当前为 {type(raw_name).__name__}")
+        name = raw_name.strip()
         if not name:
             raise ConfigError("里程碑缺少 name 字段")
         if name in seen_names:
             raise ConfigError(f"里程碑名称重复: '{name}'")
         seen_names.add(name)
 
-        try:
-            threshold = int(m.get('threshold', 40))
-            max_triggers = int(m.get('max_triggers', 0))
-        except (TypeError, ValueError):
-            raise ConfigError(f"里程碑 '{name}' threshold/max_triggers 必须为整数")
+        # 代码审查 F3（2026-08-05）：threshold/max_triggers 拒绝 bool 与 float 截断（静默误配置）
+        for field, val in (('threshold', m.get('threshold', 40)),
+                           ('max_triggers', m.get('max_triggers', 0))):
+            if isinstance(val, bool) or not isinstance(val, int):
+                raise ConfigError(
+                    f"里程碑 '{name}' {field} 必须为整数，当前为 {type(val).__name__}"
+                    f"（值 {val!r}）")
+        threshold = m['threshold'] if 'threshold' in m else 40
+        max_triggers = m['max_triggers'] if 'max_triggers' in m else 0
 
         if threshold < 1:
             raise ConfigError(f"里程碑 '{name}' 阈值必须 ≥ 1，当前为 {threshold}")
 
+        # 代码审查 F2（2026-08-05）：max_triggers 负数 → 触发一次即永久停用的静默行为偏离
+        if max_triggers < 0:
+            raise ConfigError(
+                f"里程碑 '{name}' max_triggers 必须 ≥ 0（0=无限触发），当前为 {max_triggers}")
+
         br = m.get('bonus_reward', {})
+        if not isinstance(br, dict):
+            raise ConfigError(
+                f"里程碑 '{name}' bonus_reward 必须是表（dict），当前为 {type(br).__name__}")
 
         # ── cards 校验（存在性 + 类型）──
         cards = br.get('cards', [])
@@ -702,10 +721,16 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
         if not isinstance(raw_banner, str):
             raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
 
+        # 代码审查 F3（2026-08-05）：repeat 拒绝字符串 truthy（如 repeat = "false" 被当 True）
+        repeat = m.get('repeat', False)
+        if not isinstance(repeat, bool):
+            raise ConfigError(
+                f"里程碑 '{name}' repeat 必须是布尔值，当前为 {type(repeat).__name__}")
+
         milestones.append(MilestoneDef(
             name=name,
             threshold=threshold,
-            repeat=m.get('repeat', False),
+            repeat=repeat,
             max_triggers=max_triggers,
             bonus_reward={
                 'cards': list(cards),

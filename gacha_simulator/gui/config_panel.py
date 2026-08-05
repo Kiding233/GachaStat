@@ -313,7 +313,6 @@ class RandomCardPoolDialog(QDialog):
         if self._store is not None:
             cards = list(self._store.card_defs)
         self.pool_table.setRowCount(len(cards))
-        color_map = {'SSR': QColor(255, 215, 0), 'SR': QColor(160, 80, 220), 'R': QColor(100, 149, 237)}
         for i, entry in enumerate(cards):
             cid = entry.card_id
             rarity = (entry.rarity or '?').upper()
@@ -328,7 +327,6 @@ class RandomCardPoolDialog(QDialog):
 
             rarity_item = QTableWidgetItem(rarity)
             rarity_item.setFlags(rarity_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            rarity_item.setForeground(color_map.get(rarity, QColor(0, 0, 0)))
             self.pool_table.setItem(i, 2, rarity_item)
 
             weight_spin = QDoubleSpinBox()
@@ -2117,9 +2115,6 @@ class ConfigPanel(QWidget):
             display = f"[{rarity}] {entry.name} ({cid})"
             item = QListWidgetItem(display)
             item.setData(Qt.ItemDataRole.UserRole, cid)
-            # 稀有度着色
-            color_map = {'SSR': QColor(255, 215, 0), 'SR': QColor(160, 80, 220), 'R': QColor(100, 149, 237)}
-            item.setForeground(color_map.get(rarity, QColor(0, 0, 0)))
             self.ml_cards_list.addItem(item)
 
     def _on_milestone_selected(self, row):
@@ -5735,6 +5730,9 @@ class ConfigPanel(QWidget):
         self._milestone_defs = []
         self.milestone_list.clear()
         self._current_milestone_row = -1   # REVIEW-R1-FIX: ISSUE-001 —— 回填不选中任何行，重置行追踪
+        # 代码审查 F4（2026-08-05）：跨配置加载清空随机池状态——防同名里程碑经 setdefault 继承上一配置陈旧随机池
+        self._milestone_random_pools = {}
+        self._selected_random_pool_idx = 0
         self.milestone_enabled.setChecked(store.milestone.enabled)
         for md in store.milestone.milestones:
             self._milestone_defs.append({

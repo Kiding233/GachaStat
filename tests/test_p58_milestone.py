@@ -222,6 +222,36 @@ class TestUT2BuildMilestone:
             return
         raise AssertionError('应抛 ConfigError：name 重复')
 
+    # ── 代码审查 F1/F2/F3（2026-08-05）防御性校验缺口 ──
+
+    def test_milestone_entry_not_dict(self):
+        # F1：milestone 列表项非 dict → ConfigError 而非裸 AttributeError
+        self._expect_config_error(5)
+
+    def test_name_not_string(self):
+        # F1：name 非字符串 → ConfigError 而非裸 AttributeError
+        self._expect_config_error({'name': 123})
+
+    def test_bonus_reward_not_dict(self):
+        # F1：bonus_reward 非表 → ConfigError 而非裸 AttributeError
+        self._expect_config_error({'name': 'm', 'bonus_reward': 5})
+
+    def test_max_triggers_negative(self):
+        # F2：max_triggers 负数 → ConfigError（否则静默变成「触发一次即停用」）
+        self._expect_config_error({'name': 'm', 'max_triggers': -1})
+
+    def test_threshold_float(self):
+        # F3：threshold float → ConfigError（拒绝 int() 静默截断）
+        self._expect_config_error({'name': 'm', 'threshold': 10.9})
+
+    def test_threshold_bool(self):
+        # F3：threshold bool → ConfigError（bool 是 int 子类的陷阱）
+        self._expect_config_error({'name': 'm', 'threshold': True})
+
+    def test_repeat_string(self):
+        # F3：repeat 字符串 → ConfigError（'false' 字符串 truthy 被当 True）
+        self._expect_config_error({'name': 'm', 'repeat': 'false'})
+
 
 class TestUT3TomlRoundTrip:
     """MilestoneConfig → save_toml → load_toml → 逐字段相等。"""

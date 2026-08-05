@@ -2167,3 +2167,16 @@ P58 已实施落地（M1-M9 全部完成）。核心变更文件：
 - **用户决定（UI 偏离）：** `config_panel.py` 中 `RandomCardPoolDialog` 与 `_populate_milestone_cards_list` 的「稀有度着色」（`color_map` + `setForeground`，计划 §3.8.3/3.8.5 描述）**删除**——用户确认保留删除，记为用户决定（配置面板 UI 简化，不影响功能）。
 - **N1/N2/N3 及统计层键层级问题归入独立计划：** 第 3 轮独立核查发现 `compute_transition_flags_from_gdr` 单池回退减赠卡改错字段（N1）、streaming 全累计判池成败的跨 banner 赠卡残留（N2）、`pool_ids_ordered` banner 键查全限定表的键层级错配（N3，P61 迁移既有问题）——连同「截止每池 GDR」「process_analysis 累积模式」同类键层级消费点。**根因是 P61 后「每池」语义未裁决（组合模式 vs 拆分模式）**，归入 **P72 每池分析语义界定——banner 与 pool 双层结构的组合与拆分模式**（占位计划）。
 - **「累抽得」事件分类归入独立计划：** 事件系统只有 pity_hit/early_hit/miss 三路径、无「累抽得」路径，GDR 含送卡但事件分类 draw-only 的矛盾（累抽保底被判 miss）。**主题是事件系统整体重构（类型体系 + 判定条件 + 成败口径）**，归入 **P71 过程事件系统重构——事件类型体系与成败判定口径**（占位计划）。
+
+**第 4 轮独立代码质量审查（2026-08-05，用户决定——不参照计划的实现缺陷审查，与前 3 轮 fidelity 对照区分）：**
+- **F1（重要）已修复**：`_build_milestone` 对非 dict 里程碑项 / 非字符串 name / 非 dict bonus_reward 抛裸 AttributeError 而非 ConfigError（违反 ISSUE-012 校验不变式）——补 `isinstance` 守卫统一走 ConfigError 通道（config_toml.py）。
+- **F2（重要）已修复**：`max_triggers < 0` 未校验，静默变成「触发一次即停用」（`milestone.py` L87 `if md.max_triggers and ...` 对负数 truthy）——补 `max_triggers >= 0` 校验（config_toml.py）。
+- **F3（次要）已修复**：`threshold`/`max_triggers` 拒绝 bool（int 子类陷阱）与 float（`int()` 静默截断）、`repeat` 拒绝字符串 truthy（`'false'` 被当 True）——补类型校验（config_toml.py）。
+- **F4（次要）已修复**：GUI `_milestone_random_pools` 跨配置加载未清空，同名里程碑经 `setdefault` 继承上一配置陈旧随机池——`_refresh_from_store_impl` 补清空 + 重置选中索引（config_panel.py）。
+- **F5（提示）已登记**：流式 draw-only 跨 banner 赠卡泄漏（streaming `_check_success_draw_only` 与 process_trace `_subtract_gift_cards` 两条路径对跨 banner 场景结论不一致，子 agent 实测确认）——本质是 **N2**，P72 已覆盖（跨 banner 赠卡残留），不新增处置。
+- **F6（提示）待确认设计意图**：`random.choices` 有放回抽样，`random_cards[].count` > 候选数时必出重复赠卡（子 agent 实测确认）——需下游阶段确认是否要求「随机 N 张不重复」；若确认，解析器应补 `count <= len(candidates)` 校验。
+- **F7（提示）已知限制**：InfoVectorCollector 路径静默丢弃 milestone 产出归因（`collector.py` on_bonus no-op，注释已标注），不修改。
+- **N1（预存问题）已登记**：两条流式实现（`WorkerLocalExtractor.process` vs `DrawSequenceExtractor._update_cumulative`）对池边界抽的累计快照 off-by-one 分歧（子 agent 实测确认），P58 前已存在、超出 P58 范围，归档后关注。
+- **修复验证**：+7 负例测试（F1×3 / F2×1 / F3×3，UT2 类追加），P58 51 passed，全量 **971 passed** + 1 skipped，ruff 通过。
+
+**归档结论（2026-08-05）：** P58 主体实施 + 3 轮 fidelity 核查 + 第 4 轮独立代码质量审查均闭环，无阻塞级缺陷，达到归档标准（对照 P61：3 轮核查 + 全绿）。遗留项全部登记：P72（N1/N2/N3 + 每池语义）、P71（事件系统重构）、F6（重复赠卡设计意图待确认）、N1（流式快照 off-by-one 预存问题）。

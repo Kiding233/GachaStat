@@ -101,6 +101,8 @@ gacha_simulator/
 
 **其他设施：** `PityState`——三层嵌套 namespace；`Counter`/`Flag` 遥控器；`DrawInfo`（frozen dataclass）抽卡静态事实；`PityContext` 管道载体；`LifecycleConfig`（frozen——`max_triggers`/`deactivate_on_early_hit`/`depends_on`）；`_build_pity_state_init()`——从 `PityDef` 注入 `counter_init`/`guaranteed_init`/`fate_points_init` 初始状态；`_expand_soft_to_deltas()`——`soft_interval`/`soft_additive` 语法糖 → deltas。
 
+**P75 `_rebind_state` 纪律（强制，四条）：** `PityEngine` 每次调度（`before_draw`/`after_draw`/`get_probabilities`）首行调用 `_rebind_state(state)`，把 behaviors 的 Counter/Flag 重绑到 per-call state——**纯重定向不复制旧值**，初始值完全由 `env.pity_state_init`（阶段 3 完整快照，engine 构造后取 `_state.to_dict()`）承载；绑定对象不同则计数器写入错账本、保底快照恒空（P75 根因）。**新增保底行为/查询时四条纪律：** 1) **新 behavior 必须实现 `_rebind_state`**（或确认走基类空实现；子类特有 Counter/Flag 经 `_on_rebind_state` 覆写，不得因「无覆写者」删除该调用）；2) **新只读查询不得依赖未 rebind 的 `self._state`**（无 `state` 参数的只读查询须纳入 ISSUE-104 豁免清单或改走引擎级 rebind，不得默认豁免）；3) **所有带 `state` 参数的公开入口方法必须在首行 rebind，且先于任何 spec=None 早退**；4) **`per-call state` 必须由 `env.pity_state_init` 快照派生或含构造期 `_active`/`guaranteed` 等初始 Flag 键**，否则 `_active` 读默认 False、计数型保底静默失效。
+
 ### GachaState (`core/state.py`)
 
 dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`acquired_by_path`（P63 路径切片）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id, path, overflow_bands, initial_counts) → Dict[str, float]` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。P63：`add_card()` 统一溢出管道——接受分段表，内部匹配区间并返回溢出资源（无规则返回 `{}`）；`clone()` 深拷贝 `acquired_by_path`。P61：`get_available_pools()` 方法已删除——池子可用性由 Banner 级 `is_available(real_time)` 判定（时间窗口 + lifecycle 激活，见扩展指南「新 Banner 生命周期规则」）。

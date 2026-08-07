@@ -252,14 +252,13 @@ class WorstImpactAnalyzer:
 
         pity_engine = self._build_pity_engine(all_featured_ids, all_ssr_ids, pool_targets)
 
+        # P75（阶段 3）：无条件产出完整初始状态快照——engine 构造后立即取，与 A 同源
+        # （含 counter / guaranteed / fate_points / selected_card + _active=True，ISSUE-106）
         pity_state_init = None
-        init_pity = self._get_initial_pity_state()
-        if init_pity:
-            # P60 方案 A——构造初始 PityState 后序列化
-            ps_init = PityState()
-            for cname, cval in init_pity.items():
-                ps_init.set(cname, 'counter', cval)
-            pity_state_init = ps_init.to_dict()
+        if pity_engine is not None:
+            _ps_snapshot = getattr(pity_engine, '_state', None)
+            if _ps_snapshot is not None:
+                pity_state_init = _ps_snapshot.to_dict()
 
         return {
             'pools': pools,
@@ -530,14 +529,3 @@ class WorstImpactAnalyzer:
             rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
             return PityEngine(pool_specs, pity_defs_list,
                             state=state, rarity_rank=rr)
-
-    def _get_initial_pity_state(self):
-        if not self.store.pity.enabled:
-            return {}
-        state = {}
-        # P55：counter_init 已从 PityConfig 移至每个 PityDef
-        for pdef in self.store.pity.pities:
-            ci = getattr(pdef, 'counter_init', 0)
-            if ci > 0:
-                state[pdef.name] = ci
-        return state

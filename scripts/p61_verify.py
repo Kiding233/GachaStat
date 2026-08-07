@@ -33,7 +33,9 @@ N = 1000
 TIME_WINDOW_FIELDS = {'pool_end_resources', 'banner_end_resources',
                       'pool_end_pity_states', 'banner_end_pity_states'}
 # 不可比字段（时间戳）
-SKIP_FIELDS = {'generated_at'}
+SKIP_FIELDS = {'generated_at', 'draw_pity_counter_max'}
+# P75（ISSUE-113）：draw_pity_counter_max 修复前因 get_counter 读账本 B 恒 0、
+# 修复后为真实抽前峰值（ISSUE-100/108）——预期变化，移入跳过集，真实值由 P75 回归断言覆盖
 # ISSUE-102 已知分歧字段（Ph6 后已复验收敛）：
 #   Ph6 已恢复时间窗口（ISSUE-001）：draw_times/wait/final_time 与 golden 全一致，
 #   故 draw_times 移出本集合——再现时间差异将按严格 DIFF 报 FAIL。

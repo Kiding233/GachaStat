@@ -309,14 +309,10 @@ class GachaService:
                         for k, v in rg.items():
                             resources[k] = resources.get(k, 0) + v
 
-                    # 池级保底计数器最大值（供 collector 记录）
-                    pool_counter_max = 0
-                    if _pity_engine:
-                        pool_spec = _pity_engine.get_spec(draw_pool_key)
-                        if pool_spec:
-                            for pname in pool_spec.pity_names:
-                                cv = _pity_engine.get_counter(pname) if _pity_engine else pity_state.get(pname, 'counter', 0)
-                                pool_counter_max = max(pool_counter_max, cv)
+                    # 池级保底计数器最大值（供 collector 记录）——ISSUE-108：从 DrawOutcome
+                    # 抽前峰值取（banner.draw 在 after_draw 前采集），替代原读 get_counter
+                    # （触发抽的 counter 在 after_draw 内已被 reset，原读恒低估 hard-90 峰值）
+                    pool_counter_max = out.pity_counter_max
 
                     if _is_compact:
                         for k, v in spent.items():

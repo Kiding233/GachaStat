@@ -121,6 +121,7 @@ class RetreatConfigBuilder:
                 counter_init=ci,
                 guaranteed_init=pd.guaranteed_init,
                 fate_points_init=pd.fate_points_init,
+                selected_card_init=pd.selected_card_init,  # ISSUE-132：漏拷——阶段 3 后完整分支携带、截断分支丢失致不对称
                 soft_start=pd.soft_start, soft_end=pd.soft_end,
                 soft_increment=pd.soft_increment, soft_deltas=pd.soft_deltas,
                 cr_counter_threshold=pd.cr_counter_threshold,

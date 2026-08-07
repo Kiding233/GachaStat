@@ -694,23 +694,16 @@ class SimulationEnvBuilder:
 
         resource_gain = SimulationEnvBuilder._build_resource_gain(config_store, end_time)
 
-        counter_init_cfg = pity_cfg_dict.get('counter_init', 0)
+        # P75（阶段 3）：无条件产出完整初始状态快照——engine 构造完成后立即取快照，
+        # 此时 _state 为 _build_pity_state_init 结果（含 counter_init / guaranteed_init /
+        # fate_points_init / selected_card_init + behaviors 构造期写入的 _active=True）。
+        # 纯重定向后每模拟 from_dict 重建的 B 需含全部初始态（ISSUE-106），
+        # 否则 _active 读默认 False、计数型保底永不触发。
         pity_state_init = None
-        init_counters = {}
-        if isinstance(counter_init_cfg, int) and counter_init_cfg > 0 and pity_engine:
-            for cname in pity_engine.pity_defs:
-                init_counters[cname] = counter_init_cfg
-        elif isinstance(counter_init_cfg, dict) and pity_engine:
-            for k, v in counter_init_cfg.items():
-                if v > 0 and k in pity_engine.pity_defs:
-                    init_counters[k] = v
-        if init_counters:
-            # P60 方案 A——构造初始 PityState 后序列化，与消费方 from_dict 对称
-            from gacha_simulator.core.pity import PityState as _PS
-            ps_init = _PS()
-            for cname, cval in init_counters.items():
-                ps_init.set(cname, 'counter', cval)
-            pity_state_init = ps_init.to_dict()
+        if pity_engine is not None:
+            _ps_snapshot = getattr(pity_engine, '_state', None)
+            if _ps_snapshot is not None:
+                pity_state_init = _ps_snapshot.to_dict()
 
         # 构建卡牌列表，pools 从池子分布实时推导（非从 store.card_defs 复制）
         # —— 这样用户在 GUI 中修改池子绑定后，pools 自动反映最新状态

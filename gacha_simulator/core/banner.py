@@ -60,6 +60,7 @@ class DrawOutcome:
     pool_id: str
     pity_triggered: bool
     triggered_pity_name: Optional[str] = None
+    pity_counter_max: int = 0  # ISSUE-108：本次抽前保底计数峰值（after_draw reset 前采集，供 pool_counter_max）
 
 
 @dataclass
@@ -214,6 +215,7 @@ class Banner:
         probabilities = {r.id: p for r, p in pool.rewards}
         pity_triggered = False
         triggered_pity_name = None
+        counter_peak = 0  # ISSUE-108：抽前保底计数峰值（旁路分支恒 0）
 
         if pool.excludes_all_pity or pity_engine is None:
             # 保底旁路（excludes_all_pity）或无引擎：不调 before_draw/after_draw、
@@ -245,6 +247,13 @@ class Banner:
                         probabilities[rwd_id] *= scale_factors[slot]
             pool._apply_probabilities(probabilities)
             reward = pool.draw()
+            # ISSUE-108：after_draw 前采集抽前峰值——counter 型 behavior 触发抽（如 hard-90）
+            # 会在 after_draw 内 _counter().reset()，故峰值必须在 after_draw 前取
+            if pity_spec and pity_spec.pity_names:
+                counter_peak = max(
+                    (pity_engine.get_counter(name) for name in pity_spec.pity_names),
+                    default=0,
+                )
             pity_engine.after_draw(qualified_key, pity_state, reward.id)
             # 保底触发判定：本次抽到的卡满足重置条件（featured SSR）
             if pity_spec and reward.id in pity_spec.featured_ids and pity_spec.pity_names:
@@ -268,6 +277,7 @@ class Banner:
             pool_id=pool_key,
             pity_triggered=pity_triggered,
             triggered_pity_name=triggered_pity_name,
+            pity_counter_max=counter_peak,
         )
 
     def _check_transitions(self, card_id: Optional[str] = None,

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>pywebview POC</title>
+<script src="plotly.min.js"></script>
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6fa; color: #2d3436; }
+  .header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; background: #fff; border-bottom: 1px solid #dfe6e9; }
+  h1 { font-size: 18px; margin: 0; }
+  #status { font-size: 13px; color: #0984e3; }
+  .toolbar { padding: 12px 20px; display: flex; gap: 12px; align-items: center; }
+  label { font-size: 14px; }
+  input { padding: 6px 10px; border: 1px solid #dfe6e9; border-radius: 6px; width: 100px; font-size: 14px; }
+  button { padding: 8px 18px; border: none; border-radius: 6px; background: #0984e3; color: #fff; font-size: 14px; cursor: pointer; }
+  button:hover { background: #0870c0; }
+  #chart { margin: 0 20px; height: 460px; }
+  #result { padding: 8px 20px; font-size: 13px; color: #636e72; min-height: 20px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>pywebview + Plotly 最小示例</h1>
+    <span id="status">初始化中…</span>
+  </div>
+  <div class="toolbar">
+    <label for="count">模拟次数</label>
+    <input id="count" type="number" value="2000" min="100">
+    <button onclick="runSim()">▶ 运行 Python 模拟</button>
+  </div>
+  <div id="result"></div>
+  <div id="chart"></div>
+
+  <script>
+    // JS → Python：页面加载时测试桥连通性
+    (async function () {
+      try {
+        const msg = await pywebview.api.hello();
+        document.getElementById('status').textContent = msg;
+      } catch (e) {
+        document.getElementById('status').textContent = '桥失败: ' + e;
+      }
+    })();
+
+    // JS → Python：触发模拟并渲染直方图（hover 交互来自 Plotly）
+    async function runSim() {
+      const n = parseInt(document.getElementById('count').value, 10) || 2000;
+      document.getElementById('result').textContent = '模拟中…';
+      const data = await pywebview.api.run_simulation(n);
+      Plotly.react('chart', [{
+        type: 'bar',
+        x: data.x, y: data.y,
+        marker: { color: '#0984e3', opacity: 0.8 },
+        hovertemplate: '抽数 %{x}<br>频数 %{y}<extra></extra>',
+      }], {
+        title: '出货所需次数直方图（均值 ' + data.mean.toFixed(1) + '）',
+        xaxis: { title: '出货所需抽数' },
+        yaxis: { title: '频数' },
+        margin: { l: 50, r: 20, t: 50, b: 40 },
+      }, { responsive: true, displayModeBar: true });
+      document.getElementById('result').textContent =
+        'Python 返回：' + data.n + ' 次模拟，均值 ' + data.mean.toFixed(1) + ' 抽出货';
+    }
+
+    // Python → JS 主动推送的接收端
+    window.setStatus = function (text) {
+      document.getElementById('status').textContent = text;
+    };
+  </script>
+</body>
+</html>

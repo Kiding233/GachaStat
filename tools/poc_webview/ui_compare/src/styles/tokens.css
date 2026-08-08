@@ -1,0 +1,58 @@
+/* GachaStat UI 设计 tokens（P74 阶段 1a · 第二次迭代）
+
+视觉方向（用户裁决）：
+- 整体黑白灰骨架，彩色只做语义点缀（操作/图表/成功/危险）
+- 「黑是框的颜色」：卡片/分组等主要容器的边框用黑系深色，形成清晰骨架
+- 背景/卡片/边框/文字拉开层次，避免白茫茫
+
+色源：Qt 代码考察（对照表五）+ 用户视觉方向。
+*/
+:root {
+  /* ── Element Plus 主题覆盖 ── */
+  /* 交互色（点缀）：蓝为主操作，绿/红为语义 */
+  --el-color-primary: #1976d2;
+  --el-color-primary-light-3: #54a0de;
+  --el-color-primary-light-5: #8fc1e8;
+  --el-color-primary-light-7: #c5ddf3;
+  --el-color-primary-light-8: #dbe9f8;
+  --el-color-primary-light-9: #edf5fc;
+  --el-color-primary-dark-2: #125ea8;
+  --el-color-success: #2e7d32;
+  --el-color-success-light: #e8f5e9;
+  --el-color-danger: #c62828;
+  --el-color-warning: #f5a623;
+  --el-color-info: #6b7280;
+
+  /* 边框体系（回退黑框：结构感由色块层次 + 轻阴影承担，边框仅作浅色分割）*/
+  --el-border-color: #c0c7d1;
+  --el-border-color-light: #d5dae2;
+  --el-border-color-lighter: #e5e9ee;
+  --el-border-color-extra-light: #f0f2f5;
+  --el-card-border-color: #e4e7ed;
+  --el-border-radius-base: 2px;   /* 直角约束（严肃朴素，不圆角）*/
+  --el-font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+
+  /* ── 项目级 tokens ── */
+  /* 中性骨架（色块层次：背景灰 / 卡片白 / 文字黑，不用硬边框）*/
+  --gsc-bg: #eef1f5;                /* 应用背景 */
+  --gsc-bg-panel: #ffffff;          /* 卡片/面板 */
+  --gsc-bg-result: #f5f6f8;         /* 结果区色块 */
+  --gsc-bg-header: #f7f8fa;         /* 表格头/页头色块 */
+  --gsc-border: #d5dae2;            /* 浅分割线 */
+  --gsc-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);  /* 卡片轻阴影（替代硬框）*/
+  --gsc-text-primary: #1f2329;      /* 主文字（黑）*/
+  --gsc-text-muted: #6b7280;        /* 次级文字 */
+  --gsc-text-faint: #9aa5b1;        /* 弱提示 */
+
+  /* 语义点缀 */
+  --gsc-chart-primary: #2196f3;     /* 图表主系列 */
+  --gsc-chart-palette: #1f77b4, #ff7f0e, #2ca02c, #d62728, #9467bd,
+                       #8c564b, #e377c2, #7f7f7f, #bcbd22, #17becf;
+
+  --gsc-font-main: "Microsoft YaHei", "PingFang SC", sans-serif;
+  --gsc-font-mono: "Consolas", "Courier New", monospace;
+  --gsc-radius: 2px;                /* 直角约束 */
+  --gsc-space: 6px;                 /* 紧凑密度：间距基准（参照 Qt 高密度）*/
+  --gsc-space-sm: 4px;
+  --gsc-line: 18px;                 /* 紧凑行高 */
+}

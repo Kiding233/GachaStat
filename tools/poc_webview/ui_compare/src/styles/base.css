@@ -1,0 +1,276 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--gsc-font-main);
+  background: var(--gsc-bg);
+  color: var(--gsc-text-primary);
+  font-size: 12px;
+}
+
+/* ══ 全局密度压缩（参照 Qt 高密度；Element Plus 组件尺寸统一收紧）══ */
+:root {
+  --el-component-size: 26px;          /* 默认输入框/按钮高 26 */
+  --el-component-size-small: 22px;    /* small 组件高 22 */
+  --el-font-size-base: 12px;
+  --el-font-size-small: 12px;
+}
+
+/* 表格：行高压缩（Qt QTableWidget 等密度）*/
+.el-table {
+  --el-table-cell-padding: 2px 0;
+  font-size: 12px;
+}
+.el-table .cell {
+  padding: 0 6px;
+  line-height: 18px;
+}
+.el-table__inner-wrapper::before {
+  height: 0;                          /* 去表格底部横线 */
+}
+
+/* 表单：行间距压缩 */
+.el-form-item {
+  margin-bottom: 6px;
+}
+.el-form-item__label {
+  font-size: 12px;
+  line-height: 22px;
+}
+/* 表单文本输入框不无限延伸（名称/ID 等固定最大宽度，不再顶到最右）*/
+.el-form .el-input {
+  max-width: 360px;
+}
+
+/* 标签 / 按钮 / 输入框 微调 */
+.el-tag {
+  height: 20px;
+  line-height: 18px;
+  padding: 0 6px;
+}
+.el-button {
+  font-weight: 400;
+}
+.el-dropdown-menu__item {
+  font-size: 12px;
+  padding: 4px 14px;
+  line-height: 20px;
+}
+
+/* 对话框标题紧凑 */
+.el-dialog__header {
+  padding: 10px 14px 6px;
+}
+.el-dialog__title {
+  font-size: 13px;
+}
+
+/* ══ 工具栏（添加块 / 添加分析等入口，替代下拉）══ */
+.toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  margin-bottom: 8px;
+  border: 1px solid var(--gsc-border);
+  background: var(--gsc-bg-header);
+}
+.toolbar-label {
+  font-size: 12px;
+  color: var(--gsc-text-muted);
+  margin-right: 2px;
+}
+.toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--gsc-border);
+  margin: 0 2px;
+}
+
+/* ── 应用外壳：工具栏 + Tab 区 + 状态栏 ── */
+#app,
+.app-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部工具栏（Qt 菜单栏对应）*/
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--gsc-bg-panel);
+  border-bottom: 1px solid var(--gsc-border);
+  flex: 0 0 auto;
+}
+
+.app-brand {
+  font-weight: 700;
+  font-size: 13px;
+  margin-right: 8px;
+  letter-spacing: 0.5px;
+}
+
+.app-menu {
+  display: flex;
+  align-items: center;
+}
+
+.menu-btn {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  color: var(--gsc-text-primary);
+  font-size: 12px;
+  user-select: none;
+}
+
+.menu-btn:hover {
+  background: var(--gsc-bg);
+  color: var(--gsc-text-primary);
+}
+
+/* Tab 区 */
+.app-tabs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  background: var(--gsc-bg-panel);
+  min-height: 0;
+}
+
+.app-tabs .el-tabs__header {
+  margin: 0;
+  background: var(--gsc-bg-panel);
+  border-bottom: 1px solid var(--gsc-border);
+}
+
+/* Tab 交互：悬停整体变灰，激活态黑字 + 主色指示线（不做内容切换动画）*/
+.app-tabs .el-tabs__item {
+  color: var(--gsc-text-muted);
+  font-size: 12px;
+  padding: 0 12px;
+  height: 32px;
+  line-height: 32px;
+}
+
+.app-tabs .el-tabs__item:hover {
+  color: var(--gsc-text-primary);
+  background: var(--gsc-bg);
+}
+
+.app-tabs .el-tabs__item.is-active {
+  color: var(--gsc-text-primary);
+  font-weight: 600;
+}
+
+.app-tabs .el-tabs__active-bar {
+  background-color: var(--el-color-primary);
+  height: 2px;
+}
+
+.app-tabs .el-tabs__content {
+  flex: 1;
+  overflow: auto;
+  background: var(--gsc-bg);
+  min-height: 0;
+}
+
+.app-tabs .el-tab-pane {
+  height: 100%;
+}
+
+/* 底部状态栏（Qt QStatusBar 对应）*/
+.app-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  background: var(--gsc-bg-panel);
+  border-top: 1px solid var(--gsc-border);
+  font-size: 11px;
+  color: var(--gsc-text-muted);
+  flex: 0 0 auto;
+}
+
+.app-status {
+  color: var(--gsc-text-primary);
+}
+
+/* ── 面板通用容器 ── */
+.panel {
+  height: 100%;
+  padding: var(--gsc-space);
+  overflow: auto;
+}
+
+/* 参数区 + 结果区结构（A2 布局，源自 Qt QSplitter 左参右果）*/
+.panel-split {
+  display: flex;
+  gap: var(--gsc-space);
+  align-items: flex-start;
+}
+
+.panel-left {
+  flex: 0 0 320px;
+  max-width: 420px;
+}
+
+.panel-right {
+  flex: 1;
+  min-width: 0;
+  background: var(--gsc-bg-result);
+  border: 1px solid var(--gsc-border);
+  border-radius: var(--gsc-radius);
+  padding: var(--gsc-space);
+}
+
+/* 卡片：白底 + 轻阴影（结构感由色块层次 + 阴影承担，非硬边框）*/
+.el-card {
+  border-color: var(--gsc-border);
+  box-shadow: var(--gsc-shadow);
+}
+
+/* 表单行：标签即语义（Qt A3 惯例；间距由上方密度块统一为 6px）*/
+
+/* 运行按钮 + 进度 + 状态 动作栏 */
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gsc-space);
+  margin-top: var(--gsc-space);
+}
+
+.action-bar .el-progress {
+  flex: 1;
+  margin: 0 8px;
+}
+
+.muted {
+  color: var(--gsc-text-muted);
+  font-size: 12px;
+}
+
+/* 表格内联控件缩小（Qt setCellWidget 等价形态）*/
+.cell-inline {
+  width: 100%;
+}
+
+.cell-inline.el-input-number {
+  width: 100%;
+}

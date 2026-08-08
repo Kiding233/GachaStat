@@ -2,6 +2,11 @@
 // 数据集分析方法定义（数据驱动：方法池 / 参数 / 结果区框架）
 // 对齐 Qt 各分析面板 + 信息架构定稿。后端经 js_api 接 AnalysisService。
 // ══════════════════════════════════════════════════════════════════
+//
+// P72（ISSUE-101/120）legacy 豁免：methodDefs type 'cumulative_by_pool'（L195）与
+// DatasetWorkbench.vue L186 路由键、webui analysis_service.py L163 API 方法键为同一
+// wire 键，保持 'cumulative_by_pool' 不改——PyQt 侧 chart key 已改 'cumulative_by_banner'，
+// POC 原型 / webui 为遗留层（消费链依赖 webui handler，改写将命中不到方法返回「未知分析方法」）。
 
 // 21 种广义出率（core/gdr.py UNIFIED_GDR_REGISTRY）
 export const GDR_OPTIONS = [

@@ -258,10 +258,17 @@ class RetreatPanel(QWidget):
         return specs
 
     def _get_pool_names(self):
+        """池ID → 显示名映射（P72 ISSUE-001：banner 级）。
+
+        脆弱性结果 pr.pool_id 为 banner 键（时间域，PoolVulnerabilityResult 键契约），
+        store.pools 展平后 pe.name 即 banner 级名、pe.pool_id 为全限定键——按 banner 段
+        映射，使消费端 pool_names.get(pr.pool_id) 命中（原全限定键表恒 miss、退化裸 banner id）。
+        """
         pool_names = {}
         for pe in getattr(self._store, 'pools', []):
             if pe.enabled:
-                pool_names[pe.pool_id] = getattr(pe, 'name', pe.pool_id)
+                banner_id = pe.pool_id.split('.')[0] if '.' in pe.pool_id else pe.pool_id
+                pool_names.setdefault(banner_id, getattr(pe, 'name', pe.pool_id) or pe.pool_id)
         return pool_names
 
     def _extract_cost_per_draw(self):

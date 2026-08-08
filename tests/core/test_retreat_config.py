@@ -273,3 +273,57 @@ def test_truncate_after_normalized_permanent():
     )
     # perm 在退避点前截断；after 保留
     assert [b.id for b in truncated.banner.banners] == ['after']
+
+
+def _make_store_with_multi_pool_banner():
+    """多 pool banner（b1 含 main/step1）+ 单池 banner（b2）。"""
+    store = ConfigStore()
+    store.banner.banners = [
+        BannerEntry(id='b1', name='周年庆',
+                    available_from=0 * DAY, available_until=42 * DAY,
+                    pools=[
+                        BannerPoolEntry(id='main', cost='draw_resource:160'),
+                        BannerPoolEntry(id='step1', cost='draw_resource:160'),
+                    ]),
+        BannerEntry(id='b2', name='武器特选',
+                    available_from=42 * DAY, available_until=63 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+    ]
+    store.pity = PityConfig(enabled=True, pities=[])
+    store.gain_rules = []
+    store.day_overrides = []
+    store.initial_resources = {'draw_resource': 30000}
+    store.target_cards = []
+    store.card_defs = []
+    return store
+
+
+def test_empty_from_pool_id_raises_value_error():
+    """ISSUE-129 falsy 守卫：from_pool_id=None/'' 统一 ValueError，不裸抛 TypeError。"""
+    store = _make_store_with_3_pools()
+    for bad in (None, ''):
+        with pytest.raises(ValueError):
+            RetreatConfigBuilder.build(
+                original_store=store, from_pool_id=bad,
+                initial_resources={}, pity_counter_init={})
+
+
+def test_multi_pool_banner_fallback_hits_banner_start():
+    """ISSUE-109 兜底语义（路线 A 接受项）：多 pool banner 下 build('b1') 不崩溃。
+
+    兜底命中遍历序首个池（b1.main），offset_day 取 b1 结束日（42）→ 截断保留
+    available_from >= 42 的 banner（b2）；与精确 build('b1.main') 结果一致，
+    验证「起始粒度 = banner、命中首个池 = 活动起点」的接受项语义。
+    """
+    store = _make_store_with_multi_pool_banner()
+    truncated = RetreatConfigBuilder.build(
+        original_store=store, from_pool_id='b1',
+        initial_resources={'draw_resource': 5000}, pity_counter_init={})
+    pool_ids = [p.pool_id for p in truncated.pools]
+    # offset_day = b1.main.end_day(42) → 截断保留 available_from >= 42 的 banner（b2）
+    assert pool_ids == ['b2.main'], f'got {pool_ids}'
+    # 与精确命中 b1.main 结果一致（兜底取遍历序首个池 = 活动起点语义）
+    exact = RetreatConfigBuilder.build(
+        original_store=store, from_pool_id='b1.main',
+        initial_resources={'draw_resource': 5000}, pity_counter_init={})
+    assert [p.pool_id for p in exact.pools] == pool_ids

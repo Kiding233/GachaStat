@@ -59,6 +59,7 @@ def compute_cumulative_snapshots(
     target_ids: Set[str] = None,
     ssr_ids: Set[str] = None,
 ) -> List[CumulativeSnapshot]:
+    """P72 ISSUE-004 键契约：pool_end_times 键为 banner 级（时间域），返回快照按 banner 分段。"""
     if target_ids is None:
         target_ids = set(ctx.target_specs.keys())
     if ssr_ids is None:
@@ -155,6 +156,7 @@ def per_pool_summary_stats(
 def cumulative_gdr_at_pool_ends(
     batch_cum: Dict[str, List[CumulativeSnapshot]],
 ) -> Dict[str, Dict[str, List[float]]]:
+    """P72 ISSUE-004 键契约：batch_cum 键为 banner 级（pool_end_times 键空间，时间域）。"""
     result = {}
     for pid, snaps in batch_cum.items():
         if not snaps:

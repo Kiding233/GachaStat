@@ -300,3 +300,43 @@ def test_update_transition_per_card_satisfied():
     # pool_A 结束时（≤10s）：card_A×2 → 满足card_A需求，但card_B=0 → 失败
     # pool_B 结束时（≤20s）：card_A×3 + card_B×2 → 全部满足 → 成功
     assert flags[0] == [False, True]
+
+
+def test_cumulative_snapshots_banner_keys_feed_pool_gdr():
+    """ISSUE-104/106：单线程 DrawSequenceExtractor 快照键为 banner 级（pool_end_times
+    键空间，无 '.'），且累积消费端 _compute_pool_gdr 经 banner 段取数能消费——与
+    并行路径共享同一键空间（banner 级），保证双路径行为等价。
+    """
+    from gacha_simulator.gui.process_analysis_panel import ProcessAnalysisPanel
+
+    pool_end_times = {'b1': 10.0, 'b2': 20.0}
+    extractor = DrawSequenceExtractor(
+        max_keep=10,
+        pool_end_times=pool_end_times,
+        target_ids={'card_A'},
+        target_specs={'card_A': 1},
+    )
+    extractor.on_result(_make_compact(
+        ['b1', 'b2'],
+        ['card_A', 'card_A'],
+        [5.0, 15.0],
+        pool_end_times,
+        banner_end_resources={
+            'b1': {'draw_resource': 500},
+            'b2': {'draw_resource': 400},
+        },
+    ))
+    cum_snaps = extractor.get_cumulative_snapshots()
+    # 键为 banner 级（pool_end_times 键空间）
+    assert set(cum_snaps.keys()) == {'b1', 'b2'}
+    for pid in cum_snaps:
+        assert '.' not in pid, f"累积快照键应为 banner 级，got {pid}"
+
+    # 累积消费端经 banner 段取数（全限定键 b1.main → banner_of → b1）命中
+    panel = ProcessAnalysisPanel.__new__(ProcessAnalysisPanel)
+    panel._cumulative_snapshots = cum_snaps
+    val = panel._compute_pool_gdr(
+        'cumulative', None, 'b1.main', 0, {'card_A': 1}, 'all_targets',
+        ssr_ids=None, weapon_character_map=None, initial_resources={},
+    )
+    assert val is not None

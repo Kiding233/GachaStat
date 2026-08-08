@@ -1168,9 +1168,9 @@ class AnalysisWorker(QThread):
                     _xlabel = metric_name
                     if is_resource_gdr(metric_key) and self.use_draw_units:
                         _xlabel = f'{metric_name} (抽)'
-                    _cum_title = f'{metric_name} (截止每池)'
+                    _cum_title = f'{metric_name} (截止每 banner)'  # P72 ISSUE-111：累积语义为 banner 段
                     if is_resource_gdr(metric_key) and self.use_draw_units:
-                        _cum_title = f'{metric_name} (抽, 截止每池)'
+                        _cum_title = f'{metric_name} (抽, 截止每 banner)'
                     if ridge_series:
                         _ridge_hints = {}
                         if _ridge_bins.bin_edges is not None:
@@ -1186,7 +1186,7 @@ class AnalysisWorker(QThread):
                             ylabel='池子',
                             layout_hints=_ridge_hints,
                         )
-                step_done('截止每池的GDR分布')
+                step_done('截止每 banner 的GDR分布')  # P72 ISSUE-124：文案随语义更正
 
         if 'draws_vs_gdr' in self.selected:
             self._emit('生成抽卡数-目标达成率散点图...', int(completed / total_steps * 100))

@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QProgressBar, QSplitter, QScrollArea, QButtonGroup,
 )
 
+from gacha_simulator.gui.utils import banner_of  # P72 项 5：全限定→banner 键转换（None/空串安全）
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 快照系统
@@ -869,8 +871,13 @@ class PlanSearchPanel(QWidget):
             self._on_resource_mode_changed(-1)
 
     def _find_vulnerability_pool(self, pool_id: str):
-        """在脆弱性结果中查找指定池。"""
-        if self._vulnerability_result is None:
+        """在脆弱性结果中查找指定池。
+
+        P72 路线 A：起始池下拉已统一为 banner 键（data=banner_id），脆弱性结果
+        pr.pool_id 同为 banner 键（PoolVulnerabilityResult 键契约），直接匹配。
+        falsy 守卫（ISSUE-702）：pool_combo「(从头开始)」项 data=None 时安全返回。
+        """
+        if not pool_id or self._vulnerability_result is None:
             return None
         for pr in self._vulnerability_result.pool_results:
             if pr.pool_id == pool_id:
@@ -1250,28 +1257,24 @@ class PlanSearchPanel(QWidget):
         # 更新权重表
         self._populate_weight_table(store)
 
-        # 更新起始池下拉
+        # 更新起始池下拉（P72 路线 A：统一 banner 键，每 banner 一项——data=banner_id、显示 banner.name）
         self.pool_combo.clear()
         self.pool_combo.addItem("(从头开始)", None)
-        # 从配置中填充所有池子
-        pool_names = self._get_pool_names(store)
+        seen_banners = set()
         for pe in getattr(store, 'pools', []):
-            if pe.enabled:
-                display = pool_names.get(pe.pool_id, pe.pool_id)
-                self.pool_combo.addItem(display, pe.pool_id)
+            if not pe.enabled:
+                continue
+            banner_id = banner_of(pe.pool_id)
+            if banner_id is None or banner_id in seen_banners:
+                continue
+            seen_banners.add(banner_id)
+            self.pool_combo.addItem(self._get_pool_name(banner_id), banner_id)
 
         # 从配置中自动检测单抽成本
         from gacha_simulator.core.retreat_search import get_cost_per_draw
         detected_cost = get_cost_per_draw([pe for pe in getattr(store, 'pools', []) if pe.enabled])
         if detected_cost > 0:
             self.cost_per_draw_spin.setValue(int(detected_cost))
-
-    def _get_pool_names(self, store) -> Dict[str, str]:
-        """池ID → 显示名映射"""
-        names = {}
-        for pe in getattr(store, 'pools', []):
-            names[pe.pool_id] = getattr(pe, 'name', pe.pool_id) or pe.pool_id
-        return names
 
     def set_vulnerability_result(self, vuln_result):
         """接收 VulnerabilityResult，填充起始池下拉和保底水位数据"""
@@ -1288,9 +1291,19 @@ class PlanSearchPanel(QWidget):
                 self.pool_combo.addItem(display, pr.pool_id)
 
     def _get_pool_name(self, pool_id: str) -> str:
-        """从 store 查找池的显示名"""
+        """从 store 查找池的显示名（P72 D3：先查 banner 段映射，再查全限定表）。
+
+        store.pools 展平后 pe.name 为 banner 级名——起始池下拉/脆弱性追加项的 banner 键
+        （'b1'）经 banner 段映射命中，配置池全限定键（'b1.main'）查全限定表；均 miss 回退原 id。
+        """
         if self._store is None:
             return pool_id
+        # 1) banner 段映射：banner 键 → banner.name（store.pools 展平后 pe.name 即 banner 级名）
+        for pe in getattr(self._store, 'pools', []):
+            banner_id = pe.pool_id.split('.')[0] if '.' in pe.pool_id else pe.pool_id
+            if banner_id == pool_id:
+                return getattr(pe, 'name', pool_id) or pool_id
+        # 2) 全限定键精确匹配（配置池场景）
         for pe in getattr(self._store, 'pools', []):
             if pe.pool_id == pool_id:
                 return getattr(pe, 'name', pool_id) or pool_id

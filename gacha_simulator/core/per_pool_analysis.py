@@ -352,10 +352,16 @@ def compute_transition_flags_from_gdr(
                     snap = dict(snap)
                     snap['cumulative_card_counts'] = _draw_only_card_counts(
                         snap.get('cumulative_card_counts', {}), sim_idx, pool_id)
-                val = compute_pool_gdr_cumulative(
-                    snap, pool_id, target_specs, gdr_key,
-                    ssr_ids=ssr_ids, **gdr_kwargs,
-                )
+                    val = compute_pool_gdr_cumulative(
+                        snap, pool_id, target_specs, gdr_key,
+                        ssr_ids=ssr_ids, **gdr_kwargs,
+                    )
+                else:
+                    # P72 ISSUE-703 路线(a) 落点1（D4 已裁决）：空快照（数据缺失）→ None，
+                    # 消费侧计失败并注明「数据缺失，非真失败」，避免空快照经
+                    # compute_gdr_from_cumulative({}) 算出 0.0 对 lower_is_better 类指标误判成功。
+                    # compute_pool_gdr_cumulative 对非空快照契约不变（落点 1 不触碰导出函数）。
+                    val = None
             else:
                 agg = aggregates[sim_idx] if aggregates and sim_idx < len(aggregates) else {}
                 if agg:

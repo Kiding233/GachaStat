@@ -616,7 +616,8 @@ class ProcessAnalysisPanel(QWidget):
 
             detail_text = (
                 f"总样本: {total}\n"
-                f"口径：各池 GDR/成败按截止该 banner 段（活动级累积，同 banner 多池显示相同）\n"
+                f"口径：各池 GDR/成败按截止该 banner 段（活动级累积，同 banner 多池显示相同）；\n"
+                f"未触达 banner 段（banner 开放前模拟已结束）显示为模拟终点继承态（P72 语义 A）\n"
                 f"全部池失败概率: {all_fail_prob:.4f}\n"
                 f"全部池成功概率: {all_success_prob:.4f}\n\n"
                 f"各池成功率:\n"

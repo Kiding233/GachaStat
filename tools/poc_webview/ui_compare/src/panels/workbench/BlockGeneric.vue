@@ -1,7 +1,7 @@
 <template>
   <div class="cfg-block" :class="{ open: expanded }">
-    <!-- 块头：折叠 + 类型 + 全局徽标 + 名称 + 复制/删除 -->
-    <div class="cfg-block-head" @click="expanded = !expanded">
+    <!-- 块头：折叠 + 类型 + 全局徽标 + 名称 + 复制/删除（点击 = 父级手风琴互斥展开）-->
+    <div class="cfg-block-head" @click="$emit('toggle-head')">
       <span class="drag-handle" @click.stop title="拖拽排序">⠿</span>
       <span class="arrow">{{ expanded ? '▾' : '▸' }}</span>
       <span class="block-type">{{ meta.label }}</span>
@@ -25,7 +25,61 @@
     <div v-show="expanded" class="cfg-block-body">
       <!-- ══ 资源定义块（resource_defs）：条目表（key/name/initial，可复制、序列化按 key 去重）══ -->
       <template v-if="type === 'resource_defs'">
-        <el-table :data="data.entries" size="small">
+        <el-table
+          ref="entryTableRef"
+          :data="data.entries"
+          size="small"
+          highlight-current-row
+          @row-click="onRowClick"
+          @expand-change="onExpandChange"
+        >
+          <!-- 资源行展开：P77 生命周期编辑位（resource_lifecycle 建模后持久化）-->
+          <el-table-column type="expand" width="34">
+            <template #default="{ row }">
+              <div class="row-expand" @click.stop>
+                <div class="expand-title">「{{ row.key || '未命名' }}」资源生命周期（P77 预留）</div>
+                <div class="expand-grid">
+                  <div class="expand-item">
+                    <div class="expand-label">到期时间 expire_at（天）</div>
+                    <el-input-number
+                      :model-value="row.lifecycle?.expire_at"
+                      size="small"
+                      :min="0"
+                      :controls="false"
+                      style="width: 120px"
+                      @change="(v) => setLifecycle(row, 'expire_at', v)"
+                    />
+                  </div>
+                  <div class="expand-item">
+                    <div class="expand-label">随 Banner 到期 expire_with_banner</div>
+                    <el-select
+                      :model-value="row.lifecycle?.expire_with_banner || ''"
+                      size="small"
+                      clearable
+                      placeholder="选择 Banner（空=用绝对时间）"
+                      style="width: 100%"
+                      @change="(v) => setLifecycle(row, 'expire_with_banner', v || undefined)"
+                    >
+                      <el-option v-for="bid in bannerIds" :key="bid" :label="bid" :value="bid" />
+                    </el-select>
+                  </div>
+                  <div class="expand-item">
+                    <div class="expand-label">到期行为 on_expire</div>
+                    <el-radio-group :model-value="lifecycleMode(row)" size="small" @change="(v) => setLifecycleMode(row, v)">
+                      <el-radio-button value="none">保留</el-radio-button>
+                      <el-radio-button value="clear">清零</el-radio-button>
+                      <el-radio-button value="convert">转换</el-radio-button>
+                    </el-radio-group>
+                    <div v-if="lifecycleMode(row) === 'convert'" class="expand-sub">
+                      <el-input :model-value="row.lifecycle?.on_expire?.convert_to" size="small" placeholder="转换目标资源 ID" style="width: 150px" @change="(v) => setLifecycle(row, 'convert_to', v)" />
+                      <el-input-number :model-value="row.lifecycle?.on_expire?.rate" size="small" :precision="2" :min="0" :controls="false" placeholder="汇率" style="width: 90px" @change="(v) => setLifecycle(row, 'rate', v)" />
+                    </div>
+                  </div>
+                </div>
+                <div class="expand-note">P77 落地时 resource_lifecycle 段建模后，此处编辑随配置持久化；当前为布局预留。</div>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="资源 ID" min-width="140">
             <template #default="{ row }"><el-input v-model="row.key" size="small" /></template>
           </el-table-column>
@@ -79,7 +133,7 @@
         <el-button size="small" class="sub-btn" @click="addGainRule">+ 添加获取规则</el-button>
 
         <!-- 逐日额外获取（[[resources.day_overrides]]：指定天累加资源获取——引擎语义是「累加」不是覆盖）-->
-        <div class="sub-title">逐日额外获取（{{ (data.dayOverrides || []).length }}）</div>
+        <div class="sub-title sub-title-gap">逐日额外获取（{{ (data.dayOverrides || []).length }}）</div>
         <el-table :data="data.dayOverrides || []" size="small">
           <el-table-column label="天数" width="110">
             <template #default="{ row }">
@@ -97,12 +151,58 @@
             </template>
           </el-table-column>
         </el-table>
-        <el-button size="small" class="sub-btn" @click="addDayOverride">+ 添加逐日额外</el-button>
+        <el-button size="small" class="sub-btn" @click="addDayOverride">+ 添加获取规则</el-button>
       </template>
 
       <!-- ══ 卡片/权重/目标卡：聚合条目表格（每行一个条目，字段塞一行）══ -->
       <template v-else-if="isTableType">
-        <el-table :data="data.entries" size="small" highlight-current-row @current-change="onCardSelect">
+        <el-table
+          ref="entryTableRef"
+          :data="data.entries"
+          size="small"
+          highlight-current-row
+          @row-click="onRowClick"
+          @expand-change="onExpandChange"
+        >
+          <!-- 卡片：行展开列（点击行 → 展开 tag/多值tag/溢出分段，行互斥手风琴）-->
+          <el-table-column v-if="type === 'card'" type="expand" width="34">
+            <template #default="{ row }">
+              <div class="row-expand" @click.stop>
+                <div class="expand-title">「{{ row.card_id || '未命名' }}」扩展配置</div>
+                <div class="expand-grid">
+                  <div class="expand-item">
+                    <div class="expand-label">标签 tag（单值）</div>
+                    <el-input :model-value="tagsText(row.tags)" size="small" placeholder="key:value, key:value" @change="(v) => parseTags(row, 'tags', v)" />
+                  </div>
+                  <div class="expand-item">
+                    <div class="expand-label">多值标签 list_tags</div>
+                    <el-input :model-value="listTagsText(row.list_tags)" size="small" placeholder="key:v1,v2; key2:v1" @change="(v) => parseListTags(row, 'list_tags', v)" />
+                  </div>
+                  <div class="expand-item expand-wide">
+                    <div class="expand-label">溢出分段 overflow_bands（满突溢出）</div>
+                    <el-table :data="row.overflow_bands || []" size="small">
+                      <el-table-column label="区间 [min, max]" min-width="170">
+                        <template #default="{ row: b }">
+                          <el-input :model-value="rangeText(b.range)" size="small" placeholder="1-7 或 8-inf" @change="(v) => parseRange(b, v)" />
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="资源 (key:num)" min-width="200">
+                        <template #default="{ row: b }">
+                          <el-input :model-value="resourcesText(b.resources)" size="small" placeholder="yellow_cert:1, ..." @change="(v) => parseResources(b, v)" />
+                        </template>
+                      </el-table-column>
+                      <el-table-column width="50" align="center">
+                        <template #default="{ row: b }">
+                          <el-button size="small" text type="danger" @click="removeBandFrom(row.overflow_bands, b)">×</el-button>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                    <el-button size="small" text type="primary" class="sub-btn" @click="addBandToRow(row)">+ 溢出段</el-button>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column v-for="col in entryCols" :key="col.key" :label="col.label" :min-width="col.minWidth">
             <template #default="{ row }">
               <el-input v-if="col.type === 'text'" v-model="row[col.key]" size="small" />
@@ -156,29 +256,6 @@
           </el-table-column>
         </el-table>
         <el-button size="small" class="sub-btn" @click="addEntryRow">+ 添加{{ meta.label }}</el-button>
-
-        <!-- 卡片溢出分段（card.overflow_bands）：选中行编辑（满突溢出）-->
-        <div v-if="type === 'card' && selectedCard" class="sub-section">
-          <div class="sub-title">「{{ selectedCard.card_id || '未命名' }}」溢出分段（overflow_bands）</div>
-          <el-table :data="selectedCard.overflow_bands || []" size="small">
-            <el-table-column label="区间 [min, max]" min-width="170">
-              <template #default="{ row }">
-                <el-input :model-value="rangeText(row.range)" size="small" placeholder="1-7 或 8-inf" @change="(v) => parseRange(row, v)" />
-              </template>
-            </el-table-column>
-            <el-table-column label="资源 (key:num)" min-width="200">
-              <template #default="{ row }">
-                <el-input :model-value="resourcesText(row.resources)" size="small" placeholder="yellow_cert:1, ..." @change="(v) => parseResources(row, v)" />
-              </template>
-            </el-table-column>
-            <el-table-column width="50" align="center">
-              <template #default="{ row }">
-                <el-button size="small" text type="danger" @click="removeBandFrom(selectedCard.overflow_bands, row)">×</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-button size="small" text type="primary" class="sub-btn" @click="addCardBand">+ 溢出段</el-button>
-        </div>
       </template>
 
       <!-- ══ 稀有度块：层级标签编辑（el-select 多选 + 输入即添加）══ -->
@@ -459,8 +536,9 @@ const props = defineProps({
   poolIds: { type: Array, default: () => [] },   // 全限定池 ID（{banner}.{pool}），供绑定池/目标卡下拉
   bannerIds: { type: Array, default: () => [] }, // banner ID，供「适用 Banner」下拉
   cardPools: { type: Object, default: () => ({}) }, // card_id → 全限定池 ID[]（目标卡关联池只读解析）
+  expanded: { type: Boolean, default: true },   // 受控折叠（父级手风琴）
 })
-const emit = defineEmits(['copy', 'remove', 'change', 'locate', 'move'])
+const emit = defineEmits(['copy', 'remove', 'change', 'locate', 'move', 'toggle-head'])
 
 // 快照比较：只在值真正变化时 emit，打破双向同步死循环（与 ConfigBlock 同模式）
 let lastSnap = JSON.stringify(props.data)
@@ -507,8 +585,7 @@ function targetPoolsText(row) {
   return (row.pool_ids || []).length ? row.pool_ids.join(', ') + '（未在任意池奖励中匹配）' : '（未在任意池奖励中匹配）'
 }
 
-// 块默认展开。初次打开配置页的渲染开销由 App 启动后预渲染消除。
-const expanded = ref(true)
+// 块展开状态由父级受控（手风琴互斥），此组件不再自持 expanded。
 
 const META = {
   resource_defs:  { label: '资源定义',     global: false },
@@ -553,8 +630,7 @@ const ENTRY_COLS = {
     { key: 'name', label: '名称', type: 'text', minWidth: 100 },
     { key: 'rarity', label: '稀有度', type: 'text', minWidth: 70 },
     { key: 'initial_count', label: '初始持有', type: 'number', minWidth: 90 },
-    { key: 'tags', label: '标签', type: 'tags', minWidth: 150 },
-    { key: 'list_tags', label: '多值标签', type: 'listtags', minWidth: 170 },
+    // 标签/多值标签/溢出分段已移至「行展开」（点击行查看，避免表格列拥挤）
   ],
   weight: [
     { key: 'card_id', label: '卡ID', type: 'text', minWidth: 140 },
@@ -586,11 +662,57 @@ function removeEntryRow(row) {
   props.data.entries.splice(props.data.entries.indexOf(row), 1)
 }
 
-// ── 卡片溢出分段（card.overflow_bands）/ 稀有度溢出默认（rarity_defaults）──
-const selectedCard = ref(null)
-function onCardSelect(row) {
-  if (props.type === 'card') selectedCard.value = row
+// ── 表格行 = 单元：点击行展开/收起（行互斥手风琴；仅卡片行有扩展详情）──
+const entryTableRef = ref(null)
+function onRowClick(row, column, event) {
+  if (props.type !== 'card' && props.type !== 'resource_defs') return
+  if (column && (column.type === 'expand' || column.type === 'selection')) return
+  // 点输入框内部不展开（编辑字段）
+  if (event && event.target && event.target.closest && event.target.closest('input, textarea, .el-select, .el-input-number')) return
+  entryTableRef.value?.toggleRowExpansion(row)
 }
+function addBandToRow(row) {
+  if (!Array.isArray(row.overflow_bands)) row.overflow_bands = []
+  row.overflow_bands.push({ range: [1, 1], resources: {} })
+}
+function onExpandChange(row, expandedRows) {
+  // 行互斥手风琴：展开一行时收起其余行（同块内同时只看一个）
+  if ((props.type !== 'card' && props.type !== 'resource_defs') || expandedRows.length <= 1) return
+  const current = expandedRows[expandedRows.length - 1]
+  if (current === row) {
+    for (const other of expandedRows) {
+      if (other !== row) entryTableRef.value?.toggleRowExpansion(other, false)
+    }
+  }
+}
+
+// ── 资源生命周期（P77 预留编辑位：resource_lifecycle 建模后随配置持久化）──
+function lifecycleMode(row) {
+  const o = row.lifecycle?.on_expire
+  if (!o) return 'none'
+  if (o.clear === true) return 'clear'
+  if (o.convert_to) return 'convert'
+  return 'none'
+}
+function setLifecycleMode(row, mode) {
+  if (!row.lifecycle) row.lifecycle = {}
+  if (mode === 'none') { row.lifecycle.on_expire = undefined; return }
+  if (mode === 'clear') { row.lifecycle.on_expire = { clear: true }; return }
+  row.lifecycle.on_expire = { convert_to: row.lifecycle.on_expire?.convert_to || '', rate: row.lifecycle.on_expire?.rate ?? 1 }
+}
+function setLifecycle(row, key, v) {
+  if (!row.lifecycle) row.lifecycle = {}
+  if (key === 'expire_at' && v === undefined) { delete row.lifecycle.expire_at; return }
+  if (key === 'expire_with_banner' && v === undefined) { delete row.lifecycle.expire_with_banner; return }
+  if (key === 'convert_to' || key === 'rate') {
+    row.lifecycle.on_expire = row.lifecycle.on_expire || {}
+    row.lifecycle.on_expire[key] = v
+    return
+  }
+  row.lifecycle[key] = v
+}
+
+// ── 稀有度溢出默认（rarity_defaults）/ 卡片溢出分段 共用工具 ──
 function rangeText(range) {
   const r = range || [1, 1]
   const hi = r[1] === 'inf' || r[1] === Infinity || r[1] == null ? '∞' : String(r[1])
@@ -613,11 +735,6 @@ function parseResources(row, text) {
     if (m) obj[m[1].trim()] = Number(m[2])
   }
   row.resources = Object.keys(obj).length ? obj : {}
-}
-function addCardBand() {
-  if (!selectedCard.value) return
-  if (!Array.isArray(selectedCard.value.overflow_bands)) selectedCard.value.overflow_bands = []
-  selectedCard.value.overflow_bands.push({ range: [1, 1], resources: {} })
 }
 function addBandTo(rd) {
   if (!Array.isArray(rd.overflow_bands)) rd.overflow_bands = []
@@ -981,6 +1098,10 @@ const pityExtraKeys = computed(() => Object.keys(pityExtra.value))
   background: var(--el-color-primary);
   flex-shrink: 0;
 }
+/* 非子面板开头（紧随上方的添加按钮）的标题：把负上边距改正，避免标题压住按钮 */
+.sub-title-gap {
+  margin-top: 4px;
+}
 .sub-btn {
   margin-top: 6px;
 }
@@ -1058,6 +1179,46 @@ const pityExtraKeys = computed(() => Object.keys(pityExtra.value))
 .rc-wrap {
   flex: 1;
   min-width: 0;
+}
+/* 表格行展开内容（卡片 tag/溢出 等扩展字段） */
+.row-expand {
+  padding: 6px 8px;
+  background: #fafbfc;
+}
+.expand-title {
+  font-size: 11px;
+  color: var(--gsc-text-muted);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.expand-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 8px;
+}
+.expand-item {
+  border: 1px solid var(--gsc-border);
+  background: #fff;
+  padding: 6px;
+}
+.expand-wide {
+  grid-column: 1 / -1;
+}
+.expand-label {
+  font-size: 11px;
+  color: var(--gsc-text-muted);
+  margin-bottom: 4px;
+}
+.expand-sub {
+  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.expand-note {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--gsc-text-faint);
 }
 .rank-row {
   display: flex;

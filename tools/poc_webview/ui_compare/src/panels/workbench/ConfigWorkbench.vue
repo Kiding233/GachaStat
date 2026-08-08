@@ -14,8 +14,9 @@
       <el-button v-for="e in entityTypes" :key="e.type" size="small" @click="addBlock(e.type)">{{ e.label }}</el-button>
       <span class="toolbar-divider"></span>
       <el-button v-for="g in globalTypes" :key="g.type" size="small" :disabled="isSingletonPresent(g.type)" @click="addBlock(g.type)">{{ g.label }}</el-button>
-      <!-- 工具栏最右侧：配置可视化预览（时间线 / 日历）-->
+      <!-- 工具栏最右侧：折叠全部 / 配置可视化预览（时间线 / 日历）-->
       <span class="toolbar-spacer"></span>
+      <el-button v-if="!isSearch" size="small" @click="collapseAllBlocks">全部折叠</el-button>
       <el-button v-if="!isSearch" size="small" type="info" @click="previewDlg = true">预览</el-button>
     </div>
 
@@ -71,6 +72,8 @@
               v-if="element.type === 'banner'"
               :pages="pages"
               :data="element.data"
+              :expanded="isBlockExpanded(element)"
+              @toggle-head="() => toggleBlock(element)"
               @change="onBlockChange"
               @copy="copyBlock(element)"
               @remove="removeBlock(element)"
@@ -99,6 +102,8 @@
               :pool-ids="allPoolIds"
               :banner-ids="allBannerIds"
               :card-pools="allCardPools"
+              :expanded="isBlockExpanded(element)"
+              @toggle-head="() => toggleBlock(element)"
               @change="onBlockChange"
               @copy="copyBlock(element)"
               @remove="removeBlock(element)"
@@ -299,6 +304,12 @@ function onTextChange() {
       }
       persistPages()
     }
+    // 添加块：新块默认展开（便于立即编辑）——仅 addBlock 触发的解析（_addPendingPage 非空）
+    if (_addPendingPage !== null && blocks.value.length > _addPageBefore) {
+      for (let i = _addPageBefore; i < blocks.value.length; i++) {
+        foldState[foldKey(blocks.value[i])] = true
+      }
+    }
     _addPendingPage = null
   } catch (e) {
     parseError.value = '解析失败：' + e.message
@@ -344,6 +355,44 @@ function blockIdentity(b) {
 // 拖拽排序：唯一 key + 页内拖拽映射回全局顺序
 function dragKey(b) {
   return `${b.type}:${blockIdentity(b)}`
+}
+
+// ── 块手风琴折叠（块头点击互斥展开；默认按类型分工：纯表常开、实例折叠、资源定义按内容自适应）──
+// 类型分工（对齐旧 UI「卡池/保底/累抽逐个编辑，其余整表」）：
+//   实例型（banner/pity/milestone/resource_gains）→ 默认折叠成一行头，页内一览
+//   聚合表型（card/weight/target/rarity/strategy）→ 默认常开整表（行里没有装不下的内容）
+//   resource_defs → 出现扩展内容（P77 生命周期等）时折叠，否则常开
+const EXPAND_DEFAULT = {
+  banner: false, pity: false, milestone: false, resource_gains: false,
+  card: true, weight: true, target: true, rarity: true, strategy: true,
+}
+const foldState = reactive({})   // 折叠键 → expanded（用户手动切换后覆盖默认）
+// 折叠键：有身份用 dragKey；无身份（资源定义等）用类型+序号，避免多块同键互踩
+function foldKey(b) {
+  const id = blockIdentity(b)
+  return id ? dragKey(b) : `${b.type}:${blocks.value.indexOf(b)}`
+}
+function defaultExpanded(b) {
+  if (b.type === 'resource_defs') {
+    const hasDetail = (b.data.entries || []).some((e) => e.lifecycle !== undefined && e.lifecycle !== null)
+    return !hasDetail
+  }
+  return EXPAND_DEFAULT[b.type] !== false
+}
+function isBlockExpanded(b) {
+  const k = foldKey(b)
+  return foldState[k] !== undefined ? foldState[k] : defaultExpanded(b)
+}
+function toggleBlock(b) {
+  const k = foldKey(b)
+  // 同页其余块收起（手风琴：同时只看一个）
+  for (const o of visibleBlocks.value) {
+    if (o !== b && o.type !== '_raw') foldState[foldKey(o)] = false
+  }
+  foldState[k] = !isBlockExpanded(b)
+}
+function collapseAllBlocks() {
+  for (const b of blocks.value) foldState[foldKey(b)] = false
 }
 
 // ── 自由分页：页是块的分组容器（默认「全局配置」页，可新建/命名/删除，块可移入页）──

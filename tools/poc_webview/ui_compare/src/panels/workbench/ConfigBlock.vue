@@ -1,7 +1,7 @@
 <template>
   <div class="cfg-block" :class="{ open: expanded }">
     <!-- 块头：折叠 + 类型 + 名称 + 复制/删除 -->
-    <div class="cfg-block-head" @click="expanded = !expanded">
+    <div class="cfg-block-head" @click="emit('toggle-head')">
       <span class="drag-handle" @click.stop title="拖拽排序">⠿</span>
       <span class="arrow">{{ expanded ? '▾' : '▸' }}</span>
       <span class="block-type">Banner</span>
@@ -187,8 +187,12 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 
-const props = defineProps({ data: { type: Object, required: true }, pages: { type: Array, default: () => [] } })
-const emit = defineEmits(['copy', 'remove', 'change', 'locate', 'move'])
+const props = defineProps({
+  data: { type: Object, required: true },
+  pages: { type: Array, default: () => [] },
+  expanded: { type: Boolean, default: true },   // 受控折叠（父级手风琴）
+})
+const emit = defineEmits(['copy', 'remove', 'change', 'locate', 'move', 'toggle-head'])
 
 // 块内表单编辑 → 通知父级写回文本（渲染器双向）。
 // 用快照比较：只在数据值真正变化时 emit，避免父级 parse 重建 data 引发的死循环。
@@ -200,9 +204,6 @@ watch(() => props.data, (val) => {
     emit('change')
   }
 }, { deep: true })
-
-// 块默认展开（配置打开即见完整内容）。初次打开配置页的渲染开销由 App 启动后预渲染消除。
-const expanded = ref(true)
 
 const enabled = computed({
   get: () => props.data.enabled ?? true,

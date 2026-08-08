@@ -338,7 +338,6 @@ class RetreatPanel(QWidget):
             analysis = result["analysis"]
             pool_specs = result["pool_specs"]
             ridge_fig = result.get("ridge_fig")
-            pool_names = result["pool_names"]
 
             summary = f"总体失败率: {analysis.overall_failure_rate:.1%}"
             # P51: 单调性/回退状态栏警告（合并计数，避免多池撑大状态栏）
@@ -364,12 +363,14 @@ class RetreatPanel(QWidget):
                 charts["总览"] = ridge_fig
 
             for pr in analysis.pool_results:
-                pname = pool_names.get(pr.pool_id, pr.pool_id)
+                # P72 ISSUE-121：charts 存储键用 banner_id（pr.pool_id）保证唯一——
+                # 显示名（pool_names）仅供单池图标题（L103）；若以显示名作键，
+                # 两个同名 banner（如两个「角色UP」）会互相覆盖、一个图静默丢失
                 spec_data = pool_specs.get(pr.pool_id, {})
 
                 combined_fig = spec_data.get("combined_figure") if isinstance(spec_data, dict) else None
                 if combined_fig is not None:
-                    charts[pname] = combined_fig
+                    charts[pr.pool_id] = combined_fig
 
             if charts:
                 self.chart_webview.set_charts(charts)

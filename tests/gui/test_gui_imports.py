@@ -19,6 +19,7 @@ GUI_MODULES = [
     'gacha_simulator.gui.plan_search_panel',
     'gacha_simulator.gui.process_analysis_panel',
     'gacha_simulator.gui.comparison_analysis_panel',
+    'gacha_simulator.gui.utils',  # P72（ISSUE-103 stage-1 P72-utils-2）：banner_of 共用辅助模块
 ]
 
 

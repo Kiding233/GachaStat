@@ -40,13 +40,13 @@ ANALYSIS_CATEGORIES = {
         ('per_pool_draws', '每池抽卡数统计'),
         ('per_pool_target_rate', '每池目标卡数'),
         ('per_pool_pity_rate', '每池保底数'),
-        ('cumulative_by_pool', '截止每池的GDR分布'),
+        ('cumulative_by_banner', '截止每 banner 的GDR分布'),
         ('transition_analysis', '转变分析'),
     ],
 }
 
 
-_EXPANDABLE_KEYS = {'gdr_dist', 'risk_worst_case', 'risk_best_case', 'conditional_dist', 'transition_analysis', 'cumulative_by_pool', 'success_rate'}
+_EXPANDABLE_KEYS = {'gdr_dist', 'risk_worst_case', 'risk_best_case', 'conditional_dist', 'transition_analysis', 'cumulative_by_banner', 'success_rate'}
 
 # 渲染顺序：按 ANALYSIS_CATEGORIES 中定义的出现顺序排列图表
 _CHART_DISPLAY_ORDER: dict[str, int] = {}
@@ -234,7 +234,7 @@ class AnalysisWorker(QThread):
             ('waterfall_3d', '3D瀑布图'),
             ('waterfall_2d', '2D压缩瀑布图'),
             ('per_pool_draws', '每池分析'),
-            ('cumulative_by_pool', '截止每池的GDR分布'),
+            ('cumulative_by_banner', '截止每 banner 的GDR分布'),
             ('transition_analysis', '转变分析'),
             ('correlation', '相关性分析'),
             ('success_rate', '成功率分析'),
@@ -1086,10 +1086,10 @@ class AnalysisWorker(QThread):
 
             step_done('每池分析')
 
-        if 'cumulative_by_pool' in self.selected and self.cumulative_by_pool_selections and self.pool_end_times:
-            self._emit('生成截止每池的GDR分布...', int(completed / total_steps * 100))
+        if 'cumulative_by_banner' in self.selected and self.cumulative_by_pool_selections and self.pool_end_times:
+            self._emit('生成截止每 banner 的GDR分布...', int(completed / total_steps * 100))
             if not self.cumulative_snapshots:
-                step_done('截止每池的GDR分布')
+                step_done('截止每 banner 的GDR分布')
             else:
                 pool_ids = sorted(self.cumulative_snapshots.keys())
                 short_ids = [_strip_pid(pid) for pid in pool_ids]
@@ -1177,7 +1177,7 @@ class AnalysisWorker(QThread):
                             _ridge_hints["bin_edges"] = _ridge_bins.bin_edges
                         elif _ridge_bins._extra.get("nbins"):
                             _ridge_hints["nbins"] = _ridge_bins._extra["nbins"]
-                        charts[f'cumulative_by_pool_{metric_name}'] = ChartSpec(
+                        charts[f'cumulative_by_banner_{metric_name}'] = ChartSpec(
                             chart_type="ridge",
                             data=RidgeData(series=ridge_series, baselines=ridge_baselines,
                                            labels=ridge_labels),
@@ -1928,7 +1928,7 @@ class AnalysisPanel(QWidget):
 
                         self._on_success_rate_gdr_changed(0)
 
-                    if key == 'cumulative_by_pool':
+                    if key == 'cumulative_by_banner':
                         cum_widget = QWidget()
                         cum_layout = QVBoxLayout(cum_widget)
                         cum_layout.setContentsMargins(0, 0, 0, 0)
@@ -2135,7 +2135,7 @@ class AnalysisPanel(QWidget):
         if key.startswith('gdr_dist_') or key == 'gdr_dist':
             sel = self._get_gdr_dist_selections()
             cond['gdr_dist_selections'] = frozenset((k, frozenset(v)) for k, v in sel.items())
-        if key.startswith('cumulative_by_pool_') or key == 'cumulative_by_pool':
+        if key.startswith('cumulative_by_banner_') or key == 'cumulative_by_banner':
             cond['cumulative_by_pool_selections'] = frozenset(self._get_cumulative_by_pool_selections())
         cond['use_draw_units'] = self.draw_unit_cb.isChecked()
         cond['cost_per_draw'] = self.cost_per_draw_spin.value()
@@ -2272,8 +2272,8 @@ class AnalysisPanel(QWidget):
 
             if any(k.startswith('gdr_dist_') for k in charts):
                 self._computed_conditions['gdr_dist'] = self._get_conditions_for_key('gdr_dist')
-            if any(k.startswith('cumulative_by_pool_') for k in charts):
-                self._computed_conditions['cumulative_by_pool'] = self._get_conditions_for_key('cumulative_by_pool')
+            if any(k.startswith('cumulative_by_banner_') for k in charts):
+                self._computed_conditions['cumulative_by_banner'] = self._get_conditions_for_key('cumulative_by_banner')
             if any(k.startswith('risk_worst_case_') for k in charts):
                 self._computed_conditions['risk_worst_case'] = self._get_conditions_for_key('risk_worst_case')
             if any(k.startswith('risk_best_case_') for k in charts):
@@ -2415,6 +2415,9 @@ class AnalysisPanel(QWidget):
         扩展键（如 gdr_dist_xxx）排在父键（如 gdr_dist）附近。
         未在 CATEGORIES 中出现的键排在末尾。
         """
+        # P72 ISSUE-105：重命名 cumulative_by_pool_ → cumulative_by_banner_ 后清理旧前缀缓存键，
+        # 防止旧键经下方「未匹配键」段排在尾部呈无名图表（消费侧重建不等价于产键侧清理）
+        self._prune_legacy_cumulative_keys()
         cache = self._chart_specs_cache
         if not cache:
             return {}
@@ -2433,6 +2436,16 @@ class AnalysisPanel(QWidget):
             if k not in seen:
                 ordered[k] = cache[k]
         return ordered
+
+    def _prune_legacy_cumulative_keys(self):
+        """P72 ISSUE-105：清理旧前缀缓存键（cumulative_by_pool_ → cumulative_by_banner_）。
+
+        改名后若同进程残留旧前缀键（长驻会话/热更新），_get_ordered_charts 会将其当
+        「未匹配键」排在尾部呈无名图表；此处从产键侧缓存删除（幂等）。
+        """
+        legacy = [k for k in self._chart_specs_cache if k.startswith('cumulative_by_pool_')]
+        for k in legacy:
+            del self._chart_specs_cache[k]
 
 
     # -- P43: 成功率分析槽函数 --

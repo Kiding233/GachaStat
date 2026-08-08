@@ -98,7 +98,7 @@ class ProcessAnalysisPanel(QWidget):
 
         gdr_layout.addWidget(QLabel("池子GDR方式"))
         self.pool_gdr_mode = QComboBox()
-        self.pool_gdr_mode.addItem("截止到该池（累积）", "cumulative")
+        self.pool_gdr_mode.addItem("截止到该 banner（累积）", "cumulative")  # P72 ISSUE-005：累积语义为 banner 段
         self.pool_gdr_mode.addItem("仅该池（单池）", "single_pool")
         gdr_layout.addWidget(self.pool_gdr_mode)
 

@@ -872,3 +872,57 @@ class TestObtainablePermanentBanner:
         store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)])
         result = filter_target_specs_by_obtainable({'ssr_a': 1}, store, final_time=100.0)
         assert result == {'ssr_a': 1}, f'永久 Banner 目标卡应可达，实际 {result}'
+
+
+def test_p72_mixed_draws_cross_banner_key_integrity():
+    """P72 §4.3 首条：混合抽卡跨 banner 真实模拟——累积快照/脆弱性结果键均为 banner 级。
+
+    确定性键修复（P72 §4.1）在真实模拟下生效：WorkerLocalExtractor 并行路径累积快照键
+    （banner 级，经 merge 聚合）与 compute_vulnerability_analysis pool_results 键
+    （banner 级）均不含 '.'；累积消费端 banner 段取数不崩溃。
+    """
+    from gacha_simulator.core.vulnerability import compute_vulnerability_analysis
+    from gacha_simulator.gui.process_analysis_panel import ProcessAnalysisPanel
+
+    store = _make_store(
+        banners=[
+            BannerEntry(id='b1', name='周年庆', available_from=0.0, available_until=10 * DAY,
+                        pools=[
+                            _pool('main', rewards=[
+                                _reward('t1', 30.0, 'SSR', featured=True), _reward('r1', 70.0, 'R')]),
+                            _pool('step1', rewards=[
+                                _reward('t1', 30.0, 'SSR', featured=True), _reward('r1', 70.0, 'R')]),
+                        ]),
+            BannerEntry(id='b2', name='武器特选', available_from=10 * DAY, available_until=20 * DAY,
+                        pools=[_pool('main', rewards=[
+                            _reward('t2', 30.0, 'SSR', featured=True), _reward('r2', 70.0, 'R')])]),
+        ],
+        target_cards=[
+            TargetCardEntry(card_id='t1', quantity=1),
+            TargetCardEntry(card_id='t2', quantity=1),
+        ],
+        initial={'draw_resource': 5000},
+    )
+    batch = _run(store, num=8, seed=42)
+
+    # 累积快照键 banner 级（并行路径 + merge）
+    cum = (batch.extraction or {}).get('cumulative_snapshots', {}) if batch.extraction else {}
+    assert cum, '混合抽卡应产出累积快照'
+    for pid in cum:
+        assert '.' not in pid, f'累积快照键应为 banner 级，got {pid}'
+
+    # 累积消费端 banner 段取数不崩溃（真实模拟快照）
+    panel = ProcessAnalysisPanel.__new__(ProcessAnalysisPanel)
+    panel._cumulative_snapshots = cum
+    first_pid = next(iter(cum))
+    panel._compute_pool_gdr(
+        'cumulative', None, f'{first_pid}.main', 0, {'t1': 1, 't2': 1}, 'all_targets',
+        ssr_ids=set(), weapon_character_map=None, initial_resources={'draw_resource': 5000},
+    )
+
+    # 脆弱性结果键 banner 级
+    analysis = compute_vulnerability_analysis(
+        [r.to_dict() if hasattr(r, 'to_dict') else r for r in batch.results],
+        {'t1': 1, 't2': 1}, gdr_key='all_targets', gdr_threshold=1.0, alpha=0.5)
+    for pr in analysis.pool_results:
+        assert '.' not in pr.pool_id, f'脆弱性 pool_id 应为 banner 级，got {pr.pool_id}'

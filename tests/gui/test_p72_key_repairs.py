@@ -189,6 +189,37 @@ class TestCumulativeByBannerRename:
         assert 'cumulative_by_banner_y' in ordered
         assert 'gdr_dist_z' in ordered
 
+    def test_categories_key_is_banner(self):
+        """ISSUE-108(1)：ANALYSIS_CATEGORIES/_EXPANDABLE_KEYS 的累积项键改为 cumulative_by_banner，
+        无旧 cumulative_by_pool 残留。"""
+        from gacha_simulator.gui.analysis_panel import ANALYSIS_CATEGORIES, _EXPANDABLE_KEYS
+
+        all_keys = [k for items in ANALYSIS_CATEGORIES.values() for k, _ in items]
+        assert 'cumulative_by_banner' in all_keys
+        assert 'cumulative_by_pool' not in all_keys
+        assert 'cumulative_by_banner' in _EXPANDABLE_KEYS
+
+    def test_needs_computation_initial_true(self):
+        """ISSUE-108(2)：未计算过 → 需要重算（不恒 False）。"""
+        panel = AnalysisPanel.__new__(AnalysisPanel)
+        panel._computed_conditions = {}
+        panel._get_conditions_for_key = lambda key: {'k': key}
+        assert panel._needs_computation('cumulative_by_banner_x') is True
+
+    def test_needs_computation_no_recompute_when_unchanged(self):
+        """ISSUE-108(2)：条件未变 → 不需重算（不恒 True）。"""
+        panel = AnalysisPanel.__new__(AnalysisPanel)
+        panel._computed_conditions = {'cumulative_by_banner_x': {'k': 'x'}}
+        panel._get_conditions_for_key = lambda key: {'k': 'x'}
+        assert panel._needs_computation('cumulative_by_banner_x') is False
+
+    def test_needs_computation_recompute_when_condition_changed(self):
+        """ISSUE-123(2')：勾选指标变化（条件变化）→ 必须重算——防恒 False 导致勾选后静默不更新。"""
+        panel = AnalysisPanel.__new__(AnalysisPanel)
+        panel._computed_conditions = {'cumulative_by_banner_x': {'k': 'x'}}
+        panel._get_conditions_for_key = lambda key: {'k': 'y'}  # 勾选变化 → 条件变化
+        assert panel._needs_computation('cumulative_by_banner_x') is True
+
 
 class TestAnalysisPoolNamesBannerLayer:
     """项 3d（ISSUE-701）：analysis_panel._get_pool_names 补 banner 层。
@@ -215,3 +246,139 @@ class TestAnalysisPoolNamesBannerLayer:
         names = self._names()
         assert names['b1.main'] == '周年庆.main'  # 多池区分 label 保留
         assert names['c2'] == '武器特选'
+
+
+def _make_gdr_ctx():
+    from gacha_simulator.core.gdr import GDRContext
+    return GDRContext(
+        target_specs={'card_A': 1},
+        ssr_ids={'card_A'},
+        all_drawable_ids=['card_A'],
+        initial_resources={'draw_resource': 1000},
+        resource_gain_per_day={},
+    )
+
+
+class TestPerPoolAnalysisBannerKeys:
+    """ISSUE-106 第二部分：per_pool_analysis 两产键方返回键均为 banner 级。"""
+
+    def test_compute_cumulative_snapshots_banner_keys(self):
+        from gacha_simulator.core.info_vector import InfoVector
+        from gacha_simulator.core.per_pool_analysis import compute_cumulative_snapshots
+
+        history = [
+            InfoVector('draw', 'card_A', 'b1.main', real_time_after=5.0,
+                       resources_consumed={'draw_resource': 160}),
+            InfoVector('draw', 'card_A', 'b2.main', real_time_after=15.0,
+                       resources_consumed={'draw_resource': 160}),
+        ]
+        pool_end_times = {'b1': 10.0, 'b2': 20.0}
+        snaps = compute_cumulative_snapshots(history, _make_gdr_ctx(), pool_end_times)
+        assert [s.pool_id for s in snaps] == ['b1', 'b2']  # 键为 banner 级
+        for s in snaps:
+            assert '.' not in s.pool_id
+
+    def test_cumulative_gdr_at_pool_ends_banner_keys(self):
+        from gacha_simulator.core.per_pool_analysis import (
+            CumulativeSnapshot, cumulative_gdr_at_pool_ends,
+        )
+
+        snap = CumulativeSnapshot(
+            pool_id='b1', pool_end_time=10.0, cumulative_draws=10,
+            cumulative_target_cards=1, cumulative_pity_draws=0,
+            cumulative_resources_consumed={'draw_resource': 1600},
+            target_achievement_rate=1.0, ssr_collection_rate=1.0,
+            resource_remaining=100.0,
+        )
+        result = cumulative_gdr_at_pool_ends({'b1': [snap], 'b2': []})
+        assert set(result.keys()) == {'b1'}  # 空 snaps 跳过，键为 banner 级
+
+
+def test_parallel_vs_single_thread_snapshot_equiv():
+    """ISSUE-104：并行（WorkerLocalExtractor + merge_extraction_packets）与单线程
+    （DrawSequenceExtractor）两条路径累积快照键均为 banner 级，累积消费端
+    _compute_pool_gdr 在两条路径下行为等价（ISSUE-130 单线程分支不得跳过）。
+    """
+    from gacha_simulator.core.result_types import CompactResult
+    from gacha_simulator.core.streaming import (
+        WorkerLocalExtractor, merge_extraction_packets, DrawSequenceExtractor,
+    )
+    from gacha_simulator.gui.process_analysis_panel import ProcessAnalysisPanel
+
+    pool_end_times = {'b1': 10.0, 'b2': 20.0}
+    target_specs = {'card_A': 1}
+
+    def make_compact(pool_ids, card_ids, times, res):
+        return CompactResult(
+            draw_pool_ids=pool_ids, draw_card_ids=card_ids, draw_times=times,
+            draw_pity=[False] * len(pool_ids), draw_pity_names=[''] * len(pool_ids),
+            draw_pity_counter_max=[0] * len(pool_ids),
+            draw_resources_consumed=[{'draw_resource': 160}] * len(pool_ids),
+            draw_resources_gained=[{}] * len(pool_ids),
+            banner_end_resources=res,
+        )
+
+    compacts = [
+        make_compact(['b1', 'b2'], ['card_A', 'card_A'], [5.0, 15.0],
+                     {'b1': {'draw_resource': 500}, 'b2': {'draw_resource': 400}}),
+        make_compact(['b1', 'b2'], ['card_A', 'other'], [3.0, 18.0],
+                     {'b1': {'draw_resource': 500}, 'b2': {'draw_resource': 400}}),
+    ]
+
+    # 并行路径：WorkerLocalExtractor.process(dict) → merge 按 pool_id 聚合
+    worker = WorkerLocalExtractor(pool_end_times=pool_end_times,
+                                  target_ids={'card_A'}, target_specs=target_specs)
+    packets = [worker.process(c.to_dict()) for c in compacts]
+    par = merge_extraction_packets(packets)['cumulative_snapshots']
+
+    # 单线程路径：DrawSequenceExtractor.on_result(CompactResult)
+    extractor = DrawSequenceExtractor(max_keep=10, pool_end_times=pool_end_times,
+                                      target_ids={'card_A'}, target_specs=target_specs)
+    for c in compacts:
+        extractor.on_result(c)
+    single = extractor.get_cumulative_snapshots()
+
+    # 键均为 banner 级（无 '.'）
+    assert set(par.keys()) == {'b1', 'b2'}
+    assert set(single.keys()) == {'b1', 'b2'}
+    for pid in par:
+        assert '.' not in pid
+    for pid in single:
+        assert '.' not in pid
+
+    # 消费端行为等价：_compute_pool_gdr 在两条路径快照下均命中 b1
+    def gdr_from(cum):
+        panel = ProcessAnalysisPanel.__new__(ProcessAnalysisPanel)
+        panel._cumulative_snapshots = cum
+        return panel._compute_pool_gdr(
+            'cumulative', None, 'b1.main', 0, target_specs, 'all_targets',
+            ssr_ids=None, weapon_character_map=None, initial_resources={},
+        )
+
+    assert gdr_from(par) is not None
+    assert gdr_from(single) is not None
+
+
+def test_old_dataset_without_cumulative_snapshots_hints():
+    """ISSUE-006：旧数据集（result_store 加载，无 cumulative_snapshots 字段）切累积模式——
+    update_results 给出空态提示（不静默输出 0.0 误导用户）。
+    """
+    from gacha_simulator.gui.process_analysis_panel import ProcessAnalysisPanel
+
+    panel = ProcessAnalysisPanel.__new__(ProcessAnalysisPanel)
+    panel.status_label = SimpleNamespace()
+    panel._last_status = ''
+    panel.status_label.setText = lambda s: setattr(panel, '_last_status', s)
+
+    # 有池但无累积快照（旧数据集场景）→ 空态提示
+    panel.update_results([{'card_counts': {}}], pool_end_times={'b1': 10.0}, cumulative_snapshots={})
+    assert '累积' in panel._last_status or '快照' in panel._last_status
+
+    # 正常数据集（有累积快照）→ 无提示
+    panel.update_results([{'card_counts': {}}], pool_end_times={'b1': 10.0},
+                         cumulative_snapshots={'b1': [{}]})
+    assert '提示' not in panel._last_status
+
+    # 无池 → 无提示（累积模式本就不适用）
+    panel.update_results([{'card_counts': {}}], pool_end_times={}, cumulative_snapshots={})
+    assert '提示' not in panel._last_status

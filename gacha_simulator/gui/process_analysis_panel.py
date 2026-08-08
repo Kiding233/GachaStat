@@ -301,7 +301,14 @@ class ProcessAnalysisPanel(QWidget):
         self._initial_resources = initial_resources or {}
         self._cumulative_snapshots = cumulative_snapshots or {}
         self._pool_types = pool_types or {}
-        self.status_label.setText(f"已加载 {len(self._aggregate_data)} 条模拟数据")
+        # P72 ISSUE-006：旧数据集（result_store 加载，无 cumulative_snapshots 字段）累积模式空态提示，
+        # 避免切「截止到该 banner（累积）」时静默显示 0.0/全失败误导用户
+        if self._pool_end_times and not self._cumulative_snapshots:
+            self.status_label.setText(
+                f"已加载 {len(self._aggregate_data)} 条模拟数据；提示：数据集缺少累积快照"
+                "（旧数据），累积模式将无数据")
+        else:
+            self.status_label.setText(f"已加载 {len(self._aggregate_data)} 条模拟数据")
 
     def _on_event_mode_changed(self, index):
         mode = self.event_mode_combo.itemData(index)

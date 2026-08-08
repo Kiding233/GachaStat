@@ -19,9 +19,10 @@ class RetreatConfigBuilder:
         pity_counter_init: Dict[str, int],
     ) -> ConfigStore:
         # P72 ISSUE-129：falsy 守卫——from_pool_id=None/''（起始池「(从头开始)」或调用方未传）
-        # 时统一走 ValueError，避免下方 `'.' not in from_pool_id` 对 None 裸抛 TypeError
+        # 时统一走 ValueError，避免下方 `'.' not in from_pool_id` 对 None 裸抛 TypeError；
+        # 错误消息与 L39 既有「Pool ... not found in config」统一
         if not from_pool_id:
-            raise ValueError("from_pool_id cannot be empty")
+            raise ValueError(f"Pool '{from_pool_id}' not found in config")
         from_pool = None
         for p in original_store.pools:
             if p.pool_id == from_pool_id:

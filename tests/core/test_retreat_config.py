@@ -299,10 +299,11 @@ def _make_store_with_multi_pool_banner():
 
 
 def test_empty_from_pool_id_raises_value_error():
-    """ISSUE-129 falsy 守卫：from_pool_id=None/'' 统一 ValueError，不裸抛 TypeError。"""
+    """ISSUE-129 falsy 守卫：from_pool_id=None/''/空白串统一 ValueError，
+    消息含「Pool ... not found in config」（与既有错误路径统一），不裸抛 TypeError。"""
     store = _make_store_with_3_pools()
-    for bad in (None, ''):
-        with pytest.raises(ValueError):
+    for bad in (None, '', '  '):
+        with pytest.raises(ValueError, match="not found in config"):
             RetreatConfigBuilder.build(
                 original_store=store, from_pool_id=bad,
                 initial_resources={}, pity_counter_init={})
@@ -327,3 +328,22 @@ def test_multi_pool_banner_fallback_hits_banner_start():
         original_store=store, from_pool_id='b1.main',
         initial_resources={'draw_resource': 5000}, pity_counter_init={})
     assert [p.pool_id for p in exact.pools] == pool_ids
+
+
+def test_min_resource_build_env_banner_fallback_equiv():
+    """ISSUE-110：min_resource 模式共用 _build_env 截断路径（RetreatConfigBuilder.build）。
+
+    路线 A 兜底（from_pool_id='b1' 命中首个池 b1.main）与精确（'b1.main'）经 _build_env
+    产出的模拟环境截断一致——min_resource 搜索在两种入口下环境等价（不可逆语义变化的
+    等价性基线）。
+    """
+    from gacha_simulator.core.retreat_search import PlanSearchEngine
+
+    store = _make_store_with_multi_pool_banner()
+    env1 = PlanSearchEngine(store, from_pool_id='b1')._build_env(5000.0)
+    env2 = PlanSearchEngine(store, from_pool_id='b1.main')._build_env(5000.0)
+    ids1 = sorted(b.id for b in env1.pools)
+    ids2 = sorted(b.id for b in env2.pools)
+    assert ids1 == ids2, f'env1={ids1} env2={ids2}'
+    assert ids1 == ['b2']  # offset_day=b1.end_day(42) → 截断保留 b2
+    assert env1.pool_end_times == env2.pool_end_times

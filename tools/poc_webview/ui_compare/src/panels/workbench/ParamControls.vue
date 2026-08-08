@@ -99,10 +99,20 @@ const props = defineProps({
   type: { type: String, required: true },
   params: { type: Object, required: true },
   configs: { type: Array, default: () => [] },   // 已生成的后续池子配置（worst_dist 选择来源）
+  // 块级下拉选项覆盖（如脆弱性 from_pool 动态填充真实脆弱区间池）——按参数 key 合并
+  extraOptions: { type: Object, default: () => ({}) },
 })
 const emit = defineEmits(['action'])
 
-const def = computed(() => methodByType(props.type) || { params: [] })
+const def = computed(() => {
+  const d = methodByType(props.type) || { params: [] }
+  // 浅拷贝 params 并合并块级选项覆盖（不污染全局 METHOD_DEFS 单例）
+  const params = d.params.map((f) => {
+    if (props.extraOptions[f.key]) return { ...f, options: props.extraOptions[f.key] }
+    return f
+  })
+  return { ...d, params }
+})
 // 仅显式生成类动作（统计方法自动运行；run_analysis 由方法块自动触发，不渲染按钮）
 const manualActions = computed(() => (def.value.actions || []).filter((a) => a.key !== 'run_analysis'))
 const hasManualActions = computed(() => def.value.action === 'generate_config' || manualActions.value.length > 0)

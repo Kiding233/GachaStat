@@ -53,6 +53,8 @@ export const METHOD_DEFS = [
       { key: 'nbins', label: '分箱数', type: 'number', min: 5, max: 200, default: 30 },
       { key: 'hist', label: '分布', type: 'bool', default: true },
       { key: 'cdf', label: '累积分布', type: 'bool', default: false },
+      // 对齐旧 analysis_panel draw_unit_cb：以抽数为单位（资源类 GDR ÷ cost_per_draw）
+      { key: 'unit', label: '以抽数为单位', type: 'bool', default: false },
     ],
     result: [
       { key: 'summary', title: '概览（均值 / 中位数 / 置信区间）' },
@@ -64,6 +66,7 @@ export const METHOD_DEFS = [
     params: [
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
       { key: 'ci', label: '置信水平', type: 'number', min: 0.8, max: 0.99, step: 0.01, default: 0.95, precision: 2 },
+      { key: 'unit', label: '以抽数为单位', type: 'bool', default: false },
     ],
     result: [
       { key: 'summary', title: '统计摘要（均值 / CI / 分位数）' },
@@ -73,12 +76,11 @@ export const METHOD_DEFS = [
   {
     type: 'correlation', label: 'GDR 指标相关性', category: '总体广义出率',
     params: [
-      { key: 'gdrA', label: 'GDR A', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
-      { key: 'gdrB', label: 'GDR B', type: 'select', options: GDR_OPTIONS, default: 'resource_consumed' },
+      { key: 'unit', label: '以抽数为单位', type: 'bool', default: false },
     ],
     result: [
-      { key: 'chart', title: '相关性散点图', desc: 'A×B 双指标分布' },
-      { key: 'table', title: '相关系数表', desc: 'Pearson / Spearman' },
+      { key: 'chart', title: 'GDR 相关性矩阵', desc: '多 GDR 两两 Pearson 相关热力图' },
+      { key: 'summary', title: '相关性摘要', desc: '指标数 / 样本数' },
     ],
   },
 
@@ -87,7 +89,11 @@ export const METHOD_DEFS = [
     type: 'success_rate', label: '成功率分析', category: '成功率',
     params: [
       { key: 'gdr', label: '成功标准', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
-      { key: 'scope', label: '范围', type: 'select', options: [['overall', '整体'], ['per_pool', '每池']], default: 'overall' },
+      { key: 'threshold', label: '成功阈值', type: 'number', default: 1.0, precision: 2 },
+      // 对齐旧 analysis_panel：范围 overall/cumulative/single_pool + 第k池 + 置信水平
+      { key: 'scope', label: '范围', type: 'select', options: [['overall', '总体（最终结果）'], ['cumulative', '第k池累积'], ['single_pool', '第k池单池']], default: 'overall' },
+      { key: 'pool_index', label: '第k个池', type: 'number', min: 1, max: 99, default: 1 },
+      { key: 'ci', label: '置信水平', type: 'number', min: 0.8, max: 0.99, step: 0.01, default: 0.95, precision: 2 },
     ],
     result: [
       { key: 'summary', title: '成功率 + Wilson 置信区间' },
@@ -225,8 +231,9 @@ export const METHOD_DEFS = [
   {
     type: 'transition_analysis', label: '转变分析', category: '每池分析',
     params: [
-      { key: 'eventMode', label: '事件模式', type: 'select', options: [['pity', '保底'], ['success', '成功'], ['pool', '换池']], default: 'pity' },
-      { key: 'op', label: '成败定义', type: 'select', options: [['success', '成功'], ['failure', '失败']], default: 'success' },
+      // 对齐旧 analysis_panel：成功判据（success_criteria）+ 成功阈值 + 置信水平
+      { key: 'eventMode', label: '成功判据', type: 'select', options: [['all_targets', '全部目标卡达成'], ['any_ssr', '至少一张SSR'], ['per_pool_target', '每池至少一张目标卡']], default: 'all_targets' },
+      { key: 'threshold', label: '成功阈值', type: 'number', default: 1.0, precision: 2 },
       { key: 'ci', label: '置信水平', type: 'number', min: 0.8, max: 0.99, step: 0.01, default: 0.95, precision: 2 },
     ],
     result: [
@@ -258,16 +265,19 @@ export const METHOD_DEFS = [
   {
     type: 'vuln', label: '脆弱性分析', category: '脆弱性',
     params: [
-      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'resource_remaining' },
+      // 对齐旧 retreat_panel：默认 GDR 为下拉 index 0（简单目标达成率）
+      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
       { key: 'threshold', label: '成功阈值', type: 'number', default: 1.0, precision: 2 },
       // 对齐旧 retreat_panel：α 默认 0.5、等距分箱数默认 20（旧 UI alpha_spin 0.5 / num_bins 20）
       { key: 'alpha', label: '脆弱比例 α', type: 'number', min: 0, max: 1, step: 0.01, default: 0.5, precision: 2 },
       { key: 'nbins', label: '分箱数', type: 'number', min: 5, max: 100, default: 20 },
       // ── 生成配置（按原 UI 方案搜索方法：从哪个池子开始 / 资源是什么 / 保底状态如何）──
-      { key: 'from_pool', label: '起始池', type: 'select', options: [['_root', '(从头开始)'], ['c1', '周年庆'], ['c2', '武器特选']], default: '_root' },
-      { key: 'base_resource', label: '基准资源', type: 'select', options: [['p50', '50%分位'], ['mean', '均值'], ['p25', '25%分位'], ['p75', '75%分位'], ['custom', '自定义']], default: 'p50' },
+      { key: 'from_pool', label: '起始池', type: 'select', options: [['_root', '(从头开始)']], default: '_root' },
+      // 对齐旧 retreat_search_panel：资源预设 7 档含 VI 下限/VI 均值/VI 上限，默认自定义
+      { key: 'base_resource', label: '基准资源', type: 'select', options: [['vi_lower', 'VI下限'], ['vi_mean', 'VI均值'], ['vi_upper', 'VI上限'], ['p25', '25%分位'], ['p50', '50%分位'], ['mean', '均值'], ['p75', '75%分位'], ['custom', '自定义']], default: 'custom' },
       { key: 'base_custom', label: '自定义资源', type: 'text', default: '' },
-      { key: 'pity_state', label: '保底状态', type: 'select', options: [['none', '不保留'], ['mean', '按均值'], ['median', '按中位'], ['p25', '按25%分位'], ['p75', '按75%分位']], default: 'none' },
+      // 对齐旧 retreat_search_panel：保底水位默认按均值快照
+      { key: 'pity_state', label: '保底状态', type: 'select', options: [['none', '不保留'], ['mean', '按均值'], ['median', '按中位'], ['p25', '按25%分位'], ['p75', '按75%分位']], default: 'mean' },
     ],
     result: [
       { key: 'chart', title: '脆弱性三行子图', desc: 'PAVA 保序回归 + Bootstrap 变更点 CI' },
@@ -304,7 +314,8 @@ export const METHOD_DEFS = [
     type: 'worst_dist', label: '新池子数分布', category: '最差影响',
     params: [
       { key: 'cond', label: '条件', type: 'select', options: [['all', '全部'], ['success', '成功'], ['failure', '失败']], default: 'success' },
-      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
+      // 对齐旧 worst_impact_panel：gdr_combo setCurrentIndex(1) = 可达变体
+      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement_obtainable' },
       { key: 'threshold', label: '成功阈值', type: 'number', default: 1.0, precision: 2 },
       { key: 'alpha', label: '初始资源分位 α', type: 'number', min: 0.01, max: 0.5, step: 0.01, default: 0.05, precision: 2 },
       { key: 'customResource', label: '自定义初始资源', type: 'text', default: '' },

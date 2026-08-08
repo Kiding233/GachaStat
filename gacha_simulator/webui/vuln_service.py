@@ -45,7 +45,7 @@ def run_vulnerability_analysis(dataset: dict, store, params: dict) -> dict:
     """脆弱性分析。dataset: StoredDataset dict；store: ConfigStore；params: {gdr, threshold, alpha, nbins}。"""
     aggregate_data = dataset.get('aggregate_data', []) or []
     target_specs = dict(dataset.get('target_specs', {}) or {})
-    gdr_key = params.get('gdr', 'resource_remaining')
+    gdr_key = params.get('gdr', 'target_achievement')   # 对齐旧 retreat_panel populate_gdr_combo index 0
     gdr_threshold = float(params.get('threshold', 1.0))
     alpha = float(params.get('alpha', 0.5))   # 对齐旧 retreat_panel alpha 默认 0.5
     nbins = int(params.get('nbins', 20)) if params.get('nbins') else None

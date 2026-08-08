@@ -95,21 +95,25 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
             sections.append({'key': 'chart', 'title': 'L1 ECDF 叠加', 'spec': _spec_to_dict(ecdf)})
         except Exception:
             pass
-        # ── L2 随机占优 ──
+        # ── L2 随机占优（对齐旧 comparison_analysis_panel：FSD/SSD/TSD 三阶循环，
+        # rng_seed + order 作为各阶种子）──
         if len(values_list) >= 2:
             try:
-                dom = compute_dominance_matrix(values_list, names, order=1, n_bootstrap=500,
-                                               rng_seed=42, engine='auto', lower_is_better=lower_is_better)
-                cls = dom.get('classification')
-                if cls and cls.get('label'):
-                    mtx = cls.get('matrix') or dom.get('matrix')
-                    labels = cls.get('names') or names
-                    if mtx is not None:
-                        # 转字符串（ECharts 单元格显示）
-                        str_mtx = [[str(c) for c in row] for row in np.asarray(mtx, dtype=object)]
-                        sections.append({'key': 'table', 'title': 'L2 随机占优（一阶）分类',
-                                         'headers': ['数据集'] + labels,
-                                         'rows': [[labels[i]] + str_mtx[i] for i in range(len(labels))]})
+                ordinal = {1: '一阶', 2: '二阶', 3: '三阶'}
+                for order, label in [(1, 'FSD'), (2, 'SSD'), (3, 'TSD')]:
+                    dom = compute_dominance_matrix(values_list, names, order=order, n_bootstrap=500,
+                                                   rng_seed=42 + order, engine='auto',
+                                                   lower_is_better=lower_is_better)
+                    mtx = dom.get('matrix')
+                    if mtx is None:
+                        continue
+                    # 校正后 p 值矩阵 → 字符串（ECharts 单元格显示；classification 为
+                    # List[List[str]] 标记矩阵，旧 UI 消费的是逐阶 p 值矩阵）
+                    str_mtx = [[_f(v, 4) for v in row] for row in np.asarray(mtx, dtype=object)]
+                    sections.append({'key': 'table',
+                                     'title': f'L2 随机占优 {label}（{ordinal[order]}）p 值矩阵',
+                                     'headers': ['数据集'] + names,
+                                     'rows': [[names[i]] + str_mtx[i] for i in range(len(names))]})
             except Exception:
                 pass
         # ── L3 假设检验 ──

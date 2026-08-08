@@ -66,6 +66,24 @@ def _sec_summary(title, items):
     return {'key': 'summary', 'title': title, 'items': items}
 
 
+def _build_pool_names(store) -> dict:
+    """池 ID → 显示名映射（banner 键；对齐旧 analysis_panel P72 ISSUE-701 与 vuln_service）。
+
+    store.pools 展平后 pe.name 即 banner 级名、pe.pool_id 为全限定键——按 banner 段映射，
+    使 pool_names.get(pid) 对 banner 键命中。
+    """
+    names = {}
+    if store is None:
+        return names
+    for pe in getattr(store, 'pools', []):
+        if not getattr(pe, 'enabled', True):
+            continue
+        pid = getattr(pe, 'pool_id', '')
+        banner_id = pid.split('.')[0] if '.' in pid else pid
+        names.setdefault(banner_id, getattr(pe, 'name', pid) or pid)
+    return names
+
+
 class AnalysisService:
     """单数据集统计分析服务。"""
 
@@ -94,8 +112,8 @@ class AnalysisService:
         self.cost_per_draw = 160
         self.alpha = 0.05
         self._store = store
-        # 目标卡集合（全限定键池 ID 显示名映射占位——新 UI 无显式池名表）
-        self.pool_names = {}
+        # 池显示名映射（banner 键 → 中文名；对齐旧 analysis_panel P72 ISSUE-701）
+        self.pool_names = _build_pool_names(store)
 
     # ── 数据准备 ──────────────────────────────────────────────────────
 
@@ -117,7 +135,11 @@ class AnalysisService:
     def _gdr_values(self, gdr_key, aggregate_data=None):
         agg = aggregate_data if aggregate_data is not None else self.aggregate_data
         calc, _ = self._calc_gdr(gdr_key)
-        return [calc.compute_gdr(r) for r in agg if r]
+        vals = [calc.compute_gdr(r) for r in agg if r]
+        # 以抽数为单位：资源类 GDR ÷ cost_per_draw（对齐旧 analysis_panel use_draw_units）
+        if self.use_draw_units and is_resource_gdr(gdr_key) and self.cost_per_draw > 0:
+            vals = [v / self.cost_per_draw for v in vals]
+        return vals
 
     def _compute_all_gdr_dists(self):
         """计算全部 GDR 的 EmpiricalDistribution（对齐 _prepare_gdr_dists）。"""
@@ -150,6 +172,11 @@ class AnalysisService:
 
     def run(self, method: str, params: dict = None) -> dict:
         params = params or {}
+        # P74：以抽数为单位（use_draw_units）全局开关——资源类 GDR ÷ cost_per_draw
+        #（对齐旧 analysis_panel draw_unit_cb；cost 从配置提取或默认 160）
+        self.use_draw_units = bool(params.get('unit', False))
+        if self.cost_per_draw <= 0:
+            self.cost_per_draw = 160
         handlers = {
             'gdr_dist': self._gdr_dist,
             'gdr_statistics': self._gdr_statistics,
@@ -233,45 +260,90 @@ class AnalysisService:
 
     def _gdr_statistics(self, p):
         gdr_key = p.get('gdr', 'target_achievement')
+        ci_level = float(p.get('ci', 0.95))
         vals = np.array(self._gdr_values(gdr_key), dtype=float)
         if len(vals) == 0:
             return [{'key': 'summary', 'title': 'GDR 指标统计', 'items': {'状态': '无数据'}}]
         dist = EmpiricalDistribution(vals.tolist())
         defn = resolve_gdr_definition(gdr_key)
         display = defn.display_name if defn else gdr_key
-        qs = {f'Q{int(q*100)}': f'{dist.quantile(q, use_evt=False):.4f}' for q in (0.05, 0.25, 0.5, 0.75, 0.95)}
-        rows = [['均值', f'{dist.mean():.4f}'], ['中位数', f'{dist.median():.4f}'],
-                ['标准差', f'{dist.std():.4f}'], ['最小值', f'{dist.min_val():.4f}'],
-                ['最大值', f'{dist.max_val():.4f}']]
-        for k, v in qs.items():
-            rows.append([k, v])
-        return [{'key': 'summary', 'title': f'{display} 统计摘要',
-                 'items': {'均值': f'{dist.mean():.4f}', '中位数': f'{dist.median():.4f}', '样本数': dist.n}},
-                {'key': 'table', 'title': f'{display} 统计表', 'headers': ['指标', '值'], 'rows': rows}]
+        # 对齐旧 analysis_panel._compute_statistics_unit：均值/中位数/VaR 各附 Bootstrap CI
+        # （B=1000 seed=42；均值用 BCa、中位数/分位数用 bootstrap_quantile；n<100 标「样本不足」）
+        ci_pct = f'{ci_level:.0%}'
+        headers = ['指标', '均值', f'均值 {ci_pct} CI',
+                   '中位数', f'中位数 {ci_pct} CI', '标准差',
+                   'VaR(5%)', f'VaR {ci_pct} CI']
+        try:
+            from gacha_simulator.core.bootstrap import BootstrapEngine
+            engine = BootstrapEngine(B=1000, ci_level=ci_level, random_seed=42)
+            if len(vals) >= 100:
+                try:
+                    mean_res = engine.bootstrap_mean(vals.tolist(), use_bca=True)
+                    mean_ci = f'[{mean_res.ci_lower:.4f}, {mean_res.ci_upper:.4f}]'
+                except Exception:
+                    mean_ci = '—'
+                try:
+                    median_res = engine.bootstrap_quantile(vals.tolist(), q=0.5)
+                    median_ci = f'[{median_res.ci_lower:.4f}, {median_res.ci_upper:.4f}]'
+                except Exception:
+                    median_ci = '—'
+                try:
+                    var_res = engine.bootstrap_quantile(vals.tolist(), q=0.05, use_gpd=False)
+                    var_ci = f'[{var_res.ci_lower:.4f}, {var_res.ci_upper:.4f}]'
+                except Exception:
+                    var_ci = '—'
+            else:
+                mean_ci = median_ci = var_ci = '样本不足'
+        except Exception:
+            mean_ci = median_ci = var_ci = '—'
+        alpha05 = dist.var(0.05)
+        rows = [[display, f'{dist.mean():.4f}', mean_ci,
+                 f'{dist.median():.4f}', median_ci,
+                 f'{dist.std():.4f}', f'{alpha05:.4f}', var_ci]]
+        return [_sec_summary('统计摘要', {'指标': display, '均值': f'{dist.mean():.4f}',
+                                        '中位数': f'{dist.median():.4f}', '样本数': dist.n}),
+                {'key': 'table', 'title': f'{display} 统计表（Bootstrap CI, B=1000）',
+                 'headers': headers, 'rows': rows}]
 
     def _correlation(self, p):
-        a_key = p.get('gdrA', 'target_achievement')
-        b_key = p.get('gdrB', 'resource_consumed')
-        vals_a = np.array(self._gdr_values(a_key), dtype=float)
-        vals_b = np.array(self._gdr_values(b_key), dtype=float)
-        n = min(len(vals_a), len(vals_b))
-        if n < 2:
-            return [{'key': 'summary', 'title': '相关性分析', 'items': {'状态': '数据不足'}}]
-        va, vb = vals_a[:n], vals_b[:n]
-        if np.std(va) < 1e-12 or np.std(vb) < 1e-12:
-            r = float('nan')
+        # 对齐旧 analysis_panel：多 GDR 两两相关矩阵热力图（RdBu_r、行反转、零方差过滤）
+        from gacha_simulator.core.gdr import get_expanded_gdr_entries
+        try:
+            entries = get_expanded_gdr_entries(self.store.resource_defs if self.store else None)
+        except Exception:
+            entries = []
+        gdr_dists = {}
+        for key, _d, _l, _t in entries:
+            try:
+                vals = self._gdr_values(key)
+                if len(vals) > 1:
+                    gdr_dists[key] = EmpiricalDistribution(vals)
+            except Exception:
+                pass
+        if not gdr_dists:
+            return [{'key': 'summary', 'title': '相关性分析', 'items': {'状态': '无数据'}}]
+        keys = [k for k in gdr_dists if gdr_dists[k].n > 1]
+        if len(keys) < 2:
+            return [{'key': 'summary', 'title': '相关性分析', 'items': {'状态': '需至少 2 个 GDR 指标'}}]
+        data_matrix = np.array([gdr_dists[k].samples for k in keys])
+        stds = np.std(data_matrix, axis=1)
+        valid_mask = stds > 1e-12
+        if valid_mask.sum() >= 2:
+            data_matrix = data_matrix[valid_mask]
+            keys = [k for k, v in zip(keys, valid_mask) if v]
+            corr = np.corrcoef(data_matrix)
         else:
-            r = float(np.corrcoef(va, vb)[0, 1])
-        a_name = (resolve_gdr_definition(a_key).display_name if resolve_gdr_definition(a_key) else a_key)
-        b_name = (resolve_gdr_definition(b_key).display_name if resolve_gdr_definition(b_key) else b_key)
-        # 散点图 + 相关系数
-        spec = ChartSpec(chart_type='scatter',
-                         data=ScatterData(x=va, y=vb, mode='markers'),
-                         title=f'{a_name} × {b_name} 散点图', xlabel=a_name, ylabel=b_name)
-        return [_sec_summary('相关系数', {
-            'Pearson r': '—' if np.isnan(r) else f'{r:.4f}',
-            '样本数': n,
-        }), _sec_chart('相关性散点图', spec)]
+            corr = np.zeros((len(keys), len(keys)))
+        from gacha_simulator.visualization.chart_spec import HeatmapData
+        short = [((resolve_gdr_definition(k).display_name if resolve_gdr_definition(k) else k))[:8] for k in keys]
+        spec = ChartSpec(chart_type='heatmap',
+                         data=HeatmapData(matrix=corr[::-1],
+                                          row_labels=short[::-1],
+                                          col_labels=short,
+                                          colorscale='RdBu_r'),
+                         title='GDR指标相关性')
+        return [_sec_summary('相关性', {'指标数': len(keys), '样本数': gdr_dists[keys[0]].n}),
+                _sec_chart('GDR 指标相关性矩阵', spec)]
 
     def _success_rate(self, p):
         gdr_key = p.get('gdr', 'target_achievement')
@@ -280,22 +352,91 @@ class AnalysisService:
         conf = float(p.get('ci', 0.95))
         calc = make_gdr_calculator(self.store, self.target_specs, gdr_key, gdr_threshold=threshold,
                                    ssr_ids=self.ssr_ids)
-        if scope == 'overall':
-            flags = [calc.is_success(r) for r in self.aggregate_data if r]
-        else:
-            # per_pool：用 transition_flags 预计算（第 0 池）——简化；完整每池在累计分析
-            flags = [bool(f) for f in self.transition_flags] if self.transition_flags else []
-        success = sum(flags)
-        total = len(flags)
-        rate = success / total if total else 0.0
-        lo, hi = wilson_ci(success, total, conf)
         defn = resolve_gdr_definition(gdr_key)
         display = defn.display_name if defn else gdr_key
-        return [_sec_table('成功率分析', ['成功数 / 总数', '成功率', f'{conf*100:.1f}% Wilson CI'],
-                           [[f'{success} / {total}', f'{rate*100:.2f}%',
-                             f'[{lo*100:.2f}%, {hi*100:.2f}%]']]),
+        if scope == 'overall':
+            flags = [calc.is_success(r) for r in self.aggregate_data if r]
+            success = sum(flags)
+            total = len(flags)
+            rate = success / total if total else 0.0
+            lo, hi = wilson_ci(success, total, conf)
+            return [_sec_table('成功率分析', ['成功数 / 总数', '成功率', f'{conf*100:.1f}% Wilson CI'],
+                               [[f'{success} / {total}', f'{rate*100:.2f}%',
+                                 f'[{lo*100:.2f}%, {hi*100:.2f}%]']]),
+                    {'key': 'summary', 'title': '成功率', 'items': {
+                        '判定标准': display, '成功率': f'{rate*100:.2f}%'}}]
+        if scope == 'single_pool':
+            # 资源类 GDR 仅支持总体/累积（对齐旧 analysis_panel L1246-1260）
+            if is_resource_gdr(gdr_key):
+                return [_sec_table('成功率分析', ['状态', '说明'],
+                                   [['范围不支持', f'资源类 GDR（{display}）仅支持「总体」和「第k池累积」范围']])]
+            pool_idx = int(p.get('pool_index', 0))
+            flags = self._cumulative_success_flags(gdr_key, threshold, calc, pool_idx)
+            if flags is None:
+                return [_sec_table('成功率分析', ['状态', '说明'],
+                                   [['数据不足', '逐池分析需要 cumulative_snapshots，当前批次未提供或池索引越界']])]
+            success = sum(flags)
+            total = len(flags)
+            rate = success / total if total else 0.0
+            lo, hi = wilson_ci(success, total, conf)
+            return [_sec_table(f'成功率分析（第 {pool_idx+1} 池）',
+                               ['成功数 / 总数', '成功率', f'{conf*100:.1f}% Wilson CI'],
+                               [[f'{success} / {total}', f'{rate*100:.2f}%',
+                                 f'[{lo*100:.2f}%, {hi*100:.2f}%]']]),
+                    {'key': 'summary', 'title': '成功率', 'items': {
+                        '判定标准': display, '范围': f'第 {pool_idx+1} 池', '成功率': f'{rate*100:.2f}%'}}]
+        # cumulative：逐池累积成功率（对齐旧 analysis_panel cumulative 分支）
+        rows = []
+        for pi in range(self._cumulative_pool_count(gdr_key, threshold)):
+            flags = self._cumulative_success_flags(gdr_key, threshold, calc, pi)
+            if flags is None:
+                continue
+            success = sum(flags)
+            total = len(flags)
+            rate = success / total if total else 0.0
+            lo, hi = wilson_ci(success, total, conf)
+            rows.append([f'第 {pi+1} 池', f'{success} / {total}', f'{rate*100:.2f}%',
+                         f'[{lo*100:.2f}%, {hi*100:.2f}%]'])
+        if not rows:
+            return [_sec_table('成功率分析', ['状态', '说明'],
+                               [['数据不足', '逐池分析需要 cumulative_snapshots，当前批次未提供']])]
+        return [_sec_table('成功率分析（逐池累积）', ['范围', '成功数 / 总数', '成功率', f'{conf*100:.1f}% Wilson CI'],
+                           rows),
                 {'key': 'summary', 'title': '成功率', 'items': {
-                    '判定标准': display, '成功率': f'{rate*100:.2f}%'}}]
+                    '判定标准': display, '范围': '逐池累积', '池数': len(rows)}}]
+
+    def _cumulative_pool_count(self, gdr_key, threshold):
+        """累积快照的池数量（与 _cumulative_success_flags 同源）。"""
+        if not self.cumulative_snapshots or not self.pool_end_times:
+            return 0
+        return len(self.cumulative_snapshots)
+
+    def _cumulative_success_flags(self, gdr_key, threshold, calc, pool_idx):
+        """对齐旧 analysis_panel cumulative 分支：compute_transition_flags_from_gdr 逐池 flag。"""
+        if not self.cumulative_snapshots:
+            return None
+        if self.pool_end_times:
+            sorted_pools = sorted(self.pool_end_times.items(), key=lambda x: x[1])
+            pool_ids_ordered = [pid for pid, _ in sorted_pools]
+        else:
+            pool_ids_ordered = sorted(self.cumulative_snapshots.keys())
+        pool_ids_ordered = [pid for pid in pool_ids_ordered if pid in self.cumulative_snapshots]
+        if not pool_ids_ordered or pool_idx >= len(pool_ids_ordered):
+            return None
+        try:
+            from gacha_simulator.core.per_pool_analysis import compute_transition_flags_from_gdr
+            all_flags = compute_transition_flags_from_gdr(
+                self.cumulative_snapshots, pool_ids_ordered,
+                self.target_specs, gdr_key=gdr_key, threshold=threshold,
+                scope='cumulative', aggregates=self.aggregate_data, ssr_ids=self.ssr_ids,
+                desire_weights=self.store.desire_weights if self.store else None,
+                miss_cost_weights=self.store.miss_cost_weights if self.store else None,
+                card_value_weights=self.store.card_value_weights if self.store else None,
+                bonus_events=[r.get('bonus_events', []) for r in self.aggregate_data],
+            )
+        except Exception:
+            return None
+        return [flags[pool_idx] for flags in all_flags]
 
     def _risk_var_cvar(self, p):
         alpha = float(p.get('alpha', 0.05))
@@ -520,7 +661,7 @@ class AnalysisService:
             elif gkey == 'ssr_count':
                 y_labels = [f'{v:.0f}' for v in y_ticks]
             else:
-                y_labels = [f'{v:.2f}' for v in y_ticks]
+                y_labels = [f'{v:.0f}' for v in y_ticks]   # 对齐旧 UI：资源值 0 位小数
             col_labels = [f'{sampled_draws[i]}' for i in range(len(sampled_draws))]
             spec = ChartSpec(chart_type='heatmap', data=HeatmapData(
                 matrix=mat, row_labels=y_labels, col_labels=col_labels, colorscale='YlOrRd'),
@@ -703,12 +844,16 @@ class AnalysisService:
             return [{'key': 'summary', 'title': '转变分析', 'items': {'状态': '无池结束时间数据'}}]
         sorted_pools = sorted(self.pool_end_times.items(), key=lambda x: x[1])
         pool_ids_ordered = [pid for pid, _ in sorted_pools]
+        # P74：消费前端参数（对齐旧 analysis_panel transition 的 success_criteria/threshold/conf/scope）
+        gdr_key = p.get('eventMode', p.get('gdr', 'all_targets'))
+        threshold = float(p.get('threshold', 1.0))
+        scope = p.get('scope', 'cumulative')
         if self.transition_flags:
             flags = self.transition_flags
         elif self.cumulative_snapshots:
             flags = compute_transition_flags_from_gdr(
                 self.cumulative_snapshots, pool_ids_ordered, self.target_specs,
-                gdr_key='all_targets', threshold=1.0, scope='cumulative',
+                gdr_key=gdr_key, threshold=threshold, scope=scope,
                 aggregates=self.aggregate_data, ssr_ids=self.ssr_ids,
                 desire_weights=self.store.desire_weights if self.store else None,
                 miss_cost_weights=self.store.miss_cost_weights if self.store else None,

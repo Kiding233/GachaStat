@@ -45,6 +45,7 @@
                   :type="element.type"
                   :params="element.params"
                   :configs="configs"
+                  :extra-options="vulnPoolOptions(element)"
                   @action="(a) => onAction(element, a)"
                 />
               </div>
@@ -255,7 +256,20 @@ function resolveBaseResource(params, poolOpt) {
   if (mode === 'p25') return poolOpt.percentiles?.p25 ?? 0
   if (mode === 'p75') return poolOpt.percentiles?.p75 ?? 0
   if (mode === 'p50') return poolOpt.percentiles?.p50 ?? 0
+  if (mode === 'vi_lower') return poolOpt.vi_lower ?? 0
+  if (mode === 'vi_mean') return poolOpt.vi_mean ?? 0
+  if (mode === 'vi_upper') return poolOpt.vi_upper ?? 0
   return 0
+}
+
+// 脆弱性块：from_pool 选项动态来自真实脆弱区间池（对齐旧 retreat_search 动态下拉；
+// 返回块级 extraOptions，不污染全局 METHOD_DEFS 单例）
+function vulnPoolOptions(block) {
+  if (block.type !== 'vuln') return {}
+  const opts = block.result?.config_options || {}
+  const pools = opts.from_pools || []
+  if (!pools.length) return {}
+  return { from_pool: [['_root', '(从头开始)'], ...pools.map((p) => [p.pool_id, p.pool_id])] }
 }
 
 function onAction(block, action) {

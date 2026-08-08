@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 from .chart_webview import ChartWebView
+from .utils import banner_of  # P72 项 5：全限定→banner 键转换（累积模式取 banner 段）
 
 from ..core.process_trace import SampleTrace, infer_events, compute_pool_gdr_cumulative, compute_pool_gdr_single_pool
 from ..core.process_analysis import (
@@ -510,7 +511,10 @@ class ProcessAnalysisPanel(QWidget):
                           weapon_character_map, initial_resources,
                           **gdr_kwargs):
         if mode == 'cumulative':
-            pool_snaps = self._cumulative_snapshots.get(pool_id, [])
+            # P72 ISSUE-005：累积快照键为 banner（时间域），pool_id 为全限定（pool_events 键）——
+            # 取 banner 段；同 banner 多 pool 共享同一快照（活动级累积语义，见列头口径标注）
+            banner_id = banner_of(pool_id)
+            pool_snaps = self._cumulative_snapshots.get(banner_id, []) if banner_id else []
             if sample_idx < len(pool_snaps):
                 return compute_pool_gdr_cumulative(
                     pool_snaps[sample_idx], pool_id, target_specs, gdr_key,
@@ -612,6 +616,7 @@ class ProcessAnalysisPanel(QWidget):
 
             detail_text = (
                 f"总样本: {total}\n"
+                f"口径：各池 GDR/成败按截止该 banner 段（活动级累积，同 banner 多池显示相同）\n"
                 f"全部池失败概率: {all_fail_prob:.4f}\n"
                 f"全部池成功概率: {all_success_prob:.4f}\n\n"
                 f"各池成功率:\n"
@@ -894,7 +899,8 @@ class ProcessAnalysisPanel(QWidget):
         )
 
         self.trace_detail_table.clear()
-        headers = ['池子ID', '事件类型', '保底名', '抽卡数', '计数器最大值', '池GDR值', '池成败']
+        # P72 ISSUE-005：累积模式下同 banner 多 pool 显示相同（活动级累积）——列头注明口径
+        headers = ['池子ID', '事件类型', '保底名', '抽卡数', '计数器最大值', '池GDR值(截止该banner段)', '池成败(截止该banner段)']
         self.trace_detail_table.setColumnCount(len(headers))
         self.trace_detail_table.setHorizontalHeaderLabels(headers)
         self.trace_detail_table.setRowCount(len(trace.events))

@@ -363,7 +363,7 @@ const DEFAULT_PAGES = [
   { id: 'weight', name: '权重配置' },
   { id: 'strategy', name: '策略' },
 ]
-const TYPE_TO_PAGE = { card: 'card', resource: 'res', banner: 'banner', pity: 'pity', milestone: 'ms', target: 'target', weight: 'weight', strategy: 'strategy' }
+const TYPE_TO_PAGE = { card: 'card', resource_defs: 'res', resource_gains: 'res', banner: 'banner', pity: 'pity', milestone: 'ms', target: 'target', weight: 'weight', strategy: 'strategy' }
 let _organizedOnce = false   // 首次解析后按默认页补全未归置块（新配置全归置；旧 pageState 缺失的补全，不动已归置的）
 let _addPendingPage = null     // 添加块时记录当前页，解析后新块归到该页（非全局页）
 let _addPageBefore = 0

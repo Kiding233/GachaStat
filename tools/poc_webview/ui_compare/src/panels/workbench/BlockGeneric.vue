@@ -23,8 +23,8 @@
     </div>
 
     <div v-show="expanded" class="cfg-block-body">
-      <!-- ══ 资源块：条目表（可多条、复制去重）══ -->
-      <template v-if="type === 'resource'">
+      <!-- ══ 资源定义块（resource_defs）：条目表（key/name/initial，可复制、序列化按 key 去重）══ -->
+      <template v-if="type === 'resource_defs'">
         <el-table :data="data.entries" size="small">
           <el-table-column label="资源 ID" min-width="140">
             <template #default="{ row }"><el-input v-model="row.key" size="small" /></template>
@@ -45,8 +45,11 @@
           </el-table-column>
         </el-table>
         <el-button size="small" class="sub-btn" @click="addEntry">+ 添加资源</el-button>
+      </template>
 
-        <!-- 资源获取规则（[[resources.gain_rules]]：每日/每N天/每周/每月 类型 + 资源获取）-->
+      <!-- ══ 资源获取规则块（resource_gains）：gain_rules + day_overrides，可复制、序列化汇总合并 ══ -->
+      <template v-else-if="type === 'resource_gains'">
+        <!-- 资源获取规则（[[resources.gain_rules]]：每N天/每周/每月 类型 + 资源获取）-->
         <div class="sub-title">资源获取规则（{{ (data.gainRules || []).length }}）</div>
         <el-table :data="data.gainRules || []" size="small">
           <el-table-column label="类型" width="140">
@@ -94,7 +97,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <el-button size="small" class="sub-btn" @click="addDayOverride">+ 添加逐日覆盖</el-button>
+        <el-button size="small" class="sub-btn" @click="addDayOverride">+ 添加逐日额外</el-button>
       </template>
 
       <!-- ══ 卡片/权重/目标卡：聚合条目表格（每行一个条目，字段塞一行）══ -->
@@ -508,7 +511,8 @@ function targetPoolsText(row) {
 const expanded = ref(true)
 
 const META = {
-  resource:  { label: '资源',     global: true },
+  resource_defs:  { label: '资源定义',     global: false },
+  resource_gains: { label: '资源获取规则', global: false },
   card:      { label: '卡片',     global: false },
   pity:      { label: '保底规则', global: false },
   milestone: { label: '累抽奖励', global: false },
@@ -527,9 +531,13 @@ const meta = computed(() => META[props.type] || { label: props.type, global: fal
 
 const title = computed(() => {
   const d = props.data
-  if (props.type === 'resource') {
+  if (props.type === 'resource_defs') {
     const n = (d.entries || []).length
     return n ? `${n} 种资源` : '未命名'
+  }
+  if (props.type === 'resource_gains') {
+    const g = (d.gainRules || []).length + (d.dayOverrides || []).length
+    return g ? `${g} 条获取规则` : '未命名'
   }
   if (isTableType.value) return `${(d.entries || []).length} 条`
   if (props.type === 'rarity') return `${(d.ranks || []).length} 级稀有度`

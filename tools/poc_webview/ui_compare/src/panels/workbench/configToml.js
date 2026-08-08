@@ -11,7 +11,8 @@
 
 // ── 块类型层级（信息架构梳理第六节定稿：7 实体 + 2 全局单例）──
 export const BLOCK_TYPES = {
-  resource:  { label: '资源',     kind: 'entity' },
+  resource_defs:  { label: '资源定义',     kind: 'entity' },
+  resource_gains: { label: '资源获取规则', kind: 'entity' },
   banner:    { label: 'Banner',   kind: 'entity' },
   card:      { label: '卡片',     kind: 'entity' },
   pity:      { label: '保底规则', kind: 'entity' },
@@ -28,7 +29,8 @@ export function emptyToml(type) {
   const map = {
     banner: '[[banner]]\nid = ""\nname = ""\nstart_day = 0\nend_day = 21',
     card: '[[card]]\ncard_id = ""\nname = ""\nrarity = "r"\ninitial_count = 0',
-    resource: '[resources.defs]\n\n[resources.initial]',
+    resource_defs: '[resources.defs]\n\n[resources.initial]',
+    resource_gains: '[resources]\n',
     pity: '[[pity]]\nname = ""\ntype = "soft_interval"\nscope = "ssr"',
     milestone: '[[milestone]]\nname = ""\nthreshold = 40\nrepeat = false\nmax_triggers = 0\nbanner = ""',
     target: '[[targets]]\ncard_id = ""\nquantity = 1\npool_ids = []',
@@ -279,17 +281,17 @@ export function parseToml(text) {
         cur.data.defaults[_r].overflow_bands.push({ range: [1, 1], resources: {} })
         mode = 'raritybands'
       } else if (path === 'resources.gain_rules') {
-        // [[resources.gain_rules]] → 归属资源块的获取规则（type/param/gains）
+        // [[resources.gain_rules]] → 归属资源获取规则块（type/param/gains）
         flushRaw()
-        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        if (!cur || cur.type !== 'resource_gains') openBlock('resource_gains', { gainRules: [], dayOverrides: [] }, line)
         else touchCur(line)
         if (!cur.data.gainRules) cur.data.gainRules = []
         cur.data.gainRules.push({ type: '', param: '1', gains: {} })
         mode = 'gainrules'
       } else if (path === 'resources.day_overrides') {
-        // [[resources.day_overrides]] → 归属资源块的逐日覆盖（day/gains）
+        // [[resources.day_overrides]] → 归属资源获取规则块的逐日额外获取（day/gains）
         flushRaw()
-        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        if (!cur || cur.type !== 'resource_gains') openBlock('resource_gains', { gainRules: [], dayOverrides: [] }, line)
         else touchCur(line)
         if (!cur.data.dayOverrides) cur.data.dayOverrides = []
         cur.data.dayOverrides.push({ day: 0, gains: {} })
@@ -310,9 +312,9 @@ export function parseToml(text) {
     if (tabMatch) {
       const path = tabMatch[1]
       if (path === 'resources') {
-        // [resources] 主表：打开资源块（defs/initial/gain_rules/day_overrides 子表归属）
+        // [resources] 主表：打开资源获取规则块（gain_rules/day_overrides 内联数组）
         flushRaw()
-        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        if (!cur || cur.type !== 'resource_gains') openBlock('resource_gains', { gainRules: [], dayOverrides: [] }, line)
         else touchCur(line)
         mode = 'resources'
       } else if (path === 'card.tags') {
@@ -331,11 +333,11 @@ export function parseToml(text) {
         } else { flushRaw(); pushRaw(line); mode = 'raw' }
       } else if (path === 'resources.defs') {
         flushRaw()
-        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        if (!cur || cur.type !== 'resource_defs') openBlock('resource_defs', { entries: [] }, line)
         else touchCur(line)
         mode = 'defs'
       } else if (path === 'resources.initial') {
-        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        if (!cur || cur.type !== 'resource_defs') openBlock('resource_defs', { entries: [] }, line)
         else touchCur(line)
         mode = 'initial'
       } else if (path === 'milestone.bonus_reward') {
@@ -425,33 +427,39 @@ function extraToml(d, type) {
   return out
 }
 
-// 资源块序列化（[resources] 主表 gain_rules/day_overrides 内联 + defs/initial 子表）。
-// 独立成函数：多个资源块合并（entries 去重）时复用。
-function serializeResource(d) {
+// 资源定义块序列化（[resources.defs] + [resources.initial]）。
+// 与获取规则拆分后各自独立复制/合并：多个资源定义块按 key 去重。
+function serializeResourceDefs(d) {
   const entries = d.entries || []
-  const defs = entries.filter((e) => e.name).map((e) => `${e.key} = ${serializeValue(e.name)}`).join('\n')
-  const initial = entries.filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '').map((e) => `${e.key} = ${e.initial}`).join('\n')
-  const parts = []
+  const defs = entries.filter((e) => e.name).map((e) => `${e.key} = ${serializeValue(e.name)}`)
+  const initial = entries.filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '').map((e) => `${e.key} = ${e.initial}`)
+  const parts = ['[resources.defs]' + (defs.length ? '\n' + defs.join('\n') : '')]
+  if (initial.length) parts.push('[resources.initial]\n' + initial.join('\n'))
+  return parts.join('\n\n')
+}
+
+// 资源获取规则块序列化（[resources] 主表内联 gain_rules / day_overrides）。
+function serializeResourceGains(d) {
   const resMain = []
   if (d.gainRules && d.gainRules.length) {
-    const arr = d.gainRules.map((g) => `{ type = ${serializeValue(g.type || 'daily')}${g.param !== undefined && g.param !== null ? `, param = ${g.param === '' ? '""' : serializeValue(g.param)}` : ''}, gains = ${serializeValue(g.gains || {})} }`)
+    const arr = d.gainRules.map((g) => `{ type = ${serializeValue(g.type || 'every_n_days')}${g.param !== undefined && g.param !== null ? `, param = ${g.param === '' ? '""' : serializeValue(g.param)}` : ''}, gains = ${serializeValue(g.gains || {})} }`)
     resMain.push('gain_rules = [\n  ' + arr.join(',\n  ') + ',\n]')
   }
   if (d.dayOverrides && d.dayOverrides.length) {
     const arr = d.dayOverrides.map((o) => `{ day = ${o.day}, gains = ${serializeValue(o.gains || {})} }`)
     resMain.push('day_overrides = [\n  ' + arr.join(',\n  ') + ',\n]')
   }
-  if (resMain.length) parts.push('[resources]\n' + resMain.join('\n'))
-  parts.push('[resources.defs]' + (defs ? '\n' + defs : ''))
-  if (initial) parts.push('[resources.initial]\n' + initial)
-  return parts.join('\n\n')
+  if (!resMain.length) return '[resources]\n'
+  return '[resources]\n' + resMain.join('\n')
 }
 
 export function blockToToml(b) {
   const d = b.data
   switch (b.type) {
-    case 'resource':
-      return serializeResource(d)
+    case 'resource_defs':
+      return serializeResourceDefs(d)
+    case 'resource_gains':
+      return serializeResourceGains(d)
     case 'banner': {
       const lines = ['[[banner]]']
       for (const key of ['id', 'name']) {
@@ -487,27 +495,6 @@ export function blockToToml(b) {
         return ll.join('\n')
       })
       return lines.concat(poolParts, life, extraToml(d, 'banner')).join('\n')
-    }
-    case 'resource': {
-      const entries = d.entries || []
-      const defs = entries.filter((e) => e.name).map((e) => `${e.key} = ${serializeValue(e.name)}`).join('\n')
-      const initial = entries.filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '').map((e) => `${e.key} = ${e.initial}`).join('\n')
-      const parts = []
-      // [resources] 主表：内联数组 gain_rules / day_overrides（对齐真实 config.toml）
-      const resMain = []
-      if (d.gainRules && d.gainRules.length) {
-        const arr = d.gainRules.map((g) => `{ type = ${serializeValue(g.type || 'daily')}${g.param !== undefined && g.param !== null ? `, param = ${g.param === '' ? '""' : serializeValue(g.param)}` : ''}, gains = ${serializeValue(g.gains || {})} }`)
-        resMain.push('gain_rules = [\n  ' + arr.join(',\n  ') + ',\n]')
-      }
-      if (d.dayOverrides && d.dayOverrides.length) {
-        const arr = d.dayOverrides.map((o) => `{ day = ${o.day}, gains = ${serializeValue(o.gains || {})} }`)
-        resMain.push('day_overrides = [\n  ' + arr.join(',\n  ') + ',\n]')
-      }
-      if (resMain.length) parts.push('[resources]\n' + resMain.join('\n'))
-      // defs / initial 子表
-      parts.push('[resources.defs]' + (defs ? '\n' + defs : ''))
-      if (initial) parts.push('[resources.initial]\n' + initial)
-      return parts.join('\n\n')
     }
     case 'card': {
       // 聚合条目表：每项输出一个 [[card]] 段
@@ -603,28 +590,43 @@ export function blockToToml(b) {
 }
 
 export function blocksToToml(list) {
-  // 资源块可多个（复制）——序列化时合并成一个 [resources]（entries 按 key 去重，gainRules/day_overrides 汇总）。
-  // 合并位置 = 第一个资源块原位置（保留相对顺序，round-trip 不重排块序，与旧 UI 保存保持同序）。
-  const resBlocks = list.filter((b) => b.type === 'resource')
-  let merged = null
-  if (resBlocks.length) {
-    const m = { entries: [], gainRules: [], dayOverrides: [] }
+  // 资源定义 / 资源获取规则可多个（复制）——序列化时各合并成一份：
+  //   resource_defs   多个定义块 entries 按 key 去重
+  //   resource_gains  多个规则块 gainRules / dayOverrides 汇总
+  // 合并位置 = 各自第一个块原位置（保留相对顺序，round-trip 不重排块序）。
+  const defsBlocks = list.filter((b) => b.type === 'resource_defs')
+  const gainsBlocks = list.filter((b) => b.type === 'resource_gains')
+  let mergedDefs = null
+  if (defsBlocks.length) {
+    const m = { entries: [] }
     const seen = new Set()
-    for (const b of resBlocks) {
+    for (const b of defsBlocks) {
       for (const e of b.data.entries || []) {
         if (e.key && !seen.has(e.key)) { seen.add(e.key); m.entries.push(e) }
         else if (!e.key) m.entries.push(e)
       }
+    }
+    mergedDefs = serializeResourceDefs(m)
+  }
+  let mergedGains = null
+  if (gainsBlocks.length) {
+    const m = { gainRules: [], dayOverrides: [] }
+    for (const b of gainsBlocks) {
       m.gainRules.push(...(b.data.gainRules || []))
       m.dayOverrides.push(...(b.data.dayOverrides || []))
     }
-    merged = serializeResource(m)
+    mergedGains = serializeResourceGains(m)
   }
   const parts = []
-  let resDone = false
+  let defsDone = false
+  let gainsDone = false
   for (const b of list) {
-    if (b.type === 'resource') {
-      if (!resDone && merged) { resDone = true; parts.push(merged) }
+    if (b.type === 'resource_defs') {
+      if (!defsDone && mergedDefs) { defsDone = true; parts.push(mergedDefs) }
+      continue
+    }
+    if (b.type === 'resource_gains') {
+      if (!gainsDone && mergedGains) { gainsDone = true; parts.push(mergedGains) }
       continue
     }
     const t = blockToToml(b)

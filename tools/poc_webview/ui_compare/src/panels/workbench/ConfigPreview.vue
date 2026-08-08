@@ -76,7 +76,9 @@ const calDate = ref(new Date())
 const previewData = computed(() => {
   try {
     const blocks = parseToml(props.configText || '')
-    const resBlock = blocks.find((b) => b.type === 'resource')
+    // 资源定义（resource_defs）与获取规则（resource_gains）拆分为两个块
+    const resDefBlock = blocks.find((b) => b.type === 'resource_defs')
+    const resGainBlock = blocks.find((b) => b.type === 'resource_gains')
     const banners = blocks
       .filter((b) => b.type === 'banner')
       .map((b) => ({
@@ -85,7 +87,7 @@ const previewData = computed(() => {
       }))
     // 资源定义（defs 的 key → 显示名）
     const resources = {}
-    for (const e of resBlock?.data?.entries || []) {
+    for (const e of resDefBlock?.data?.entries || []) {
       if (e.key && e.name) resources[e.key] = e.name
       else if (e.key) resources[e.key] = e.key
     }
@@ -101,8 +103,8 @@ const previewData = computed(() => {
     if (m && !isNaN(Date.parse(m[1]))) startDate = new Date(m[1])
     return {
       resources, banners,
-      gainRules: resBlock?.data?.gainRules || [],
-      dayOverrides: resBlock?.data?.dayOverrides || [],
+      gainRules: resGainBlock?.data?.gainRules || [],
+      dayOverrides: resGainBlock?.data?.dayOverrides || [],
       pityRules, milestoneRules,
       startDate,
     }
@@ -120,7 +122,8 @@ const summaryItems = computed(() => {
   const cards = fullBlocks.value.filter((b) => b.type === 'card').flatMap((b) => b.data.entries || [])
   const targets = fullBlocks.value.filter((b) => b.type === 'target').flatMap((b) => b.data.entries || [])
   const weights = fullBlocks.value.filter((b) => b.type === 'weight').flatMap((b) => b.data.entries || [])
-  const res = fullBlocks.value.find((b) => b.type === 'resource')
+  const res = fullBlocks.value.find((b) => b.type === 'resource_defs')
+  const resGain = fullBlocks.value.find((b) => b.type === 'resource_gains')
   const rar = fullBlocks.value.find((b) => b.type === 'rarity')
   const initRes = (res?.data?.entries || []).filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '')
     .map((e) => `${e.key}=${e.initial}`).join(' · ') || '—'
@@ -130,7 +133,7 @@ const summaryItems = computed(() => {
     '目标卡': `${targets.length} 张`,
     '权重': `${weights.length} 条`,
     '初始资源': initRes,
-    '资源获取': `${(res?.data?.gainRules || []).length} 条规则 · 逐日额外 ${(res?.data?.dayOverrides || []).length} 条`,
+    '资源获取': `${(resGain?.data?.gainRules || []).length} 条规则 · 逐日额外 ${(resGain?.data?.dayOverrides || []).length} 条`,
     '稀有度层级': (rar?.data?.ranks || []).map((r) => (r || []).join('/')).join(' → ') || '—',
     '保底': `${fullBlocks.value.filter((b) => b.type === 'pity').length} 条`,
     '累抽奖励': `${fullBlocks.value.filter((b) => b.type === 'milestone').length} 条`,

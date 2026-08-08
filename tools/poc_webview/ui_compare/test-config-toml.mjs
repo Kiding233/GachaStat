@@ -170,8 +170,8 @@ for (const t of Object.keys(BLOCK_TYPES)) {
   eq(p2.map((x) => x.type), [t], `${t} 空模板可解析且序列化后仍为 ${t} 块`)
 }
 
-// ═══ 7. resources 主表 gain_rules/day_overrides 建模（内联数组 → resource 块 gainRules/dayOverrides）═══
-sec('resources 主表 gain_rules/day_overrides 建模（round-trip 不丢）')
+// ═══ 7. resources 拆分建模：定义（resource_defs）与获取规则（resource_gains）两个块 ═══
+sec('resources 拆分：resource_defs（定义）+ resource_gains（获取规则）')
 const rawIn = `[resources]
 gain_rules = [
     { type = "every_n_days", param = "", gains = { draw_resource = 60 } },
@@ -186,17 +186,27 @@ draw_resource = "抽卡资源"
 [resources.initial]
 draw_resource = 55000`
 const rawP = parseToml(rawIn)
-assert(rawP.some((x) => x.type === 'resource'), 'resources 归入 resource 块')
-const rblock = rawP.find((x) => x.type === 'resource')
-eq(rblock.data.gainRules.length, 1, 'gain_rules 解析进 resource 块')
-eq(rblock.data.dayOverrides.length, 1, 'day_overrides 解析进 resource 块')
+assert(rawP.some((x) => x.type === 'resource_gains'), 'gain_rules/day_overrides 归入 resource_gains 块')
+assert(rawP.some((x) => x.type === 'resource_defs'), 'defs/initial 归入 resource_defs 块')
+const gblock = rawP.find((x) => x.type === 'resource_gains')
+eq(gblock.data.gainRules.length, 1, 'gain_rules 解析进 resource_gains')
+eq(gblock.data.dayOverrides.length, 1, 'day_overrides 解析进 resource_gains')
+const dblock = rawP.find((x) => x.type === 'resource_defs')
+eq(dblock.data.entries.length, 1, 'defs/initial 解析进 resource_defs')
+eq(dblock.data.entries[0].initial, 55000, 'initial 并入 resource_defs 条目')
 const rawText = blocksToToml(rawP)
 assert(rawText.includes('gain_rules'), 'round-trip 后 gain_rules 文本保留')
 assert(rawText.includes('day_overrides'), 'round-trip 后 day_overrides 文本保留')
 const rawP2 = parseToml(rawText)
-const rb2 = rawP2.find((x) => x.type === 'resource')
-eq(rb2.data.gainRules.length, 1, 'round-trip 后 gainRules 保留')
-eq(rb2.data.dayOverrides.length, 1, 'round-trip 后 dayOverrides 保留')
+const gb2 = rawP2.find((x) => x.type === 'resource_gains')
+eq(gb2.data.gainRules.length, 1, 'round-trip 后 gainRules 保留')
+eq(gb2.data.dayOverrides.length, 1, 'round-trip 后 dayOverrides 保留')
+// 多个 resource_gains 块复制 → 序列化汇总合并
+const gainsCopy = parseToml('[resources]\ngain_rules = [\n    { type = "weekly", param = "1", gains = { exchange_currency = 10 } },\n]')
+const mergedText = blocksToToml([...rawP, ...gainsCopy])
+const mergedP = parseToml(mergedText)
+eq(mergedP.filter((x) => x.type === 'resource_gains').length, 1, '多个 resource_gains 合并为一个')
+eq(mergedP.find((x) => x.type === 'resource_gains').data.gainRules.length, 2, '合并后 gainRules 汇总')
 
 // ═══ 8. pity 未渲染参数（_extra）写回不丢 ═══
 sec('pity 专用参数（_extra）round-trip 不丢')

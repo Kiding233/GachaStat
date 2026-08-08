@@ -1616,6 +1616,9 @@ class AnalysisPanel(QWidget):
         P61（2026-08-04 修复 D5 / ISSUE-324）：多池 Banner 时 label 按 banner_id.pool_id
         拆分区分——同一 Banner 的 main/free_10pull 若共用相同中文名则图表标签歧义，
         多池场景 label 用「banner 中文名.裸池 id」。
+        P72 ISSUE-701：额外补一层 banner_id → banner.name 映射——时间域消费点
+        （cumulative_by_banner 山脊图 ridge_labels、转变矩阵标题 _pool_label）用 banner 键
+        查此层，不再退化裸 banner id（原全限定键表对 banner 键恒 miss）。
         """
         names = {}
         if self._store and hasattr(self._store, 'pools'):
@@ -1626,12 +1629,15 @@ class AnalysisPanel(QWidget):
                 banner_pool_count[banner_id] = banner_pool_count.get(banner_id, 0) + 1
                 pool_ids.append((pe, banner_id))
             for pe, banner_id in pool_ids:
-                name = getattr(pe, 'name', pe.pool_id)
+                name = getattr(pe, 'name', pe.pool_id) or pe.pool_id
                 if banner_pool_count.get(banner_id, 0) > 1:
                     pool_part = pe.pool_id.split('.', 1)[1] if '.' in pe.pool_id else pe.pool_id
                     names[pe.pool_id] = f"{name}.{pool_part}"
                 else:
                     names[pe.pool_id] = name
+                # P72 ISSUE-701：banner 级映射（banner_id → banner.name），时间域消费点经此查询；
+                # setdefault 保证同 banner 多 pe 取同一 banner 名（banner 级名一致，无取首分歧）
+                names.setdefault(banner_id, name)
         return names
 
     def _extract_cost_per_draw(self):

@@ -382,3 +382,65 @@ def test_old_dataset_without_cumulative_snapshots_hints():
     # 无池 → 无提示（累积模式本就不适用）
     panel.update_results([{'card_counts': {}}], pool_end_times={}, cumulative_snapshots={})
     assert '提示' not in panel._last_status
+
+
+def _mock_bb_table(panel):
+    """mock _fill_bb_table 依赖的 QTableWidget 接口（__new__ 模式）。"""
+    panel.bb_table = SimpleNamespace()
+    panel.bb_table.clear = lambda: None
+    panel.bb_table.setColumnCount = lambda n: None
+    panel.bb_table.setHorizontalHeaderLabels = lambda h: None
+    panel.bb_table.setRowCount = lambda n: None
+    panel.bb_table.setItem = lambda *a: None
+    panel.bb_table.resizeColumnsToContents = lambda: None
+    panel.bb_table.horizontalHeader = lambda: SimpleNamespace(
+        setSectionResizeMode=lambda m: None)
+    panel.success_mode_combo = SimpleNamespace(currentData=lambda: 'count')
+    return panel
+
+
+def test_bb_detail_label_caliber_projection_and_missing():
+    """ISSUE-003 + ISSUE-103：成败统计 bb_detail_label 注明「未触达继承态」与
+    「数据缺失，非真失败」两种口径。"""
+    from gacha_simulator.gui.process_analysis_panel import ProcessAnalysisPanel
+
+    panel = _mock_bb_table(ProcessAnalysisPanel.__new__(ProcessAnalysisPanel))
+    panel.bb_detail_label = SimpleNamespace()
+    panel._bb_text = ''
+    panel.bb_detail_label.setText = lambda s: setattr(panel, '_bb_text', s)
+
+    panel._fill_bb_table({
+        'pattern_table': [], 'pool_success_rates': {},
+        'all_fail_prob': 0, 'all_success_prob': 0, 'total': 0,
+    })
+    assert '未触达' in panel._bb_text and '继承态' in panel._bb_text  # ISSUE-003
+    assert '数据缺失' in panel._bb_text and '非真失败' in panel._bb_text  # ISSUE-103
+
+
+def test_chart_webview_new_prefix_hit():
+    """ISSUE-108(3)：ChartWebView has_chart/update_chart 命中新前缀 cumulative_by_banner，
+    旧前缀 cumulative_by_pool miss（set_charts 重置键集后旧 key 不残留）。
+    """
+    from gacha_simulator.gui.chart_webview import ChartWebView
+
+    wv = ChartWebView.__new__(ChartWebView)
+    wv._loaded = False
+    wv._pending_updates = {}
+    wv._pending_charts = None
+    wv._renderer = SimpleNamespace()
+
+    class _FakeFig:
+        def to_json(self):
+            return '{}'
+
+    wv._renderer.to_figure = lambda spec: _FakeFig()
+
+    wv.set_charts({'cumulative_by_banner_x': 'spec'})
+    assert wv.has_chart('cumulative_by_banner_x') is True   # 新前缀命中
+    assert wv.has_chart('cumulative_by_pool_x') is False    # 旧前缀 miss
+
+    # update_chart 命中新前缀（_loaded=True 时登记 _chart_keys；False 时走 pending 暂存）
+    wv._loaded = True
+    wv.page = lambda: SimpleNamespace(runJavaScript=lambda *a, **k: None)
+    wv.update_chart('cumulative_by_banner_y', 'spec')
+    assert wv.has_chart('cumulative_by_banner_y') is True

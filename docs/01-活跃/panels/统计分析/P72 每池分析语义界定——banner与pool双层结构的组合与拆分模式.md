@@ -1,4 +1,4 @@
-<!-- META: P72 | module:panels/统计分析 | status:design | last:2026-08-07 | depends:P61✅,P58✅ | priority:medium -->
+<!-- META: P72 | module:panels/统计分析 | status:done | last:2026-08-08 | depends:P61✅,P58✅ | priority:medium -->
 # P72 每池分析语义界定——banner 与 pool 双层结构的组合与拆分模式
 
 > 日期：2026-08-05 | 更新：2026-08-07 | 状态：设计已裁决（转变分析暂时方案 A）| 优先级：中
@@ -308,16 +308,17 @@ A' 与方案 A 的差异只在 streaming 判成败的统计窗口（累计 → �
 ## 实施任务清单（plan-execute 消费）
 
 > 2026-08-08 由 plan-execute 前置补记——把 §4.1 修复项 + §4.3 补测转为 checkbox 任务清单（依赖序：项 5 banner_of 先行 → 项 1 → 项 2 → 项 3 → 测试）。项 4 已移交 P76 不实施。
+> ✅ **2026-08-08 全部 9 项实施完成**：11 个提交（Task 1-9 + Fidelity 修复），246 passed 回归（tests/gui 全量 + core 相关子集），Fidelity 独立审查闭环（无 critical，6 条偏离已修）。
 
-- [ ] Task 1: 项 5 `banner_of` 统一键辅助（新建 `gui/utils.py` + None/空串/裸键/全限定四态契约 + `tests/gui/test_banner_of.py` 参数化单测 + `test_gui_imports.py` GUI_MODULES 同步）
-- [ ] Task 2: 项 1a/1d `retreat_panel._get_pool_names` 补 banner→name 映射 + `PoolVulnerabilityResult` 键契约注释（ISSUE-006）
-- [ ] Task 3: 项 1b/1c `plan_search_panel` 路线 A（`set_store` 按 banner 去重 + `_find_vulnerability_pool` 匹配 + falsy 守卫 + `_get_pool_name` banner 映射，D3）
-- [ ] Task 4: 项 2a/2b `process_analysis_panel._compute_pool_gdr` 累积模式 banner 段取数 + 列头/副标「截止该 banner 段」口径标注（含 bb_table）
-- [ ] Task 5: 项 2c 空快照返 None（`per_pool_analysis` 累积分支短路，core 例外登记）+ 2d-1 未触达继承态展示口径
-- [ ] Task 6: 项 3a/3b/3e analysis_panel chart key `cumulative_by_pool`→`cumulative_by_banner` 全链替换（含 `_chart_specs_cache` prune、`_get_ordered_charts`）+ ChartWebView 缓存 + `pool_gdr_mode` 下拉标签
-- [ ] Task 7: 项 3d 显示名 banner 映射（`_get_pool_names` 补 banner 层 + `_banner_label`，供山脊图/转变矩阵标题）
-- [ ] Task 8: 项 3c 非代码引用同步（`02-实施.md`/`00-档案.md` 改 `cumulative_by_banner`；POC DatasetWorkbench/methodDefs 走 legacy 豁免登记不改）
-- [ ] Task 9: §4.3 补测试（键空间契约运行期断言 + 未达边界 + 双路径快照行为等价 + result_store 加载边界 + 脆弱性链路混合抽卡回归）
+- [x] Task 1: 项 5 `banner_of` 统一键辅助（新建 `gui/utils.py` + None/空串/裸键/全限定四态契约 + `tests/gui/test_banner_of.py` 参数化单测 + `test_gui_imports.py` GUI_MODULES 同步）
+- [x] Task 2: 项 1a/1d `retreat_panel._get_pool_names` 补 banner→name 映射 + `PoolVulnerabilityResult` 键契约注释（ISSUE-006）
+- [x] Task 3: 项 1b/1c `plan_search_panel` 路线 A（`set_store` 按 banner 去重 + `_find_vulnerability_pool` 匹配 + falsy 守卫 + `_get_pool_name` banner 映射，D3）
+- [x] Task 4: 项 2a/2b `process_analysis_panel._compute_pool_gdr` 累积模式 banner 段取数 + 列头/副标「截止该 banner 段」口径标注（含 bb_table）
+- [x] Task 5: 项 2c 空快照返 None（`per_pool_analysis` 累积分支短路，core 例外登记）+ 2d-1 未触达继承态展示口径
+- [x] Task 6: 项 3a/3b/3e analysis_panel chart key `cumulative_by_pool`→`cumulative_by_banner` 全链替换（含 `_chart_specs_cache` prune、`_get_ordered_charts`）+ ChartWebView 缓存 + `pool_gdr_mode` 下拉标签
+- [x] Task 7: 项 3d 显示名 banner 映射（`_get_pool_names` 补 banner 层 + `_banner_label`，供山脊图/转变矩阵标题）
+- [x] Task 8: 项 3c 非代码引用同步（`02-实施.md`/`00-档案.md` 改 `cumulative_by_banner`；POC DatasetWorkbench/methodDefs 走 legacy 豁免登记不改）
+- [x] Task 9: §4.3 补测试（键空间契约运行期断言 + 未达边界 + 双路径快照行为等价 + result_store 加载边界 + 脆弱性链路混合抽卡回归）
 
 ## 自动化审查记录
 

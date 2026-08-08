@@ -106,9 +106,13 @@ class AnalysisService:
             return make_gdr_calculator(self.store, self.target_specs, gdr_key,
                                        gdr_threshold=None, ssr_ids=self.ssr_ids), weights_ok
         except Exception:
-            # store 缺失/权重问题 → 退化无权重计算
-            return make_gdr_calculator(None, self.target_specs, gdr_key,
-                                       ssr_ids=self.ssr_ids), False
+            # store 缺失/权重问题 → 退化无权重计算（直接构造 GDRCalculator 传空权重，
+            # 避免 make_gdr_calculator 对 store=None 解引用抛 AttributeError 在 try 外崩溃）
+            from gacha_simulator.core.gdr import GDRCalculator
+            return GDRCalculator(self.target_specs, gdr_key=gdr_key,
+                                 gdr_threshold=None, ssr_ids=self.ssr_ids,
+                                 desire_weights={}, miss_cost_weights={},
+                                 card_value_weights={}), False
 
     def _gdr_values(self, gdr_key, aggregate_data=None):
         agg = aggregate_data if aggregate_data is not None else self.aggregate_data

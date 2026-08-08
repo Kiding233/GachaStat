@@ -17,8 +17,7 @@ import numpy as np
 from gacha_simulator.core.vulnerability import compute_vulnerability_analysis
 from gacha_simulator.core.retreat_config import RetreatConfigBuilder
 from gacha_simulator.visualization.chart_spec import (
-    ChartSpec, ChartAnnotation, HistogramData, RidgeData,
-    ScatterData, ScatterTrace,
+    ChartSpec, RidgeData,
 )
 from gacha_simulator.core.config_toml import save_toml
 
@@ -63,7 +62,19 @@ def run_vulnerability_analysis(dataset: dict, store, params: dict) -> dict:
         use_draw_units=False,
     )
 
-    sections = _build_sections(analysis, alpha)
+    # 不抽卡基线（dataset 随模拟结果持久化；对齐旧 retreat_panel no_draw_pool_resources）
+    no_draw_pool_resources = dict(dataset.get('no_draw_pool_resources', {}) or {})
+    from gacha_simulator.core.gdr import parse_gdr_key
+    _, resource_key = parse_gdr_key(gdr_key)
+
+    # 池显示名映射（banner 键 → 中文名；对齐旧 retreat_panel._get_pool_names）
+    pool_names = _build_pool_names(store)
+
+    # 资源名（x 轴标题「资源剩余 (XX)」，对齐旧 plot_vulnerability resource_name）
+    resource_name = _resource_display_name(store, resource_key)
+
+    sections = _build_sections(analysis, alpha, no_draw_pool_resources,
+                               resource_key, pool_names, resource_name)
     pools = _serialize_pools(analysis)
     return {
         'ok': True,
@@ -101,7 +112,38 @@ def _extract_cost_per_draw(store) -> float:
     return 160.0
 
 
-def _build_sections(analysis, alpha) -> list:
+def _build_pool_names(store) -> dict:
+    """池 ID → 显示名映射（banner 键；对齐旧 retreat_panel._get_pool_names）。
+
+    store.pools 展平后 pe.name 即 banner 级名、pe.pool_id 为全限定键——
+    按 banner 段映射，使 pool_names.get(pr.pool_id) 命中（pr.pool_id 为 banner 键）。
+    """
+    names = {}
+    if store is None:
+        return names
+    for pe in getattr(store, 'pools', []):
+        if not getattr(pe, 'enabled', True):
+            continue
+        pid = getattr(pe, 'pool_id', '')
+        banner_id = pid.split('.')[0] if '.' in pid else pid
+        names.setdefault(banner_id, getattr(pe, 'name', pid) or pid)
+    return names
+
+
+def _resource_display_name(store, resource_key: str) -> str:
+    """资源显示名（对齐旧 plot_vulnerability resource_name 默认「抽卡资源」）。"""
+    if store is not None:
+        rd = getattr(store, 'resource_defs', {}) or {}
+        if resource_key in rd:
+            return rd[resource_key]
+    return '抽卡资源'
+
+
+def _build_sections(analysis, alpha, no_draw_pool_resources=None,
+                    resource_key='draw_resource', pool_names=None,
+                    resource_name='抽卡资源') -> list:
+    pool_names = pool_names or {}
+    no_draw_pool_resources = no_draw_pool_resources or {}
     sections = []
     # 总览摘要
     summary_items = {
@@ -112,105 +154,168 @@ def _build_sections(analysis, alpha) -> list:
     }
     sections.append({'key': 'summary', 'title': '脆弱性总览', 'items': summary_items})
 
-    # 总览山脊：各池资源分布（脆弱池红、其余蓝）
+    # 总览山脊：各池资源分布（对齐旧 plot_vulnerability_ridge——
+    # 全池 Viridis 渐变柱 + 均值红虚线 + 不抽卡基线绿点线 + 脆弱区间浅红带 + y 轴池名）
     series = {}
     labels = {}
-    colors = []
+    means = {}
+    vuln_regions = {}
     for pr in analysis.pool_results:
         vals = pr.resource_values_all or []
         if len(vals) < 2:
             continue
-        series[pr.pool_id] = np.array(vals)
-        labels[pr.pool_id] = pr.pool_id
-        colors.append('#c62828' if pr.vulnerability_intervals else '#1976d2')
+        pid = pr.pool_id
+        series[pid] = np.array(vals)
+        labels[pid] = pool_names.get(pid, pr.pool_id)
+        means[pid] = float(np.mean(vals))
+        if pr.vulnerability_intervals:
+            vuln_regions[pid] = (float(pr.vulnerability_intervals[0].lower),
+                                 float(pr.vulnerability_intervals[0].upper))
     if series:
-        ridge = ChartSpec(chart_type='ridge', data=RidgeData(series=series, labels=labels),
-                          title='各池资源剩余分布（脆弱池红色）', xlabel='资源剩余', ylabel='池子',
-                          layout_hints={'bin_edges': list(analysis.global_bin_edges)} if analysis.global_bin_edges else {})
+        # 全池 Viridis 渐变（对齐旧 sample_colorscale('Viridis', [i/(n-1)]))；脆弱性靠区间带表达）
+        colors = {}
+        n = len(series)
+        pids = list(series.keys())
+        _viridis = _viridis_colors(n)
+        for i, pid in enumerate(pids):
+            colors[pid] = _viridis[i]
+        baselines = {}
+        for pid in series:
+            pool_res = no_draw_pool_resources.get(pid, {})
+            if not isinstance(pool_res, dict):
+                # 全限定键兜底（对齐 analysis_service 的 pid.split('.')[0] 做法）
+                pool_res = no_draw_pool_resources.get(pid.split('.')[0], {})
+            if isinstance(pool_res, dict) and resource_key in pool_res:
+                baselines[pid] = float(pool_res[resource_key])
+        ridge = ChartSpec(
+            chart_type='ridge',
+            data=RidgeData(series=series, baselines=baselines, labels=labels,
+                           means=means, vuln_regions=vuln_regions, colors=colors),
+            title='资源脆弱性总览', xlabel=f'资源剩余 ({resource_name})', ylabel='池子',
+            layout_hints={'bin_edges': list(analysis.global_bin_edges)} if analysis.global_bin_edges else {},
+        )
         sections.append({'key': 'chart', 'title': '各池资源分布总览', 'spec': _spec_to_dict(ridge)})
 
-    # 每池：直方图 + PAVA 图 + N_j + 区间表
+    # 每池：单池组合图（3 子图，对齐旧 plot_vulnerability）+ 区间表
     for pr in analysis.pool_results:
-        base = f'池 {pr.pool_id}'
+        pname = pool_names.get(pr.pool_id, pr.pool_id)
+        base = f'池 {pname}'
         rows = []
         for vi in pr.vulnerability_intervals:
             rows.append([f'[{vi.lower:.0f}, {vi.upper:.0f}]', f'{vi.mean:.0f}'])
         if rows:
             sections.append({'key': 'table', 'title': f'{base} 脆弱区间',
                              'headers': ['区间', '中心'], 'rows': rows})
-        # 直方图（资源分布）——与原 UI plot_vulnerability 一致：全部池共享 global_bin_edges
-        #（分箱宽度全局统一，否则各池独立分箱宽度不一致、与原 UI 视觉不同）
-        vals = pr.resource_values_all or []
-        failed = pr.resource_values_failed or []
-        if len(vals) >= 2:
-            hist_layout = ({'bin_edges': list(analysis.global_bin_edges)}
-                           if analysis.global_bin_edges else {'nbins': 30})
-            hist = ChartSpec(
-                chart_type='histogram',
-                data=HistogramData(samples=np.array(vals), mean_line=True, quantile_lines=None,
-                                   overlays=[], density=False)
-                if not failed else
-                HistogramData(samples=np.array(vals), mean_line=True,
-                              overlays=_overlays_from_failed(failed), density=False),
-                title=f'{base} 资源分布', xlabel='资源剩余', ylabel='频次',
-                layout_hints=hist_layout,
-            )
-            sections.append({'key': 'chart', 'title': f'{base} 资源分布', 'spec': _spec_to_dict(hist)})
-        # PAVA 图
-        pava = _pava_chart(pr, alpha)
-        if pava is not None:
-            sections.append({'key': 'chart', 'title': f'{base} PAVA 推断', 'spec': _spec_to_dict(pava)})
+        comp = _composite_pool_chart(pr, alpha, analysis.global_bin_edges,
+                                     pname=pname, resource_name=resource_name)
+        if comp is not None:
+            sections.append({'key': 'chart', 'title': f'{base} 脆弱性分析（PAVA 保序 + 变更点）',
+                             'spec': _spec_to_dict(comp)})
     return sections
 
 
-def _overlays_from_failed(failed):
-    from gacha_simulator.visualization.chart_spec import HistogramOverlay
-    return [HistogramOverlay(samples=np.array(failed), color='#c62828', opacity=0.5,
-                            label=f'失败样本(n={len(failed)})')]
+def _viridis_colors(n):
+    """Viridis 渐变取色（对齐旧 plot_vulnerability_ridge sample_colorscale('Viridis', ...)）。"""
+    from gacha_simulator.visualization.chart_spec import _VIRIDIS_HEX
+    if n <= 1:
+        return [_VIRIDIS_HEX[10]]
+    idx = [int(round(i / (n - 1) * (len(_VIRIDIS_HEX) - 1))) for i in range(n)]
+    return [_VIRIDIS_HEX[i] for i in idx]
 
 
-def _pava_chart(pr, alpha):
-    """PAVA 推断图：p̂_j 散点 + θ̃ 台阶 + α 参考线 + 脆弱区间（scatter multi-traces）。"""
+def _composite_pool_chart(pr, alpha, global_bin_edges, pname=None, resource_name='抽卡资源'):
+    """单池组合图——对齐旧 plot_vulnerability 的 3 子图结构：
+    ① 等距直方图（频次 + 均值红虚线）② PAVA 推断（p̂_j 灰点 + θ̃ 台阶 + α 线 + 脆弱区间带）
+    ③ 分位数分箱 N_j 分布（柱宽=PAVA 箱宽，色=安全蓝/脆弱红）。
+    返回 ChartSpec(chart_type='composite') 或 None（数据不足）。
+    """
+    if not pr.resource_bins or pr.pava_fit is None:
+        return None
+    from gacha_simulator.visualization.chart_spec import (
+        PanelSpec, PanelCompositeData, ChartSpec, HistogramData,
+        HistogramOverlay, ScatterData, ScatterTrace, BarData,
+        ChartAnnotation, ShadedRegion,
+    )
+    bin_edges = np.array(pr.resource_bins, dtype=float)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    samples_all = np.repeat(bin_centers, np.maximum(pr.freq_all, 0).astype(int))
+    if len(samples_all) < 2:
+        return None
     fit = pr.pava_fit
-    if fit is None:
-        return None
+    is_fallback = bool(fit.get('used_fallback', False) or len(fit.get('theta_per_bin', [])) > 50)
+    gbe = np.asarray(global_bin_edges, dtype=float) if global_bin_edges is not None else None
+
+    # ① 直方图（频次，density=False）
+    hist_data = HistogramData(samples=samples_all, mean_line=True, density=False)
+    if pr.freq_failed and pr.resource_values_failed:
+        failed_arr = np.array(pr.resource_values_failed)
+        hist_data.overlays = [HistogramOverlay(samples=failed_arr, color='#c62828',
+                                               opacity=0.5, label=f'失败样本(n={len(failed_arr)})')]
+    p1 = PanelSpec(chart_type='histogram', data=hist_data, title='频次',
+                   layout_hints={'bin_edges': list(gbe)} if gbe is not None
+                   else {'bin_edges': list(bin_edges)},
+                   show_x_axis=False)
+
+    # ② PAVA 推断
     traces = []
-    if fit.get('used_fallback'):
-        x = list(fit.get('bin_centers', []))
-        y = list(fit.get('theta_per_bin', []))
-        if x and y:
-            traces.append(ScatterTrace(x=np.array(x), y=np.array(y), mode='lines',
-                                      name='θ̃', line_color='darkred', marker_size=2))
+    if is_fallback:
+        # 回退路径：PAVA 自身 bin_centers 连线（对齐旧 plot_vulnerability L1059-1067）
+        traces.append(ScatterTrace(x=np.array(fit['bin_centers']),
+                                   y=np.array(fit['theta_per_bin']), mode='lines',
+                                   name='θ̃', line_color='darkred', line_width=2.5))
     else:
-        bc = list(fit.get('bin_centers', []))
-        ph = list(fit.get('p_hat', []))
-        if bc and ph:
-            # 散点（p̂_j）——用多轨迹表达：每点一个 marker 不现实，改为折线+点
-            traces.append(ScatterTrace(x=np.array(bc), y=np.array(ph), mode='markers',
-                                      name='p̂_j', marker_size=6, marker_color='#888'))
-        # PAVA 台阶
-        xl = fit.get('x_left', [])
-        xr = fit.get('x_right', [])
-        tt = fit.get('theta_tilde', [])
-        blocks = fit.get('blocks', [])
-        if blocks and xl and xr and tt:
-            sx, sy = [], []
-            for bi, blk in enumerate(blocks):
-                if bi < len(tt):
-                    sx += [xl[blk[0]], xr[blk[-1]], None]
-                    sy += [tt[bi], tt[bi], None]
-            if sx:
-                traces.append(ScatterTrace(x=np.array([v for v in sx if v is not None]),
-                                          y=np.array([v for v in sy if v is not None]),
-                                          mode='lines', name='θ̃', line_color='darkred', marker_size=2))
-    if not traces:
-        return None
-    spec = ChartSpec(chart_type='scatter', data=ScatterData(traces=traces),
-                     title=f'池 {pr.pool_id} PAVA 推断（α={alpha:.2f}）',
-                     xlabel='资源剩余', ylabel='P(失败 | 资源剩余)',
-                     annotations=[ChartAnnotation(type='hline', value=alpha, color='gray',
-                                                  dash='dash', text=f'α={alpha}')])
-    return spec
+        N_j = np.asarray(fit['N_j'], dtype=float)
+        N_max = float(N_j.max()) if len(N_j) else 1.0
+        sizes = [max(4.0, 20.0 * nj / N_max) for nj in N_j]
+        traces.append(ScatterTrace(
+            x=np.array(fit['bin_centers']), y=np.array(fit['p_hat']), mode='markers',
+            name='p̂_j', marker_color='#888', marker_sizes=sizes,
+            opacity=0.6, customdata=[int(n) for n in N_j],
+        ))
+        xl = np.asarray(fit['x_left'])
+        xr = np.asarray(fit['x_right'])
+        for bi, blk in enumerate(fit['blocks']):
+            if bi < len(fit['theta_tilde']):
+                traces.append(ScatterTrace(
+                    x=np.array([float(xl[blk[0]]), float(xr[blk[-1]])]),
+                    y=np.array([float(fit['theta_tilde'][bi]), float(fit['theta_tilde'][bi])]),
+                    mode='lines', name='θ̃', line_color='darkred', line_width=2.5,
+                ))
+    pava_annotations = [ChartAnnotation(type='hline', value=alpha, color='gray',
+                                        dash='dash', text=f'α={alpha}')]
+    pava_regions = [ShadedRegion(lower=vi.lower, upper=vi.upper,
+                                 color='rgba(200,50,50,0.15)',
+                                 label=f'脆弱区间 [{vi.lower:.0f}, {vi.upper:.0f}]')
+                    for vi in pr.vulnerability_intervals]
+    p2 = PanelSpec(chart_type='scatter', data=ScatterData(traces=traces), title='P(失败 | 资源剩余)',
+                   annotations=pava_annotations, shaded_regions=pava_regions, show_x_axis=False)
+
+    # ③ N_j 分位数分箱分布
+    p3 = None
+    if not is_fallback:
+        xl = np.asarray(fit['x_left'])
+        xr = np.asarray(fit['x_right'])
+        centers = ((xl + xr) / 2).tolist()
+        widths = (xr - xl).tolist()
+        N_j = np.asarray(fit['N_j'], dtype=float)
+        colors = []
+        for j in range(len(fit['theta_per_bin'])):
+            colors.append('rgba(220,50,50,0.6)' if fit['theta_per_bin'][j] > alpha
+                          else 'rgba(31,119,180,0.5)')
+        p3 = PanelSpec(chart_type='bar', data=BarData(labels=[], values=N_j, orientation='v'),
+                       title='N_j',
+                       layout_hints={'bar_centers': centers,
+                                     'bar_widths': widths,
+                                     'bar_colors': colors}, show_x_axis=True)
+
+    panels = [p1, p2] + ([p3] if p3 else [])
+    comp = ChartSpec(
+        chart_type='composite',
+        data=PanelCompositeData(panels=panels, xlabel=f'资源剩余 ({resource_name})',
+                                row_heights=[0.4, 0.35, 0.25]),
+        title=pname or pr.pool_id,
+    )
+    return comp
 
 
 def _serialize_pools(analysis) -> list:

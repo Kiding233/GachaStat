@@ -140,8 +140,11 @@ function renderCharts() {
       el.addEventListener('wheel', (e) => onWheel(e, inst), { passive: false })
     }
     // 山脊线图：单子图定高，全图高度随堆叠数动态增长（容器高度 = top + rows×rowHeight）
+    // 组合图（composite）：多面板按 row_heights 比例堆叠，总高已算好
     if (opt.__gscRidge) {
       el.style.height = (opt.__gscRidge.top + opt.__gscRidge.rows * opt.__gscRidge.rowHeight) + 'px'
+    } else if (opt.__gscComposite && opt.__gscComposite.total) {
+      el.style.height = opt.__gscComposite.total + 'px'
     } else {
       el.style.height = ''
     }

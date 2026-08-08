@@ -7,6 +7,13 @@ from typing import Literal, Union
 import numpy as np
 
 
+# Viridis 色阶十六进制表（21 级，对齐 Plotly sample_colorscale('Viridis') 近似）
+_VIRIDIS_HEX = [
+    '#440154', '#482575', '#414487', '#355f8d', '#2a788e', '#21918c',
+    '#22a884', '#43bf71', '#7ad151', '#b8de29', '#fde725',
+]
+
+
 # ── 各图表类型的类型化 data 载荷 ──────────────────────────────────────────
 
 @dataclass
@@ -40,6 +47,9 @@ class RidgeData:
     series: dict[str, np.ndarray]  # {内部键: 样本数组}
     baselines: dict[str, float] = field(default_factory=dict)  # {内部键: 基线值}，不抽卡基线
     labels: dict[str, str] = field(default_factory=dict)  # {内部键: 显示名}，为空时用内部键作为显示名
+    means: dict[str, float] = field(default_factory=dict)  # {内部键: 均值}，画均值虚线
+    vuln_regions: dict[str, tuple] = field(default_factory=dict)  # {内部键: (lower, upper)} 脆弱区间带
+    colors: dict[str, str] | None = None  # {内部键: 颜色}（old UI Viridis 渐变 / 脆弱池红色）
 
 
 @dataclass
@@ -59,6 +69,10 @@ class ScatterTrace:
     marker_size: int = 7
     marker_color: str | None = None
     line_color: str | None = None
+    marker_sizes: list[float] | None = None  # 每点独立大小（∝ N_j，PAVA p̂_j 散点）
+    opacity: float | None = None  # 全局透明度（PAVA 灰点 0.6）
+    customdata: list | None = None  # 每点附加数据（N_j）供 tooltip 展示
+    line_width: float | None = None  # 连线宽度（PAVA 台阶 darkred 2.5）
 
 
 @dataclass
@@ -120,6 +134,27 @@ class TableData:
     cell_colors: list[list[str]] | None = None  # 每列的单元格颜色
 
 
+@dataclass
+class PanelSpec:
+    """组合图内单个子面板（对齐旧 Plotly make_subplots 子图）。"""
+    chart_type: ChartType
+    data: ChartData
+    title: str = ""                          # y 轴标题（如「频次」「P(失败|资源剩余)」「N_j」）
+    annotations: list[ChartAnnotation] = field(default_factory=list)
+    shaded_regions: list[ShadedRegion] = field(default_factory=list)
+    layout_hints: dict = field(default_factory=dict)
+    show_x_axis: bool = False                # 是否显示 x 轴（旧 shared_xaxes：仅末面板显示）
+
+
+@dataclass
+class PanelCompositeData:
+    """多面板组合图数据（旧 Plotly make_subplots rows=n shared_xaxes）。"""
+    panels: list[PanelSpec]
+    xlabel: str = ""                         # 共享 x 轴标题
+    row_heights: list[float] | None = None   # 各面板高度占比
+    shared_x: bool = True                    # 是否共享 x 轴（旧 shared_xaxes=True）
+
+
 # ── Union 类型别名 ─────────────────────────────────────────────────────
 
 ChartData = Union[
@@ -133,12 +168,13 @@ ChartData = Union[
     Waterfall3DData,
     SubplotGridData,
     TableData,
+    PanelCompositeData,
 ]
 
 ChartType = Literal[
     "histogram", "cdf", "ridge", "boxplot",
     "scatter", "bar", "heatmap", "waterfall_3d",
-    "subplot_grid", "table",
+    "subplot_grid", "table", "composite",
 ]
 
 
@@ -177,6 +213,7 @@ class ChartSpec:
     shaded_regions: list[ShadedRegion] = field(default_factory=list)
     layout_hints: dict = field(default_factory=dict)
     # layout_hints 可包含: figsize=(w, h), nbins=int, color=str, bin_edges=ndarray, 等渲染提示
+    panels: list[PanelSpec] = field(default_factory=list)  # 组合图子面板（chart_type='composite'）
 
 
 # ── 便捷构造函数 ───────────────────────────────────────────────────────

@@ -132,11 +132,14 @@ export const METHOD_DEFS = [
   {
     type: 'conditional_dist', label: '条件分布', category: '风险分析',
     params: [
-      { key: 'cond', label: '条件', type: 'select', options: [['success', '成功'], ['failure', '失败']], default: 'success' },
-      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
+      // 对齐旧 analysis_panel：条件分布 = 「条件 GDR 指标 cond + 阈值 threshold」下目标 GDR 的分布
+      { key: 'cond', label: '条件指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
+      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'resource_remaining' },
+      { key: 'threshold', label: '条件阈值', type: 'number', default: 0.5, precision: 4 },
     ],
     result: [
-      { key: 'chart', title: '条件分布图', desc: '按条件切分的 GDR 分布' },
+      { key: 'summary', title: '条件分布统计量表' },
+      { key: 'chart', title: '条件分布图', desc: '按条件指标阈值切分的 GDR 分布' },
     ],
   },
 

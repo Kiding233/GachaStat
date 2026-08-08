@@ -133,8 +133,12 @@
       <div class="sub-section">
         <div class="sub-title">生命周期（{{ data.lifecycle.length }}）</div>
         <el-table :data="data.lifecycle" size="small">
-          <el-table-column label="关联池" width="120">
-            <template #default="{ row }"><el-input v-model="row.pool" size="small" placeholder="pool id" /></template>
+          <el-table-column label="关联池" width="130">
+            <template #default="{ row }">
+              <el-select v-model="row.pool" size="small" allow-create filterable placeholder="pool id">
+                <el-option v-for="p in ownPoolIds" :key="p" :label="p" :value="p" />
+              </el-select>
+            </template>
           </el-table-column>
           <el-table-column label="条件" width="150">
             <template #default="{ row }">
@@ -207,6 +211,8 @@ const enabled = computed({
 
 const CONDITIONS = ['pool_draws', 'banner_draws', 'card_obtained', 'pool_exhausted', 'time_window']
 const ACTIONS = ['switch_to', 'exhaust_banner']
+// 生命周期「关联池」：本 Banner 的池子 id 下拉（不再手输）
+const ownPoolIds = computed(() => (props.data.pools || []).map((p) => p.id).filter(Boolean))
 
 // 匹配列仅 card_obtained 条件需要
 const isCardObtainedLife = computed(() =>

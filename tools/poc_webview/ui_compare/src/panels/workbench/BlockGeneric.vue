@@ -45,11 +45,61 @@
           </el-table-column>
         </el-table>
         <el-button size="small" class="sub-btn" @click="addEntry">+ 添加资源</el-button>
+
+        <!-- 资源获取规则（[[resources.gain_rules]]：每日/每N天/每周/每月 类型 + 资源获取）-->
+        <div class="sub-title">资源获取规则（{{ (data.gainRules || []).length }}）</div>
+        <el-table :data="data.gainRules || []" size="small">
+          <el-table-column label="类型" width="140">
+            <template #default="{ row }">
+              <el-select v-model="row.type" size="small" style="width: 100%">
+                <el-option label="每 N 天" value="every_n_days" />
+                <el-option label="每周（参数=星期几 1-7）" value="weekly" />
+                <el-option label="每月固定日（参数=日 或 月,日）" value="monthly_day" />
+                <el-option label="每月第 N 周（参数=周,星期几）" value="monthly_week" />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="参数" width="100">
+            <template #default="{ row }"><el-input v-model="row.param" size="small" placeholder="N / 日 / 月,日 / 周,星期" /></template>
+          </el-table-column>
+          <el-table-column label="资源获取 (res:num)" min-width="170">
+            <template #default="{ row }">
+              <el-input :model-value="gainsText(row.gains)" size="small" placeholder="draw_resource:60" @change="(v) => parseGains(row, v)" />
+            </template>
+          </el-table-column>
+          <el-table-column width="50" align="center">
+            <template #default="{ row }">
+              <el-button size="small" text type="danger" @click="removeGainRule(row)">×</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-button size="small" class="sub-btn" @click="addGainRule">+ 添加获取规则</el-button>
+
+        <!-- 逐日额外获取（[[resources.day_overrides]]：指定天累加资源获取——引擎语义是「累加」不是覆盖）-->
+        <div class="sub-title">逐日额外获取（{{ (data.dayOverrides || []).length }}）</div>
+        <el-table :data="data.dayOverrides || []" size="small">
+          <el-table-column label="天数" width="110">
+            <template #default="{ row }">
+              <el-input-number v-model="row.day" size="small" :min="0" :controls="false" style="width: 90px" />
+            </template>
+          </el-table-column>
+          <el-table-column label="资源获取 (res:num)" min-width="170">
+            <template #default="{ row }">
+              <el-input :model-value="gainsText(row.gains)" size="small" placeholder="draw_resource:100" @change="(v) => parseGains(row, v)" />
+            </template>
+          </el-table-column>
+          <el-table-column width="50" align="center">
+            <template #default="{ row }">
+              <el-button size="small" text type="danger" @click="removeDayOverride(row)">×</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-button size="small" class="sub-btn" @click="addDayOverride">+ 添加逐日覆盖</el-button>
       </template>
 
       <!-- ══ 卡片/权重/目标卡：聚合条目表格（每行一个条目，字段塞一行）══ -->
       <template v-else-if="isTableType">
-        <el-table :data="data.entries" size="small">
+        <el-table :data="data.entries" size="small" highlight-current-row @current-change="onCardSelect">
           <el-table-column v-for="col in entryCols" :key="col.key" :label="col.label" :min-width="col.minWidth">
             <template #default="{ row }">
               <el-input v-if="col.type === 'text'" v-model="row[col.key]" size="small" />
@@ -75,6 +125,24 @@
               >
                 <el-option v-for="pid in poolIds" :key="pid" :label="pid" :value="pid" />
               </el-select>
+              <!-- 目标卡关联池：只读自动解析（由该卡在哪些池的奖励中出现推导，对齐旧 UI _update_target_pools）-->
+              <span v-else-if="col.type === 'pools_readonly'" class="pools-ro">
+                {{ targetPoolsText(row) }}
+              </span>
+              <el-input
+                v-else-if="col.type === 'tags'"
+                :model-value="tagsText(row[col.key])"
+                size="small"
+                placeholder="key:value, key:value"
+                @change="(v) => parseTags(row, col.key, v)"
+              />
+              <el-input
+                v-else-if="col.type === 'listtags'"
+                :model-value="listTagsText(row[col.key])"
+                size="small"
+                placeholder="key:v1,v2; key2:v1"
+                @change="(v) => parseListTags(row, col.key, v)"
+              />
             </template>
           </el-table-column>
           <el-table-column width="130" align="center">
@@ -85,6 +153,29 @@
           </el-table-column>
         </el-table>
         <el-button size="small" class="sub-btn" @click="addEntryRow">+ 添加{{ meta.label }}</el-button>
+
+        <!-- 卡片溢出分段（card.overflow_bands）：选中行编辑（满突溢出）-->
+        <div v-if="type === 'card' && selectedCard" class="sub-section">
+          <div class="sub-title">「{{ selectedCard.card_id || '未命名' }}」溢出分段（overflow_bands）</div>
+          <el-table :data="selectedCard.overflow_bands || []" size="small">
+            <el-table-column label="区间 [min, max]" min-width="170">
+              <template #default="{ row }">
+                <el-input :model-value="rangeText(row.range)" size="small" placeholder="1-7 或 8-inf" @change="(v) => parseRange(row, v)" />
+              </template>
+            </el-table-column>
+            <el-table-column label="资源 (key:num)" min-width="200">
+              <template #default="{ row }">
+                <el-input :model-value="resourcesText(row.resources)" size="small" placeholder="yellow_cert:1, ..." @change="(v) => parseResources(row, v)" />
+              </template>
+            </el-table-column>
+            <el-table-column width="50" align="center">
+              <template #default="{ row }">
+                <el-button size="small" text type="danger" @click="removeBandFrom(selectedCard.overflow_bands, row)">×</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-button size="small" text type="primary" class="sub-btn" @click="addCardBand">+ 溢出段</el-button>
+        </div>
       </template>
 
       <!-- ══ 稀有度块：层级标签编辑（el-select 多选 + 输入即添加）══ -->
@@ -110,6 +201,32 @@
         <el-button size="small" class="sub-btn" @click="data.ranks.push([])">+ 添加层级</el-button>
       </template>
 
+      <!-- ══ 稀有度溢出默认（[rarity_defaults.<rarity>] + overflow_bands）══ -->
+      <template v-else-if="type === 'rarity_defaults'">
+        <div v-for="(rd, r) in data.defaults || {}" :key="r" class="rd-block">
+          <div class="sub-title">稀有度「{{ r }}」默认溢出</div>
+          <el-table :data="rd.overflow_bands || []" size="small">
+            <el-table-column label="区间 [min, max]" min-width="170">
+              <template #default="{ row }">
+                <el-input :model-value="rangeText(row.range)" size="small" placeholder="1-7 或 8-inf" @change="(v) => parseRange(row, v)" />
+              </template>
+            </el-table-column>
+            <el-table-column label="资源 (key:num)" min-width="200">
+              <template #default="{ row }">
+                <el-input :model-value="resourcesText(row.resources)" size="small" placeholder="starglitter:10, ..." @change="(v) => parseResources(row, v)" />
+              </template>
+            </el-table-column>
+            <el-table-column width="50" align="center">
+              <template #default="{ row }">
+                <el-button size="small" text type="danger" @click="removeBandFrom(rd.overflow_bands, row)">×</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-button size="small" text type="primary" class="sub-btn" @click="addBandTo(rd)">+ 溢出段</el-button>
+        </div>
+        <el-button size="small" class="sub-btn" @click="addRarityDefault">+ 稀有度默认</el-button>
+      </template>
+
       <!-- ══ 保底块：纵向逐行（保持逻辑链），按语义分组紧凑 ══ -->
       <template v-else-if="type === 'pity'">
         <div class="pity-groups">
@@ -131,7 +248,7 @@
                 />
                 <el-switch v-else-if="f.type === 'bool'" :model-value="!!data[f.key]" size="small" @change="(v) => (data[f.key] = v)" />
                 <el-select v-else-if="f.type === 'select'" v-model="data[f.key]" size="small" allow-create filterable class="pity-sel">
-                  <el-option v-for="o in f.options" :key="o" :label="o" :value="o" />
+                  <el-option v-for="o in selectOptions(f)" :key="String(o[0])" :label="o[1]" :value="o[0]" />
                 </el-select>
                 <el-select
                   v-else-if="f.type === 'array'"
@@ -143,9 +260,58 @@
                   default-first-option
                   class="pity-arr"
                   @change="(v) => (data[f.key] = v)"
-                />
+                >
+                  <el-option v-for="o in arrayOptions(f)" :key="String(o[0])" :label="o[1]" :value="o[0]" />
+                </el-select>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- 类型专用参数（rotating_cr/targeted 等事件驱动参数可编辑；deltas 表用于 soft_step）-->
+        <div v-if="pitySpecial.fields.length || pitySpecial.showDeltas" class="pity-group">
+          <div class="pity-group-title">类型专用参数</div>
+          <div v-for="f in pitySpecial.fields" :key="f.key" class="pity-row">
+            <span class="pity-label">{{ f.label }}</span>
+            <div class="pity-ctl">
+              <el-input-number
+                v-if="f.type === 'number'"
+                :model-value="data[f.key]"
+                size="small"
+                :precision="f.precision"
+                :controls="false"
+                class="pity-num"
+                @change="(v) => (data[f.key] = v)"
+              />
+              <el-switch
+                v-else-if="f.type === 'bool'"
+                :model-value="!!(data[f.key] ?? f.default)"
+                size="small"
+                @change="(v) => (data[f.key] = v)"
+              />
+              <el-input v-else-if="f.type === 'text'" v-model="data[f.key]" size="small" placeholder="card_id" />
+              <!-- cr_state_probs：浮点列表 -->
+              <div v-else-if="f.type === 'floats'" class="floats-edit">
+                <el-tag v-for="(v, vi) in (data[f.key] || [])" :key="vi" size="small" closable @close="removeFloat(f.key, vi)">{{ v }}</el-tag>
+                <el-input-number size="small" :controls="false" :precision="4" :step="0.01" style="width: 80px" @change="(nv) => addFloat(f.key, nv)" />
+              </div>
+            </div>
+          </div>
+          <!-- soft_step：爬升曲线 deltas（[抽数段长, 增量%] 表）-->
+          <div v-if="pitySpecial.showDeltas" class="pity-deltas">
+            <div class="pity-deltas-title">爬升曲线 deltas（[抽数段长, 增量]）</div>
+            <el-table :data="data.deltas || []" size="small">
+              <el-table-column label="段长(抽)" width="120">
+                <template #default="{ row }"><el-input-number v-model="row[0]" size="small" :min="1" :controls="false" style="width: 90px" /></template>
+              </el-table-column>
+              <el-table-column label="增量" min-width="120">
+                <template #default="{ row }"><el-input-number v-model="row[1]" size="small" :precision="2" :controls="false" style="width: 90px" /></template>
+              </el-table-column>
+              <el-table-column width="56">
+                <template #default="{ row }"><el-button size="small" text type="danger" @click="removeDeltasRow(row)">×</el-button></template>
+              </el-table-column>
+            </el-table>
+            <el-button size="small" text type="primary" @click="addDeltasRow">+ 段</el-button>
           </div>
         </div>
       </template>
@@ -175,8 +341,8 @@
               @change="(v) => (data[f.key] = v)"
             />
             <!-- 下拉 -->
-            <el-select v-else-if="f.type === 'select'" v-model="data[f.key]" size="small" allow-create filterable style="width: 200px">
-              <el-option v-for="o in f.options" :key="o" :label="o" :value="o" />
+            <el-select v-else-if="f.type === 'select'" v-model="data[f.key]" size="small" allow-create filterable style="width: 220px">
+              <el-option v-for="o in selectOptions(f)" :key="String(o[0])" :label="o[1]" :value="o[0]" />
             </el-select>
             <!-- 字符串数组 -->
             <el-select
@@ -189,7 +355,9 @@
               default-first-option
               style="width: 100%"
               @change="(v) => (data[f.key] = v)"
-            />
+            >
+              <el-option v-for="o in arrayOptions(f)" :key="String(o[0])" :label="o[1]" :value="o[0]" />
+            </el-select>
           </el-form-item>
         </el-form>
       </template>
@@ -204,10 +372,13 @@
           <el-form-item label="依赖行为">
             <el-input v-model="data.lifecycle.depends_on" size="small" placeholder="依赖的 behavior 名" />
           </el-form-item>
+          <el-form-item label="最大触发">
+            <el-input-number :model-value="data.lifecycle.max_triggers" size="small" :min="0" :controls="false" class="pity-num" @change="(v) => (data.lifecycle.max_triggers = v)" />
+          </el-form-item>
         </el-form>
       </div>
       <div v-if="pityExtraKeys.length" class="sub-section">
-        <div class="sub-title">其他参数（该保底类型专用，展开只读）</div>
+        <div class="sub-title">未识别的其他参数（只读）</div>
         <pre class="extra-json">{{ JSON.stringify(pityExtra, null, 2) }}</pre>
       </div>
 
@@ -241,11 +412,34 @@
               </div>
             </div>
           </el-form-item>
-          <el-form-item label="随机卡">
-            <span class="muted">{{ data.bonus_reward.random_cards.length }} 个候选池（展开只读）</span>
+          <el-form-item label="随机卡（候选池）">
+            <div class="rc-wrap">
+              <el-table :data="data.bonus_reward.random_cards" size="small">
+                <el-table-column label="候选卡（逗号分隔）" min-width="180">
+                  <template #default="{ row }">
+                    <el-input :model-value="(row.candidates || []).join(',')" size="small" @change="(v) => (row.candidates = v.split(',').map((s) => s.trim()).filter(Boolean))" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="权重（逗号分隔）" min-width="140">
+                  <template #default="{ row }">
+                    <el-input :model-value="(row.weights || []).join(',')" size="small" @change="(v) => (row.weights = v.split(',').map((s) => parseFloat(s.trim())).filter((x) => !Number.isNaN(x)))" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="数量" width="80">
+                  <template #default="{ row }">
+                    <el-input-number v-model="row.count" size="small" :min="1" :controls="false" style="width: 60px" />
+                  </template>
+                </el-table-column>
+                <el-table-column width="50" align="center">
+                  <template #default="{ row }">
+                    <el-button size="small" text type="danger" @click="removeRandomCard(row)">×</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-button size="small" text type="primary" @click="addRandomCard">+ 候选池</el-button>
+            </div>
           </el-form-item>
         </el-form>
-        <pre v-if="data.bonus_reward.random_cards.length" class="extra-json">{{ JSON.stringify(data.bonus_reward.random_cards, null, 2) }}</pre>
       </div>
     </div>
   </div>
@@ -259,19 +453,56 @@ const props = defineProps({
   data: { type: Object, required: true },
   copyable: { type: Boolean, default: true },
   pages: { type: Array, default: () => [] },
-  poolIds: { type: Array, default: () => [] },   // 全限定池 ID（{banner}.{pool}），供目标卡关联池下拉
+  poolIds: { type: Array, default: () => [] },   // 全限定池 ID（{banner}.{pool}），供绑定池/目标卡下拉
+  bannerIds: { type: Array, default: () => [] }, // banner ID，供「适用 Banner」下拉
+  cardPools: { type: Object, default: () => ({}) }, // card_id → 全限定池 ID[]（目标卡关联池只读解析）
 })
 const emit = defineEmits(['copy', 'remove', 'change', 'locate', 'move'])
 
 // 快照比较：只在值真正变化时 emit，打破双向同步死循环（与 ConfigBlock 同模式）
 let lastSnap = JSON.stringify(props.data)
 watch(() => props.data, (val) => {
-  const snap = JSON.stringify(val)
+  // 目标卡关联池：只读自动解析——卡ID/池奖励变化时同步 pool_ids（对齐旧 UI _update_target_pools）
+  if (props.type === 'target') {
+    for (const e of (props.data.entries || [])) {
+      if (!e.card_id) continue
+      const d = targetPools(e)
+      if (d.length && JSON.stringify(d) !== JSON.stringify(e.pool_ids || [])) e.pool_ids = [...d]
+    }
+  }
+  const snap = JSON.stringify(props.data)
   if (snap !== lastSnap) {
     lastSnap = snap
     emit('change')
   }
 }, { deep: true })
+
+// ── 下拉选项 / 目标卡关联池（只读推导）──
+function optPair(o) { return Array.isArray(o) ? o : [o, o] }
+// 里程碑「适用 Banner」等动态选项：空 = 全部 Banner + 真实 bannerIds（对齐引擎 banner 精确匹配）
+function selectOptions(f) {
+  if (f.key === 'banner') return [['', '全部（所有 Banner）'], ...props.bannerIds.map((b) => [b, b])]
+  return (f.options || []).map(optPair)
+}
+// 保底「绑定池」数组：全限定池下拉 + 通配预设（引擎 fnmatch：'*' 全部池 / '*.main' 各 Banner 主池）
+function arrayOptions(f) {
+  if (f.options && f.options.length) return f.options.map(optPair)
+  if (f.key === 'pools') {
+    return [['*', '*（全部池）'], ['*.main', '*.main（各 Banner 主池）'],
+            ...props.poolIds.map((p) => [p, p])]
+  }
+  return []
+}
+// 目标卡关联池：该卡出现在哪些池的奖励中（banner.pool.reward.card_id）→ 全限定 {banner}.{pool}
+function targetPools(row) {
+  const d = props.cardPools[row.card_id] || []
+  return Array.isArray(d) ? d : []
+}
+function targetPoolsText(row) {
+  const p = targetPools(row)
+  if (p.length) return p.join(', ')
+  return (row.pool_ids || []).length ? row.pool_ids.join(', ') + '（未在任意池奖励中匹配）' : '（未在任意池奖励中匹配）'
+}
 
 // 块默认展开。初次打开配置页的渲染开销由 App 启动后预渲染消除。
 const expanded = ref(true)
@@ -284,6 +515,7 @@ const META = {
   target:    { label: '目标卡',   global: false },
   weight:    { label: '权重',     global: false },
   rarity:    { label: '稀有度层级', global: true },
+  rarity_defaults: { label: '稀有度溢出默认', global: true },
   strategy:  { label: '策略',     global: true },
   search_meta:     { label: '搜索信息',   global: false },
   search_target:   { label: '搜索目标',   global: false },
@@ -309,10 +541,12 @@ const TABLE_TYPES = ['card', 'weight', 'target']
 const isTableType = computed(() => TABLE_TYPES.includes(props.type))
 const ENTRY_COLS = {
   card: [
-    { key: 'card_id', label: '卡ID', type: 'text', minWidth: 140 },
-    { key: 'name', label: '名称', type: 'text', minWidth: 110 },
-    { key: 'rarity', label: '稀有度', type: 'text', minWidth: 80 },
-    { key: 'initial_count', label: '初始持有', type: 'number', minWidth: 100 },
+    { key: 'card_id', label: '卡ID', type: 'text', minWidth: 130 },
+    { key: 'name', label: '名称', type: 'text', minWidth: 100 },
+    { key: 'rarity', label: '稀有度', type: 'text', minWidth: 70 },
+    { key: 'initial_count', label: '初始持有', type: 'number', minWidth: 90 },
+    { key: 'tags', label: '标签', type: 'tags', minWidth: 150 },
+    { key: 'list_tags', label: '多值标签', type: 'listtags', minWidth: 170 },
   ],
   weight: [
     { key: 'card_id', label: '卡ID', type: 'text', minWidth: 140 },
@@ -323,7 +557,7 @@ const ENTRY_COLS = {
   target: [
     { key: 'card_id', label: '目标卡', type: 'text', minWidth: 140 },
     { key: 'quantity', label: '数量', type: 'number', minWidth: 90 },
-    { key: 'pool_ids', label: '关联池', type: 'array', minWidth: 180 },
+    { key: 'pool_ids', label: '关联池（只读）', type: 'pools_readonly', minWidth: 200 },
   ],
 }
 const entryCols = computed(() => ENTRY_COLS[props.type] || [])
@@ -342,6 +576,55 @@ function copyEntryRow(row) {
 }
 function removeEntryRow(row) {
   props.data.entries.splice(props.data.entries.indexOf(row), 1)
+}
+
+// ── 卡片溢出分段（card.overflow_bands）/ 稀有度溢出默认（rarity_defaults）──
+const selectedCard = ref(null)
+function onCardSelect(row) {
+  if (props.type === 'card') selectedCard.value = row
+}
+function rangeText(range) {
+  const r = range || [1, 1]
+  const hi = r[1] === 'inf' || r[1] === Infinity || r[1] == null ? '∞' : String(r[1])
+  return `${r[0]}-${hi}`
+}
+function parseRange(row, text) {
+  const m = (text || '').trim().match(/^([\d.]+)\s*[-–~]\s*(.+)$/)
+  if (m) {
+    const hi = /^∞$|^inf$/i.test(m[2].trim()) ? 'inf' : Number(m[2])
+    row.range = [Number(m[1]), hi]
+  }
+}
+function resourcesText(res) {
+  return Object.entries(res || {}).map(([k, v]) => `${k}:${v}`).join(', ')
+}
+function parseResources(row, text) {
+  const obj = {}
+  for (const part of (text || '').split(',')) {
+    const m = part.trim().match(/^([^:]+):([\d.]+)$/)
+    if (m) obj[m[1].trim()] = Number(m[2])
+  }
+  row.resources = Object.keys(obj).length ? obj : {}
+}
+function addCardBand() {
+  if (!selectedCard.value) return
+  if (!Array.isArray(selectedCard.value.overflow_bands)) selectedCard.value.overflow_bands = []
+  selectedCard.value.overflow_bands.push({ range: [1, 1], resources: {} })
+}
+function addBandTo(rd) {
+  if (!Array.isArray(rd.overflow_bands)) rd.overflow_bands = []
+  rd.overflow_bands.push({ range: [1, 1], resources: {} })
+}
+function removeBandFrom(arr, row) {
+  if (!Array.isArray(arr)) return
+  arr.splice(arr.indexOf(row), 1)
+}
+function addRarityDefault() {
+  const name = window.prompt('稀有度名（如 ssr）', 'ssr')
+  if (name && name.trim()) {
+    if (!props.data.defaults) props.data.defaults = {}
+    props.data.defaults[name.trim()] = { overflow_bands: [] }
+  }
 }
 
 // ── 字段描述（按块类型；类型化渲染）──
@@ -383,7 +666,7 @@ const FIELDS = {
     { key: 'threshold', label: '触发阈值', type: 'number' },
     { key: 'repeat', label: '可重复', type: 'bool' },
     { key: 'max_triggers', label: '最大触发', type: 'number' },
-    { key: 'banner', label: '适用 Banner', type: 'text' },
+    { key: 'banner', label: '适用 Banner', type: 'select' },
   ],
   strategy: [
     { key: 'key', label: '策略键', type: 'select', options: STRATEGY_KEYS },
@@ -420,7 +703,8 @@ const pityGroups = computed(() => {
   const t = props.data.type
   const visible = (key) => {
     if (key === 'threshold') return t === 'hard'
-    if (key === 'start' || key === 'end') return ['soft_interval', 'soft_additive', 'soft_step'].includes(t)
+    if (key === 'start') return ['soft_interval', 'soft_additive'].includes(t)
+    if (key === 'end') return t === 'soft_interval'   // soft_additive 用 increment（类型专用参数）
     return true
   }
   const byKey = Object.fromEntries(FIELDS.pity.map((f) => [f.key, f]))
@@ -430,6 +714,64 @@ const pityGroups = computed(() => {
     { key: 'scope', title: '作用范围', fields: ['pools'].map((k) => byKey[k]).filter(Boolean) },
   ]
 })
+
+// ── 保底类型专用参数（事件驱动家族可编辑；对齐旧 config_panel BEHAVIOR_REGISTRY 动态控件）──
+const PITY_SPECIAL = {
+  soft_interval: [],
+  soft_additive: [{ key: 'increment', label: '增量(%)', type: 'number', precision: 2 }],
+  soft_step: [],
+  hard: [],
+  rotating: [{ key: 'guaranteed_init', label: '初始大保底', type: 'bool', default: false }],
+  rotating_soft: [{ key: 'guaranteed_init', label: '初始大保底', type: 'bool', default: false }],
+  rotating_cr: [
+    { key: 'guaranteed_init', label: '初始大保底', type: 'bool', default: false },
+    { key: 'cr_counter_threshold', label: '捕获明光阈值', type: 'number' },
+    { key: 'cr_base_rate', label: '捕获明光基础率', type: 'number', precision: 4 },
+    { key: 'cr_state_probs', label: '捕获明光状态概率', type: 'floats' },
+  ],
+  rotating_cr_soft: [
+    { key: 'guaranteed_init', label: '初始大保底', type: 'bool', default: false },
+    { key: 'cr_counter_threshold', label: '捕获明光阈值', type: 'number' },
+    { key: 'cr_base_rate', label: '捕获明光基础率', type: 'number', precision: 4 },
+    { key: 'cr_state_probs', label: '捕获明光状态概率', type: 'floats' },
+  ],
+  targeted: [
+    { key: 'fate_threshold', label: '定轨阈值', type: 'number' },
+    { key: 'fate_points_init', label: '初始定轨点', type: 'number' },
+    { key: 'selected_card_init', label: '初始定轨卡', type: 'text' },
+    { key: 'switch_allowed', label: '允许切换', type: 'bool', default: true },
+    { key: 'switch_resets_progress', label: '切换重置进度', type: 'bool', default: true },
+  ],
+  targeted_soft: [
+    { key: 'fate_threshold', label: '定轨阈值', type: 'number' },
+    { key: 'fate_points_init', label: '初始定轨点', type: 'number' },
+    { key: 'selected_card_init', label: '初始定轨卡', type: 'text' },
+    { key: 'switch_allowed', label: '允许切换', type: 'bool', default: true },
+    { key: 'switch_resets_progress', label: '切换重置进度', type: 'bool', default: true },
+  ],
+}
+const HANDLED_SPECIAL = new Set(Object.values(PITY_SPECIAL).flat().map((f) => f.key))
+const pitySpecial = computed(() => {
+  const t = props.data.type || 'soft_interval'
+  return { fields: PITY_SPECIAL[t] || [], showDeltas: t === 'soft_step' }
+})
+function addDeltasRow() {
+  if (!Array.isArray(props.data.deltas)) props.data.deltas = []
+  props.data.deltas.push([10, 0])
+}
+function removeDeltasRow(row) {
+  if (!Array.isArray(props.data.deltas)) return
+  props.data.deltas.splice(props.data.deltas.indexOf(row), 1)
+}
+function addFloat(key, nv) {
+  if (nv === undefined || nv === null) return
+  if (!Array.isArray(props.data[key])) props.data[key] = []
+  props.data[key].push(nv)
+}
+function removeFloat(key, vi) {
+  if (!Array.isArray(props.data[key])) return
+  props.data[key].splice(vi, 1)
+}
 
 // ── 资源块条目操作（key 去重）──
 function addEntry() {
@@ -446,6 +788,61 @@ function copyEntry(row) {
 }
 function removeEntry(row) {
   props.data.entries.splice(props.data.entries.indexOf(row), 1)
+}
+
+// ── 资源获取规则 / 逐日覆盖（gains = {res: num} 文本编辑）──
+function ensureArrays() {
+  if (!props.data.gainRules) props.data.gainRules = []
+  if (!props.data.dayOverrides) props.data.dayOverrides = []
+}
+function addGainRule() {
+  ensureArrays()
+  props.data.gainRules.push({ type: 'every_n_days', param: '', gains: {} })
+}
+function removeGainRule(row) {
+  props.data.gainRules.splice(props.data.gainRules.indexOf(row), 1)
+}
+function addDayOverride() {
+  ensureArrays()
+  props.data.dayOverrides.push({ day: 0, gains: {} })
+}
+function removeDayOverride(row) {
+  props.data.dayOverrides.splice(props.data.dayOverrides.indexOf(row), 1)
+}
+function gainsText(gains) {
+  return Object.entries(gains || {}).map(([k, v]) => `${k}:${v}`).join(', ')
+}
+function parseGains(row, text) {
+  const obj = {}
+  for (const part of (text || '').split(',')) {
+    const m = part.trim().match(/^([^:]+):([\d.]+)$/)
+    if (m) obj[m[1].trim()] = Number(m[2])
+  }
+  row.gains = Object.keys(obj).length ? obj : {}
+}
+
+// ── 卡片标签：tags（单值） / list_tags（多值）──
+function tagsText(tags) {
+  return Object.entries(tags || {}).map(([k, v]) => `${k}:${v}`).join(', ')
+}
+function parseTags(row, key, text) {
+  const obj = {}
+  for (const part of (text || '').split(',')) {
+    const m = part.trim().match(/^([^:]+):(.+)$/)
+    if (m) obj[m[1].trim()] = m[2].trim()
+  }
+  row[key] = Object.keys(obj).length ? obj : undefined
+}
+function listTagsText(listTags) {
+  return Object.entries(listTags || {}).map(([k, vs]) => `${k}:${(vs || []).join(',')}`).join('; ')
+}
+function parseListTags(row, key, text) {
+  const obj = {}
+  for (const part of (text || '').split(';')) {
+    const m = part.trim().match(/^([^:]+):(.+)$/)
+    if (m) obj[m[1].trim()] = m[2].split(',').map((s) => s.trim()).filter(Boolean)
+  }
+  row[key] = Object.keys(obj).length ? obj : undefined
 }
 
 // ── milestone：resources KV 编辑 ──
@@ -467,6 +864,13 @@ function renameResource(oldKey, newKey) {
     delete props.data.bonus_reward.resources[oldKey]
   }
 }
+// 随机卡候选池（random_cards: {candidates, weights, count}）
+function addRandomCard() {
+  props.data.bonus_reward.random_cards.push({ candidates: [], weights: [], count: 1 })
+}
+function removeRandomCard(row) {
+  props.data.bonus_reward.random_cards.splice(props.data.bonus_reward.random_cards.indexOf(row), 1)
+}
 
 // ── pity 未建模参数（已建模字段之外，只读展示；序列化时由 configToml.extraToml 写回）──
 const PITY_KNOWN = new Set(['name', 'type', 'scope', 'target_featured', 'threshold', 'reset', 'start', 'end', 'counter_init', 'pools', 'lifecycle'])
@@ -474,7 +878,7 @@ const pityExtra = computed(() => {
   if (props.type !== 'pity') return {}
   const o = {}
   for (const [k, v] of Object.entries(props.data)) {
-    if (!PITY_KNOWN.has(k) && v !== undefined && v !== null && v !== '') o[k] = v
+    if (!PITY_KNOWN.has(k) && !HANDLED_SPECIAL.has(k) && v !== undefined && v !== null && v !== '') o[k] = v
   }
   return o
 })
@@ -622,6 +1026,31 @@ const pityExtraKeys = computed(() => Object.keys(pityExtra.value))
   flex: 1;
   min-width: 0;
 }
+.floats-edit {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.pity-deltas {
+  margin-top: 6px;
+  border-top: 1px dashed var(--gsc-border);
+  padding-top: 6px;
+}
+.pity-deltas-title {
+  font-size: 11px;
+  color: var(--gsc-text-muted);
+  margin-bottom: 4px;
+}
+.rd-block {
+  margin-bottom: 8px;
+}
+.rc-wrap {
+  flex: 1;
+  min-width: 0;
+}
 .rank-row {
   display: flex;
   align-items: center;
@@ -654,5 +1083,17 @@ const pityExtraKeys = computed(() => Object.keys(pityExtra.value))
 }
 .kv-val {
   width: 110px;
+}
+/* 目标卡关联池（只读）：浅灰底 + 等宽字体，与可编辑列区分 */
+.pools-ro {
+  font-family: var(--gsc-font-mono);
+  font-size: 11px;
+  color: var(--gsc-text-muted);
+  background: #f0f1f2;
+  border-radius: 2px;
+  padding: 2px 5px;
+  display: inline-block;
+  line-height: 1.5;
+  word-break: break-all;
 }
 </style>

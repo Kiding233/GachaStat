@@ -78,22 +78,15 @@
       </el-select>
     </div>
 
-    <!-- 动作按钮：单 action / actions 数组（多动作） / 无 action 时默认「运行分析」 -->
-    <div class="p-action">
-      <el-button v-if="def.action" type="primary" size="small" @click="$emit('action', def.action)">
-        {{ def.action === 'generate_config' ? '生成后续池子配置' : '运行分析' }}
-      </el-button>
+    <!-- 动作按钮：仅显式生成类动作（生成后续池子配置等）。统计方法自动运行（无运行按钮）-->
+    <div v-if="hasManualActions" class="p-action">
       <el-button
-        v-for="a in def.actions || []"
+        v-for="a in manualActions"
         :key="a.key"
-        :type="a.key === 'generate_config' ? 'primary' : 'default'"
+        type="primary"
         size="small"
         @click="$emit('action', a.key)"
       >{{ a.label }}</el-button>
-      <!-- 无显式 action 的统计方法：默认「运行分析」（methodDefs 多数方法无 action 字段）-->
-      <el-button v-if="!def.action && !def.actions?.length" type="primary" size="small" @click="$emit('action', 'run_analysis')">
-        运行分析
-      </el-button>
     </div>
   </div>
 </template>
@@ -110,6 +103,9 @@ const props = defineProps({
 const emit = defineEmits(['action'])
 
 const def = computed(() => methodByType(props.type) || { params: [] })
+// 仅显式生成类动作（统计方法自动运行；run_analysis 由方法块自动触发，不渲染按钮）
+const manualActions = computed(() => (def.value.actions || []).filter((a) => a.key !== 'run_analysis'))
+const hasManualActions = computed(() => def.value.action === 'generate_config' || manualActions.value.length > 0)
 </script>
 
 <style scoped>

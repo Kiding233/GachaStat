@@ -61,6 +61,13 @@ def _jsonable(obj):
     return obj
 
 
+def _extract_ui_section(text: str) -> str:
+    """从 TOML 文本提取 [ui] 段（UI 元数据：分页状态等）。引擎 save_toml 会丢未知段，需保存后追加回。"""
+    import re
+    m = re.search(r'(^\[ui\]\n(?:.*\n)*?)(?=^\[|\Z)', text or '', re.MULTILINE)
+    return m.group(1) if m else ''
+
+
 class GachaApi:
     """暴露给前端的 js_api 桥。"""
 
@@ -138,13 +145,21 @@ class GachaApi:
         return errors
 
     def save_config_text(self, text: str) -> dict:
-        """解析校验 + 写回 config.toml（前端「保存」按钮）。"""
+        """解析校验 + 写回 config.toml（前端「保存」按钮）。
+
+        [ui] 段（分页状态等 UI 元数据）由引擎 save_toml 丢弃，此处提取后追加回文件，
+        保证分页状态持久化到配置本身。
+        """
         try:
+            ui_section = _extract_ui_section(text)
             store = _store_from_text(text)
             errors = self._validate_store(store)
             if errors:
                 return {'ok': False, 'errors': errors}
             save_toml(store, self._config_path)
+            if ui_section:
+                with open(self._config_path, 'a', encoding='utf-8') as f:
+                    f.write('\n' + ui_section)
             self._store = store
             return {'ok': True, 'errors': []}
         except Exception as e:
@@ -458,28 +473,42 @@ class GachaApi:
     # ── 资源监控 ─────────────────────────────────────────────────────────
 
     def get_resource_usage(self) -> dict:
+        """资源监控：CPU/内存（psutil）+ 并行 worker（运行中任务数 / 可用 CPU 核）。
+
+        cpu_percent 用 interval=0.3（短时采样）——interval=None 时首调恒返回 0、
+        后续读数依调用间隔抖动，前端看到「一会 95% 一会 0」。
+        """
         try:
             import psutil
+            # 并行 worker = 运行中任务声明的并行数（w 参数）之和（模拟任务 w=workers；搜索任务按 1）
+            with self._task_lock:
+                running_workers = 0
+                for t in self._tasks.values():
+                    if t.get('status') == 'running':
+                        running_workers += int((t.get('params') or {}).get('w', 1) or 1)
             return {
                 'ok': True,
-                'cpu': psutil.cpu_percent(interval=None),
+                'cpu': psutil.cpu_percent(interval=0.3),
                 'mem': psutil.virtual_memory().percent,
+                'workers_max': psutil.cpu_count(logical=True),
+                'workers_active': running_workers,
             }
         except ImportError:
             # psutil 未装时返回占位（不阻塞前端）
-            return {'ok': True, 'cpu': None, 'mem': None}
+            return {'ok': True, 'cpu': None, 'mem': None, 'workers_max': None, 'workers_active': 0}
         except Exception:
-            return {'ok': True, 'cpu': None, 'mem': None}
+            return {'ok': True, 'cpu': None, 'mem': None, 'workers_max': None, 'workers_active': 0}
 
     # ── 关于 / 插件 ──────────────────────────────────────────────────────
 
     def get_about_info(self) -> dict:
-        from gacha_simulator._version import __version__
+        from gacha_simulator._version import __version__, VERSION_HISTORY
         return {
             'ok': True,
             'version': __version__,
             'name': 'GachaStat',
             'tech': 'pywebview + Vue3 + Element Plus + ECharts（P74 换头）',
+            'version_history': VERSION_HISTORY,
         }
 
     def list_plugins(self) -> dict:

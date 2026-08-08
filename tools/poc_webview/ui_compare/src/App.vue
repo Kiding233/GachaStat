@@ -40,7 +40,6 @@
         <el-button size="small" @click="createNode('config')">新建配置</el-button>
         <el-button size="small" @click="createNode('search')">新建搜索任务</el-button>
         <el-button size="small" @click="createCompareTask()">新建对比分析任务</el-button>
-        <el-button size="small" @click="createNode('user_folder')">新建文件夹</el-button>
         <span class="tb-spacer"></span>
         <el-button size="small" type="primary" :disabled="runKind === 'none'" @click="dispatchTask">{{ runBtnLabel }}</el-button>
         <el-button size="small" @click="switchRun">任务管理</el-button>
@@ -165,21 +164,33 @@
                 @open-node="openTab"
               />
             </template>
-            <el-empty v-if="!openedTabs.length" description="点击左侧工作区打开配置 / 数据集 / 搜索任务 / 对比分析任务等页面" />
+            <el-empty v-if="!openedTabs.length || !activeNodeId" description="点击左侧工作区打开配置 / 数据集 / 搜索任务 / 对比分析任务等页面" />
           </template>
         </template>
       </main>
     </div>
 
-    <!-- 关于对话框 -->
-    <el-dialog v-model="aboutDlg" title="关于 GachaStat" width="420" append-to-body>
-      <div class="about-body">
-        <div class="about-name">GachaStat</div>
-        <div class="about-version">版本 {{ aboutInfo.version || '—' }}</div>
-        <div class="about-tech">{{ aboutInfo.tech || '' }}</div>
-        <div class="about-desc">抽卡概率模拟与分析系统（pywebview + Vue3 + Element Plus + ECharts）</div>
-      </div>
+    <!-- 关于对话框（5 个页签，内容迁移自旧 gui/about_dialog.py）-->
+    <el-dialog v-model="aboutDlg" title="关于 GachaStat" width="780" append-to-body class="about-dialog">
+      <el-tabs v-model="aboutTab" class="about-tabs">
+        <el-tab-pane label="关于" name="about">
+          <div class="about-html" v-html="ABOUT_CONTENT.about" />
+        </el-tab-pane>
+        <el-tab-pane label="版本历史" name="version">
+          <div class="about-html" v-html="versionHtml" />
+        </el-tab-pane>
+        <el-tab-pane label="配置文件指南" name="config">
+          <div class="about-html" v-html="ABOUT_CONTENT.config" />
+        </el-tab-pane>
+        <el-tab-pane label="算法说明" name="algo">
+          <div class="about-html" v-html="ABOUT_CONTENT.algo" />
+        </el-tab-pane>
+        <el-tab-pane label="策略行为说明" name="strategy">
+          <div class="about-html" v-html="ABOUT_CONTENT.strategy" />
+        </el-tab-pane>
+      </el-tabs>
       <template #footer>
+        <span class="muted about-ver">版本 {{ aboutInfo.version || '—' }}</span>
         <el-button size="small" type="primary" @click="aboutDlg = false">关闭</el-button>
       </template>
     </el-dialog>
@@ -220,6 +231,7 @@
 import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import ContextMenu from '@imengyu/vue3-context-menu'
 import api, { onTaskProgress, onTaskDone } from './api.js'
+import { ABOUT_CONTENT, versionRowsHtml } from './aboutContent.js'
 import ConfigWorkbench from './panels/workbench/ConfigWorkbench.vue'
 import DatasetWorkbench from './panels/workbench/DatasetWorkbench.vue'
 import DatasetInfoWorkbench from './panels/workbench/DatasetInfoWorkbench.vue'
@@ -428,6 +440,7 @@ function createNode(type, parentId = null, partial = {}) {
   const parent = parentId ? findNode(parentId) : null
   const siblings = parent ? (parent.children || []) : treeData
   const n = NODE_FACTORY[type](siblings, partial, parentId)
+  n.type = n.type || type            // 工厂可能不设 type——缺失则 WORKBENCH[undefined] 空白页（点击无反应根因）
   n.id = n.id || `${type}-${Date.now()}-${siblings.length}`
   n.parent = parentId
   n.kind = n.kind || 'file'
@@ -440,14 +453,42 @@ function createNode(type, parentId = null, partial = {}) {
   return n
 }
 const NODE_LABEL = { config: '配置', search: '搜索任务', compare_task: '对比分析任务', user_folder: '文件夹', dataset: '数据集', analysis: '统计分析' }
+// 新建配置的空白模板（不复制现有配置内容，从一张空池子骨架开始编辑）
+const BLANK_CONFIG_TEXT = `[[banner]]
+id = "b1"
+name = ""
+start_day = 0
+end_day = 21
+
+[[banner.pool]]
+id = "main"
+cost = "draw_resource:160"
+
+[[banner.pool.reward]]
+card_id = ""
+probability = 0
+rarity = "r"
+featured = false
+
+[resources.defs]
+draw_resource = "抽卡资源"
+
+[resources.initial]
+draw_resource = 0
+`
 const NODE_FACTORY = {
   config: (sib, p) => {
-    const src = treeData.find((n) => n.type === 'config')
-    return { label: p.label || `配置 ${sib.length + 1}`, kind: 'file', vpath: '配置/config.toml', meta: { pools: 1, maxDraws: '无限制', pity: '—', configText: src?.meta?.configText || '' } }
+    return { label: p.label || `配置 ${sib.length + 1}`, kind: 'file', vpath: '配置/config.toml', meta: { pools: 1, maxDraws: '无限制', pity: '—', configText: BLANK_CONFIG_TEXT } }
   },
   search: (sib, p) => ({ label: p.label || `搜索任务 ${sib.length + 1}`, kind: 'file', vpath: '搜索任务/search.json', meta: { mode: 'plan_search', refConfigId: treeData.find((n) => n.type === 'config')?.id || '', params: {} } }),
   user_folder: (sib, p) => ({ label: p.label || `文件夹 ${sib.length + 1}`, kind: 'folder', vpath: '文件夹/', meta: {} }),
   analysis: (sib, p, parentId) => ({ label: sib.length ? `统计分析 ${sib.length + 1}` : '统计分析', kind: 'file', meta: { datasetId: parentId, blocks: [] } }),
+  // 对比分析任务：工作区根多实例（右键「新建对比分析任务」路径，与工具栏 createCompareTask 同构）
+  compare_task: (sib, p) => ({
+    label: p.label || `对比分析任务 ${sib.length + 1}`, kind: 'file',
+    vpath: `对比任务${sib.length + 1}/对比任务.json`,
+    meta: { includedDs: [], excludedDs: [] },
+  }),
 }
 
 // 数据集：在配置下创建（模拟产物；datasetId 为后端 register_dataset 返回的缓存 id）
@@ -611,6 +652,7 @@ async function onCreateTask({ type, targetId, params }) {
     name: `${type === 'search' ? '搜索' : '模拟'} · ${target?.label || '（未选）'}`,
     type, targetId, params,
     status: 'running', progress: 0, elapsed: 0, error: '', backendId: '', resultDataset: null,
+    startTime: Date.now(),   // 真实耗时基准（elapsed 由 RunWorkbench 定时刷新）
   })
   taskQueue.value.push(task)
   try {
@@ -776,6 +818,8 @@ function typeColor(type) {
 const aboutDlg = ref(false)
 const pluginDlg = ref(false)
 const aboutInfo = ref({})
+const aboutTab = ref('about')
+const versionHtml = computed(() => versionRowsHtml(aboutInfo.value?.version_history))
 const plugins = ref([])
 
 function ensureRootFolder() {
@@ -813,7 +857,7 @@ onMounted(async () => {
   // 后端任务事件 → 更新任务队列 + 建节点（按 backendId 匹配：前端 task.id 与后端 task_id 不同）
   onTaskProgress((p) => {
     const t = taskQueue.value.find((x) => x.backendId === p.taskId)
-    if (t) { t.progress = p.pct ?? 0; t.elapsed = (t.elapsed || 0) + 0.3 }
+    if (t) { t.progress = p.pct ?? 0 }   // elapsed 由 RunWorkbench 从 startTime 定时刷新（真实耗时）
   })
   onTaskDone((p) => {
     const t = taskQueue.value.find((x) => x.backendId === p.taskId)
@@ -1035,4 +1079,29 @@ onMounted(async () => {
   font-size: 11px;
   flex-shrink: 0;
 }
+/* 关于对话框：v-html 内容样式（动态 HTML 无 scoped 属性，需 :deep）*/
+.about-html {
+  max-height: 60vh;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  padding-right: 4px;
+}
+.about-html :deep(h3) { font-size: 15px; margin: 8px 0 6px; }
+.about-html :deep(h4) { font-size: 13px; margin: 10px 0 4px; color: var(--gsc-text-primary); }
+.about-html :deep(h5) { font-size: 12px; margin: 8px 0 3px; }
+.about-html :deep(pre) {
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  padding: 6px 8px;
+  font-family: var(--gsc-font-mono);
+  font-size: 11px;
+  overflow-x: auto;
+  line-height: 1.4;
+}
+.about-html :deep(ul), .about-html :deep(ol) { margin: 4px 0; padding-left: 20px; }
+.about-html :deep(li) { margin: 2px 0; }
+.about-html :deep(code) { background: #f5f5f5; padding: 0 3px; border-radius: 2px; font-size: 11px; }
+.about-html :deep(table) { width: 100%; font-size: 11px; }
+.about-ver { margin-right: 12px; font-size: 12px; }
 </style>

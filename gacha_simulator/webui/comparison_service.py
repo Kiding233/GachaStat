@@ -63,6 +63,38 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
                          'headers': ['数据集', '均值', '中位数', '标准差', '偏度', '峰度',
                                      'VaR₀.₀₅', 'CVaR₀.₀₅', '成功率', 'min', 'max', 'N'],
                          'rows': rows})
+        # ── L1 分布对比图：PMF 叠加（共享分箱）+ ECDF 叠加（对齐旧 comparison_analysis_panel._render_l1_charts）──
+        try:
+            from gacha_simulator.core.gdr_binning import compute_bins
+            from gacha_simulator.visualization.chart_spec import (
+                ChartSpec, HistogramData, HistogramOverlay, ScatterData, ScatterTrace)
+            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+                      '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+            all_vals = np.concatenate([np.asarray(v, dtype=float) for v in values_list])
+            br = compute_bins(gdr_key, all_vals, cost_per_draw=None)
+            # PMF 叠加：主序列（首数据集）为柱/直方，其余为半透明填充曲线
+            overlays = []
+            for i in range(1, len(values_list)):
+                overlays.append(HistogramOverlay(samples=np.asarray(values_list[i], dtype=float),
+                                                 color=colors[i % len(colors)], opacity=0.55, label=names[i]))
+            pmf = ChartSpec(chart_type='histogram',
+                            data=HistogramData(samples=np.asarray(values_list[0], dtype=float),
+                                               mean_line=False, overlays=overlays, density=True),
+                            title='L1 分布对比（PMF 叠加）', xlabel=gdr_key, ylabel='概率密度',
+                            layout_hints=br.to_layout_hints())
+            sections.append({'key': 'chart', 'title': 'L1 分布对比（PMF 叠加）', 'spec': _spec_to_dict(pmf)})
+            # ECDF 叠加：每数据集一条累积曲线
+            traces = []
+            for i, (vals, name) in enumerate(zip(values_list, names)):
+                sv = np.sort(np.asarray(vals, dtype=float))
+                ye = np.arange(1, len(sv) + 1) / len(sv)
+                traces.append(ScatterTrace(x=sv, y=ye, mode='lines', name=name,
+                                           marker_size=2, line_color=colors[i % len(colors)]))
+            ecdf = ChartSpec(chart_type='scatter', data=ScatterData(traces=traces),
+                             title='L1 ECDF 叠加', xlabel=gdr_key, ylabel='累积概率')
+            sections.append({'key': 'chart', 'title': 'L1 ECDF 叠加', 'spec': _spec_to_dict(ecdf)})
+        except Exception:
+            pass
         # ── L2 随机占优 ──
         if len(values_list) >= 2:
             try:
@@ -128,7 +160,10 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
                     sections.append({'key': 'chart', 'title': '帕累托前沿', 'spec': _spec_to_dict(spec)})
             except Exception:
                 pass
-        return {'ok': True, 'sections': sections}
+        # 供前端 L2 分类矩阵点击 → 对 CDF 可视化（samples/names 透传各数据集原始 GDR 值）
+        return {'ok': True, 'sections': sections,
+                'names': list(names),
+                'samples': [np.asarray(v, dtype=float).tolist() for v in values_list]}
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -30,10 +30,11 @@
             </template>
           </el-table-column>
           <el-table-column prop="elapsed" label="耗时(s)" width="70" />
-          <el-table-column label="操作" width="110">
+          <el-table-column label="操作" width="90">
             <template #default="{ row }">
-              <el-button size="small" text type="danger" :disabled="row.status === 'done' || row.status === 'failed'" @click="$emit('cancel-task', row)">取消</el-button>
-              <el-button v-if="row.status === 'done'" size="small" text @click="$emit('view-result', row)">查看</el-button>
+              <el-button v-if="row.status === 'running' || row.status === 'queued'" size="small" text type="danger" @click="$emit('cancel-task', row)">取消</el-button>
+              <el-button v-else-if="row.status === 'done'" size="small" text @click="$emit('view-result', row)">查看</el-button>
+              <span v-else class="muted">—</span>
             </template>
           </el-table-column>
         </el-table>
@@ -54,9 +55,13 @@
           </div>
           <div class="res-card">
             <div class="res-title">并行 worker</div>
-            <div class="worker-line"><span class="muted">由模拟任务参数决定</span></div>
+            <div class="worker-line">
+              <span class="worker-num" :class="{ ok: workersActive > 0 }">
+                {{ workersActive || 0 }}<span class="muted"> / {{ workersMax ?? '—' }}</span>
+              </span>
+            </div>
           </div>
-          <div class="res-note">资源数据经 js_api（psutil）采集，每 2 秒刷新。CPU/内存为空表示 psutil 未安装。</div>
+          <div class="res-note">资源数据经 js_api（psutil）采集，每 2 秒刷新。CPU 为 0.3s 短采样；worker = 当前运行任务占用 / 可用 CPU 核。CPU/内存为空表示 psutil 未安装。</div>
         </div>
       </div>
     </div>
@@ -142,20 +147,33 @@ function confirmDialog() {
 // 资源监控：经 js_api psutil 定时刷新（真实）
 const cpu = ref(null)
 const mem = ref(null)
-const workers = ref(null)
+const workersActive = ref(0)
+const workersMax = ref(null)
 let resTimer = null
+let elapsedTimer = null
 async function refreshResource() {
   const r = await api.getResourceUsage()
   if (r?.ok) {
     if (r.cpu != null) cpu.value = r.cpu
     if (r.mem != null) mem.value = r.mem
+    if (r.workers_max != null) workersMax.value = r.workers_max
+    if (r.workers_active != null) workersActive.value = r.workers_active
+  }
+}
+function refreshElapsed() {
+  // 真实耗时：从任务 startTime 计算（前端记录，非假增量）
+  for (const t of props.taskQueue) {
+    if (t.status === 'running' && t.startTime) {
+      t.elapsed = Math.round((Date.now() - t.startTime) / 100) / 10
+    }
   }
 }
 onMounted(() => {
   refreshResource()
   resTimer = setInterval(refreshResource, 2000)
+  elapsedTimer = setInterval(refreshElapsed, 500)
 })
-onBeforeUnmount(() => { if (resTimer) clearInterval(resTimer) })
+onBeforeUnmount(() => { if (resTimer) clearInterval(resTimer); if (elapsedTimer) clearInterval(elapsedTimer) })
 
 // 供 App 从工具栏「创建模拟任务」触发：跳转任务页后自动打开新建任务对话框（预选当前运行对象）
 defineExpose({ openNewTask: openDialog })
@@ -246,6 +264,13 @@ defineExpose({ openNewTask: openDialog })
   display: flex;
   justify-content: space-between;
   font-size: 12px;
+}
+.worker-num {
+  font-weight: 700;
+  color: var(--gsc-text-muted);
+}
+.worker-num.ok {
+  color: var(--el-color-primary);
 }
 .res-note {
   margin-top: auto;

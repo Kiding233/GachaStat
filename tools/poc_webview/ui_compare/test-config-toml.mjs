@@ -170,8 +170,8 @@ for (const t of Object.keys(BLOCK_TYPES)) {
   eq(p2.map((x) => x.type), [t], `${t} 空模板可解析且序列化后仍为 ${t} 块`)
 }
 
-// ═══ 7. 未建模段（resources 主表 gain_rules/day_overrides）→ _raw 兜底不丢 ═══
-sec('未建模段 → _raw 兜底（round-trip 不丢）')
+// ═══ 7. resources 主表 gain_rules/day_overrides 建模（内联数组 → resource 块 gainRules/dayOverrides）═══
+sec('resources 主表 gain_rules/day_overrides 建模（round-trip 不丢）')
 const rawIn = `[resources]
 gain_rules = [
     { type = "every_n_days", param = "", gains = { draw_resource = 60 } },
@@ -186,12 +186,17 @@ draw_resource = "抽卡资源"
 [resources.initial]
 draw_resource = 55000`
 const rawP = parseToml(rawIn)
-assert(rawP.some((x) => x.type === '_raw'), 'gain_rules/day_overrides 归入 _raw 块')
-assert(rawP.some((x) => x.type === 'resource'), 'defs/initial 归入 resource 块')
+assert(rawP.some((x) => x.type === 'resource'), 'resources 归入 resource 块')
+const rblock = rawP.find((x) => x.type === 'resource')
+eq(rblock.data.gainRules.length, 1, 'gain_rules 解析进 resource 块')
+eq(rblock.data.dayOverrides.length, 1, 'day_overrides 解析进 resource 块')
 const rawText = blocksToToml(rawP)
+assert(rawText.includes('gain_rules'), 'round-trip 后 gain_rules 文本保留')
+assert(rawText.includes('day_overrides'), 'round-trip 后 day_overrides 文本保留')
 const rawP2 = parseToml(rawText)
-assert(rawP2.some((x) => x.type === '_raw' && x.data.text.includes('gain_rules')), 'round-trip 后 gain_rules 文本保留')
-assert(rawP2.some((x) => x.type === '_raw' && x.data.text.includes('day_overrides')), 'round-trip 后 day_overrides 文本保留')
+const rb2 = rawP2.find((x) => x.type === 'resource')
+eq(rb2.data.gainRules.length, 1, 'round-trip 后 gainRules 保留')
+eq(rb2.data.dayOverrides.length, 1, 'round-trip 后 dayOverrides 保留')
 
 // ═══ 8. pity 未渲染参数（_extra）写回不丢 ═══
 sec('pity 专用参数（_extra）round-trip 不丢')

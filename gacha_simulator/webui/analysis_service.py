@@ -30,6 +30,7 @@ from gacha_simulator.core.process_analysis import wilson_ci
 from gacha_simulator.visualization.chart_spec import (
     ChartSpec, ChartAnnotation, HistogramData, HistogramOverlay, CDFData,
     RidgeData, ScatterData, ScatterTrace, BarData, HeatmapData,
+    Waterfall3DData, SubplotGridData,
 )
 
 
@@ -156,6 +157,8 @@ class AnalysisService:
             'conditional_dist': self._conditional_dist,
             'time_series': self._time_series,
             'time_heatmap': self._time_heatmap,
+            'waterfall_3d': self._waterfall_3d,
+            'waterfall_2d': self._waterfall_2d,
             'draws_vs_gdr': self._draws_vs_gdr,
             'per_pool_draws': self._per_pool_draws,
             'per_pool_target_rate': self._per_pool_target_rate,
@@ -536,6 +539,75 @@ class AnalysisService:
                          title=f'抽卡数 vs {display}', xlabel='总抽卡数', ylabel=display)
         return [_sec_chart('抽卡数-达成率', spec)]
 
+    # ── 瀑布图（对齐旧 analysis_panel waterfall_3d / waterfall_2d）：目标达成随抽卡步数的分布演化 ──
+    def _waterfall(self, p, mode):
+        if not self.draw_sequences:
+            return [{'key': 'summary', 'title': '瀑布图', 'items': {'状态': '无逐抽序列数据'}}]
+        target_ids = set(self.target_specs.keys())
+        target_count = sum(self.target_specs.values())
+        time_gdr_data = {}
+        for seq in self.draw_sequences:
+            card_ids = seq.get('draw_card_ids', []) or []
+            obtained = 0
+            for i, cid in enumerate(card_ids):
+                if cid in target_ids:
+                    obtained += 1
+                time_gdr_data.setdefault(i, []).append(obtained)
+        if not time_gdr_data:
+            return [{'key': 'summary', 'title': '瀑布图', 'items': {'状态': '无数据'}}]
+        sorted_times = sorted(time_gdr_data.keys())
+        gdr_range = list(range(0, target_count + 1))
+        if mode == '3d':
+            t_sample = min(40, len(sorted_times))
+            t_indices = sorted(set(np.linspace(0, len(sorted_times) - 1, t_sample, dtype=int)))
+            xs, ys, zs = [], [], []
+            for idx in t_indices:
+                t_val = sorted_times[idx]
+                data = time_gdr_data[t_val]
+                total = len(data)
+                counts = {}
+                for v in data:
+                    counts[v] = counts.get(v, 0) + 1
+                for g in gdr_range:
+                    xs.append(float(t_val))
+                    ys.append(float(g))
+                    zs.append(counts.get(g, 0) / total if total else 0.0)
+            spec = ChartSpec(chart_type='waterfall_3d',
+                             data=Waterfall3DData(x=np.array(xs), y=np.array(ys), z=np.array(zs)),
+                             title='3D瀑布图', xlabel='时间步', ylabel='目标卡数',
+                             layout_hints={'zlabel': '概率'})
+            return [_sec_chart('3D瀑布图', spec)]
+        t_sample = min(25, len(sorted_times))
+        t_indices = sorted(set(np.linspace(0, len(sorted_times) - 1, t_sample, dtype=int)))
+        t_min = sorted_times[t_indices[0]]
+        t_max = sorted_times[t_indices[-1]]
+        traces = []
+        for idx in t_indices:
+            t_val = sorted_times[idx]
+            data = time_gdr_data[t_val]
+            total = len(data)
+            counts = {}
+            for v in data:
+                counts[v] = counts.get(v, 0) + 1
+            probs = [counts.get(g, 0) / total if total else 0.0 for g in gdr_range]
+            # viridis 色阶按时间渐变（对齐旧 _build_waterfall_2d）
+            frac = (t_val - t_min) / max(t_max - t_min, 1)
+            r = int((0.267 + frac * (0.993 - 0.267)) * 255)
+            g2 = int((0.004 + frac * (0.906 - 0.004)) * 255)
+            b = int((0.329 + frac * (0.144 - 0.329)) * 255)
+            traces.append(ScatterTrace(x=np.array(gdr_range, dtype=float), y=np.array(probs),
+                                      mode='lines', name=f't={int(t_val)}',
+                                      marker_size=1, line_color=f'#{r:02x}{g2:02x}{b:02x}'))
+        spec = ChartSpec(chart_type='scatter', data=ScatterData(traces=traces),
+                         title='2D瀑布图', xlabel='目标卡数量', ylabel='概率')
+        return [_sec_chart('2D瀑布图', spec)]
+
+    def _waterfall_3d(self, p):
+        return self._waterfall(p, '3d')
+
+    def _waterfall_2d(self, p):
+        return self._waterfall(p, '2d')
+
     def _per_pool(self, mode):
         agg = self.aggregate_data
         if not agg:
@@ -644,13 +716,29 @@ class AnalysisService:
         trans = compute_transition_matrices_from_flags(flags, pool_ids_ordered)
         if not trans:
             return [{'key': 'summary', 'title': '转变分析', 'items': {'状态': '无足够数据生成转移矩阵'}}]
-        # 成功率变化折线
-        rates = [t.success_rate_before for t in trans] + [trans[-1].success_rate_after]
-        xs = list(range(len(rates)))
-        spec = ChartSpec(chart_type='scatter',
-                         data=ScatterData(x=np.array(xs, dtype=float), y=np.array(rates, dtype=float),
-                                          mode='lines+markers'),
-                         title='成功率变化', xlabel='池序', ylabel='成功率')
+        # 成功率变化：转移前/后 两条折线（对齐旧 UI transition_analysis_rates）
+        xs = np.arange(len(trans))
+        spec = ChartSpec(chart_type='scatter', data=ScatterData(traces=[
+            ScatterTrace(x=xs, y=np.array([t.success_rate_before for t in trans]),
+                         mode='lines+markers', name='转移前成功率', marker_size=8, line_color='#2196F3'),
+            ScatterTrace(x=xs, y=np.array([t.success_rate_after for t in trans]),
+                         mode='lines+markers', name='转移后成功率', marker_size=8, line_color='#4CAF50',
+                         marker_symbol='square'),
+        ]), title='相邻池子间成功率变化', xlabel='转移', ylabel='成功率')
+        # 转移概率矩阵子图网格（2×2 × 转移数，Blues，每行 4 个，对齐旧 UI transition_analysis_matrices）
+        matrices = []
+        grid_titles = []
+        for t in trans:
+            matrices.append(np.array([
+                [t.success_to_success, t.success_to_fail],
+                [t.fail_to_success, t.fail_to_fail],
+            ]))
+            grid_titles.append(f'{self.pool_names.get(t.from_pool_id, t.from_pool_id)}→{self.pool_names.get(t.to_pool_id, t.to_pool_id)}')
+        grid = ChartSpec(chart_type='subplot_grid',
+                         data=SubplotGridData(matrices=matrices, titles=grid_titles,
+                                              row_labels=['成功', '失败'], col_labels=['成功', '失败'],
+                                              colorscale='Blues', cols=4),
+                         title='转移概率矩阵')
         # 转移矩阵（2×2 → 文本表）
         rows = []
         for t in trans:
@@ -658,5 +746,6 @@ class AnalysisService:
                          self.pool_names.get(t.to_pool_id, t.to_pool_id),
                          f'{t.success_to_success:.4f}', f'{t.success_to_fail:.4f}',
                          f'{t.fail_to_success:.4f}', f'{t.fail_to_fail:.4f}'])
-        return [_sec_chart('成功率变化', spec),
+        return [_sec_chart('相邻池子间成功率变化', spec),
+                _sec_chart('转移概率矩阵', grid),
                 _sec_table('转移矩阵', ['前池', '后池', '成功→成功', '成功→失败', '失败→成功', '失败→失败'], rows)]

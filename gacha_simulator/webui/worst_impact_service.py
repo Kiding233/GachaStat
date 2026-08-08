@@ -61,7 +61,7 @@ def generate_worst_config(dataset, store, params: dict) -> dict:
         analyzer._prepare_pool_info()
         if analyzer.custom_pool_config and analyzer.custom_pool_config.get('distribution'):
             analyzer._apply_custom_pool_config()
-        condition = params.get('cond', 'failure')
+        condition = params.get('cond', 'success')   # 对齐旧 worst_impact_panel 默认「成功」情景
         alpha = float(params.get('alpha', 0.05))
         custom_resource = params.get('customResource', '')
         if custom_resource not in (None, ''):
@@ -166,11 +166,19 @@ def analyze_worst_dist(dataset, store, params: dict) -> dict:
         dist = result['distribution']
         expected = result['expected']
         sections = []
-        # gauge：大保底资源覆盖（worst 资源不可重算——用 dataset 的初始资源近似）
+        # gauge：大保底资源覆盖（dataset 初始资源 = 最差资源，重算覆盖倍数——对齐旧 worst_impact_panel PityCoverageGauge）
         init_res = (dataset.get('initial_resources') or {}).get('draw_resource', 0)
+        try:
+            pity_coverage = float(analyzer._compute_pity_coverage(init_res))
+        except Exception:
+            pity_coverage = None
+        if pity_coverage is not None and np.isfinite(pity_coverage):
+            sections.append({'key': 'gauge', 'title': '大保底资源覆盖', 'value': round(pity_coverage, 2),
+                             'desc': '覆盖倍数（≥1 = 初始资源可覆盖一次大保底）'})
         sections.append({'key': 'summary', 'title': '新池子数分布',
                          'items': {'期望连续新池子数': f'{expected:.2f}',
                                    '初始资源': f'{init_res:.0f}',
+                                   '大保底覆盖': f'{pity_coverage:.2f}x' if pity_coverage is not None else '—',
                                    '模拟数': len(agg)}})
         # 柱状图
         ks = sorted(dist.keys())

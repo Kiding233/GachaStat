@@ -145,10 +145,9 @@ export const METHOD_DEFS = [
     type: 'time_series', label: 'GDR 时间序列演化', category: '时间演化',
     params: [
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
-      { key: 'unit', label: '以抽数为单位', type: 'bool', default: false },
     ],
     result: [
-      { key: 'chart', title: 'GDR 时间序列', desc: '逐日/逐抽 GDR 演化' },
+      { key: 'chart', title: 'GDR 时间序列', desc: '逐抽 GDR 演化' },
     ],
   },
   {
@@ -158,6 +157,20 @@ export const METHOD_DEFS = [
     ],
     result: [
       { key: 'chart', title: '时间-GDR 热力图', desc: '时间×GDR 二维热力' },
+    ],
+  },
+  {
+    type: 'waterfall_3d', label: '3D 瀑布图', category: '时间演化',
+    params: [],
+    result: [
+      { key: 'chart', title: '3D 瀑布图', desc: '目标达成随时间步的分布演化（z=概率）' },
+    ],
+  },
+  {
+    type: 'waterfall_2d', label: '2D 压缩瀑布图', category: '时间演化',
+    params: [],
+    result: [
+      { key: 'chart', title: '2D 压缩瀑布图', desc: '各时间步目标卡数概率曲线（viridis 渐变）' },
     ],
   },
   {
@@ -177,7 +190,7 @@ export const METHOD_DEFS = [
     result: [
       { key: 'summary', title: '每池抽卡数摘要' },
       { key: 'table', title: '每池抽卡数表', desc: '池 / 均值 / 分位数' },
-      { key: 'chart', title: '每池抽卡数箱线', desc: '各池抽卡数分布' },
+      { key: 'chart', title: '每池抽卡数柱状', desc: '各池抽卡数（横向柱状）' },
     ],
   },
   {
@@ -223,8 +236,12 @@ export const METHOD_DEFS = [
   {
     type: 'process', label: '过程分析', category: '过程分析',
     params: [
-      { key: 'events', label: '事件类型', type: 'array', default: ['pity', 'early'] },
-      { key: 'successOp', label: '成败定义', type: 'select', options: [['success', '成功'], ['failure', '失败']], default: 'success' },
+      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
+      { key: 'threshold', label: '成功阈值', type: 'number', default: 1.0, precision: 2 },
+      // 对齐旧 process_analysis_panel：eventMode / successMode（后端 process_service 读这两个键，
+      // 旧版 events/successOp 键后端不读、配置被静默忽略）
+      { key: 'eventMode', label: '事件模式', type: 'select', options: [['sequence', '事件类型序列'], ['set', '事件类型集合'], ['count_set', '事件计数组合'], ['raw', '原始轨迹'], ['custom', '自定义模式']], default: 'sequence' },
+      { key: 'successMode', label: '成败模式', type: 'select', options: [['count', '成败计数'], ['sequence', '成败序列'], ['set', '成败集合'], ['custom', '自定义模式']], default: 'count' },
       { key: 'ci', label: '置信水平', type: 'number', min: 0.8, max: 0.99, step: 0.01, default: 0.95, precision: 2 },
     ],
     result: [
@@ -240,8 +257,9 @@ export const METHOD_DEFS = [
     params: [
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'resource_remaining' },
       { key: 'threshold', label: '成功阈值', type: 'number', default: 1.0, precision: 2 },
-      { key: 'alpha', label: '脆弱比例 α', type: 'number', min: 0.01, max: 0.5, step: 0.01, default: 0.05, precision: 2 },
-      { key: 'nbins', label: '分箱数', type: 'number', min: 5, max: 100, default: 30 },
+      // 对齐旧 retreat_panel：α 默认 0.5、等距分箱数默认 20（旧 UI alpha_spin 0.5 / num_bins 20）
+      { key: 'alpha', label: '脆弱比例 α', type: 'number', min: 0, max: 1, step: 0.01, default: 0.5, precision: 2 },
+      { key: 'nbins', label: '分箱数', type: 'number', min: 5, max: 100, default: 20 },
       // ── 生成配置（按原 UI 方案搜索方法：从哪个池子开始 / 资源是什么 / 保底状态如何）──
       { key: 'from_pool', label: '起始池', type: 'select', options: [['_root', '(从头开始)'], ['c1', '周年庆'], ['c2', '武器特选']], default: '_root' },
       { key: 'base_resource', label: '基准资源', type: 'select', options: [['p50', '50%分位'], ['mean', '均值'], ['p25', '25%分位'], ['p75', '75%分位'], ['custom', '自定义']], default: 'p50' },
@@ -263,7 +281,7 @@ export const METHOD_DEFS = [
   {
     type: 'worst_config', label: '生成后续池子配置', category: '最差影响',
     params: [
-      { key: 'cond', label: '条件', type: 'select', options: [['all', '全部'], ['success', '成功'], ['failure', '失败']], default: 'failure' },
+      { key: 'cond', label: '条件', type: 'select', options: [['all', '全部'], ['success', '成功'], ['failure', '失败']], default: 'success' },
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'resource_remaining' },
       { key: 'threshold', label: '成功阈值', type: 'number', default: 1.0, precision: 2 },
       { key: 'alpha', label: '初始资源分位 α', type: 'number', min: 0.01, max: 0.5, step: 0.01, default: 0.05, precision: 2 },
@@ -302,3 +320,24 @@ export const METHOD_DEFS = [
 
 export const methodByType = (t) => METHOD_DEFS.find((m) => m.type === t)
 export const methodsByCategory = (cat) => METHOD_DEFS.filter((m) => m.category === cat)
+
+// ── 动态 GDR 选项（资源类 GDR 按资源种类展开为 :qualified 条目）──
+// 静态 GDR_OPTIONS 是兜底（资源定义缺失/独立运行）。连接真实后端后，前端启动时经
+// api.list_gdr_options() 取 get_expanded_gdr_entries 的展开列表（resource_remaining:draw_resource 等），
+// 注入所有 GDR 下拉的 options，并修正资源类默认值为限定形式（与原 UI populate_gdr_combo 一致）。
+export function applyGdrOptions(options) {
+  if (!Array.isArray(options) || !options.length) return
+  const pairs = options.map((o) => [o.key, o.display])
+  const keys = pairs.map((p) => p[0])
+  for (const m of METHOD_DEFS) {
+    for (const f of m.params) {
+      if (!['gdr', 'gdrA', 'gdrB'].includes(f.key)) continue
+      f.options = pairs
+      // 默认值修正：未限定资源 key（如 resource_remaining）在展开列表中已变为 :draw_resource
+      if (f.default && !f.default.includes(':') && !keys.includes(f.default)) {
+        const qualified = `${f.default}:draw_resource`
+        if (keys.includes(qualified)) f.default = qualified
+      }
+    }
+  }
+}

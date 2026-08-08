@@ -77,9 +77,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import draggable from 'vuedraggable'
-import { METHOD_CATEGORIES, methodsByCategory, methodByType } from './methodDefs.js'
+import { METHOD_CATEGORIES, methodsByCategory, methodByType, applyGdrOptions } from './methodDefs.js'
 import ParamControls from './ParamControls.vue'
 import ResultChart from './ResultChart.vue'
 import api from '../../api.js'
@@ -107,6 +107,13 @@ if (props.analysisNode) {
 const activeUid = ref(null)
 const activeCat = ref(METHOD_CATEGORIES[0])
 
+// 启动时注入动态 GDR 选项：资源类 GDR（resource_remaining 等）按资源种类展开为 :qualified
+// 条目（draw_resource/exchange_currency…），并在 GDR 下拉可选（与后端 get_expanded_gdr_entries 一致）。
+onMounted(async () => {
+  const g = await api.listGdrOptions()
+  if (g?.ok && g.options?.length) applyGdrOptions(g.options)
+})
+
 function defaultParams(type) {
   const def = methodByType(type)
   const p = {}
@@ -120,25 +127,42 @@ function addMethod(type) {
   const m = methodByType(type)
   if (!m) return
   const uid = nextUid++
-  blocks.value.push({ uid, type, label: m.label, expanded: true, params: defaultParams(type), status: 'idle', result: null })
+  const block = reactive({
+    uid, type, label: m.label, expanded: true,
+    params: defaultParams(type), status: 'idle', result: null,
+    _seq: 0, _timer: null, _pending: false,
+  })
+  // 参数变化 → 防抖自动重跑（高频调整时合并，运行中标记 pending 完成后跑最新）
+  watch(block.params, () => scheduleRun(block), { deep: true })
+  blocks.value.push(block)
   activeUid.value = uid
+  // 创建后自动运行（仅分析类；worst_config 等纯生成类等用户点「生成」）
+  if (!isGenerateOnly(type)) runAnalysis(block)
 }
 
-// ── 分析执行（后端 js_api）──
-// 方法 → 后端调用路由
-const ANALYSIS_API = {
-  gdr_dist: 'runAnalysis', gdr_statistics: 'runAnalysis', correlation: 'runAnalysis',
-  success_rate: 'runAnalysis', risk_var_cvar: 'runAnalysis', risk_worst_case: 'runAnalysis',
-  risk_best_case: 'runAnalysis', conditional_dist: 'runAnalysis', time_series: 'runAnalysis',
-  time_heatmap: 'runAnalysis', draws_vs_gdr: 'runAnalysis', per_pool_draws: 'runAnalysis',
-  per_pool_target_rate: 'runAnalysis', per_pool_pity_rate: 'runAnalysis',
-  cumulative_by_pool: 'runAnalysis', transition_analysis: 'runAnalysis',
-  process: 'runProcessAnalysis', vuln: 'runVulnerability', worst_dist: 'analyzeWorstDist',
+// 纯生成类方法块（无自动分析，等用户显式生成配置）
+function isGenerateOnly(type) {
+  const m = methodByType(type)
+  return m?.action === 'generate_config'
+}
+
+// ── 自动运行（防抖 + 运行中 pending + 过期响应丢弃）──
+// 统计方法创建即运行；参数变化防抖重跑。长任务高频调参场景：
+// 参数快速变化 → 防抖合并；运行中参数再变 → 置 pending，当前完成后自动跑最新；旧响应经 seq 丢弃。
+const DEBOUNCE_MS = 600
+function scheduleRun(block) {
+  clearTimeout(block._timer)
+  block._timer = setTimeout(() => {
+    if (block.status === 'running') { block._pending = true; return }
+    runAnalysis(block)
+  }, DEBOUNCE_MS)
 }
 
 async function runAnalysis(block) {
   const route = ANALYSIS_API[block.type]
   if (!route) return
+  const seq = (block._seq || 0) + 1
+  block._seq = seq
   block.status = 'running'
   block.result = null
   try {
@@ -149,12 +173,26 @@ async function runAnalysis(block) {
         : route === 'runVulnerability'
           ? await api.runVulnerability(datasetId.value, { ...block.params })
           : await api.analyzeWorstDist(datasetId.value, { ...block.params })
+    if (seq !== block._seq) return   // 过期响应（参数已再次变化）→ 丢弃
     block.result = res
     block.status = 'done'
+    if (block._pending) { block._pending = false; block._timer = setTimeout(() => runAnalysis(block), 100) }
   } catch (e) {
+    if (seq !== block._seq) return
     block.result = { ok: false, sections: [], error: String(e) }
     block.status = 'error'
   }
+}
+// 方法 → 后端调用路由
+const ANALYSIS_API = {
+  gdr_dist: 'runAnalysis', gdr_statistics: 'runAnalysis', correlation: 'runAnalysis',
+  success_rate: 'runAnalysis', risk_var_cvar: 'runAnalysis', risk_worst_case: 'runAnalysis',
+  risk_best_case: 'runAnalysis', conditional_dist: 'runAnalysis', time_series: 'runAnalysis',
+  time_heatmap: 'runAnalysis', draws_vs_gdr: 'runAnalysis', per_pool_draws: 'runAnalysis',
+  per_pool_target_rate: 'runAnalysis', per_pool_pity_rate: 'runAnalysis',
+  cumulative_by_pool: 'runAnalysis', transition_analysis: 'runAnalysis',
+  waterfall_3d: 'runAnalysis', waterfall_2d: 'runAnalysis',
+  process: 'runProcessAnalysis', vuln: 'runVulnerability', worst_dist: 'analyzeWorstDist',
 }
 
 // 生成配置 → 真在工作区创建派生配置节点（挂源配置下，带真实 config_text）

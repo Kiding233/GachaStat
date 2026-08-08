@@ -48,7 +48,7 @@ def run_vulnerability_analysis(dataset: dict, store, params: dict) -> dict:
     target_specs = dict(dataset.get('target_specs', {}) or {})
     gdr_key = params.get('gdr', 'resource_remaining')
     gdr_threshold = float(params.get('threshold', 1.0))
-    alpha = float(params.get('alpha', 0.05))
+    alpha = float(params.get('alpha', 0.5))   # 对齐旧 retreat_panel alpha 默认 0.5
     nbins = int(params.get('nbins', 20)) if params.get('nbins') else None
     desire_weights = store.desire_weights if store else None
     miss_cost_weights = store.miss_cost_weights if store else None
@@ -125,7 +125,8 @@ def _build_sections(analysis, alpha) -> list:
         colors.append('#c62828' if pr.vulnerability_intervals else '#1976d2')
     if series:
         ridge = ChartSpec(chart_type='ridge', data=RidgeData(series=series, labels=labels),
-                          title='各池资源剩余分布（脆弱池红色）', xlabel='资源剩余', ylabel='池子')
+                          title='各池资源剩余分布（脆弱池红色）', xlabel='资源剩余', ylabel='池子',
+                          layout_hints={'bin_edges': list(analysis.global_bin_edges)} if analysis.global_bin_edges else {})
         sections.append({'key': 'chart', 'title': '各池资源分布总览', 'spec': _spec_to_dict(ridge)})
 
     # 每池：直方图 + PAVA 图 + N_j + 区间表
@@ -137,19 +138,22 @@ def _build_sections(analysis, alpha) -> list:
         if rows:
             sections.append({'key': 'table', 'title': f'{base} 脆弱区间',
                              'headers': ['区间', '中心'], 'rows': rows})
-        # 直方图（资源分布）
+        # 直方图（资源分布）——与原 UI plot_vulnerability 一致：全部池共享 global_bin_edges
+        #（分箱宽度全局统一，否则各池独立分箱宽度不一致、与原 UI 视觉不同）
         vals = pr.resource_values_all or []
         failed = pr.resource_values_failed or []
         if len(vals) >= 2:
+            hist_layout = ({'bin_edges': list(analysis.global_bin_edges)}
+                           if analysis.global_bin_edges else {'nbins': 30})
             hist = ChartSpec(
                 chart_type='histogram',
                 data=HistogramData(samples=np.array(vals), mean_line=True, quantile_lines=None,
-                                   overlays=[])
+                                   overlays=[], density=False)
                 if not failed else
                 HistogramData(samples=np.array(vals), mean_line=True,
-                              overlays=_overlays_from_failed(failed)),
+                              overlays=_overlays_from_failed(failed), density=False),
                 title=f'{base} 资源分布', xlabel='资源剩余', ylabel='频次',
-                layout_hints={'nbins': 30},
+                layout_hints=hist_layout,
             )
             sections.append({'key': 'chart', 'title': f'{base} 资源分布', 'spec': _spec_to_dict(hist)})
         # PAVA 图

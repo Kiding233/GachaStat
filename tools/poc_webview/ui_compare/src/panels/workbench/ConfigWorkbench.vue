@@ -14,6 +14,9 @@
       <el-button v-for="e in entityTypes" :key="e.type" size="small" @click="addBlock(e.type)">{{ e.label }}</el-button>
       <span class="toolbar-divider"></span>
       <el-button v-for="g in globalTypes" :key="g.type" size="small" :disabled="isSingletonPresent(g.type)" @click="addBlock(g.type)">{{ g.label }}</el-button>
+      <!-- 工具栏最右侧：配置可视化预览（时间线 / 日历）-->
+      <span class="toolbar-spacer"></span>
+      <el-button v-if="!isSearch" size="small" type="info" @click="previewDlg = true">预览</el-button>
     </div>
 
     <div class="wb-body" ref="bodyRef">
@@ -94,6 +97,8 @@
               :copyable="isBlockCopyable(element.type)"
               :pages="pages"
               :pool-ids="allPoolIds"
+              :banner-ids="allBannerIds"
+              :card-pools="allCardPools"
               @change="onBlockChange"
               @copy="copyBlock(element)"
               @remove="removeBlock(element)"
@@ -107,6 +112,11 @@
         </draggable>
       </div>
     </div>
+
+    <!-- 配置可视化预览（时间线 + 日历：资源获取曲线 / 池子开放区间）-->
+    <el-dialog v-model="previewDlg" title="配置可视化预览" width="900" append-to-body>
+      <ConfigPreview :config-text="configText" />
+    </el-dialog>
   </div>
 </template>
 
@@ -115,10 +125,12 @@ import { ref, reactive, computed, watch } from 'vue'
 import draggable from 'vuedraggable'
 import ConfigBlock from './ConfigBlock.vue'
 import BlockGeneric from './BlockGeneric.vue'
+import ConfigPreview from './ConfigPreview.vue'
 import api from '../../api.js'
 import {
   BLOCK_TYPES, emptyToml, parseToml, blocksToToml, isEntity,
   SEARCH_BLOCK_TYPES, emptySearchToml, parseSearchToml, blocksToSearchToml, SEARCH_INITIAL_TEXT,
+  extractUiSection, injectUiSection,
 } from './configToml.js'
 
 const props = defineProps({
@@ -129,6 +141,7 @@ const props = defineProps({
 const configName = computed(() => props.node.label)
 const isSearch = computed(() => props.mode === 'search')
 const headTitle = computed(() => `${isSearch.value ? '搜索任务' : '配置'}：${configName.value}`)
+const previewDlg = ref(false)   // 配置可视化预览对话框
 
 // 块类型集合：config → 实体+全局；search → 搜索专用块
 const blockTypes = computed(() => (isSearch.value ? SEARCH_BLOCK_TYPES : BLOCK_TYPES))
@@ -220,11 +233,14 @@ ranks = [["SSR"],["SR"],["R"]]
 key = "smart"`;
 const configText = ref(isSearch.value
   ? (props.node?.meta?.configText || SEARCH_INITIAL_TEXT)
-  : (props.node?.meta?.configText || CONFIG_TEXT))
+  : (extractUiSection(props.node?.meta?.configText || CONFIG_TEXT).cleanText || CONFIG_TEXT))
 
-// 外部更新（导入/重置/打开派生配置）→ 同步文本
+// 外部更新（导入/重置/打开派生配置）→ 同步文本（剥离 [ui] 段）
 watch(() => props.node?.meta?.configText, (v) => {
-  if (typeof v === 'string' && v && v !== configText.value) configText.value = v
+  if (typeof v === 'string' && v) {
+    const { cleanText } = extractUiSection(v)
+    if (cleanText !== configText.value) configText.value = cleanText
+  }
 })
 
 // ── 双向同步（文本 = 真相源；块编辑 → 防抖写回文本）──
@@ -239,11 +255,51 @@ const allPoolIds = computed(() =>
     .filter((b) => b.type === 'banner')
     .flatMap((b) => (b.data.pools || []).map((p) => `${b.data.id}.${p.id}`)),
 )
+// Banner ID（里程碑「适用 Banner」下拉：空=全部）
+const allBannerIds = computed(() =>
+  blocks.value.filter((b) => b.type === 'banner').map((b) => b.data.id).filter(Boolean),
+)
+// 卡 → 全限定池 ID[]（目标卡关联池只读自动解析：该卡出现在哪些池的奖励中，对齐旧 UI _update_target_pools）
+const allCardPools = computed(() => {
+  const map = {}
+  for (const b of blocks.value.filter((x) => x.type === 'banner')) {
+    for (const p of (b.data.pools || [])) {
+      for (const r of (p.rewards || [])) {
+        if (r.card_id) {
+          const k = `${b.data.id}.${p.id}`
+          map[r.card_id] = map[r.card_id] || []
+          if (!map[r.card_id].includes(k)) map[r.card_id].push(k)
+        }
+      }
+    }
+  }
+  return map
+})
 
 function onTextChange() {
   parseError.value = ''
   try {
+    const before = blocks.value.length
     blocks.value = doParse(configText.value)
+    // 首次解析：按旧 UI tag 结构补全未归置块（已归置的保留，未归置的按类型进默认页）
+    if (!_organizedOnce) {
+      _organizedOnce = true
+      for (const b of blocks.value) {
+        const pageId = TYPE_TO_PAGE[b.type]
+        if (pageId && !pageOf[dragKey(b)] && pages.value.some((p) => p.id === pageId)) {
+          pageOf[dragKey(b)] = pageId
+        }
+      }
+      persistPages()
+    }
+    // 添加块：新块归到添加时的当前页（非全局页，否则留全局）
+    if (_addPendingPage && _addPendingPage !== 'g') {
+      for (let i = _addPageBefore; i < blocks.value.length; i++) {
+        pageOf[dragKey(blocks.value[i])] = _addPendingPage
+      }
+      persistPages()
+    }
+    _addPendingPage = null
   } catch (e) {
     parseError.value = '解析失败：' + e.message
   }
@@ -260,9 +316,8 @@ function onBlockChange() {
 }
 
 // ── 块操作：添加 / 复制 / 删除（写回文本）──
-// 全局单表类型（资源/稀有度/策略）在 TOML 中只能有一个段——重复添加会产生非法 TOML
+// 全局单表类型（资源已可多块，仅稀有度/策略）在 TOML 中只能有一个段——重复添加会产生非法 TOML
 const SINGLETON_HINT = {
-  resource: '资源为全局单表（[resources.defs]/[resources.initial]），请在现有资源块内添加条目',
   rarity: '稀有度层级为全局单例（[rarities]），已在渲染视图中',
   strategy: '策略为全局单例（[strategy]），已在渲染视图中',
 }
@@ -271,6 +326,9 @@ function addBlock(type) {
     import('element-plus').then(({ ElMessage }) => ElMessage.info(SINGLETON_HINT[type]))
     return
   }
+  // 记录添加时的当前页——解析后新块归到该页（非全局页）
+  _addPendingPage = currentPage.value
+  _addPageBefore = blocks.value.length
   configText.value = configText.value.trimEnd() + '\n\n' + doEmpty(type)
 }
 // 单例已存在 → 工具栏按钮灰显
@@ -289,9 +347,44 @@ function dragKey(b) {
 }
 
 // ── 自由分页：页是块的分组容器（默认「全局配置」页，可新建/命名/删除，块可移入页）──
-const pages = ref([{ id: 'g', name: '全局配置' }])
-const currentPage = ref('g')
-const pageOf = reactive({})   // dragKey → pageId（未记录 = 全局页）
+// 分页状态持久化到 config.toml 的 [ui] 段（page_state JSON）——保存配置时随文件写入，
+// 加载配置时从 [ui] 恢复。可建「全局配置/卡牌定义/资源管理」等页恢复旧 UI 的 tag 结构。
+const _uiInit = isSearch.value ? {} : (extractUiSection(props.node?.meta?.configText || '').ui.pageState || {})
+const _ps = _uiInit || {}
+// 无 pageState（新配置/未组织）→ 按旧 UI tag 结构建默认页，首次解析后自动按类型归置块
+const DEFAULT_PAGES = [
+  { id: 'g', name: '全局配置' },
+  { id: 'card', name: '卡牌定义' },
+  { id: 'res', name: '资源管理' },
+  { id: 'banner', name: '卡池管理' },
+  { id: 'pity', name: '保底机制' },
+  { id: 'ms', name: '累抽奖励' },
+  { id: 'target', name: '目标卡' },
+  { id: 'weight', name: '权重配置' },
+  { id: 'strategy', name: '策略' },
+]
+const TYPE_TO_PAGE = { card: 'card', resource: 'res', banner: 'banner', pity: 'pity', milestone: 'ms', target: 'target', weight: 'weight', strategy: 'strategy' }
+let _organizedOnce = false   // 首次解析后按默认页补全未归置块（新配置全归置；旧 pageState 缺失的补全，不动已归置的）
+let _addPendingPage = null     // 添加块时记录当前页，解析后新块归到该页（非全局页）
+let _addPageBefore = 0
+
+const pages = ref(_ps?.pages?.length ? JSON.parse(JSON.stringify(_ps.pages)) : JSON.parse(JSON.stringify(DEFAULT_PAGES)))
+const currentPage = ref(_ps?.currentPage || 'g')
+const pageOf = reactive(_ps?.pageOf ? { ..._ps.pageOf } : {})   // dragKey → pageId（未记录 = 全局页）
+// 保存/加载用的 UI 元数据对象（保存时注入 [ui] 段）
+const _pageStateObj = reactive({
+  pages: JSON.parse(JSON.stringify(pages.value)),
+  pageOf: {},
+  currentPage: currentPage.value,
+})
+
+function persistPages() {
+  _pageStateObj.pages = JSON.parse(JSON.stringify(pages.value))
+  _pageStateObj.pageOf = { ...pageOf }
+  _pageStateObj.currentPage = currentPage.value
+}
+// 分页操作即时持久化（改页/移块/切页都同步到 _pageStateObj，保存配置时随 [ui] 写文件）
+watch([pages, pageOf, currentPage], persistPages, { deep: true })
 
 const visibleBlocks = computed(() => {
   if (currentPage.value === 'g') return blocks.value.filter((b) => !pageOf[dragKey(b)])
@@ -327,8 +420,9 @@ function onDragEnd() {
   blocks.value = blocks.value.map((b) => (visSet.has(b) ? vis[vi++] : b))
   onBlockChange()
 }
-// 聚合条目表格块（资源/卡片/权重/目标卡）：块级复制无意义，条目级复制在块内提供
-const TABLE_TYPES = ['resource', 'card', 'weight', 'target']
+// 聚合条目表格块（卡片/权重/目标卡）：块级复制无意义，条目级复制在块内提供；
+// 资源块可整块复制（多个资源块序列化时合并去重）
+const TABLE_TYPES = ['card', 'weight', 'target']
 function isBlockCopyable(t) {
   return isEntity(t) && !TABLE_TYPES.includes(t)
 }
@@ -402,9 +496,11 @@ async function saveToast() {
     import('element-plus').then(({ ElMessage }) => ElMessage.success('搜索配置已保存'))
     return
   }
-  const r = await api.saveConfigText(configText.value)
+  // 分页状态等 UI 元数据注入 [ui] 段，随配置一起持久化到 config.toml
+  const fullText = injectUiSection(configText.value, _pageStateObj)
+  const r = await api.saveConfigText(fullText)
   if (r?.ok) {
-    props.node.meta.configText = configText.value
+    props.node.meta.configText = fullText
     import('element-plus').then(({ ElMessage }) => ElMessage.success('配置已保存'))
   } else {
     const msg = (r?.errors || []).join('；') || r?.error || '未知错误'
@@ -449,6 +545,37 @@ async function onImport() {
 .wb-head h2 {
   margin: 0;
   font-size: 13px;
+}
+/* 添加块工具栏：左实体/全局按钮，最右侧「预览」按钮（spacer 推右）*/
+.toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  border: 1px solid var(--gsc-border);
+  background: var(--gsc-bg-header);
+  margin-bottom: 8px;
+}
+.toolbar-label {
+  font-size: 11px;
+  color: var(--gsc-text-muted);
+  margin-right: 4px;
+}
+.toolbar .el-button {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--gsc-border);
+  margin: 0 2px;
+}
+.toolbar-spacer {
+  flex: 1;
 }
 /* 配置上下文操作切换 */
 .op-switch {

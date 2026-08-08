@@ -2,7 +2,7 @@
   <div class="result-chart">
     <!-- 加载中 -->
     <div v-if="loading" class="rs rs-loading"><span class="muted">分析运行中…</span></div>
-    <!-- 真实结果 sections（后端 analysis_service 产出）-->
+    <!-- 真实结果 sections（后端 analysis_service 产出，每个 chart section 独立图表实例）-->
     <template v-else-if="sections && sections.length">
       <template v-for="(sec, i) in sections" :key="i">
         <!-- summary：键值摘要 -->
@@ -24,13 +24,13 @@
             <div class="gauge-desc">{{ sec.desc || '' }}</div>
           </div>
         </div>
-        <!-- chart：ChartSpec → ECharts -->
+        <!-- chart：ChartSpec → ECharts（函数 ref 按 index 绑定，多图各自实例）-->
         <div v-else-if="sec.key === 'chart'" class="rs rs-chart">
           <div class="rs-title">{{ sec.title }}</div>
-          <div :ref="setChartEl" class="chart-box" />
-          <div v-if="tableFallback" class="chart-fallback">
-            <el-table :data="tableFallback.rows" size="small" border>
-              <el-table-column v-for="h in tableFallback.headers" :key="h" :label="h" :prop="h" />
+          <div v-if="!tableFallback[i]" :ref="(el) => setChartContainers(el, i)" class="chart-box" />
+          <div v-else class="chart-fallback">
+            <el-table :data="tableFallback[i].rows" size="small" border>
+              <el-table-column v-for="h in tableFallback[i].headers" :key="h" :label="h" :prop="h" />
             </el-table>
           </div>
         </div>
@@ -93,34 +93,91 @@ const props = defineProps({
 })
 const def = computed(() => methodByType(props.type) || { result: [] })
 
-// ── 图表容器（函数 ref 防 v-for 收集成数组）──
-const chartEl = ref(null)
-function setChartEl(el) { chartEl.value = el }
-let chart = null
-const tableFallback = ref(null)
+// ── 每个 chart section 独立容器与 echarts 实例（函数 ref 按 index 槽位绑定）──
+const chartContainers = {}   // section index → DOM 元素
+const chartInstances = {}    // section index → echarts 实例
+const tableFallback = ref({}) // section index → { headers, rows }（__table 类型兜底表）
 
-// chart section → ECharts。table 类型（__table 标记）→ el-table 兜底
+function setChartContainers(el, i) {
+  if (el) chartContainers[i] = el
+  else delete chartContainers[i]
+}
+
 function renderCharts() {
-  const charts = (props.sections || []).filter((s) => s.key === 'chart')
-  tableFallback.value = null
-  if (!charts.length || !chartEl.value) return
-  const first = charts[0]
-  const opt = specToECharts(first.spec)
-  if (opt.__table) {
-    tableFallback.value = { headers: opt.headers, rows: (opt.rows || []).map((r) => {
-      const o = {}
-      opt.headers.forEach((h, i) => { o[h] = r[i] })
-      return o
-    }) }
-    return
+  const sections = props.sections || []
+  // 清空已移除 section 的实例
+  for (const k of Object.keys(chartInstances)) {
+    const sec = sections[Number(k)]
+    if (!sec || sec.key !== 'chart') {
+      try { chartInstances[k].dispose() } catch (e) {}
+      delete chartInstances[k]
+    }
   }
-  if (!chart) {
-    chart = echarts.init(chartEl.value)
-    window.addEventListener('resize', onResize)
-    chartEl.value.addEventListener('wheel', onWheel, { passive: false })
+  const nextFallback = {}
+  sections.forEach((sec, i) => {
+    if (sec.key !== 'chart') return
+    const el = chartContainers[i]
+    if (!el) return
+    const opt = specToECharts(sec.spec)
+    if (opt.__table) {
+      // table 类型（ChartSpec chart_type='table'）→ el-table 兜底
+      nextFallback[i] = {
+        headers: opt.headers,
+        rows: (opt.rows || []).map((r) => {
+          const o = {}
+          opt.headers.forEach((h, idx) => { o[h] = r[idx] })
+          return o
+        }),
+      }
+      try { if (chartInstances[i]) { chartInstances[i].dispose(); delete chartInstances[i] } } catch (e) {}
+      return
+    }
+    let inst = chartInstances[i]
+    if (!inst) {
+      inst = echarts.init(el)
+      chartInstances[i] = inst
+      window.addEventListener('resize', onResize)
+      el.addEventListener('wheel', (e) => onWheel(e, inst), { passive: false })
+    }
+    // 山脊线图：单子图定高，全图高度随堆叠数动态增长（容器高度 = top + rows×rowHeight）
+    if (opt.__gscRidge) {
+      el.style.height = (opt.__gscRidge.top + opt.__gscRidge.rows * opt.__gscRidge.rowHeight) + 'px'
+    } else {
+      el.style.height = ''
+    }
+    inst.setOption(opt, true)
+    inst.resize()
+  })
+  tableFallback.value = nextFallback
+}
+
+watch(() => props.sections, async () => {
+  await nextTick()
+  renderCharts()
+}, { deep: true })
+
+onBeforeUnmount(() => {
+  for (const k of Object.keys(chartInstances)) {
+    try { chartInstances[k].dispose() } catch (e) {}
   }
-  chart.setOption(opt, true)
-  // 其余 chart section 附在标题行后（紧凑展示：当前仅渲染首个，避免多图叠放）
+  window.removeEventListener('resize', onResize)
+})
+function onResize() {
+  for (const k of Object.keys(chartInstances)) chartInstances[k].resize()
+}
+// Ctrl+滚轮缩放（每个实例独立；普通滚轮放行页面）
+function onWheel(e, inst) {
+  if (!e.ctrlKey || !inst) return
+  e.preventDefault()
+  const opt = inst.getOption()
+  const dz = (opt.dataZoom && opt.dataZoom[0]) || { start: 0, end: 100 }
+  const start = dz.start ?? 0
+  const end = dz.end ?? 100
+  const span = end - start
+  const factor = e.deltaY > 0 ? 0.85 : 1.18
+  const newSpan = Math.max(8, Math.min(100, span * factor))
+  const center = (start + end) / 2
+  inst.dispatchAction({ type: 'dataZoom', start: Math.max(0, center - newSpan / 2), end: Math.min(100, center + newSpan / 2) })
 }
 
 function tableRows(sec) {
@@ -129,33 +186,6 @@ function tableRows(sec) {
     sec.headers.forEach((h, i) => { o[h] = r[i] })
     return o
   })
-}
-
-watch(() => [props.sections, props.type], async () => {
-  await nextTick()
-  renderCharts()
-}, { deep: true })
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
-  if (chartEl.value) chartEl.value.removeEventListener('wheel', onWheel)
-  if (chart) chart.dispose()
-  chart = null
-})
-function onResize() { chart && chart.resize() }
-// Ctrl+滚轮缩放（与 ResultChart 旧逻辑一致：普通滚轮放行页面）
-function onWheel(e) {
-  if (!e.ctrlKey || !chart) return
-  e.preventDefault()
-  const opt = chart.getOption()
-  const dz = (opt.dataZoom && opt.dataZoom[0]) || { start: 0, end: 100 }
-  const start = dz.start ?? 0
-  const end = dz.end ?? 100
-  const span = end - start
-  const factor = e.deltaY > 0 ? 0.85 : 1.18
-  const newSpan = Math.max(8, Math.min(100, span * factor))
-  const center = (start + end) / 2
-  chart.dispatchAction({ type: 'dataZoom', start: Math.max(0, center - newSpan / 2), end: Math.min(100, center + newSpan / 2) })
 }
 </script>
 

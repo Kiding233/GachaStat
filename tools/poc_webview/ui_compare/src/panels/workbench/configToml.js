@@ -192,6 +192,32 @@ export function parseToml(text) {
       const e = cur.data.entries.find((x) => x.key === key)
       if (e) e.initial = v
       else cur.data.entries.push({ key, name: '', initial: v })
+    } else if (mode === 'gainrules') {
+      const r = cur.data.gainRules[cur.data.gainRules.length - 1]
+      if (r) r[key] = v
+    } else if (mode === 'dayoverrides') {
+      const r = cur.data.dayOverrides[cur.data.dayOverrides.length - 1]
+      if (r) r[key] = v
+    } else if (mode === 'cardtags') {
+      if (curEntry) { curEntry.tags = curEntry.tags || {}; curEntry.tags[key] = v }
+    } else if (mode === 'cardlisttags') {
+      if (curEntry) { curEntry.listTags = curEntry.listTags || {}; curEntry.listTags[key] = v }
+    } else if (mode === 'resources') {
+      // [resources] 主表：真实 config.toml 用内联数组 gain_rules = [...] / day_overrides = [...]
+      if (key === 'gain_rules') cur.data.gainRules = Array.isArray(v) ? v : []
+      else if (key === 'day_overrides') cur.data.dayOverrides = Array.isArray(v) ? v : []
+      else cur.data[key] = v
+    } else if (mode === 'cardoverflow') {
+      // [[card.overflow_bands]] 条目（range/resources）归属最近 [[card]] 条目
+      const _bs = curEntry.overflow_bands || []
+      const _b = _bs[_bs.length - 1]
+      if (_b) _b[key] = v
+    } else if (mode === 'raritybands') {
+      // [[rarity_defaults.<rarity>.overflow_bands]] 条目归属对应稀有度分段
+      const _rk = Object.keys(cur.data.defaults || {}).at(-1)
+      const _bl = cur.data.defaults?.[_rk]?.overflow_bands || []
+      const _b2 = _bl[_bl.length - 1]
+      if (_b2) _b2[key] = v
     } else cur.data[key] = v
   }
 
@@ -235,6 +261,39 @@ export function parseToml(text) {
         flushRaw(); openBlock('pity', { name: '', type: 'soft_interval', scope: 'ssr' }, line); mode = 'pity'
       } else if (path === 'milestone') {
         flushRaw(); openBlock('milestone', { name: '', threshold: 40, repeat: false, max_triggers: 0, banner: '', bonus_reward: { cards: [], resources: {}, random_cards: [] } }, line); mode = 'milestone'
+      } else if (path === 'card.overflow_bands') {
+        // 归属最近 [[card]] 条目的溢出分段（range = [min, max]，resources = {}）
+        if (curEntry && (mode === 'card' || mode === 'cardoverflow')) {
+          curEntry.overflow_bands = curEntry.overflow_bands || []
+          curEntry.overflow_bands.push({ range: [1, 1], resources: {} })
+          mode = 'cardoverflow'
+          touchCur(line)
+        } else { flushRaw(); pushRaw(line); mode = 'raw' }
+      } else if (path.startsWith('rarity_defaults.')) {
+        // [[rarity_defaults.<rarity>.overflow_bands]] → rarity_defaults 块
+        flushRaw()
+        const _r = path.split('.')[1]
+        if (!cur || cur.type !== 'rarity_defaults') openBlock('rarity_defaults', { defaults: {} }, line)
+        else touchCur(line)
+        cur.data.defaults[_r] = cur.data.defaults[_r] || { overflow_bands: [] }
+        cur.data.defaults[_r].overflow_bands.push({ range: [1, 1], resources: {} })
+        mode = 'raritybands'
+      } else if (path === 'resources.gain_rules') {
+        // [[resources.gain_rules]] → 归属资源块的获取规则（type/param/gains）
+        flushRaw()
+        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        else touchCur(line)
+        if (!cur.data.gainRules) cur.data.gainRules = []
+        cur.data.gainRules.push({ type: '', param: '1', gains: {} })
+        mode = 'gainrules'
+      } else if (path === 'resources.day_overrides') {
+        // [[resources.day_overrides]] → 归属资源块的逐日覆盖（day/gains）
+        flushRaw()
+        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        else touchCur(line)
+        if (!cur.data.dayOverrides) cur.data.dayOverrides = []
+        cur.data.dayOverrides.push({ day: 0, gains: {} })
+        mode = 'dayoverrides'
       } else if (path === 'targets') {
         // 已被上方聚合分支覆盖（保留此处避免逻辑分支遗漏）
         flushRaw(); openBlock('target', { entries: [] }, line)
@@ -251,15 +310,32 @@ export function parseToml(text) {
     if (tabMatch) {
       const path = tabMatch[1]
       if (path === 'resources') {
-        // resources 主表：gain_rules / day_overrides 等未建模内容 → 原始文本兜底
-        flushRaw(); pushRaw(line); mode = 'raw'
+        // [resources] 主表：打开资源块（defs/initial/gain_rules/day_overrides 子表归属）
+        flushRaw()
+        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
+        else touchCur(line)
+        mode = 'resources'
+      } else if (path === 'card.tags') {
+        // [card.tags] 子表 → 归属最近 [[card]] 条目的标签（单值）
+        if (curEntry && (mode === 'card' || mode === 'cardtags' || mode === 'cardlisttags')) {
+          curEntry.tags = curEntry.tags || {}
+          mode = 'cardtags'
+          touchCur(line)
+        } else { flushRaw(); pushRaw(line); mode = 'raw' }
+      } else if (path === 'card.list_tags') {
+        // [card.list_tags] 子表 → 归属最近 [[card]] 条目的多值标签
+        if (curEntry && (mode === 'card' || mode === 'cardtags' || mode === 'cardlisttags')) {
+          curEntry.listTags = curEntry.listTags || {}
+          mode = 'cardlisttags'
+          touchCur(line)
+        } else { flushRaw(); pushRaw(line); mode = 'raw' }
       } else if (path === 'resources.defs') {
         flushRaw()
-        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [] }, line)
+        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
         else touchCur(line)
         mode = 'defs'
       } else if (path === 'resources.initial') {
-        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [] }, line)
+        if (!cur || cur.type !== 'resource') openBlock('resource', { entries: [], gainRules: [], dayOverrides: [] }, line)
         else touchCur(line)
         mode = 'initial'
       } else if (path === 'milestone.bonus_reward') {
@@ -281,7 +357,15 @@ export function parseToml(text) {
         mode = 'pitylife'
         touchCur(line)
       } else if (path === 'rarity_defaults') {
-        flushRaw(); pushRaw(line); mode = 'raw'
+        flushRaw(); openBlock('rarity_defaults', { defaults: {} }, line); mode = 'rarity_meta'
+      } else if (path.startsWith('rarity_defaults.')) {
+        // [rarity_defaults.<rarity>] 表 → 初始化该稀有度分段容器
+        flushRaw()
+        const _r = path.split('.')[1]
+        if (!cur || cur.type !== 'rarity_defaults') openBlock('rarity_defaults', { defaults: {} }, line)
+        else touchCur(line)
+        cur.data.defaults[_r] = cur.data.defaults[_r] || { overflow_bands: [] }
+        mode = 'rarity_meta'
       } else {
         // 其他未知段（[card.tags] / [card.overflow] 等）→ 原始文本兜底
         flushRaw(); pushRaw(line); mode = 'raw'
@@ -341,9 +425,33 @@ function extraToml(d, type) {
   return out
 }
 
+// 资源块序列化（[resources] 主表 gain_rules/day_overrides 内联 + defs/initial 子表）。
+// 独立成函数：多个资源块合并（entries 去重）时复用。
+function serializeResource(d) {
+  const entries = d.entries || []
+  const defs = entries.filter((e) => e.name).map((e) => `${e.key} = ${serializeValue(e.name)}`).join('\n')
+  const initial = entries.filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '').map((e) => `${e.key} = ${e.initial}`).join('\n')
+  const parts = []
+  const resMain = []
+  if (d.gainRules && d.gainRules.length) {
+    const arr = d.gainRules.map((g) => `{ type = ${serializeValue(g.type || 'daily')}${g.param !== undefined && g.param !== null ? `, param = ${g.param === '' ? '""' : serializeValue(g.param)}` : ''}, gains = ${serializeValue(g.gains || {})} }`)
+    resMain.push('gain_rules = [\n  ' + arr.join(',\n  ') + ',\n]')
+  }
+  if (d.dayOverrides && d.dayOverrides.length) {
+    const arr = d.dayOverrides.map((o) => `{ day = ${o.day}, gains = ${serializeValue(o.gains || {})} }`)
+    resMain.push('day_overrides = [\n  ' + arr.join(',\n  ') + ',\n]')
+  }
+  if (resMain.length) parts.push('[resources]\n' + resMain.join('\n'))
+  parts.push('[resources.defs]' + (defs ? '\n' + defs : ''))
+  if (initial) parts.push('[resources.initial]\n' + initial)
+  return parts.join('\n\n')
+}
+
 export function blockToToml(b) {
   const d = b.data
   switch (b.type) {
+    case 'resource':
+      return serializeResource(d)
     case 'banner': {
       const lines = ['[[banner]]']
       for (const key of ['id', 'name']) {
@@ -385,7 +493,18 @@ export function blockToToml(b) {
       const defs = entries.filter((e) => e.name).map((e) => `${e.key} = ${serializeValue(e.name)}`).join('\n')
       const initial = entries.filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '').map((e) => `${e.key} = ${e.initial}`).join('\n')
       const parts = []
-      // 至少输出 [resources.defs] 段头——空资源块在 round-trip 中保留（不凭空消失）
+      // [resources] 主表：内联数组 gain_rules / day_overrides（对齐真实 config.toml）
+      const resMain = []
+      if (d.gainRules && d.gainRules.length) {
+        const arr = d.gainRules.map((g) => `{ type = ${serializeValue(g.type || 'daily')}${g.param !== undefined && g.param !== null ? `, param = ${g.param === '' ? '""' : serializeValue(g.param)}` : ''}, gains = ${serializeValue(g.gains || {})} }`)
+        resMain.push('gain_rules = [\n  ' + arr.join(',\n  ') + ',\n]')
+      }
+      if (d.dayOverrides && d.dayOverrides.length) {
+        const arr = d.dayOverrides.map((o) => `{ day = ${o.day}, gains = ${serializeValue(o.gains || {})} }`)
+        resMain.push('day_overrides = [\n  ' + arr.join(',\n  ') + ',\n]')
+      }
+      if (resMain.length) parts.push('[resources]\n' + resMain.join('\n'))
+      // defs / initial 子表
       parts.push('[resources.defs]' + (defs ? '\n' + defs : ''))
       if (initial) parts.push('[resources.initial]\n' + initial)
       return parts.join('\n\n')
@@ -452,6 +571,19 @@ export function blockToToml(b) {
         return lines.join('\n')
       }).join('\n\n')
     }
+    case 'rarity_defaults': {
+      // [rarity_defaults.<rarity>] + [[...overflow_bands]]（range/resources）
+      const lines = []
+      for (const [rarity, rd] of Object.entries(d.defaults || {})) {
+        lines.push(`[rarity_defaults.${rarity}]`)
+        for (const b of (rd.overflow_bands || [])) {
+          lines.push(`[[rarity_defaults.${rarity}.overflow_bands]]`)
+          if (b.range) lines.push(`range = ${serializeValue(b.range)}`)
+          if (b.resources && Object.keys(b.resources).length) lines.push(`resources = ${serializeValue(b.resources)}`)
+        }
+      }
+      return lines.join('\n')
+    }
     case 'rarity': {
       const lines = ['[rarities]']
       if (d.ranks && d.ranks.length) lines.push(`ranks = ${serializeValue(d.ranks)}`)
@@ -471,7 +603,70 @@ export function blockToToml(b) {
 }
 
 export function blocksToToml(list) {
-  return list.map((b) => blockToToml(b)).filter(Boolean).join('\n\n')
+  // 资源块可多个（复制）——序列化时合并成一个 [resources]（entries 按 key 去重，gainRules/day_overrides 汇总）。
+  // 合并位置 = 第一个资源块原位置（保留相对顺序，round-trip 不重排块序，与旧 UI 保存保持同序）。
+  const resBlocks = list.filter((b) => b.type === 'resource')
+  let merged = null
+  if (resBlocks.length) {
+    const m = { entries: [], gainRules: [], dayOverrides: [] }
+    const seen = new Set()
+    for (const b of resBlocks) {
+      for (const e of b.data.entries || []) {
+        if (e.key && !seen.has(e.key)) { seen.add(e.key); m.entries.push(e) }
+        else if (!e.key) m.entries.push(e)
+      }
+      m.gainRules.push(...(b.data.gainRules || []))
+      m.dayOverrides.push(...(b.data.dayOverrides || []))
+    }
+    merged = serializeResource(m)
+  }
+  const parts = []
+  let resDone = false
+  for (const b of list) {
+    if (b.type === 'resource') {
+      if (!resDone && merged) { resDone = true; parts.push(merged) }
+      continue
+    }
+    const t = blockToToml(b)
+    if (t) parts.push(t)
+  }
+  return parts.join('\n\n')
+}
+
+// ══════════════════════════════════════════════════════════════════
+// [ui] 段：UI 元数据（配置自由分页状态等）持久化到 config.toml 本身。
+// 引擎 load_toml 忽略未知段；save_toml 会丢 [ui]——由后端 save_config_text 在写盘后追加回。
+// 格式：[ui]\npage_state = '<JSON 单引号字符串>'
+// ══════════════════════════════════════════════════════════════════
+
+export function extractUiSection(text) {
+  // 从 TOML 文本提取 [ui] 段，返回 { cleanText（去 [ui] 的配置主体）, ui（解析后的元数据） }
+  const lines = (text || '').split('\n')
+  const out = []
+  const uiLines = []
+  let inUi = false
+  for (const ln of lines) {
+    const t = ln.trim()
+    if (/^\[ui(\.[^\]]*)?\]$/.test(t)) { inUi = true; uiLines.push(ln); continue }
+    if (inUi) {
+      if (/^\[[^\]]+\]$/.test(t)) { inUi = false; out.push(ln) }
+      else uiLines.push(ln)
+      continue
+    }
+    out.push(ln)
+  }
+  let ui = {}
+  const m = uiLines.join('\n').match(/page_state\s*=\s*'([^']*)'/)
+  if (m) { try { ui = JSON.parse(m[1]) } catch (e) { ui = {} } }
+  return { cleanText: out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd(), ui }
+}
+
+export function injectUiSection(text, ui) {
+  // 把 UI 元数据注入 [ui] 段（替换已有段）
+  const { cleanText } = extractUiSection(text)
+  if (!ui || !Object.keys(ui).length) return cleanText
+  const state = JSON.stringify(ui)
+  return cleanText + '\n\n[ui]\npage_state = \'' + state + '\'\n'
 }
 
 // ══════════════════════════════════════════════════════════════════

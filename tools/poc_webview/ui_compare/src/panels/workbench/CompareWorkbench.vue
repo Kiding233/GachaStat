@@ -62,19 +62,22 @@
     <div v-if="resultError" class="cmp-pane"><el-alert type="error" :closable="false" :title="resultError" /></div>
     <div v-if="sections.length" class="cmp-body">
       <template v-for="(sec, i) in sections" :key="i">
-        <!-- table -->
+        <!-- table：L2 分类矩阵带颜色（≻绿/≺红/×橙/＝灰），点击单元格 → 对 ECDF 可视化 -->
         <div v-if="sec.key === 'table'" class="res-sec">
           <div class="pane-head">{{ sec.title }}</div>
-          <el-table :data="tableRows(sec)" size="small" border max-height="300">
+          <el-table :data="tableRows(sec)" size="small" border max-height="300" @cell-click="(row, col) => onL2CellClick(sec, row, col)">
             <el-table-column v-for="h in sec.headers || []" :key="h" :label="h">
-              <template #default="{ row }">{{ row[h] }}</template>
+              <template #default="{ row }">
+                <span v-if="isL2(sec)" :style="l2CellStyle(row[h])" class="l2-cell">{{ row[h] }}</span>
+                <span v-else>{{ row[h] }}</span>
+              </template>
             </el-table-column>
           </el-table>
         </div>
-        <!-- chart -->
+        <!-- chart：多图表各占容器（L1 PMF/ECDF + L4 帕累托）-->
         <div v-else-if="sec.key === 'chart'" class="res-sec">
           <div class="pane-head">{{ sec.title }}</div>
-          <div :ref="setChartEl" class="chart-box" />
+          <div :ref="(el) => setChartEl(el, i)" class="chart-box" />
         </div>
         <!-- summary -->
         <div v-else-if="sec.key === 'summary'" class="res-sec">
@@ -86,6 +89,12 @@
           </div>
         </div>
       </template>
+    </div>
+
+    <!-- L2 单元格点击 → 该对数据集 ECDF 对比图 -->
+    <div v-if="pairChartName" class="cmp-pane pair-chart">
+      <div class="pane-head">{{ pairChartName }}（点击 L2 矩阵单元格切换）</div>
+      <div :ref="setPairEl" class="pair-box" />
     </div>
   </div>
 </template>
@@ -140,34 +149,98 @@ async function run() {
   running.value = true
   resultError.value = ''
   sections.value = []
+  pairChartName.value = ''
   try {
     const ds = includedNodes.value.map((n) => n.meta.datasetId).filter(Boolean)
     const r = await api.runComparison(ds, { ...params.value })
-    if (r?.ok) sections.value = r.sections || []
-    else { resultError.value = r?.error || '比较分析失败' }
+    if (r?.ok) {
+      sections.value = r.sections || []
+      lastNames.value = r.names || []
+      lastSamples.value = r.samples || []
+    } else { resultError.value = r?.error || '比较分析失败' }
   } catch (e) {
     resultError.value = String(e)
   } finally {
     running.value = false
     await nextTick()
-    renderChart()
+    renderCharts()
   }
 }
 
-// chart 渲染（函数 ref）
-const chartEl = ref(null)
-let chart = null
-function setChartEl(el) { chartEl.value = el }
-function renderChart() {
-  const c = sections.value.find((s) => s.key === 'chart')
-  if (!c || !chartEl.value) return
-  const opt = specToECharts(c.spec)
-  if (!chart) {
-    chart = echarts.init(chartEl.value)
-    window.addEventListener('resize', onResize)
+// ── 多图表渲染（按 section 索引绑定容器：L1 PMF/ECDF + L4 帕累托 各自实例）──
+const chartEls = {}
+const chartInsts = {}
+function setChartEl(el, i) { if (el) chartEls[i] = el; else delete chartEls[i] }
+function renderCharts() {
+  const sectionsAll = sections.value
+  for (const k of Object.keys(chartInsts)) {
+    const sec = sectionsAll[Number(k)]
+    if (!sec || sec.key !== 'chart') { try { chartInsts[k].dispose() } catch (e) {}; delete chartInsts[k] }
   }
-  chart.setOption(opt, true)
+  sectionsAll.forEach((sec, i) => {
+    if (sec.key !== 'chart') return
+    const el = chartEls[i]
+    if (!el) return
+    const opt = specToECharts(sec.spec)
+    if (!chartInsts[i]) { chartInsts[i] = echarts.init(el); window.addEventListener('resize', onResize) }
+    chartInsts[i].setOption(opt, true)
+  })
 }
+
+// ── L2 分类矩阵：颜色单元格 + 点击 → 该对数据集 ECDF（对齐旧 comparison_analysis_panel）──
+const lastNames = ref([])
+const lastSamples = ref([])
+function isL2(sec) { return (sec.title || '').startsWith('L2') }
+function l2CellStyle(label) {
+  const c = String(label || '')[0]
+  const map = { '≻': '#2e7d32', '≺': '#c62828', '×': '#ef6c00', '=': '#757575', '—': '#e0e0e0', 'e': '#8b0000' }
+  const bg = map[c]
+  if (!bg) return {}
+  return { background: bg, color: (c === '≻' || c === '≺' || c === 'e') ? '#fff' : undefined }
+}
+function onL2CellClick(sec, row, col) {
+  if (!isL2(sec) || !col.label || col.label === '数据集') return
+  const i = lastNames.value.indexOf(row['数据集'])
+  const j = lastNames.value.indexOf(col.label)
+  if (i < 0 || j < 0 || i === j) return
+  renderPairCdf(i, j)
+}
+const pairChartName = ref('')
+const pairEl = ref(null)
+let pairChart = null
+function setPairEl(el) { pairEl.value = el }
+function renderPairCdf(i, j) {
+  const a = [...(lastSamples.value[i] || [])].sort((x, y) => x - y)
+  const b = [...(lastSamples.value[j] || [])].sort((x, y) => x - y)
+  if (!a.length || !b.length) return
+  pairChartName.value = `${lastNames.value[i]} vs ${lastNames.value[j]} ECDF`
+  const cdf = (arr) => arr.map((x, k) => [+x.toFixed(4), (k + 1) / arr.length])
+  nextTick(() => {
+    if (!pairEl.value) return
+    if (!pairChart) { pairChart = echarts.init(pairEl.value); window.addEventListener('resize', onResize) }
+    pairChart.setOption({
+      title: { text: pairChartName.value, left: 'center', textStyle: { fontSize: 12 } },
+      tooltip: { trigger: 'axis' },
+      grid: { top: 40, bottom: 30, left: 60, right: 30 },
+      xAxis: { type: 'value', name: 'GDR 值', nameLocation: 'middle', nameGap: 24 },
+      yAxis: { type: 'value', name: '累积概率', min: 0, max: 1.02 },
+      series: [
+        { type: 'line', data: cdf(a), showSymbol: false, lineStyle: { color: '#1f77b4', width: 2 }, name: lastNames.value[i] },
+        { type: 'line', data: cdf(b), showSymbol: false, lineStyle: { color: '#ff7f0e', width: 2 }, name: lastNames.value[j] },
+      ],
+    }, true)
+  })
+}
+function onResize() {
+  for (const k of Object.keys(chartInsts)) { try { chartInsts[k].resize() } catch (e) {} }
+  if (pairChart) pairChart.resize()
+}
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onResize)
+  for (const k of Object.keys(chartInsts)) { try { chartInsts[k].dispose() } catch (e) {} }
+  if (pairChart) pairChart.dispose()
+  pairChart = null
+})
 function tableRows(sec) {
   return (sec.rows || []).map((r) => {
     const o = {}
@@ -175,12 +248,6 @@ function tableRows(sec) {
     return o
   })
 }
-function onResize() { chart && chart.resize() }
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
-  if (chart) chart.dispose()
-  chart = null
-})
 watch(() => props.node.meta.includedDs, async () => {
   // 数据集变化 → 清结果
   if (!props.node.meta.includedDs?.length) { sections.value = []; }
@@ -268,5 +335,19 @@ watch(() => props.node.meta.includedDs, async () => {
 }
 .chart-box {
   height: 240px;
+}
+.l2-cell {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+.pair-chart {
+  margin-top: 8px;
+}
+.pair-box {
+  height: 260px;
+}
+.pair-chart .pane-head {
+  margin-bottom: 0;
 }
 </style>

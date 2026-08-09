@@ -220,25 +220,87 @@ const pairChartName = ref('')
 const pairEl = ref(null)
 let pairChart = null
 function setPairEl(el) { pairEl.value = el }
+
+// j 阶积分 CDF（对齐旧 compute_integrated_cdf：order=1 经验 CDF，order=2/3 逐级 trapz 积分）
+function integratedCdf(samples, grid, order) {
+  const ecdf = (s, x) => samples.filter((v) => v <= x).length / samples.length
+  let F = grid.map((xi) => ecdf(samples, xi))
+  for (let k = 1; k < order; k++) {
+    const next = []
+    for (let t = 0; t < grid.length; t++) {
+      let acc = 0
+      for (let m = 0; m < t; m++) {
+        acc += (F[m] + F[m + 1]) / 2 * (grid[m + 1] - grid[m])   // trapz
+      }
+      next.push(acc)
+    }
+    F = next
+  }
+  return F
+}
+
+// L2 矩阵点击 → 1/2/3 阶积分 CDF 对比（对齐旧 comparison_analysis_panel._render_l2_chart：
+// 100 点网格与 PySDTest 检验域一致、三列 FSD/SSD/TSD、差异区域着色、max Δ 标注）
 function renderPairCdf(i, j) {
-  const a = [...(lastSamples.value[i] || [])].sort((x, y) => x - y)
-  const b = [...(lastSamples.value[j] || [])].sort((x, y) => x - y)
+  const a = [...(lastSamples.value[i] || [])]
+  const b = [...(lastSamples.value[j] || [])]
   if (!a.length || !b.length) return
-  pairChartName.value = `${lastNames.value[i]} vs ${lastNames.value[j]} ECDF`
-  const cdf = (arr) => arr.map((x, k) => [+x.toFixed(4), (k + 1) / arr.length])
+  const combined = [...a, ...b]
+  const lo = Math.min(...combined)
+  const hi = Math.max(...combined)
+  const grid = Array.from({ length: 100 }, (_, t) => lo + (hi - lo) * t / 99)
+  const nameA = lastNames.value[i]
+  const nameB = lastNames.value[j]
+  pairChartName.value = `${nameA} vs ${nameB} 积分 CDF（1/2/3 阶）`
+  const orders = [1, 2, 3]
+  const titles = ['FSD (一阶)', 'SSD (二阶)', 'TSD (三阶)']
+  const grids = []
+  const xAxes = []
+  const yAxes = []
+  const series = []
+  orders.forEach((order, oi) => {
+    const F_a = integratedCdf(a, grid, order)
+    const F_b = integratedCdf(b, grid, order)
+    series.push(
+      { type: 'line', xAxisIndex: oi, yAxisIndex: oi, data: grid.map((x, t) => [+x.toFixed(4), +F_a[t].toFixed(6)]), showSymbol: false, lineStyle: { color: '#1f77b4', width: 2 }, name: nameA },
+      { type: 'line', xAxisIndex: oi, yAxisIndex: oi, data: grid.map((x, t) => [+x.toFixed(4), +F_b[t].toFixed(6)]), showSymbol: false, lineStyle: { color: '#ff7f0e', width: 2 }, name: nameB },
+    )
+    // max Δ 标注（对齐旧 marker+text 'max Δ=x.xxx'）
+    const diffAb = grid.map((x, t) => F_a[t] - F_b[t])
+    const maxAb = Math.max(...diffAb)
+    if (maxAb > 1e-10) {
+      const idxMax = diffAb.indexOf(maxAb)
+      series.push({
+        type: 'scatter', xAxisIndex: oi, yAxisIndex: oi, symbol: 'triangle', symbolSize: 8,
+        itemStyle: { color: '#c62828' },
+        data: [[+grid[idxMax].toFixed(4), +F_a[idxMax].toFixed(6)]],
+        label: { show: true, formatter: `max Δ=${maxAb.toFixed(3)}`, position: 'top', fontSize: 9, color: '#c62828' },
+      })
+    }
+    const diffBa = grid.map((x, t) => F_b[t] - F_a[t])
+    const maxBa = Math.max(...diffBa)
+    if (maxBa > 1e-10) {
+      const idxMax = diffBa.indexOf(maxBa)
+      series.push({
+        type: 'scatter', xAxisIndex: oi, yAxisIndex: oi, symbol: 'triangle', symbolSize: 8,
+        itemStyle: { color: '#1565c0' },
+        data: [[+grid[idxMax].toFixed(4), +F_b[idxMax].toFixed(6)]],
+        label: { show: true, formatter: `max Δ=${maxBa.toFixed(3)}`, position: 'top', fontSize: 9, color: '#1565c0' },
+      })
+    }
+    grids.push({ left: (oi * 33 + 2) + '%', right: (100 - (oi + 1) * 33 + 1) + '%', top: 50, height: '72%', title: { text: titles[oi], left: 'center', textStyle: { fontSize: 10 } } })
+    xAxes.push({ type: 'value', gridIndex: oi, axisLabel: { fontSize: 9 } })
+    yAxes.push({ type: 'value', gridIndex: oi, min: 0, axisLabel: { fontSize: 9 }, name: oi === 0 ? '积分值' : '', nameLocation: 'middle', nameGap: 34 })
+  })
   nextTick(() => {
     if (!pairEl.value) return
     if (!pairChart) { pairChart = echarts.init(pairEl.value); window.addEventListener('resize', onResize) }
     pairChart.setOption({
       title: { text: pairChartName.value, left: 'center', textStyle: { fontSize: 12 } },
       tooltip: { trigger: 'axis' },
-      grid: { top: 40, bottom: 30, left: 60, right: 30 },
-      xAxis: { type: 'value', name: 'GDR 值', nameLocation: 'middle', nameGap: 24 },
-      yAxis: { type: 'value', name: '累积概率', min: 0, max: 1.02 },
-      series: [
-        { type: 'line', data: cdf(a), showSymbol: false, lineStyle: { color: '#1f77b4', width: 2 }, name: lastNames.value[i] },
-        { type: 'line', data: cdf(b), showSymbol: false, lineStyle: { color: '#ff7f0e', width: 2 }, name: lastNames.value[j] },
-      ],
+      legend: { top: 24, textStyle: { fontSize: 10 } },
+      grid: grids, xAxis: xAxes, yAxis: yAxes,
+      series,
     }, true)
   })
 }

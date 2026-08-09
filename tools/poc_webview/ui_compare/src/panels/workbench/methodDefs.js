@@ -50,7 +50,6 @@ export const METHOD_DEFS = [
     type: 'gdr_dist', label: 'GDR 分布', category: '总体广义出率',
     params: [
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
-      { key: 'nbins', label: '分箱数', type: 'number', min: 5, max: 200, default: 30 },
       { key: 'hist', label: '分布', type: 'bool', default: true },
       { key: 'cdf', label: '累积分布', type: 'bool', default: false },
       // 对齐旧 analysis_panel draw_unit_cb：以抽数为单位（资源类 GDR ÷ cost_per_draw）
@@ -117,22 +116,23 @@ export const METHOD_DEFS = [
     type: 'risk_worst_case', label: '最差情形分析', category: '风险分析',
     params: [
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'resource_remaining' },
-      { key: 'cond', label: '条件分布', type: 'bool', default: false },
+      // 对齐旧 analysis_panel alpha 全局参数：风险水平可调（后端 _risk_tail 消费）
+      { key: 'alpha', label: '风险 α', type: 'number', min: 0.01, max: 0.5, step: 0.01, default: 0.05, precision: 2 },
     ],
     result: [
       { key: 'summary', title: '最差情形分位数' },
-      { key: 'chart', title: '最差情形分布', desc: '尾部 5% 分布' },
+      { key: 'chart', title: '最差情形分布', desc: '尾部 α 分布' },
     ],
   },
   {
     type: 'risk_best_case', label: '最好情形分析', category: '风险分析',
     params: [
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
-      { key: 'cond', label: '条件分布', type: 'bool', default: false },
+      { key: 'alpha', label: '风险 α', type: 'number', min: 0.01, max: 0.5, step: 0.01, default: 0.05, precision: 2 },
     ],
     result: [
       { key: 'summary', title: '最好情形分位数' },
-      { key: 'chart', title: '最好情形分布', desc: '头部 5% 分布' },
+      { key: 'chart', title: '最好情形分布', desc: '头部 α 分布' },
     ],
   },
   {
@@ -222,7 +222,6 @@ export const METHOD_DEFS = [
     type: 'cumulative_by_pool', label: '截止每池 GDR 分布', category: '每池分析',
     params: [
       { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
-      { key: 'nbins', label: '分箱数', type: 'number', min: 5, max: 100, default: 20 },
     ],
     result: [
       { key: 'chart', title: '截止每池 GDR 分布', desc: '多池累积分布' },

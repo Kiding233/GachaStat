@@ -13,10 +13,11 @@
         <el-select v-model="params.goal" size="small" class="p-sel">
           <el-option label="最少资源" value="min_resource" />
           <el-option label="最多目标卡" value="max_target" />
+          <el-option label="前进法" value="forward" />
           <el-option label="Pareto" value="pareto" />
         </el-select>
       </div>
-      <div class="p-row"><span class="p-label">起始资源</span><el-input-number v-model="params.budget" size="small" :min="0" :step="100" /></div>
+      <div class="p-row"><span class="p-label">起始资源</span><el-input-number v-model="params.base_resource" size="small" :min="0" :step="100" /></div>
       <div class="p-row">
         <span class="p-label">GDR 指标</span>
         <el-select v-model="params.gdr_key" size="small" class="p-sel">
@@ -33,8 +34,7 @@
           <el-option v-for="k in strategyKeys" :key="k" :label="k" :value="k" />
         </el-select>
       </div>
-      <div class="p-row"><span class="p-label">模拟次数</span><el-input-number v-model="params.n" size="small" :min="50" :max="100000" :step="100" /></div>
-      <div class="p-row"><span class="p-label">种子</span><el-input-number v-model="params.seed" size="small" :min="0" /></div>
+      <div class="p-row"><span class="p-label">模拟次数</span><el-input-number v-model="params.num_simulations" size="small" :min="50" :max="100000" :step="100" /></div>
     </template>
 
     <template v-else>

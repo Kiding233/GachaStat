@@ -56,6 +56,17 @@
         </el-select>
         <el-button type="primary" size="small" :loading="running" :disabled="!includedNodes.length" @click="run" class="run-btn">运行对比分析</el-button>
       </div>
+      <!-- L4 帕累托：x/y 轴 GDR 指标可选（对齐旧 comparison_analysis_panel）-->
+      <div class="p-row">
+        <span class="p-label">帕累托 X</span>
+        <el-select v-model="params.x_gdr" size="small" class="p-ctl" filterable>
+          <el-option v-for="g in gdrOptions" :key="g.key" :label="g.display" :value="g.key" />
+        </el-select>
+        <span class="p-label">帕累托 Y</span>
+        <el-select v-model="params.y_gdr" size="small" class="p-ctl" filterable>
+          <el-option v-for="g in gdrOptions" :key="g.key" :label="g.display" :value="g.key" />
+        </el-select>
+      </div>
     </div>
 
     <!-- 结果 -->
@@ -128,7 +139,7 @@ onMounted(async () => {
     }
   })
 })
-const params = ref({ gdr: 'target_achievement', threshold: 1.0, method: 'MWU', correction: 'BH' })
+const params = ref({ gdr: 'target_achievement', threshold: 1.0, method: 'MWU', correction: 'BH', x_gdr: 'target_achievement', y_gdr: 'resource_remaining' })
 
 const groupedDatasets = computed(() =>
   props.allDatasets.map(({ id, label, meta }) => ({ id, label, meta })),

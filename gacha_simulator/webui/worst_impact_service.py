@@ -160,9 +160,11 @@ def analyze_worst_dist(dataset, store, params: dict) -> dict:
     try:
         agg = dataset.get('aggregate_data', []) or []
         analyzer = WorstImpactAnalyzer(agg, dict(dataset.get('target_specs', {}) or {}), store,
-                                       gdr_key=params.get('gdr', 'target_achievement'),
+                                       gdr_key=params.get('gdr', 'target_achievement_obtainable'),
                                        gdr_threshold=float(params.get('threshold', 1.0)))
-        result = analyzer.analyze_batch_results(agg, len(agg))
+        # P74：消费 cond（按成功/失败过滤模拟，对齐旧 get_conditional_distribution 语义）
+        cond = params.get('cond', 'success')
+        result = analyzer.analyze_batch_results(agg, len(agg), condition=cond)
         dist = result['distribution']
         expected = result['expected']
         sections = []
@@ -175,26 +177,29 @@ def analyze_worst_dist(dataset, store, params: dict) -> dict:
         if pity_coverage is not None and np.isfinite(pity_coverage):
             sections.append({'key': 'gauge', 'title': '大保底资源覆盖', 'value': round(pity_coverage, 2),
                              'desc': '覆盖倍数（≥1 = 初始资源可覆盖一次大保底）'})
+        cond_label = {'all': '全部', 'success': '成功', 'failure': '失败'}.get(cond, cond)
         sections.append({'key': 'summary', 'title': '新池子数分布',
                          'items': {'期望连续新池子数': f'{expected:.2f}',
                                    '初始资源': f'{init_res:.0f}',
                                    '大保底覆盖': f'{pity_coverage:.2f}x' if pity_coverage is not None else '—',
+                                   '条件': cond_label,
                                    '模拟数': len(agg)}})
         # 柱状图
         ks = sorted(dist.keys())
         bars = ChartSpec(chart_type='bar', data=BarData(
             labels=[f'k={k}' for k in ks], values=np.array([dist[k] for k in ks])),
-            title='新池子数分布', xlabel='连续成功池数 k', ylabel='概率')
+            title=f'新池子数分布（{cond_label}）', xlabel='连续成功池数 k', ylabel='概率')
         sections.append({'key': 'chart', 'title': 'P(X=k) 分布', 'spec': _spec_to_dict(bars)})
-        # 详情表
+        # 详情表（对齐旧 worst_impact_panel detail_table 5 列含「说明」）
         cum = 0.0
         rows = []
         for k in ks:
             cum += dist[k]
             p_ge = sum(dist[j] for j in ks if j >= k)
-            rows.append([str(k), f'{dist[k]:.4f}', f'{p_ge:.4f}', f'{cum:.4f}'])
+            note = '保守资源' if k == 0 else ('大保底覆盖' if k == 1 else f'连续 {k} 池')
+            rows.append([str(k), f'{dist[k]:.4f}', f'{p_ge:.4f}', f'{cum:.4f}', note])
         sections.append({'key': 'table', 'title': '分布详情',
-                         'headers': ['k', 'P(X=k)', 'P(X≥k)', '累计概率'], 'rows': rows})
+                         'headers': ['k', 'P(X=k)', 'P(X≥k)', '累计概率', '说明'], 'rows': rows})
         return {'ok': True, 'sections': sections, 'expected': expected, 'distribution': dist}
     except Exception as e:
         import traceback

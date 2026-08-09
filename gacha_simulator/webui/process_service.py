@@ -67,28 +67,43 @@ def run_process_analysis(dataset, store, params: dict) -> dict:
                                  'headers': ['成败模式', '次数', '概率'], 'rows': rows})
         except Exception:
             pass
-        # AB：事件→成败
+        # AB：事件→成败（含 low_sample 警告——样本 <5 时 Wilson CI 不可信）
         try:
             ab = compute_ab(traces, event_mode=event_mode, success_mode=success_mode, conf_level=conf)
             if ab:
-                rows = [[r.get('event_pattern'), f"{r.get('count', 0)}", f"{r.get('success_count', 0)}",
-                         f"{r.get('failure_count', 0)}", f"{r.get('overall_success_prob', 0):.4f}",
-                         f"{r.get('wilson_ci_lower', 0):.4f}", f"{r.get('wilson_ci_upper', 0):.4f}"]
-                        for r in ab]
+                rows = []
+                for r in ab:
+                    row = [r.get('event_pattern'), f"{r.get('count', 0)}", f"{r.get('success_count', 0)}",
+                           f"{r.get('failure_count', 0)}", f"{r.get('overall_success_prob', 0):.4f}",
+                           f"{r.get('wilson_ci_lower', 0):.4f}", f"{r.get('wilson_ci_upper', 0):.4f}"]
+                    if r.get('low_sample'):
+                        row.append('样本<5')
+                    else:
+                        row.append('')
+                    rows.append(row)
                 sections.append({'key': 'table', 'title': '事件→成败（AB）',
-                                 'headers': ['事件组合', '次数', '成功', '失败', 'P(成功)', 'CI下', 'CI上'],
+                                 'headers': ['事件组合', '次数', '成功', '失败', 'P(成功)', 'CI下', 'CI上', '提示'],
                                  'rows': rows})
         except Exception:
             pass
-        # BA：成败→事件
+        # BA：成败→事件（含 Wilson CI 列，对齐 core compute_ba 字段）
         try:
             ba = compute_ba(traces, event_mode=event_mode, success_mode=success_mode, conf_level=conf)
             if ba:
-                rows = [[r.get('event_pattern'), f"{r.get('p_given_success', 0):.4f}",
-                         f"{r.get('p_given_failure', 0):.4f}", f"{r.get('ratio', 0):.4f}",
-                         f"{r.get('count', 0)}"] for r in ba]
+                rows = []
+                for r in ba:
+                    row = [r.get('event_pattern'), f"{r.get('p_given_success', 0):.4f}",
+                           f"[{r.get('p_given_success_wilson_lower', 0):.4f}, {r.get('p_given_success_wilson_upper', 0):.4f}]",
+                           f"{r.get('p_given_failure', 0):.4f}",
+                           f"[{r.get('p_given_failure_wilson_lower', 0):.4f}, {r.get('p_given_failure_wilson_upper', 0):.4f}]",
+                           f"{r.get('ratio', 0):.4f}", f"{r.get('count', 0)}"]
+                    if r.get('low_sample'):
+                        row.append('样本<5')
+                    else:
+                        row.append('')
+                    rows.append(row)
                 sections.append({'key': 'table', 'title': '成败→事件（BA）',
-                                 'headers': ['事件组合', 'P(组合|成功)', 'P(组合|失败)', '比值', '次数'],
+                                 'headers': ['事件组合', 'P(组合|成功)', '成功 CI', 'P(组合|失败)', '失败 CI', '比值', '次数', '提示'],
                                  'rows': rows})
         except Exception:
             pass

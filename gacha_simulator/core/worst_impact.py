@@ -275,10 +275,30 @@ class WorstImpactAnalyzer:
             'pool_targets': pool_targets,
         }
 
-    def analyze_batch_results(self, aggregate_data: list, num_simulations: int = 0) -> dict:
-        success_counts = defaultdict(int)
+    def analyze_batch_results(self, aggregate_data: list, num_simulations: int = 0,
+                              condition: str = 'all') -> dict:
+        """按条件过滤后统计连续成功池数分布（worst_dist 消费已有 dataset）。
 
+        condition: 'all' 全部模拟 | 'success' 仅成功模拟 | 'failure' 仅失败模拟
+        （对齐旧 get_conditional_distribution 的条件语义；需成功判据时经 GDR checker）
+        """
+        success_counts = defaultdict(int)
+        checker = None
+        if condition in ('success', 'failure'):
+            checker = self._build_success_checker(
+                target_specs=self.target_specs, ssr_ids=self._ssr_ids)
+
+        filtered = []
         for result in aggregate_data:
+            if checker is not None:
+                is_success = bool(checker.is_success(result))
+                if condition == 'success' and not is_success:
+                    continue
+                if condition == 'failure' and is_success:
+                    continue
+            filtered.append(result)
+
+        for result in filtered:
             card_counts = result.get('card_counts', {})
             consecutive = 0
             for i in range(MAX_POOLS):
@@ -289,10 +309,11 @@ class WorstImpactAnalyzer:
                     break
             success_counts[consecutive] += 1
 
-        n = num_simulations if num_simulations > 0 else (len(aggregate_data) or 1)
-        n_failed = n - len(aggregate_data)
-        if n_failed > 0:
-            success_counts[0] += n_failed
+        n = num_simulations if num_simulations > 0 else (len(filtered) or 1)
+        if condition == 'all':
+            n_failed = n - len(filtered)
+            if n_failed > 0:
+                success_counts[0] += n_failed
 
         distribution = {k: count / n for k, count in sorted(success_counts.items())}
         expected = sum(k * prob for k, prob in distribution.items())

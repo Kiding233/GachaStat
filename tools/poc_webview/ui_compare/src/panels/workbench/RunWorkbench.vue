@@ -119,7 +119,8 @@ const dialogOp = computed(() => {
 })
 const defaultParams = (op) => (
   op === 'search'
-    ? { goal: 'min_resource', budget: 5000, strategy: 'smart', n: 1000, seed: 42, gdr_key: 'all_targets', success_threshold: 0.95 }
+    // 键名对齐 plan_search_service：base_resource / num_simulations / upper_bound
+    ? { goal: 'min_resource', base_resource: 0, num_simulations: 1000, strategy: 'smart', gdr_key: 'all_targets', success_threshold: 0.95, upper_bound: 8000 }
     : { n: 1000, seed: 42, w: 4 }
 )
 const dialogParams = ref(defaultParams('sim'))

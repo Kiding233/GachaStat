@@ -493,16 +493,23 @@ class AnalysisService:
             if cond.n == 0:
                 continue
             dname = resolve_gdr_definition(name).display_name if resolve_gdr_definition(name) else name
-            rows.append([dname, f'{cond.n}', f'{dist.mean():.4f}', f'{cond.mean():.4f}',
-                         f'{cond.mean()-dist.mean():.4f}', f'{cond.median():.4f}', f'{cond.std():.4f}'])
+            g_mean = dist.mean()
+            g_var = dist.var(alpha)
+            # 对齐旧 analysis_panel L441-454：12 列含 var_label/VaR-均值差/VaR-中位数差/min/max
+            rows.append([dname, f'{cond.n}', f'{g_mean:.4f}', f'{cond.mean():.4f}',
+                         f'{cond.mean()-g_mean:.4f}', f'{cond.median():.4f}', f'{cond.std():.4f}',
+                         f'{cond.var(alpha):.4f}', f'{g_var - g_mean:.4f}',
+                         f'{g_var - dist.median():.4f}', f'{cond.min_val():.4f}', f'{cond.max_val():.4f}'])
         sections = []
         display = defn.display_name if defn else gdr_key
         sections.append(_sec_summary(f'{("最差" if worst else "最好")}情形', {
             '主指标': display, '尾部阈值': f'{val:.4f}', '尾部样本': tail_dist.n,
         }))
         if rows:
+            var_label = f'上{1-alpha}分位数' if lower else f'VaR({alpha})'
             sections.append(_sec_table(f'{("最差" if worst else "最好")}情形条件统计',
-                                       ['GDR指标', '样本数', '全局均值', '条件均值', '均值差', '中位数', '标准差'], rows))
+                                       ['GDR指标', '样本数', '全局均值', '条件均值', '均值差', '中位数', '标准差',
+                                        var_label, 'VaR-均值差', 'VaR-中位数差', '最小值', '最大值'], rows))
         # 主分布直方图 + 尾部叠加
         bin_result = compute_bins(gdr_key, np.array(primary.samples), target_specs=self.target_specs,
                                   cost_per_draw=self.cost_per_draw if is_resource_gdr(gdr_key) else None,
@@ -542,10 +549,12 @@ class AnalysisService:
         rows = []
         for label, cd in [('全部', all_t), (f'{cname}≥{threshold}', succ), (f'{cname}<{threshold}', fail)]:
             if cd.n > 0:
+                # 对齐旧 analysis_panel L703-714：含 VaR(alpha) 列（alpha 取全局 0.05）
                 rows.append([label, f'{cd.n}', f'{cd.mean():.4f}', f'{cd.median():.4f}',
-                             f'{cd.std():.4f}', f'{cd.quantile(0.25):.4f}', f'{cd.quantile(0.75):.4f}'])
+                             f'{cd.std():.4f}', f'{cd.var(self.alpha):.4f}',
+                             f'{cd.quantile(0.25):.4f}', f'{cd.quantile(0.75):.4f}'])
         sections = [_sec_table(f'{cname} 条件下 {tname} 的分布统计量',
-                               ['条件', '样本数', '均值', '中位数', '标准差', 'Q25', 'Q75'], rows)]
+                               ['条件', '样本数', '均值', '中位数', '标准差', f'VaR({self.alpha})', 'Q25', 'Q75'], rows)]
         overlays = []
         if succ.n > 0:
             overlays.append(HistogramOverlay(samples=np.array(succ.samples), color='green', opacity=0.5,
@@ -835,8 +844,19 @@ class AnalysisService:
                 pool_res = self.no_draw_pool_resources.get(pid_banner, {})
                 if rid in pool_res:
                     baselines[pid] = float(pool_res[rid])
+        # 统一分箱：全部池样本合并经 compute_bins（对齐旧 analysis_panel L1158-1187，
+        # 跨池共享 bin_edges 而非前端退化的固定 50 等距箱）
+        try:
+            all_vals = np.concatenate([np.asarray(v, dtype=float) for v in series.values()])
+            bin_result = compute_bins(gdr_key, all_vals,
+                                      cost_per_draw=self.cost_per_draw if is_resource_gdr(gdr_key) else None,
+                                      use_draw_units=False)
+            layout_hints = bin_result.to_layout_hints()
+        except Exception:
+            layout_hints = {}
         spec = ChartSpec(chart_type='ridge', data=RidgeData(series=series, baselines=baselines, labels=labels),
-                         title=f'{display} (截止每池)', xlabel=display, ylabel='池子')
+                         title=f'{display} (截止每池)', xlabel=display, ylabel='池子',
+                         layout_hints=layout_hints)
         return [_sec_chart(f'{display} 截止每池', spec)]
 
     def _transition_analysis(self, p):
@@ -844,10 +864,17 @@ class AnalysisService:
             return [{'key': 'summary', 'title': '转变分析', 'items': {'状态': '无池结束时间数据'}}]
         sorted_pools = sorted(self.pool_end_times.items(), key=lambda x: x[1])
         pool_ids_ordered = [pid for pid, _ in sorted_pools]
-        # P74：消费前端参数（对齐旧 analysis_panel transition 的 success_criteria/threshold/conf/scope）
-        gdr_key = p.get('eventMode', p.get('gdr', 'all_targets'))
-        threshold = float(p.get('threshold', 1.0))
-        scope = p.get('scope', 'cumulative')
+        # P74：成功判据 → (gdr_key, scope, threshold) 三元组映射
+        #（对齐旧 analysis_panel L1360-1364 criteria_map；'any_ssr'/'per_pool_target'
+        # 不是合法 GDR key，直接传会让判定口径静默退化）
+        criteria_map = {
+            'all_targets':     ('all_targets',       'cumulative',  1.0),
+            'any_ssr':         ('ssr_collection',    'cumulative',  0.01),
+            'per_pool_target': ('target_card_draws', 'single_pool', 1.0),
+        }
+        event_mode = p.get('eventMode', 'all_targets')
+        gdr_key, scope, threshold = criteria_map.get(
+            event_mode, ('all_targets', 'cumulative', 1.0))
         if self.transition_flags:
             flags = self.transition_flags
         elif self.cumulative_snapshots:

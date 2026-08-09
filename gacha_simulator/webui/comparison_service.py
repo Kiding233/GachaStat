@@ -96,10 +96,12 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
         except Exception:
             pass
         # ── L2 随机占优（对齐旧 comparison_analysis_panel：FSD/SSD/TSD 三阶循环，
-        # rng_seed + order 作为各阶种子）──
+        # rng_seed + order 作为各阶种子；分类矩阵消费三阶双向 p 值）──
         if len(values_list) >= 2:
             try:
+                from gacha_simulator.core.comparison_analyzer import classify_dominance
                 ordinal = {1: '一阶', 2: '二阶', 3: '三阶'}
+                dom_results = {}
                 for order, label in [(1, 'FSD'), (2, 'SSD'), (3, 'TSD')]:
                     dom = compute_dominance_matrix(values_list, names, order=order, n_bootstrap=500,
                                                    rng_seed=42 + order, engine='auto',
@@ -107,13 +109,36 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
                     mtx = dom.get('matrix')
                     if mtx is None:
                         continue
-                    # 校正后 p 值矩阵 → 字符串（ECharts 单元格显示；classification 为
-                    # List[List[str]] 标记矩阵，旧 UI 消费的是逐阶 p 值矩阵）
                     str_mtx = [[_f(v, 4) for v in row] for row in np.asarray(mtx, dtype=object)]
                     sections.append({'key': 'table',
                                      'title': f'L2 随机占优 {label}（{ordinal[order]}）p 值矩阵',
                                      'headers': ['数据集'] + names,
                                      'rows': [[names[i]] + str_mtx[i] for i in range(len(names))]})
+                    dom_results[order] = dom
+                # 阶段 0：分类矩阵（对齐旧 comparison_analysis_panel L564-587：
+                # 三阶双向 p 值 → classify_dominance → ≻/≺/×/=/err）
+                if len(dom_results) >= 1:
+                    n = len(names)
+                    classification = [['—'] * n for _ in range(n)]
+                    for i in range(n):
+                        for j in range(n):
+                            if i == j:
+                                continue
+                            p_ij = {k: dom_results[k]['matrix'][i][j] for k in dom_results if dom_results[k].get('matrix')}
+                            p_ji = {k: dom_results[k]['matrix'][j][i] for k in dom_results if dom_results[k].get('matrix')}
+                            p_ij_clean = {k: v for k, v in p_ij.items() if v is not None}
+                            p_ji_clean = {k: v for k, v in p_ji.items() if v is not None}
+                            if not p_ij_clean and not p_ji_clean:
+                                classification[i][j] = 'err'
+                            else:
+                                classification[i][j] = classify_dominance(p_ij_clean, p_ji_clean).label
+                    # 符号映射（对齐旧 _render_classification_matrix 的 ≻/≺/×/=）
+                    sym_map = {'≻': '≻', '≺': '≺', '×': '×', '=': '=', 'err': 'err', '—': '—'}
+                    str_cls = [[sym_map.get(c, c) for c in row] for row in classification]
+                    sections.insert(0, {'key': 'table',
+                                        'title': 'L2 随机占优分类矩阵（≻=行一阶随机占优列, ≺=列占优行, ×=互不占优, ==等价）',
+                                        'headers': ['数据集'] + names,
+                                        'rows': [[names[i]] + str_cls[i] for i in range(n)]})
             except Exception:
                 pass
         # ── L3 假设检验 ──

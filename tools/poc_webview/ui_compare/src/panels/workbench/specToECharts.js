@@ -68,8 +68,10 @@ function decorate(opt, { xValue = false } = {}) {
     },
   }
   // 轴型：value（数值）轴才能区域缩放；category 轴 dataZoom.inside 无意义
+  // 滚轮缩放改为 Ctrl+滚轮（zoomOnMouseWheel:'ctrl'）：按住 ctrl 才缩放（内部 stop 事件），
+  // 普通滚轮放行给页面上下滚动（未按 ctrl 时 _mousewheelHandler 直接 return，不 preventDefault）。
   if (xValue) {
-    opt.dataZoom = [{ type: 'inside', zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: false, start: 0, end: 100 }]
+    opt.dataZoom = [{ type: 'inside', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false, moveOnMouseMove: false, start: 0, end: 100 }]
   }
   return opt
 }
@@ -372,7 +374,7 @@ export function specToECharts(spec) {
       const opt = {
         title,
         tooltip: { trigger: 'axis' },
-        dataZoom: [{ type: 'inside', xAxisIndex: keys.map((_, i) => i), zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: false }],
+        dataZoom: [{ type: 'inside', xAxisIndex: keys.map((_, i) => i), zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false, moveOnMouseMove: false }],
         grid: gridA, xAxis, yAxis, series,
       }
       opt.toolbox = { right: 10, top: 0, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {}, saveAsImage: {} } }
@@ -402,24 +404,35 @@ export function specToECharts(spec) {
       return decorate(opt)
     }
     case 'scatter': {
-      // 每条轨迹：支持点大小 ∝ N_j（marker_sizes）、透明度、每点附加数据（tooltip）
-      const base = (tr) => ({
-        type: 'scatter',
-        symbolSize: tr.marker_sizes ? (i) => tr.marker_sizes[i] : (tr.marker_size || 7),
-        symbol: tr.marker_symbol || 'circle',
-        itemStyle: { color: tr.marker_color || '#5470c6', opacity: tr.opacity ?? 1 },
-        data: (tr.x || []).map((xi, i) => [xi, (tr.y || [])[i]]),
-        ...(tr.line_width != null ? { lineStyle: { width: tr.line_width } } : {}),
-        ...(tr.customdata && tr.customdata.length ? {
-          tooltip: {
-            formatter(params) {
-              const pt = params.data || []
-              const n = tr.customdata[params.dataIndex] ?? ''
-              return `箱中心: ${pt[0] == null ? '' : Number(pt[0]).toFixed(0)}<br>p̂: ${pt[1] == null ? '' : Number(pt[1]).toFixed(3)}<br>N: ${n}`
+      // 每条轨迹：支持点大小 ∝ N_j（marker_sizes）、透明度、每点附加数据（tooltip）、
+      // mode='lines'（折线：L1 ECDF 叠加 / PAVA 台阶）→ 必须渲染为 line 类型（scatter 不连线）
+      const base = (tr) => {
+        const isLine = tr.mode === 'lines'
+        const lineS = {
+          type: 'line',
+          symbol: 'none',
+          data: (tr.x || []).map((xi, i) => [xi, (tr.y || [])[i]]),
+          lineStyle: { color: tr.line_color || tr.marker_color || '#5470c6', width: tr.line_width || 2 },
+        }
+        if (isLine) return lineS
+        return {
+          type: 'scatter',
+          symbolSize: tr.marker_sizes ? (i) => tr.marker_sizes[i] : (tr.marker_size || 7),
+          symbol: tr.marker_symbol || 'circle',
+          itemStyle: { color: tr.marker_color || '#5470c6', opacity: tr.opacity ?? 1 },
+          data: (tr.x || []).map((xi, i) => [xi, (tr.y || [])[i]]),
+          ...(tr.line_width != null ? { lineStyle: { width: tr.line_width } } : {}),
+          ...(tr.customdata && tr.customdata.length ? {
+            tooltip: {
+              formatter(params) {
+                const pt = params.data || []
+                const n = tr.customdata[params.dataIndex] ?? ''
+                return `箱中心: ${pt[0] == null ? '' : Number(pt[0]).toFixed(0)}<br>p̂: ${pt[1] == null ? '' : Number(pt[1]).toFixed(3)}<br>N: ${n}`
+              },
             },
-          },
-        } : {}),
-      })
+          } : {}),
+        }
+      }
       let series
       let colorOpt = {}
       if (d.traces && d.traces.length) {
@@ -565,6 +578,15 @@ export function specToECharts(spec) {
         for (let j = 0; j < n; j++) if (edgesByPanel[j]) return edgesByPanel[j]
         return null
       }
+      // 三子图横向对齐（对齐旧 make_subplots shared_xaxes）：所有面板显式共享同一 x 轴范围。
+      // 否则各面板 x 轴独立推导——N_j 面板中心（左+右）/2 范围比直方图 bin_edges 范围窄，
+      // 柱被压缩、三图错位（用户可见「分位数分箱没和分布图对齐」）。
+      const sharedEdges = (() => {
+        for (let i = 0; i < n; i++) if (edgesByPanel[i]) return edgesByPanel[i]
+        return null
+      })()
+      const xMin = sharedEdges ? sharedEdges[0] : undefined
+      const xMax = sharedEdges ? sharedEdges[sharedEdges.length - 1] : undefined
       let cumTop = TOP
       panels.forEach((p, i) => {
         const ph = panelHs[i]
@@ -581,6 +603,7 @@ export function specToECharts(spec) {
           splitLine: { show: false },
           name: xlabP,
           nameLocation: 'middle', nameGap: 22,
+          min: xMin, max: xMax,
         })
         // 对齐旧 plot_vulnerability：PAVA 面板 y 轴固定 [-0.05, 1.05]（概率区间）
         const pd = p.data || {}
@@ -673,23 +696,33 @@ export function specToECharts(spec) {
         } else if (pt === 'scatter') {
           // PAVA 面板：p̂_j 灰点（大小∝N_j）+ θ̃ 台阶 + α hline + 脆弱区间 markArea
           const traces = pd.traces || []
-          const sers = traces.map((tr) => ({
-            type: 'scatter', xAxisIndex: i, yAxisIndex: i,
-            symbolSize: tr.marker_sizes ? (idx) => tr.marker_sizes[idx] : (tr.marker_size || 7),
-            symbol: tr.marker_symbol || 'circle',
-            itemStyle: { color: tr.marker_color || '#5470c6', opacity: tr.opacity ?? 1 },
-            data: (tr.x || []).map((xi, jj) => [xi, (tr.y || [])[jj]]),
-            lineStyle: tr.line_width != null ? { width: tr.line_width } : undefined,
-            ...(tr.customdata && tr.customdata.length ? {
-              tooltip: {
-                formatter(params) {
-                  const pt = params.data || []
-                  const nd = tr.customdata[params.dataIndex] ?? ''
-                  return `箱中心: ${pt[0] == null ? '' : Number(pt[0]).toFixed(0)}<br>p̂: ${pt[1] == null ? '' : Number(pt[1]).toFixed(3)}<br>N: ${nd}`
+          const sers = traces.map((tr) => {
+            // mode='lines' 的轨迹（PAVA 台阶横线）→ 必须用 line 类型，scatter 不连线（缺横线根因）
+            const isLine = tr.mode === 'lines'
+            const lineS = {
+              xAxisIndex: i, yAxisIndex: i,
+              data: (tr.x || []).map((xi, jj) => [xi, (tr.y || [])[jj]]),
+              showSymbol: false,
+              lineStyle: { color: tr.line_color || tr.marker_color || '#5470c6', width: tr.line_width || 2 },
+            }
+            if (isLine) return { type: 'line', ...lineS }
+            return {
+              type: 'scatter', xAxisIndex: i, yAxisIndex: i,
+              symbolSize: tr.marker_sizes ? (idx) => tr.marker_sizes[idx] : (tr.marker_size || 7),
+              symbol: tr.marker_symbol || 'circle',
+              itemStyle: { color: tr.marker_color || '#5470c6', opacity: tr.opacity ?? 1 },
+              data: (tr.x || []).map((xi, jj) => [xi, (tr.y || [])[jj]]),
+              ...(tr.customdata && tr.customdata.length ? {
+                tooltip: {
+                  formatter(params) {
+                    const pt = params.data || []
+                    const nd = tr.customdata[params.dataIndex] ?? ''
+                    return `箱中心: ${pt[0] == null ? '' : Number(pt[0]).toFixed(0)}<br>p̂: ${pt[1] == null ? '' : Number(pt[1]).toFixed(3)}<br>N: ${nd}`
+                  },
                 },
-              },
-            } : {}),
-          }))
+              } : {}),
+            }
+          })
           const hml = markLines(p.annotations, 'yAxis')
           const ma = markAreas(p.shaded_regions)
           if (sers.length) {
@@ -743,7 +776,7 @@ export function specToECharts(spec) {
         grid: gridA, xAxis, yAxis, series,
       }
       opt.toolbox = { right: 8, top: 2, itemSize: 13, feature: { dataZoom: { yAxisIndex: 'none', title: { zoom: '区域缩放', back: '还原缩放' } }, restore: { title: '还原' }, saveAsImage: { title: '保存图片' } } }
-      opt.dataZoom = [{ type: 'inside', xAxisIndex: panels.map((_, i) => i), zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: false }]
+      opt.dataZoom = [{ type: 'inside', xAxisIndex: panels.map((_, i) => i), zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false, moveOnMouseMove: false }]
       opt.__gscComposite = { total: cumTop + 8 }
       return opt
     }

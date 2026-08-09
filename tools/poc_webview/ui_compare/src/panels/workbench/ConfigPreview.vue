@@ -67,6 +67,7 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import { parseToml } from './configToml.js'
+import { bindZoomWheel } from './zoomWheel.js'
 
 const props = defineProps({ configText: { type: String, default: '' } })
 const tab = ref('timeline')
@@ -413,7 +414,8 @@ function buildTimeline() {
       { type: 'category', gridIndex: 2, data: rules.map((r) => r.name), axisLabel: { fontSize: 10, formatter: (v) => (v && v.length > 12 ? v.slice(0, 12) + '…' : v) }, name: '规则', nameLocation: 'middle', nameGap: 44 },
     ],
     dataZoom: [
-      { type: 'inside', xAxisIndex: [0, 1, 2], zoomOnMouseWheel: false, moveOnMouseWheel: true },
+      // 滚轮统一由 bindZoomWheel 处理（Ctrl+滚轮缩放）；此处关闭内部 moveOnMouseWheel，避免锁死页面滚动
+      { type: 'inside', xAxisIndex: [0, 1, 2], zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: false },
     ],
     series: [...resSeries, poolGantt, ruleScatter2],
   }
@@ -423,6 +425,7 @@ function buildTimeline() {
   if (!tlChart) {
     tlChart = echarts.init(tlEl.value)
     window.addEventListener('resize', onResize)
+    bindZoomWheel(tlEl.value, tlChart)
   }
   tlChart.setOption(opt, true)
 }

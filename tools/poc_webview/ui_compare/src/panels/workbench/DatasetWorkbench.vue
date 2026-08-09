@@ -55,11 +55,12 @@
       </aside>
 
       <!-- 右栏：结果按顺序堆叠（每方法独立结果区框架）-->
-      <main class="right-col">
+      <main ref="rightColRef" class="right-col">
         <div
           v-for="b in blocks"
           :key="b.uid"
           class="result-item"
+          :data-uid="b.uid"
           :class="{ active: b.uid === activeUid }"
           @click="focusBlock(b.uid)"
         >
@@ -78,7 +79,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import draggable from 'vuedraggable'
 import { METHOD_CATEGORIES, methodsByCategory, methodByType, applyGdrOptions } from './methodDefs.js'
 import ParamControls from './ParamControls.vue'
@@ -94,6 +95,9 @@ const emit = defineEmits(['create-derived'])
 const headTitle = computed(() => (props.analysisNode ? `统计分析 · ${props.node.label}` : `数据集：${props.node.label}`))
 // 后端数据集 id（模拟任务完成时 register_dataset 的返回）
 const datasetId = computed(() => props.node?.meta?.datasetId || '')
+
+// 右侧结果区滚动容器 ref（新增模块自动跳转）
+const rightColRef = ref(null)
 
 // 方法单元：点击创建，允许重复，每个独立参数
 let nextUid = 1
@@ -140,8 +144,23 @@ function addMethod(type) {
   watch(block.params, () => scheduleRun(block), { deep: true })
   blocks.value.push(block)
   activeUid.value = uid
+  // 创建后自动跳转：右侧结果区滚动到刚新增模块的位置（对齐旧 UI 新增分析单元聚焦）
+  nextTick(() => scrollToBlock(uid))
   // 创建后自动运行（仅分析类；worst_config 等纯生成类等用户点「生成」）
   if (!isGenerateOnly(type)) runAnalysis(block)
+}
+
+// 滚动右侧结果区到指定模块（新增后自动跳转 / 点击左栏定位）
+function scrollToBlock(uid) {
+  const col = rightColRef.value
+  if (!col) return
+  const item = col.querySelector(`.result-item[data-uid="${uid}"]`)
+  if (!item) return
+  // 相对容器定位：offsetTop 相对最近 offsetParent（可能非容器），改用 getBoundingClientRect 差值
+  const colRect = col.getBoundingClientRect()
+  const itemRect = item.getBoundingClientRect()
+  const targetTop = col.scrollTop + (itemRect.top - colRect.top) - 8
+  col.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
 }
 
 // 纯生成类方法块（无自动分析，等用户显式生成配置）
@@ -289,6 +308,7 @@ function focusBlock(uid) {
   activeUid.value = uid
   const b = blocks.value.find((x) => x.uid === uid)
   if (b) b.expanded = true
+  scrollToBlock(uid)
 }
 function removeBlock(uid) {
   const idx = blocks.value.findIndex((b) => b.uid === uid)

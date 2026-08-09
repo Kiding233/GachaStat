@@ -30,17 +30,32 @@
           <div v-if="!tableFallback[i]" :ref="(el) => setChartContainers(el, i)" class="chart-box" />
           <div v-else class="chart-fallback">
             <el-table :data="tableFallback[i].rows" size="small" border>
-              <el-table-column v-for="h in tableFallback[i].headers" :key="h" :label="h" :prop="h" />
+              <el-table-column v-for="(h, ci) in tableFallback[i].headers" :key="ci" :label="h">
+                <template #default="{ row }">{{ row['_' + ci] }}</template>
+              </el-table-column>
             </el-table>
           </div>
         </div>
         <!-- table：el-table -->
         <div v-else-if="sec.key === 'table'" class="rs rs-table">
           <div class="rs-title">{{ sec.title }}</div>
+          <!-- 轨迹详情：全部/仅成功/仅失败 筛选（对齐旧 UI trace_filter_combo）-->
+          <div v-if="sec.meta?.trace_filter" class="rs-body trace-filter">
+            <el-radio-group v-model="traceFilter[i]" size="small">
+              <el-radio-button :value="'all'">全部</el-radio-button>
+              <el-radio-button :value="'success'">仅成功</el-radio-button>
+              <el-radio-button :value="'failure'">仅失败</el-radio-button>
+            </el-radio-group>
+          </div>
           <div class="rs-body">
-            <el-table :data="tableRows(sec)" size="small" border max-height="320">
-              <el-table-column v-for="h in sec.headers || []" :key="h" :label="h">
-                <template #default="{ row }">{{ row[h] }}</template>
+            <el-table :data="filteredRows(sec, i)" size="small" border max-height="320" :row-class-name="lowSampleRowClass">
+              <el-table-column v-for="(h, ci) in sec.headers || []" :key="ci" :label="h">
+                <template #default="{ row }">
+                  <!-- 列值按下标取（row['_'+ci]）：避免 header 字符串作对象键——AB/BA 表两个同名
+                       CI 列头（如两个 '95% CI'）若用 row[h] 会互相覆盖，旧 UI 按列索引渲染无此问题 -->
+                  <span v-if="h === '▲'">{{ row['_8'] ?? row['_7'] ?? '' }}</span>
+                  <span v-else>{{ row['_' + ci] }}</span>
+                </template>
               </el-table-column>
             </el-table>
           </div>
@@ -84,6 +99,7 @@ import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import { methodByType } from './methodDefs.js'
 import { specToECharts } from './specToECharts.js'
+import { bindZoomWheel } from './zoomWheel.js'
 
 const props = defineProps({
   type: { type: String, required: true },
@@ -121,11 +137,12 @@ function renderCharts() {
     const opt = specToECharts(sec.spec)
     if (opt.__table) {
       // table 类型（ChartSpec chart_type='table'）→ el-table 兜底
+      // 行键按下标（'_'+idx）：header 可能重复，用 header 字符串作键会互相覆盖
       nextFallback[i] = {
         headers: opt.headers,
         rows: (opt.rows || []).map((r) => {
           const o = {}
-          opt.headers.forEach((h, idx) => { o[h] = r[idx] })
+          opt.headers.forEach((_, idx) => { o['_' + idx] = r[idx] })
           return o
         }),
       }
@@ -137,7 +154,8 @@ function renderCharts() {
       inst = echarts.init(el)
       chartInstances[i] = inst
       window.addEventListener('resize', onResize)
-      el.addEventListener('wheel', (e) => onWheel(e, inst), { passive: false })
+      // 滚轮统一处理：capture 拦截 zrender 的 wheel，Ctrl+滚轮缩放、普通滚轮放行页面滚动
+      bindZoomWheel(el, inst)
     }
     // 山脊线图：单子图定高，全图高度随堆叠数动态增长（容器高度 = top + rows×rowHeight）
     // 组合图（composite）：多面板按 row_heights 比例堆叠，总高已算好
@@ -168,31 +186,44 @@ onBeforeUnmount(() => {
 function onResize() {
   for (const k of Object.keys(chartInstances)) chartInstances[k].resize()
 }
-// Ctrl+滚轮缩放（每个实例独立；普通滚轮放行页面）
-function onWheel(e, inst) {
-  if (!e.ctrlKey || !inst) return
-  e.preventDefault()
-  const opt = inst.getOption()
-  const dz = (opt.dataZoom && opt.dataZoom[0]) || { start: 0, end: 100 }
-  const start = dz.start ?? 0
-  const end = dz.end ?? 100
-  const span = end - start
-  const factor = e.deltaY > 0 ? 0.85 : 1.18
-  const newSpan = Math.max(8, Math.min(100, span * factor))
-  const center = (start + end) / 2
-  inst.dispatchAction({ type: 'dataZoom', start: Math.max(0, center - newSpan / 2), end: Math.min(100, center + newSpan / 2) })
-}
 
 function tableRows(sec) {
+  // 列值按下标存取（对象键 '_'+i）：header 可能重复（AB/BA 两个 CI 列），
+  // 用 header 字符串作键会互相覆盖（旧 UI QTableWidget 按列索引，无此问题）
   return (sec.rows || []).map((r) => {
     const o = {}
-    sec.headers.forEach((h, i) => { o[h] = r[i] })
+    sec.headers.forEach((_, i) => { o['_' + i] = r[i] })
     return o
   })
+}
+// 轨迹详情筛选：全部 / 仅成功 / 仅失败（按「整体」列下标 1 过滤；对齐旧 UI trace_filter_combo）
+const traceFilter = ref({})
+function filteredRows(sec, i) {
+  const rows = tableRows(sec)
+  const f = traceFilter.value[i]
+  if (!sec.meta?.trace_filter || !f || f === 'all') return rows
+  const want = f === 'success' ? '✓' : '✗'
+  return rows.filter((r) => (r['_1'] || '').startsWith(want))
+}
+// AB/BA 低样本行（末列 '▲'：AB 表下标 8、BA 表下标 7 = '样本不足'）→ 灰底（对齐旧 UI 灰行）
+function lowSampleRowClass({ row }) {
+  if (row['_8'] === '样本不足' || row['_7'] === '样本不足') return 'low-sample-row'
+  return ''
 }
 </script>
 
 <style scoped>
+.low-sample-row :deep(td) {
+  background: #f2f2f2 !important;
+  color: #9e9e9e;
+}
+.trace-filter {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--gsc-border);
+}
+.trace-filter .el-radio-group {
+  margin: 0;
+}
 .result-chart {
   display: flex;
   flex-direction: column;

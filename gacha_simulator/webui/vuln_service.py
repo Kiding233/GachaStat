@@ -233,7 +233,7 @@ def _composite_pool_chart(pr, alpha, global_bin_edges, pname=None, resource_name
         return None
     from gacha_simulator.visualization.chart_spec import (
         PanelSpec, PanelCompositeData, ChartSpec, HistogramData,
-        HistogramOverlay, ScatterData, ScatterTrace, BarData,
+        ScatterData, ScatterTrace, BarData,
         ChartAnnotation, ShadedRegion,
     )
     bin_edges = np.array(pr.resource_bins, dtype=float)
@@ -245,12 +245,8 @@ def _composite_pool_chart(pr, alpha, global_bin_edges, pname=None, resource_name
     is_fallback = bool(fit.get('used_fallback', False) or len(fit.get('theta_per_bin', [])) > 50)
     gbe = np.asarray(global_bin_edges, dtype=float) if global_bin_edges is not None else None
 
-    # ① 直方图（频次，density=False）
+    # ① 直方图（频次，density=False；对齐旧 plot_vulnerability：纯频次柱 + 均值线，无失败样本叠加）
     hist_data = HistogramData(samples=samples_all, mean_line=True, density=False)
-    if pr.freq_failed and pr.resource_values_failed:
-        failed_arr = np.array(pr.resource_values_failed)
-        hist_data.overlays = [HistogramOverlay(samples=failed_arr, color='#c62828',
-                                               opacity=0.5, label=f'失败样本(n={len(failed_arr)})')]
     p1 = PanelSpec(chart_type='histogram', data=hist_data, title='频次',
                    layout_hints={'bin_edges': list(gbe)} if gbe is not None
                    else {'bin_edges': list(bin_edges)},

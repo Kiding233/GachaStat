@@ -77,10 +77,10 @@
         <div v-if="sec.key === 'table'" class="res-sec">
           <div class="pane-head">{{ sec.title }}</div>
           <el-table :data="tableRows(sec)" size="small" border max-height="300" @cell-click="(row, col) => onL2CellClick(sec, row, col)">
-            <el-table-column v-for="h in sec.headers || []" :key="h" :label="h">
+            <el-table-column v-for="(h, ci) in sec.headers || []" :key="ci" :label="h">
               <template #default="{ row }">
-                <span v-if="isL2(sec)" :style="l2CellStyle(row[h])" class="l2-cell">{{ row[h] }}</span>
-                <span v-else>{{ row[h] }}</span>
+                <span v-if="isL2(sec)" :style="l2CellStyle(row['_' + ci])" class="l2-cell">{{ row['_' + ci] }}</span>
+                <span v-else>{{ row['_' + ci] }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -115,6 +115,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
 import api from '../../api.js'
 import { specToECharts } from './specToECharts.js'
+import { bindZoomWheel } from './zoomWheel.js'
 
 const props = defineProps({
   node: { type: Object, required: true },
@@ -193,7 +194,11 @@ function renderCharts() {
     const el = chartEls[i]
     if (!el) return
     const opt = specToECharts(sec.spec)
-    if (!chartInsts[i]) { chartInsts[i] = echarts.init(el); window.addEventListener('resize', onResize) }
+    if (!chartInsts[i]) {
+      chartInsts[i] = echarts.init(el)
+      window.addEventListener('resize', onResize)
+      bindZoomWheel(el, chartInsts[i])
+    }
     chartInsts[i].setOption(opt, true)
   })
 }
@@ -211,7 +216,8 @@ function l2CellStyle(label) {
 }
 function onL2CellClick(sec, row, col) {
   if (!isL2(sec) || !col.label || col.label === '数据集') return
-  const i = lastNames.value.indexOf(row['数据集'])
+  // 行对象按键 _0（列下标 0 = 数据集列；tableRows 改下标键后不再有 row['数据集']）
+  const i = lastNames.value.indexOf(row['_0'])
   const j = lastNames.value.indexOf(col.label)
   if (i < 0 || j < 0 || i === j) return
   renderPairCdf(i, j)
@@ -294,7 +300,11 @@ function renderPairCdf(i, j) {
   })
   nextTick(() => {
     if (!pairEl.value) return
-    if (!pairChart) { pairChart = echarts.init(pairEl.value); window.addEventListener('resize', onResize) }
+    if (!pairChart) {
+      pairChart = echarts.init(pairEl.value)
+      window.addEventListener('resize', onResize)
+      bindZoomWheel(pairEl.value, pairChart)
+    }
     pairChart.setOption({
       title: { text: pairChartName.value, left: 'center', textStyle: { fontSize: 12 } },
       tooltip: { trigger: 'axis' },
@@ -315,9 +325,11 @@ onBeforeUnmount(() => {
   pairChart = null
 })
 function tableRows(sec) {
+  // 列值按下标存取（对象键 '_'+i）：header 可能重复（如 L2/L3 矩阵表），
+  // 用 header 字符串作键会互相覆盖（旧 UI QTableWidget 按列索引，无此问题）
   return (sec.rows || []).map((r) => {
     const o = {}
-    sec.headers.forEach((h, i) => { o[h] = r[i] })
+    sec.headers.forEach((_, i) => { o['_' + i] = r[i] })
     return o
   })
 }

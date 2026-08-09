@@ -80,7 +80,7 @@ function fmtNum(v) {
   return v == null ? '—' : (Math.round(v * 100) / 100).toString()
 }
 function fmtPct(v) {
-  return v == null ? '—' : (v * 100).toFixed(1) + '%'
+  return v == null ? '—' : (v * 100).toFixed(2) + '%'   // 对齐旧 plan_search_panel .2%
 }
 </script>
 

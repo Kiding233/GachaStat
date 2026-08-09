@@ -536,6 +536,8 @@ function onTextScroll() {
   scrollTop.value = textRef.value?.scrollTop || 0
 }
 function locateBlock(b) {
+  // 解析失败时 blocks 保留旧 lines，定位会偏移到旧行区间 → 禁用
+  if (parseError.value) return
   const el = textRef.value
   if (!el || !b.lines) return
   const [start, end] = b.lines

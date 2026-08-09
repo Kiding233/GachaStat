@@ -52,13 +52,14 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
         )
 
         sections = []
-        # ── L1 描述统计 ──
+        # ── L1 描述统计（精度对齐旧 comparison_analysis_panel L462-466：
+        # 偏度/峰度 .3f、成功率 .1%、min/max .4f）──
         rows = []
         for v, n in zip(values_list, names):
             s = DescriptiveStats.compute(n, gdr_key, v, threshold, lower_is_better)
-            rows.append([n, _f(s.mean), _f(s.median), _f(s.std), _f(s.skewness),
-                         _f(s.kurtosis), _f(s.var_05), _f(s.cvar_05),
-                         f'{s.success_rate:.2%}', _f(s.min_val, 0), _f(s.max_val, 0), str(s.n)])
+            rows.append([n, _f(s.mean), _f(s.median), _f(s.std),
+                         f'{s.skewness:.3f}', f'{s.kurtosis:.3f}', _f(s.var_05), _f(s.cvar_05),
+                         f'{s.success_rate:.1%}', _f(s.min_val), _f(s.max_val), str(s.n)])
         sections.append({'key': 'table', 'title': 'L1 描述统计',
                          'headers': ['数据集', '均值', '中位数', '标准差', '偏度', '峰度',
                                      'VaR₀.₀₅', 'CVaR₀.₀₅', '成功率', 'min', 'max', 'N'],
@@ -109,7 +110,7 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
                     mtx = dom.get('matrix')
                     if mtx is None:
                         continue
-                    str_mtx = [[_f(v, 4) for v in row] for row in np.asarray(mtx, dtype=object)]
+                    str_mtx = [[_f(v, 3) for v in row] for row in np.asarray(mtx, dtype=object)]
                     sections.append({'key': 'table',
                                      'title': f'L2 随机占优 {label}（{ordinal[order]}）p 值矩阵',
                                      'headers': ['数据集'] + names,
@@ -152,7 +153,7 @@ def run_comparison(datasets: list, store, params: dict) -> dict:
                 lab = pmat.get('names', names)
                 if raw is not None:
                     sel = {'raw': raw, 'Holm': holm, 'BH': bh}.get(correction, bh or raw)
-                    str_mtx = [[_f(v, 4) for v in row] for row in np.asarray(sel, dtype=object)]
+                    str_mtx = [[_f(v, 3) for v in row] for row in np.asarray(sel, dtype=object)]
                     sections.append({'key': 'table',
                                      'title': f'L3 {method} 假设检验（{"BH校正" if correction=="BH" else "Holm校正" if correction=="Holm" else "原始 p"}）',
                                      'headers': ['数据集'] + lab,

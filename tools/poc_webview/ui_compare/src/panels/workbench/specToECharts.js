@@ -467,15 +467,19 @@ export function specToECharts(spec) {
       const cols = d.col_labels || (mat[0] ? mat[0].map((_, j) => String(j)) : [])
       const vals = []
       mat.forEach((row, i) => row.forEach((v, j) => vals.push([j, i, v])))
+      // 对齐旧 plotly_charts heatmap：x 轴置顶（xaxis_side='top'）、色阶不钳 0
+      //（旧 go.Heatmap 未设 zmin/zmax，Plotly 自动映射数据范围；前端仅展示用数据范围）
+      const vmMin = Math.min(...vals.map((v) => v[2]))
+      const vmMax = Math.max(...vals.map((v) => v[2]))
       const opt = {
         title,
         tooltip: { position: 'top' },
         grid: { top: 30, bottom: 40, left: 60, right: 60 },
-        xAxis: { type: 'category', data: cols, name: xlab, splitArea: { show: true } },
+        xAxis: { type: 'category', data: cols, name: xlab, position: 'top', splitArea: { show: true } },
         yAxis: { type: 'category', data: rows, name: ylab, splitArea: { show: true } },
         visualMap: {
-          min: Math.min(0, ...vals.map((v) => v[2])),
-          max: Math.max(0, ...vals.map((v) => v[2])),
+          min: vmMin === vmMax ? vmMin - 1 : vmMin,
+          max: vmMax,
           calculable: true, orient: 'horizontal', left: 'center', bottom: 0, textStyle: { fontSize: 10 },
           inRange: { color: scaleColors(d.colorscale) },
         },
@@ -521,12 +525,16 @@ export function specToECharts(spec) {
         const gw = perW * 0.92
         const gh = 88 / Math.max(1, Math.ceil(mats.length / cols))
         gridA.push({ left: (colI * perW + 2) + '%', right: (100 - (colI + 1) * perW + perW * 0.08) + '%', top: (rowI * gh + 3) + '%', height: gh * 0.8 + '%' })
-        xAxis.push({ type: 'category', gridIndex: idx, data: d.col_labels || (mat[0] ? mat[0].map((_, j) => String(j)) : []), axisLabel: { fontSize: 10 } })
+        // #7：子图标题（对齐旧 Plotly 子图底部池名 annotation）——用 grid 上方标题组件
+        if (titles[idx]) gridA[gridA.length - 1].title = { text: titles[idx], left: 'center', textStyle: { fontSize: 10 } }
+        // #5：x 轴置顶（对齐旧 xaxis_side='top'）
+        xAxis.push({ type: 'category', gridIndex: idx, data: d.col_labels || (mat[0] ? mat[0].map((_, j) => String(j)) : []), axisLabel: { fontSize: 10 }, position: 'top' })
         yAxis.push({ type: 'category', gridIndex: idx, data: rows, axisLabel: { fontSize: 10 } })
         const vals = []
         mat.forEach((r, i) => r.forEach((v, j) => vals.push([j, i, v])))
         series.push({ type: 'heatmap', xAxisIndex: idx, yAxisIndex: idx, data: vals })
-        visualMap.push({ min: Math.min(0, ...vals.map((v) => v[2])), max: Math.max(0, ...vals.map((v) => v[2])), show: false })
+        // #6：每个 visualMap 绑定对应 seriesIndex（否则多 visualMap 作用域歧义、共用最后一张色阶）
+        visualMap.push({ min: Math.min(0, ...vals.map((v) => v[2])), max: Math.max(0, ...vals.map((v) => v[2])), show: false, seriesIndex: [idx] })
       })
       const opt = { title, tooltip: { position: 'top' }, grid: gridA, xAxis, yAxis, series, visualMap }
       return decorate(opt)

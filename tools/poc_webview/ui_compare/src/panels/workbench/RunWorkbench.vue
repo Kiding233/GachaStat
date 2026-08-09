@@ -19,7 +19,11 @@
           <el-table-column label="状态" width="80">
             <template #default="{ row }">
               <el-tag v-if="row.status === 'done'" size="small" type="success">完成</el-tag>
-              <el-tag v-else-if="row.status === 'failed'" size="small" type="danger">失败</el-tag>
+              <el-tag v-else-if="row.status === 'failed'" size="small" type="danger">
+                <el-tooltip :content="row.error || '失败'" placement="top" :show-after="200">
+                  <span>失败</span>
+                </el-tooltip>
+              </el-tag>
               <el-tag v-else-if="row.status === 'running'" size="small">运行中</el-tag>
               <el-tag v-else size="small" type="info">排队</el-tag>
             </template>

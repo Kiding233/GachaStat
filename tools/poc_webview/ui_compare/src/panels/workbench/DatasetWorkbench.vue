@@ -113,6 +113,9 @@ const activeCat = ref(METHOD_CATEGORIES[0])
 onMounted(async () => {
   const g = await api.listGdrOptions()
   if (g?.ok && g.options?.length) applyGdrOptions(g.options)
+  else if (!g?.ok) {
+    import('element-plus').then(({ ElMessage }) => ElMessage.warning('GDR 指标加载失败，下拉使用默认列表'))
+  }
 })
 
 function defaultParams(type) {
@@ -289,7 +292,13 @@ function focusBlock(uid) {
 }
 function removeBlock(uid) {
   const idx = blocks.value.findIndex((b) => b.uid === uid)
-  if (idx >= 0) blocks.value.splice(idx, 1)
+  if (idx < 0) return
+  const b = blocks.value[idx]
+  // 清理孤儿定时器/请求：防抖 pending 中删块 → 到点仍发起 API 请求；运行中删块 → 完成后 _pending 又触发重跑
+  if (b._timer) { clearTimeout(b._timer); b._timer = null }
+  b._pending = false
+  b._seq = (b._seq || 0) + 1   // 使过期响应丢弃判定失效（seq 不再匹配）
+  blocks.value.splice(idx, 1)
   if (activeUid.value === uid) activeUid.value = null
 }
 </script>

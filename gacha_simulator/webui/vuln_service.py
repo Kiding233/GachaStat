@@ -147,7 +147,7 @@ def _build_sections(analysis, alpha, no_draw_pool_resources=None,
     sections = []
     # 总览摘要
     summary_items = {
-        '总体失败率': f'{analysis.overall_failure_rate:.2%}',
+        '总体失败率': f'{analysis.overall_failure_rate:.1%}',
         'α': f'{analysis.alpha:.2f}',
         'GDR 指标': analysis.gdr_key,
         '模拟数': analysis.n_simulations,

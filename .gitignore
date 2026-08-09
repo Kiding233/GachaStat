@@ -28,3 +28,20 @@ results.json
 benchmark_chart.py
 test_*.html
 profile_*.py
+
+#垃圾箱
+.recycle_bin
+
+# 前端工程（P74 UI 换头计划 POC）
+node_modules/
+
+# 新 UI 运行时数据集产物（工作区保存的数据集）
+gacha_simulator/datasets/
+
+# 新 UI 前端运行日志（ui_compare 演示/验证日志）
+tools/poc_webview/ui_compare/*.log
+
+# POC 垂直切片大文件（ui_compare 已用 npm echarts 依赖；plotly 已退役；charts.json 为生成物）
+tools/poc_webview/plotly.min.js
+tools/poc_webview/echarts.min.js
+tools/poc_webview/charts.json

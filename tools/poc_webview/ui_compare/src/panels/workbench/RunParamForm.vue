@@ -3,7 +3,7 @@
     <!-- 生成型参数区：sim（模拟）/ search（搜索）/ sens（敏感性）三套，供运行页与搜索配置复用 -->
     <template v-if="op === 'sim'">
       <div class="p-row"><span class="p-label">模拟次数</span><el-input-number v-model="params.n" size="small" :min="100" :max="100000" :step="100" /></div>
-      <div class="p-row"><span class="p-label">种子</span><el-input-number v-model="params.seed" size="small" :min="0" /></div>
+      <div class="p-row"><span class="p-label">种子</span><el-input-number v-model="params.seed" size="small" :min="-1" :step="1" /><span class="muted" style="font-size:11px">-1=随机</span></div>
       <div class="p-row"><span class="p-label">并行数</span><el-input-number v-model="params.w" size="small" :min="1" :max="16" /></div>
     </template>
 

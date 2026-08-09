@@ -75,8 +75,9 @@ export function parseInlineTable(text) {
   const inner = text.slice(1, text.endsWith('}') ? -1 : undefined).trim()
   const obj = {}
   for (const part of splitTopLevel(inner, ',')) {
-    const m = part.match(/^([A-Za-z0-9_.]+)\s*=\s*(.+)$/)
-    if (m) obj[m[1]] = parseValue(m[2].trim())
+    // 键支持引号包裹（如 "b1.main" 全限定点号键）与裸键
+    const m = part.match(/^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_]+))\s*=\s*(.+)$/)
+    if (m) obj[m[1] ?? m[2] ?? m[3]] = parseValue(m[4].trim())
   }
   return obj
 }
@@ -105,7 +106,11 @@ export function serializeValue(v) {
     return '[' + v.map((x) => serializeValue(x)).join(', ') + ']'
   }
   if (typeof v === 'object') {
-    return '{ ' + Object.entries(v).map(([k, x]) => `${k} = ${serializeValue(x)}`).join(', ') + ' }'
+    // 内联表键：含 '.'（全限定池键如 b1.main）或非裸键字符 → 引号包裹（引擎 tomllib 裸点键是嵌套路径）
+    return '{ ' + Object.entries(v).map(([k, x]) => {
+      const key = /^[A-Za-z0-9_]+$/.test(k) ? k : `"${k.replace(/"/g, '\\"')}"`
+      return `${key} = ${serializeValue(x)}`
+    }).join(', ') + ' }'
   }
   return String(v)
 }
@@ -658,8 +663,9 @@ export function extractUiSection(text) {
     out.push(ln)
   }
   let ui = {}
-  const m = uiLines.join('\n').match(/page_state\s*=\s*'([^']*)'/)
-  if (m) { try { ui = JSON.parse(m[1]) } catch (e) { ui = {} } }
+  // TOML 单引号字面串内 ' 需转义为 ''（对齐引擎 _extract_ui_section 的还原逻辑）
+  const m = uiLines.join('\n').match(/page_state\s*=\s*'((?:[^']|'')*)'/)
+  if (m) { try { ui = JSON.parse(m[1].replace(/''/g, "'")) } catch (e) { ui = {} } }
   return { cleanText: out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd(), ui }
 }
 
@@ -667,7 +673,7 @@ export function injectUiSection(text, ui) {
   // 把 UI 元数据注入 [ui] 段（替换已有段）
   const { cleanText } = extractUiSection(text)
   if (!ui || !Object.keys(ui).length) return cleanText
-  const state = JSON.stringify(ui)
+  const state = JSON.stringify(ui).replace(/'/g, "''")   // 单引号串内转义
   return cleanText + '\n\n[ui]\npage_state = \'' + state + '\'\n'
 }
 

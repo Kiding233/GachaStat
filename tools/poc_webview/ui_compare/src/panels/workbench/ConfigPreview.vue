@@ -85,6 +85,15 @@ const previewData = computed(() => {
         id: b.data.id, name: b.data.name || b.data.id,
         start: b.data.start_day ?? 0, end: b.data.end_day ?? null,
       }))
+    // D7：对齐引擎 _normalize_permanent_banners——无 end_day 的永久 Banner 截到
+    // 最后一个有结束时间的 Banner 的 available_until（全永久引擎直接 ConfigError）
+    {
+      const ends = banners.map((b) => b.end).filter((e) => e !== null && e !== undefined)
+      if (ends.length) {
+        const maxEnd = Math.max(...ends)
+        for (const b of banners) if (b.end === null || b.end === undefined) b.end = maxEnd
+      }
+    }
     // 资源定义（defs 的 key → 显示名）
     const resources = {}
     for (const e of resDefBlock?.data?.entries || []) {

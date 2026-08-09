@@ -380,16 +380,31 @@ function renameNode(node) {
   const name = window.prompt('新名称', node.label)
   if (name && name.trim()) { node.label = name.trim(); statusMsg.value = `已重命名为：${node.label}` }
 }
-function deleteNode(node) {
-  const parent = node.parent ? findNode(node.parent) : null
-  const siblings = parent ? parent.children : treeData
-  const idx = siblings.indexOf(node)
-  if (idx >= 0) siblings.splice(idx, 1)
-  // 级联：关闭该节点及其子孙所有已打开页面 / 勾选
-  openedTabs.value = openedTabs.value.filter((t) => !isSelfOrDescendant(node, t))
-  checkedDs.value = checkedDs.value.filter((d) => !isSelfOrDescendant(node, d))
-  if (activeNodeId.value === node.id) activeNodeId.value = null
-  statusMsg.value = `已删除：${node.label}`
+async function deleteNode(node) {
+  // 对齐旧 data_manager_panel：删除确认（数据集还需删磁盘文件）
+  const isDs = node.type === 'dataset'
+  const hint = isDs ? '此操作不可撤销，并将删除磁盘上的数据集文件。' : '此操作不可撤销。'
+  try {
+    const { ElMessageBox, ElMessage } = await import('element-plus')
+    await ElMessageBox.confirm(`确定删除「${node.label}」？${hint}`, '删除确认', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+    if (isDs) {
+      const name = node.meta?.datasetId
+      if (name) {
+        try { await api.deleteDataset(name) } catch (e) { console.warn('删除数据集文件失败', e) }
+      }
+    }
+    const parent = node.parent ? findNode(node.parent) : null
+    const siblings = parent ? parent.children : treeData
+    const idx = siblings.indexOf(node)
+    if (idx >= 0) siblings.splice(idx, 1)
+    // 级联：关闭该节点及其子孙所有已打开页面 / 勾选
+    openedTabs.value = openedTabs.value.filter((t) => !isSelfOrDescendant(node, t))
+    checkedDs.value = checkedDs.value.filter((d) => !isSelfOrDescendant(node, d))
+    if (activeNodeId.value === node.id) activeNodeId.value = null
+    ElMessage.success(`已删除：${node.label}`)
+  } catch (e) {
+    // 用户取消
+  }
 }
 function isSelfOrDescendant(ancestor, n) {
   if (ancestor.id === n.id) return true

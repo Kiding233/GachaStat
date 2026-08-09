@@ -180,10 +180,14 @@ const maxDay = computed(() => {
 //   every_n_days param=n（空=1）→ 第 0,n,2n,… 天；weekly param=weekday(1-7) → 每周该星期几；
 //   monthly_day param=日 或 "月,日"；monthly_week param="week,day" → 每月第 N 周的星期几。
 // day_overrides 是「累加」（与每日规则求和），不是覆盖——字段名 legacy，引擎注释即「累加语义」。
+// 引擎侧：amount > 0 才累加；越界 day / 非法 weekly/monthly 参数被引擎跳过（resource_gain.py）。
 function dailyGainByResource(maxDay) {
   const startDate = previewData.value.startDate
   const map = {}
-  const add = (d, res, amt) => { if (d >= 0 && d <= maxDay && amt) { map[d] = map[d] || {}; map[d][res] = (map[d][res] || 0) + amt } }
+  const add = (d, res, amt) => {
+    // D6a：对齐引擎仅 amount > 0 累加（负值被忽略）；越界 day 丢弃（resource_gain.py L324）
+    if (d >= 0 && d <= maxDay && amt > 0) { map[d] = map[d] || {}; map[d][res] = (map[d][res] || 0) + amt }
+  }
   const dayDate = (d) => new Date(startDate.getTime() + d * 86400000)
   // Python isoweekday (1=周一..7=周日) → JS getDay() (0=周日..6=周六)
   const isoWeekday = (dt) => dt.getDay() === 0 ? 7 : dt.getDay()
@@ -198,7 +202,9 @@ function dailyGainByResource(maxDay) {
       if (n <= 0) n = 1
       for (let d = 0; d <= maxDay; d += n) grant(d)
     } else if (type === 'weekly') {
-      const wd = parseInt(param, 10) || 1
+      // D6c：引擎对 weekly 参数越界（非 1-7）跳过；此处同判
+      const wd = parseInt(param, 10)
+      if (wd < 1 || wd > 7) continue
       for (let d = 0; d <= maxDay; d++) { if (isoWeekday(dayDate(d)) === wd) grant(d) }
     } else if (type === 'monthly_day') {
       let m = null
@@ -207,6 +213,8 @@ function dailyGainByResource(maxDay) {
         const parts = param.split(',')
         m = parseInt(parts[0], 10); dayOfMonth = parseInt(parts[1], 10)
       }
+      // D6c：月份 1-12、日 1-31 之外引擎跳过
+      if ((m !== null && (m < 1 || m > 12)) || dayOfMonth < 1 || dayOfMonth > 31) continue
       for (let d = 0; d <= maxDay; d++) {
         const dt = dayDate(d)
         if ((m === null || dt.getMonth() + 1 === m) && dt.getDate() === dayOfMonth) grant(d)
@@ -216,6 +224,8 @@ function dailyGainByResource(maxDay) {
       if (parts.length !== 2) parts = param.split('-')
       if (parts.length === 2) {
         const wk = parseInt(parts[0], 10); const wd = parseInt(parts[1], 10)
+        // D6c：周 1-5、星期 1-7 之外引擎跳过
+        if (wk < 1 || wk > 5 || wd < 1 || wd > 7) continue
         for (let d = 0; d <= maxDay; d++) {
           const dt = dayDate(d)
           const weekOfMonth = Math.floor((dt.getDate() - 1) / 7) + 1
@@ -227,7 +237,7 @@ function dailyGainByResource(maxDay) {
   // day_overrides：累加（引擎 day_overrides 分支「累加语义」——不是覆盖）
   for (const o of previewData.value.dayOverrides) {
     for (const [res, amt] of Object.entries(o.gains || {})) {
-      if (o.day !== undefined && amt) { map[o.day] = map[o.day] || {}; map[o.day][res] = (map[o.day][res] || 0) + amt }
+      if (o.day !== undefined && amt > 0) { map[o.day] = map[o.day] || {}; map[o.day][res] = (map[o.day][res] || 0) + amt }
     }
   }
   return map

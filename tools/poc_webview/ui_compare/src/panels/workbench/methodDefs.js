@@ -49,7 +49,8 @@ export const METHOD_DEFS = [
   {
     type: 'gdr_dist', label: 'GDR 分布', category: '总体广义出率',
     params: [
-      { key: 'gdr', label: 'GDR 指标', type: 'select', options: GDR_OPTIONS, default: 'target_achievement' },
+      // 对齐旧 analysis_panel：多 GDR 多选（每指标独立生成 hist/cdf）
+      { key: 'gdr', label: 'GDR 指标', type: 'array', options: GDR_OPTIONS, default: ['target_achievement'] },
       { key: 'hist', label: '分布', type: 'bool', default: true },
       { key: 'cdf', label: '累积分布', type: 'bool', default: false },
       // 对齐旧 analysis_panel draw_unit_cb：以抽数为单位（资源类 GDR ÷ cost_per_draw）
@@ -251,6 +252,10 @@ export const METHOD_DEFS = [
       // 旧版 events/successOp 键后端不读、配置被静默忽略）
       { key: 'eventMode', label: '事件模式', type: 'select', options: [['sequence', '事件类型序列'], ['set', '事件类型集合'], ['count_set', '事件计数组合'], ['raw', '原始轨迹'], ['custom', '自定义模式']], default: 'sequence' },
       { key: 'successMode', label: '成败模式', type: 'select', options: [['count', '成败计数'], ['sequence', '成败序列'], ['set', '成败集合'], ['custom', '自定义模式']], default: 'count' },
+      // 自定义模式约束（对齐旧 custom_threshold_widget / success_custom_widget）
+      { key: 'successOp', label: '成功算符', type: 'select', options: [['>=', '≥'], ['>', '>'], ['=', '='], ['<=', '≤'], ['<', '<']], default: '>=' },
+      { key: 'successN', label: '成功次数 N', type: 'number', min: 1, max: 99, default: 1 },
+      { key: 'constraints', label: '事件约束', type: 'text', default: '' },
       { key: 'ci', label: '置信水平', type: 'number', min: 0.8, max: 0.99, step: 0.01, default: 0.95, precision: 2 },
     ],
     result: [

@@ -28,9 +28,13 @@
         default-first-option
         class="p-ctl"
       >
-        <el-option label="保底" value="pity" />
-        <el-option label="提前出货" value="early" />
-        <el-option label="miss" value="miss" />
+        <!-- 有 options 时用动态选项（如 gdr_dist 多指标多选）；否则用默认事件类型选项 -->
+        <el-option v-if="f.options && f.options.length" v-for="o in f.options" :key="o[0]" :label="o[1]" :value="o[0]" />
+        <template v-else>
+          <el-option label="保底" value="pity" />
+          <el-option label="提前出货" value="early" />
+          <el-option label="miss" value="miss" />
+        </template>
       </el-select>
     </div>
 

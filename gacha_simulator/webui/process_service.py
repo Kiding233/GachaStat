@@ -22,6 +22,11 @@ def run_process_analysis(dataset, store, params: dict) -> dict:
         event_mode = params.get('eventMode', 'sequence')
         success_mode = params.get('successMode', 'count')
         conf = float(params.get('ci', 0.95))
+        # 自定义模式约束（对齐旧 process_analysis_panel custom_threshold_widget / success_custom_widget）
+        constraints = params.get('constraints') or None
+        success_op = params.get('successOp') or None
+        success_n = params.get('successN')
+        success_n = int(success_n) if success_n is not None else None
         checker = make_gdr_calculator(store, target_specs, gdr_key, gdr_threshold=threshold, ssr_ids=ssr_ids)
 
         traces = []
@@ -49,7 +54,7 @@ def run_process_analysis(dataset, store, params: dict) -> dict:
         sections = []
         # AA：事件统计
         try:
-            aa = compute_aa(traces, event_mode=event_mode)
+            aa = compute_aa(traces, event_mode=event_mode, constraints=constraints)
             if aa:
                 rows = [[r['pattern'], f"{r['count']}", f"{r['probability']:.4f}",
                          f"{r['cumulative_probability']:.4f}"] for r in aa]
@@ -59,7 +64,8 @@ def run_process_analysis(dataset, store, params: dict) -> dict:
             pass
         # BB：成败模式
         try:
-            bb = compute_bb(traces, success_mode=success_mode)
+            bb = compute_bb(traces, success_mode=success_mode,
+                            success_op=success_op, success_n=success_n)
             if bb and bb.get('pattern_table'):
                 rows = [[p['pattern'], f"{p['count']}", f"{p.get('probability', 0):.4f}"]
                         for p in bb['pattern_table']]
@@ -69,7 +75,9 @@ def run_process_analysis(dataset, store, params: dict) -> dict:
             pass
         # AB：事件→成败（含 low_sample 警告——样本 <5 时 Wilson CI 不可信）
         try:
-            ab = compute_ab(traces, event_mode=event_mode, success_mode=success_mode, conf_level=conf)
+            ab = compute_ab(traces, event_mode=event_mode, success_mode=success_mode,
+                            constraints=constraints, success_op=success_op,
+                            success_n=success_n, conf_level=conf)
             if ab:
                 rows = []
                 for r in ab:
@@ -88,7 +96,9 @@ def run_process_analysis(dataset, store, params: dict) -> dict:
             pass
         # BA：成败→事件（含 Wilson CI 列，对齐 core compute_ba 字段）
         try:
-            ba = compute_ba(traces, event_mode=event_mode, success_mode=success_mode, conf_level=conf)
+            ba = compute_ba(traces, event_mode=event_mode, success_mode=success_mode,
+                            constraints=constraints, success_op=success_op,
+                            success_n=success_n, conf_level=conf)
             if ba:
                 rows = []
                 for r in ba:

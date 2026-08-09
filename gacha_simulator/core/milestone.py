@@ -101,7 +101,7 @@ class MilestoneEngine:
         # 随机卡——从候选池中抽取（使用 self._rng 保证可复现）
         for rc in br.get('random_cards', []):
             candidates = rc['candidates']
-            weights = rc.get('weights', [1.0] * len(candidates))
+            weights = rc.get('weights') or [1.0] * len(candidates)   # 空列表/缺失 → 等权兜底
             count = rc.get('count', 1)
             chosen = self._rng.choices(candidates, weights=weights, k=count)
             result['card_ids'].extend(chosen)

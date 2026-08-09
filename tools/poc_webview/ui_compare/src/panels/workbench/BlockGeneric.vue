@@ -440,6 +440,58 @@
             </el-select>
           </el-form-item>
         </el-form>
+
+        <!-- 策略参数区：按后端 ParamDescriptor 元数据动态渲染（对齐旧 param_renderer）-->
+        <div v-if="type === 'strategy'" class="sub-section">
+          <div class="sub-title">策略参数（{{ data.params ? Object.keys(data.params).length : 0 }}）</div>
+          <el-form label-width="120px" size="small">
+            <el-form-item v-for="pd in strategyParams" :key="pd.key" :label="pd.display">
+              <!-- 数值 -->
+              <el-input-number
+                v-if="pd.type === 'float' || pd.type === 'int'"
+                :model-value="data.params?.[pd.key] ?? pd.default"
+                size="small"
+                :min="pd.min ?? 0"
+                :max="pd.max"
+                :precision="pd.type === 'float' ? 2 : 0"
+                :controls="false"
+                style="width: 140px"
+                @change="(v) => setStrategyParam(pd, v)"
+              />
+              <!-- 布尔 -->
+              <el-switch
+                v-else-if="pd.type === 'bool'"
+                :model-value="!!(data.params?.[pd.key] ?? pd.default)"
+                size="small"
+                @change="(v) => setStrategyParam(pd, v)"
+              />
+              <!-- 字符串列表 -->
+              <el-select
+                v-else-if="pd.type === 'string_list'"
+                :model-value="data.params?.[pd.key] ?? pd.default ?? []"
+                size="small"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                style="width: 100%"
+                @change="(v) => setStrategyParam(pd, v)"
+              />
+              <!-- 池子→整数映射 -->
+              <div v-else-if="pd.type === 'pool_int_map'" class="kv-editor">
+                <div v-for="(val, k) in (data.params?.[pd.key] ?? {})" :key="k" class="kv-row">
+                  <el-input :model-value="k" size="small" class="kv-key" @change="(nk) => renamePoolMapKey(pd, k, nk)" />
+                  <el-input-number :model-value="val" size="small" class="kv-val" :min="0" :controls="false" @change="(v) => setPoolMapValue(pd, k, v)" />
+                  <el-button size="small" text type="danger" @click="removePoolMapKey(pd, k)">×</el-button>
+                </div>
+                <el-button size="small" text type="primary" @click="addPoolMapKey(pd)">+ 池</el-button>
+              </div>
+              <!-- 字符串 -->
+              <el-input v-else :model-value="data.params?.[pd.key] ?? pd.default ?? ''" size="small" @change="(v) => setStrategyParam(pd, v)" />
+            </el-form-item>
+            <div v-if="!strategyParams.length" class="muted">该策略无参数（smart / no_draw）</div>
+          </el-form>
+        </div>
       </template>
 
       <!-- ══ pity 特化：生命周期 + 未渲染参数 ══ -->
@@ -451,9 +503,6 @@
           </el-form-item>
           <el-form-item label="依赖行为">
             <el-input v-model="data.lifecycle.depends_on" size="small" placeholder="依赖的 behavior 名" />
-          </el-form-item>
-          <el-form-item label="最大触发">
-            <el-input-number :model-value="data.lifecycle.max_triggers" size="small" :min="0" :controls="false" class="pity-num" @change="(v) => (data.lifecycle.max_triggers = v)" />
           </el-form-item>
         </el-form>
       </div>
@@ -536,9 +585,37 @@ const props = defineProps({
   poolIds: { type: Array, default: () => [] },   // 全限定池 ID（{banner}.{pool}），供绑定池/目标卡下拉
   bannerIds: { type: Array, default: () => [] }, // banner ID，供「适用 Banner」下拉
   cardPools: { type: Object, default: () => ({}) }, // card_id → 全限定池 ID[]（目标卡关联池只读解析）
+  rarityNames: { type: Array, default: () => [] }, // 稀有度名（scope 下拉动态选项，对齐 [rarities] 注册名）
   expanded: { type: Boolean, default: true },   // 受控折叠（父级手风琴）
 })
 const emit = defineEmits(['copy', 'remove', 'change', 'locate', 'move', 'toggle-head'])
+
+// ── 策略参数（按后端 ParamDescriptor 元数据渲染，对齐旧 param_renderer）──
+const strategyParams = ref([])
+const strategyKeyWatch = watch(() => props.data?.key, async (k) => {
+  if (props.type !== 'strategy' || !k) { strategyParams.value = []; return }
+  try {
+    const { default: api } = await import('../../api.js')
+    const r = await api.listStrategyParams(k)
+    strategyParams.value = r?.ok ? (r.params || []) : []
+  } catch (e) { strategyParams.value = [] }
+}, { immediate: true })
+function setStrategyParam(pd, v) {
+  if (!props.data.params) props.data.params = {}
+  props.data.params[pd.key] = v
+}
+function renamePoolMapKey(pd, oldK, newK) {
+  const m = props.data.params?.[pd.key] || {}
+  if (oldK !== newK && newK && !(newK in m)) { m[newK] = m[oldK]; delete m[oldK] }
+}
+function setPoolMapValue(pd, k, v) { props.data.params[pd.key][k] = v }
+function addPoolMapKey(pd) {
+  if (!props.data.params) props.data.params = {}
+  if (!props.data.params[pd.key]) props.data.params[pd.key] = {}
+  const n = Object.keys(props.data.params[pd.key]).length + 1
+  props.data.params[pd.key][`pool${n}`] = 0
+}
+function removePoolMapKey(pd, k) { delete props.data.params[pd.key][k] }
 
 // 快照比较：只在值真正变化时 emit，打破双向同步死循环（与 ConfigBlock 同模式）
 let lastSnap = JSON.stringify(props.data)
@@ -563,6 +640,9 @@ function optPair(o) { return Array.isArray(o) ? o : [o, o] }
 // 里程碑「适用 Banner」等动态选项：空 = 全部 Banner + 真实 bannerIds（对齐引擎 banner 精确匹配）
 function selectOptions(f) {
   if (f.key === 'banner') return [['', '全部（所有 Banner）'], ...props.bannerIds.map((b) => [b, b])]
+  if (f.dynamic && f.key === 'scope' && props.rarityNames.length) {
+    return props.rarityNames.map((r) => [r, r])
+  }
   return (f.options || []).map(optPair)
 }
 // 保底「绑定池」数组：全限定池下拉 + 通配预设（引擎 fnmatch：'*' 全部池 / '*.main' 各 Banner 主池）
@@ -777,7 +857,7 @@ const FIELDS = {
   pity: [
     { key: 'name', label: '名称', type: 'text' },
     { key: 'type', label: '类型', type: 'select', options: PITY_TYPES },
-    { key: 'scope', label: '稀有度', type: 'select', options: ['ssr', 'sr', 'r'] },
+    { key: 'scope', label: '稀有度', type: 'select', options: ['ssr', 'sr', 'r'], dynamic: true },
     { key: 'target_featured', label: '仅限 Featured', type: 'bool' },
     { key: 'reset', label: '重置条件', type: 'text' },
     { key: 'start', label: '起始水位', type: 'number' },

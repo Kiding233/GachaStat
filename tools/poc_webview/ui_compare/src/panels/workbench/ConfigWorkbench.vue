@@ -102,6 +102,7 @@
               :pool-ids="allPoolIds"
               :banner-ids="allBannerIds"
               :card-pools="allCardPools"
+              :rarity-names="allRarityNames"
               :expanded="isBlockExpanded(element)"
               @toggle-head="() => toggleBlock(element)"
               @change="onBlockChange"
@@ -264,6 +265,19 @@ const allPoolIds = computed(() =>
 const allBannerIds = computed(() =>
   blocks.value.filter((b) => b.type === 'banner').map((b) => b.data.id).filter(Boolean),
 )
+// 稀有度名（保底 scope 下拉动态选项，对齐 [rarities] 注册名；config_toml.py L524-532）
+const allRarityNames = computed(() => {
+  const names = new Set()
+  for (const b of blocks.value) {
+    if (b.type === 'rarity' && b.data?.entries) {
+      for (const e of b.data.entries) {
+        const n = String(e.rank || e.name || '').trim().toLowerCase()
+        if (n) names.add(n)
+      }
+    }
+  }
+  return [...names]
+})
 // 卡 → 全限定池 ID[]（目标卡关联池只读自动解析：该卡出现在哪些池的奖励中，对齐旧 UI _update_target_pools）
 const allCardPools = computed(() => {
   const map = {}

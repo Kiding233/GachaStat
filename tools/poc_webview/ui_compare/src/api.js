@@ -75,6 +75,7 @@ export const api = {
   getAboutInfo: () => call('get_about_info'),
   listPlugins: () => call('list_plugins'),
   togglePlugin: (key, disable) => call('toggle_plugin', key, disable),
+  listStrategyParams: (strategyKey) => call('list_strategy_params', strategyKey),
 }
 
 // 文件对话框（pywebview 原生，Python 侧 create_file_dialog）
@@ -106,6 +107,7 @@ const devMock = {
   get_resource_usage: () => ({ ok: true, cpu: null, mem: null }),
   get_about_info: () => ({ ok: true, version: 'dev', name: 'GachaStat', tech: 'dev 模式（无 pywebview）' }),
   list_plugins: () => ({ ok: true, plugins: [] }),
+  list_strategy_params: () => ({ ok: false, error: 'no bridge', params: [] }),
   toggle_plugin: () => ({ ok: true }),
 }
 

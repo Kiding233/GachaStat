@@ -522,6 +522,42 @@ class GachaApi:
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
+    def list_strategy_params(self, strategy_key: str) -> dict:
+        """返回策略参数描述（ParamDescriptor 元数据），供配置工作台渲染参数表单。
+
+        对齐旧 config_panel + param_renderer 的类型映射：
+        FloatParam/IntParam/BoolParam/StrParam/StringListParam/PoolIntMapParam。
+        """
+        from gacha_simulator.core.strategy import STRATEGY_REGISTRY
+        meta = STRATEGY_REGISTRY.get(strategy_key)
+        if not meta:
+            return {'ok': False, 'error': f'未知策略: {strategy_key}'}
+        try:
+            params = []
+            for pd in meta.params or []:
+                ptype = type(pd).__name__
+                desc = {
+                    'key': pd.key,
+                    'display': pd.display_name,
+                    'default': getattr(pd, 'default', None),
+                }
+                if ptype in ('FloatParam', 'IntParam'):
+                    desc['type'] = 'float' if ptype == 'FloatParam' else 'int'
+                    desc['min'] = getattr(pd, 'min_val', None)
+                    desc['max'] = getattr(pd, 'max_val', None)
+                elif ptype == 'BoolParam':
+                    desc['type'] = 'bool'
+                elif ptype == 'StringListParam':
+                    desc['type'] = 'string_list'
+                elif ptype == 'PoolIntMapParam':
+                    desc['type'] = 'pool_int_map'
+                else:
+                    desc['type'] = 'str'
+                params.append(desc)
+            return {'ok': True, 'key': strategy_key, 'params': params}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
     def toggle_plugin(self, key: str, disable: bool) -> dict:
         """启用/禁用插件策略（持久化到 TOML [plugins].disabled）。"""
         try:

@@ -432,7 +432,7 @@ function extraToml(d, type) {
 function serializeResourceDefs(d) {
   const entries = d.entries || []
   const defs = entries.filter((e) => e.name).map((e) => `${e.key} = ${serializeValue(e.name)}`)
-  const initial = entries.filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '').map((e) => `${e.key} = ${e.initial}`)
+  const initial = entries.filter((e) => e.initial !== undefined && e.initial !== null && e.initial !== '').map((e) => `${e.key} = ${serializeValue(e.initial)}`)
   const parts = ['[resources.defs]' + (defs.length ? '\n' + defs.join('\n') : '')]
   if (initial.length) parts.push('[resources.initial]\n' + initial.join('\n'))
   return parts.join('\n\n')

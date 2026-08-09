@@ -211,51 +211,56 @@ class AnalysisService:
     # ── 各方法 ───────────────────────────────────────────────────────
 
     def _gdr_dist(self, p):
-        gdr_key = p.get('gdr', 'target_achievement')
+        # 对齐旧 analysis_panel：多 GDR 多选（每指标独立生成 hist/cdf）
+        raw_gdr = p.get('gdr', ['target_achievement'])
+        gdr_keys = raw_gdr if isinstance(raw_gdr, list) else [raw_gdr]
         show_hist = p.get('hist', True)
         show_cdf = p.get('cdf', False)
-        vals = np.array(self._gdr_values(gdr_key), dtype=float)
-        if len(vals) == 0:
-            return [{'key': 'summary', 'title': 'GDR 分布', 'items': {'状态': '无数据'}}]
-        dist = EmpiricalDistribution(vals.tolist())
-        defn = resolve_gdr_definition(gdr_key)
-        display = defn.display_name if defn else gdr_key
         sections = []
-        base = None
-        if parse_gdr_key(gdr_key)[0] == 'resource_remaining':
-            _rid = parse_gdr_key(gdr_key)[1]
-            base = self.no_draw_resources.get(_rid, self.no_draw_resource)
-        annotations = []
-        if base is not None:
-            annotations.append(ChartAnnotation(type='vline', value=base, color='green',
-                                               dash='dash', text=f'不抽卡基线: {base:.1f}'))
-        if show_hist:
-            bin_result = compute_bins(gdr_key, vals, target_specs=self.target_specs,
-                                      cost_per_draw=self.cost_per_draw if is_resource_gdr(gdr_key) else None,
-                                      use_draw_units=False)
-            title = f'{display} 分布'
-            if bin_result.inf_label:
-                title += f' ({bin_result.inf_label})'
-            spec = ChartSpec(chart_type='histogram',
-                             data=HistogramData(samples=vals, mean_line=True,
-                                                quantile_lines=[self.alpha]),
-                             title=title, xlabel=display,
-                             ylabel='频数' if not bin_result.density else '概率密度',
-                             annotations=annotations,
-                             layout_hints=bin_result.to_layout_hints())
-            sections.append(_sec_chart(title, spec))
-        if show_cdf:
-            cdf_spec = ChartSpec(chart_type='cdf', data=CDFData(samples=vals),
-                                 title=f'{display} 累积分布', xlabel=display,
-                                 ylabel='累积概率',
+        if not gdr_keys:
+            return [{'key': 'summary', 'title': 'GDR 分布', 'items': {'状态': '未选择指标'}}]
+        for gdr_key in gdr_keys:
+            try:
+                vals = np.array(self._gdr_values(gdr_key), dtype=float)
+            except Exception:
+                continue
+            if len(vals) == 0:
+                continue
+            defn = resolve_gdr_definition(gdr_key)
+            display = defn.display_name if defn else gdr_key
+            base = None
+            if parse_gdr_key(gdr_key)[0] == 'resource_remaining':
+                _rid = parse_gdr_key(gdr_key)[1]
+                base = self.no_draw_resources.get(_rid, self.no_draw_resource)
+            annotations = []
+            if base is not None:
+                annotations.append(ChartAnnotation(type='vline', value=base, color='green',
+                                                   dash='dash', text=f'不抽卡基线: {base:.1f}'))
+            if show_hist:
+                bin_result = compute_bins(gdr_key, vals, target_specs=self.target_specs,
+                                          cost_per_draw=self.cost_per_draw if is_resource_gdr(gdr_key) else None,
+                                          use_draw_units=False)
+                title = f'{display} 分布'
+                if bin_result.inf_label:
+                    title += f' ({bin_result.inf_label})'
+                spec = ChartSpec(chart_type='histogram',
+                                 data=HistogramData(samples=vals, mean_line=True,
+                                                    quantile_lines=[self.alpha]),
+                                 title=title, xlabel=display,
+                                 ylabel='频数' if not bin_result.density else '概率密度',
+                                 annotations=annotations,
+                                 layout_hints=bin_result.to_layout_hints())
+                sections.append(_sec_chart(title, spec))
+            if show_cdf:
+                cdf_spec = ChartSpec(chart_type='cdf', data=CDFData(samples=vals),
+                                     title=f'{display} 累积分布', xlabel=display,
+                                     ylabel='累积概率',
                                  annotations=[ChartAnnotation(type='hline', value=self.alpha,
                                                               color='orange', dash='dot',
                                                               text=f'α={self.alpha:.2f}')] + annotations)
-            sections.append(_sec_chart(f'{display} 累积分布', cdf_spec))
-        sections.insert(0, _sec_summary('概览', {
-            '均值': f'{dist.mean():.4f}', '中位数': f'{dist.median():.4f}',
-            '标准差': f'{dist.std():.4f}', '样本数': dist.n,
-        }))
+                sections.append(_sec_chart(f'{display} 累积分布', cdf_spec))
+        if not sections:
+            return [{'key': 'summary', 'title': 'GDR 分布', 'items': {'状态': '无数据'}}]
         return sections
 
     def _gdr_statistics(self, p):
@@ -471,6 +476,7 @@ class AnalysisService:
             return [{'key': 'summary', 'title': '风险分析', 'items': {'状态': '无数据'}}]
         defn = resolve_gdr_definition(gdr_key)
         lower = defn.lower_is_better if defn else False
+        display = defn.display_name if defn else gdr_key
         if worst:
             val = primary.quantile(1 - alpha) if lower else primary.quantile(alpha)
             in_tail = [v >= val if lower else v <= val for v in primary.samples]
@@ -484,6 +490,7 @@ class AnalysisService:
         tail_samples = [primary.samples[i] for i in range(primary.n) if in_tail[i]]
         tail_dist = EmpiricalDistribution(tail_samples) if tail_samples else EmpiricalDistribution([])
         rows = []
+        cond_charts = []
         for name, dist in dists.items():
             if dist.n < 2 or name == gdr_key:
                 continue
@@ -500,8 +507,28 @@ class AnalysisService:
                          f'{cond.mean()-g_mean:.4f}', f'{cond.median():.4f}', f'{cond.std():.4f}',
                          f'{cond.var(alpha):.4f}', f'{g_var - g_mean:.4f}',
                          f'{g_var - dist.median():.4f}', f'{cond.min_val():.4f}', f'{cond.max_val():.4f}'])
+            # per-indicator 条件分布子图（对齐旧 analysis_panel L503-538：
+            # 每指标一图 = 全局分布 + 条件样本红色 overlay）
+            if cond.n >= 2:
+                try:
+                    br = compute_bins(name, np.array(dist.samples), target_specs=self.target_specs,
+                                      cost_per_draw=self.cost_per_draw if is_resource_gdr(name) else None,
+                                      use_draw_units=False)
+                    from gacha_simulator.visualization.chart_spec import HistogramData, HistogramOverlay
+                    cond_charts.append(ChartSpec(
+                        chart_type='histogram',
+                        data=HistogramData(samples=np.array(dist.samples), mean_line=False,
+                                           overlays=[HistogramOverlay(samples=np.array(cond.samples),
+                                                                      color='red', opacity=0.6,
+                                                                      label=f'{dname}(最差条件, n={cond.n})')],
+                                           density=br.density),
+                        title=f'{("最差" if worst else "最好")}情形: {dname} | {display}{("≥" if lower else "≤")}{tail_label}',
+                        xlabel=dname, ylabel='频次' if not br.density else '密度',
+                        layout_hints=br.to_layout_hints(),
+                    ))
+                except Exception:
+                    pass
         sections = []
-        display = defn.display_name if defn else gdr_key
         sections.append(_sec_summary(f'{("最差" if worst else "最好")}情形', {
             '主指标': display, '尾部阈值': f'{val:.4f}', '尾部样本': tail_dist.n,
         }))
@@ -510,6 +537,8 @@ class AnalysisService:
             sections.append(_sec_table(f'{("最差" if worst else "最好")}情形条件统计',
                                        ['GDR指标', '样本数', '全局均值', '条件均值', '均值差', '中位数', '标准差',
                                         var_label, 'VaR-均值差', 'VaR-中位数差', '最小值', '最大值'], rows))
+        for cs in cond_charts:
+            sections.append(_sec_chart(cs.title, cs))
         # 主分布直方图 + 尾部叠加
         bin_result = compute_bins(gdr_key, np.array(primary.samples), target_specs=self.target_specs,
                                   cost_per_draw=self.cost_per_draw if is_resource_gdr(gdr_key) else None,

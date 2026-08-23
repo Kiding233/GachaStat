@@ -4,6 +4,7 @@ from .config_store import (
     ConfigStore, PityConfig, PityDef, GainRule, DayOverride,
     TargetCardEntry, CardDefEntry, BannerEntry, BannerPoolEntry,
     LifecycleRuleEntry, MilestoneConfig, MilestoneDef,   # P58（ISSUE-005/306）：里程碑透传
+    SelectVoucherDef,   # P78（ISSUE-130）：截断透传 select_vouchers
 )
 
 # P61：秒/天换算——截断后时间窗口以秒写入 store.banner（与 config_store/config_toml 同口径）
@@ -202,10 +203,20 @@ class RetreatConfigBuilder:
                     name=m.name, threshold=m.threshold, repeat=m.repeat,
                     max_triggers=m.max_triggers, bonus_reward=dict(m.bonus_reward),
                     banner=m.banner,
+                    # P78（ISSUE-107 全量透传纪律）：截断分支重建须携带新字段——
+                    # 否则「最少资源/Pareto 搜索」走截断分支时里程碑退化为空交替+零偏移，
+                    # 与完整时间线分支结果不一致。
+                    alternate_rewards=[dict(a) for a in m.alternate_rewards],
+                    offset=m.offset,
                 )
                 for m in original_store.milestone.milestones
             ],
         )
+        # P78（ISSUE-130）：截断 store 复制 select_vouchers——截断与完整分支查询层一致
+        truncated.select_vouchers = [
+            SelectVoucherDef(voucher=sv.voucher, cards=list(sv.cards))
+            for sv in original_store.select_vouchers
+        ]
         truncated.card_overflow_map = dict(original_store.card_overflow_map)
         truncated.rarity_defaults = dict(original_store.rarity_defaults)
 

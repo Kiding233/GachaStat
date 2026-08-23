@@ -113,7 +113,13 @@ class StrategyContext:
     _milestone_engine: Optional['MilestoneEngine'] = field(default=None, repr=False)
 
     def get_milestone_counter(self, name: str) -> int:
-        """当前累计抽数（已抽次数），不存在 → 0。余量 = md.threshold - get_milestone_counter(name)。"""
+        """当前累计抽数（已抽次数），不存在 → 0。余量 = md.threshold - get_milestone_counter(name)。
+
+        P78（ISSUE-104）：该值为相对计数器（未叠加 offset 的原始累计值）——首节点
+        阶段（offset 生效区间）实际触发点 = threshold + offset，策略按
+        「余量 = threshold - counter」预测会低估首节点到 80（实际 100）。
+        精确余量须叠加 offset（首节点阶段）或经 `get_all_defs()[name].offset` 判断。
+        """
         if self._milestone_engine is None:
             return 0
         return self._milestone_engine.get_counter(name)

@@ -489,4 +489,8 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
             _update(str(md.max_triggers))
             _update(str(md.banner))
             _update(str(md.bonus_reward))
+            # P78（ISSUE-108）：alternate_rewards/offset 纳入 hash——仅新字段不同的
+            # 数据集判「配置: 不同」（否则交替/偏移里程碑与旧形态 hash 相同、误判可比）
+            _update(str(md.alternate_rewards))
+            _update(str(md.offset))
     return h.hexdigest()[:16]

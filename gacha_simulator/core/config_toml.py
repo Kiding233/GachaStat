@@ -27,6 +27,7 @@ from .config_store import (
     MilestoneDef,
     PityConfig,
     PityDef,
+    SelectVoucherDef,   # ← P78
     TargetCardEntry,
 )
 from .overflow import OverflowBand, expand_sugar_to_bands
@@ -64,6 +65,7 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     # 各段构建
     _build_resources(data, store)
     _build_cards(data, store)
+    _build_select_voucher(data, store)   # P78：[[select_voucher]] 自选券候选集段（ISSUE-129——须在 _build_resources L65 之后、_build_cards L66 之后：voucher id setdefault 补全需 resource_defs 就绪、候选卡校验需 card_defs 就绪）
     _build_gain_rules(data, store)
     _build_day_overrides(data, store)
     _build_pity(data, store)        # 依赖 rarity_rank 完成 scope 校验
@@ -164,8 +166,9 @@ def save_toml(store: ConfigStore, path: str) -> None:
 
     # milestone（P58：[[milestone]] 累抽奖励段——独立于保底体系）
     if store.milestone.enabled and store.milestone.milestones:
-        data['milestone'] = [
-            {
+        data['milestone'] = []
+        for m in store.milestone.milestones:
+            entry = {
                 'name': m.name,
                 'threshold': m.threshold,
                 'repeat': m.repeat,
@@ -173,7 +176,21 @@ def save_toml(store: ConfigStore, path: str) -> None:
                 'banner': m.banner,
                 'bonus_reward': m.bonus_reward,
             }
-            for m in store.milestone.milestones
+            # P78 条件写键纪律（ISSUE-113）——空列表/零偏移省略键：
+            # 显式空 alternate_rewards=[]/offset=0 写出会在下次 load_toml 命中
+            # ISSUE-112 规则 1/ISSUE-007 抛 ConfigError（GUI 保存→重载断裂）。
+            if m.alternate_rewards:
+                entry['alternate_rewards'] = m.alternate_rewards
+            if m.offset:
+                entry['offset'] = m.offset
+            data['milestone'].append(entry)
+
+    # select_voucher（P78：[[select_voucher]] 自选券候选集段——独立 gate，ISSUE-118：
+    # 与 milestone 的 enabled-and-milestones gate 无关，防 milestone 禁用/为空时段被整体跳过）
+    if store.select_vouchers:
+        data['select_voucher'] = [
+            {'voucher': v.voucher, 'cards': list(v.cards)}
+            for v in store.select_vouchers
         ]
 
     # strategy（P69：key + params 格式）
@@ -598,6 +615,337 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
     store.pity = PityConfig(enabled=True, pities=pities)
 
 
+def _validate_reward_dict(reward: dict, known_card_ids: set, allow_empty: bool = False) -> dict:
+    """校验单个 reward dict（cards / resources / random_cards 三字段，P78 ISSUE-131）。
+
+    供 `_build_milestone` 的 bonus_reward（allow_empty=True——空 {} 合法，ISSUE-503）
+    与 alternate_rewards 每个交替项（allow_empty=False——空 {} 拒，ISSUE-112 规则 2）
+    共用——与引擎侧 `_resolve_bonus_from(reward)` 同构（交替项与 bonus_reward 同为
+    卡片/资源/随机池三字段）。set_config 恢复路径亦经此（ISSUE-114/116 同构校验）。
+
+    **校验 + 规范化写回一体（ISSUE-701）**：非纯校验——对 random_cards 的
+    weights/count 原地规范化写回（与 _build_milestone 原 L696-708/L717 行为一致），
+    保证 set_config 入口对字符串数值权重同样规范化、引擎 rng.choices 收到 float
+    权重不崩溃。副作用声明：原地修改调用方传入的 dict（幂等无害）。
+
+    Args:
+        reward: 待校验的 reward dict（cards/resources/random_cards）。
+        known_card_ids: 已知卡 id 集合（cards/random_cards 存在性校验）。
+        allow_empty: True 时空 {} 直接通过（bonus_reward 合法空奖励里程碑）；
+            False 时空 {} 抛 ConfigError（alternate_rewards 空项，ISSUE-112 规则 2）。
+
+    Returns:
+        校验后的 reward dict（含 cards/resources/random_cards 三键，规范化后的
+        random_cards 写回原 dict）。若 allow_empty=True 且 reward 为空 {} 则原样返回。
+    """
+    # ISSUE-503：bonus_reward={} 空奖励里程碑是既有合法语义（纯计数/统计锚点）
+    if allow_empty and not reward:
+        return reward
+    if not isinstance(reward, dict):
+        raise ConfigError(
+            f"奖励项必须是表（dict），当前为 {type(reward).__name__}")
+
+    # ── cards 校验（存在性 + 类型）──
+    cards = reward.get('cards', [])
+    if not isinstance(cards, list):
+        raise ConfigError(
+            f"奖励项 cards 必须是数组，当前为 {type(cards).__name__}")
+    for cid in cards:
+        if cid not in known_card_ids:
+            raise ConfigError(f"奖励项 cards 引用不存在的 card_id: '{cid}'")
+
+    # ── resources 校验（类型 + 值数值——ISSUE-303）──
+    resources = reward.get('resources', {})
+    if not isinstance(resources, dict):
+        raise ConfigError(
+            f"奖励项 resources 必须是键值对，当前为 {type(resources).__name__}")
+    for _rk, _rv in resources.items():
+        if not isinstance(_rv, (int, float)) or isinstance(_rv, bool):
+            raise ConfigError(
+                f"奖励项 resources['{_rk}'] 值必须为数值（int/float），"
+                f"当前为 {type(_rv).__name__}")
+
+    # ── random_cards 校验（类型 + candidates 存在性 + weights 数值 + count ≥1）──
+    random_cards = reward.get('random_cards', [])
+    if not isinstance(random_cards, list):
+        raise ConfigError(
+            f"奖励项 random_cards 必须是数组，当前为 {type(random_cards).__name__}")
+    for i, rc in enumerate(random_cards):
+        # ISSUE-606：rc['candidates'] 缺键 KeyError 兜底——显式报错而非裸 KeyError
+        if not isinstance(rc, dict):
+            raise ConfigError(f"奖励项 random_cards[{i}] 必须是表（dict）")
+        candidates = rc.get('candidates')
+        if candidates is None:
+            raise ConfigError(f"奖励项 random_cards[{i}] 缺少 candidates 字段")
+        if not candidates:
+            raise ConfigError(f"奖励项 random_cards[{i}].candidates 不得为空")
+        for cid in candidates:
+            if cid not in known_card_ids:
+                raise ConfigError(
+                    f"奖励项 random_cards[{i}].candidates 引用不存在的 card_id: '{cid}'")
+        if 'weights' in rc and len(rc['weights']) != len(candidates):
+            raise ConfigError(
+                f"奖励项 random_cards[{i}].weights 长度({len(rc['weights'])})"
+                f"与 candidates({len(candidates)})不匹配")
+        # ISSUE-302：权重逐项 float 数值校验 + 规范化写回
+        wlist = rc.get('weights', [1.0] * len(candidates))
+        w_norm: list = []
+        for w in wlist:
+            try:
+                w_norm.append(float(w))
+            except (TypeError, ValueError):
+                raise ConfigError(
+                    f"奖励项 random_cards[{i}].weights 含非数字值 '{w}'"
+                    f"（类型 {type(w).__name__}）——必须为数值")
+        if w_norm and all(w == 0.0 for w in w_norm):
+            raise ConfigError(
+                f"奖励项 random_cards[{i}].weights 全为零——random.choices 无法抽样，至少一个权重 > 0")
+        rc['weights'] = w_norm
+        # ISSUE-301：count 解析期校验 + 规范化写回（ISSUE-701）
+        try:
+            count = int(rc.get('count', 1))
+        except (TypeError, ValueError):
+            raise ConfigError(f"奖励项 random_cards[{i}].count 必须为整数")
+        if count < 1:
+            raise ConfigError(
+                f"奖励项 random_cards[{i}].count 必须 ≥ 1（正整数），当前为 {count}")
+        rc['count'] = count
+
+    return {
+        'cards': list(cards),
+        'resources': dict(resources),
+        'random_cards': list(random_cards),
+    }
+
+
+def _build_select_voucher(data: dict, store: ConfigStore) -> None:
+    """[[select_voucher]] → store.select_vouchers（P78 自选券候选集段）。
+
+    候选集定义——资源 id → 可兑换卡片显式列表。纯元数据声明（模拟结算不消费，
+    仅供查询/展示层）。依赖 store.resource_defs（_build_resources 已先执行）做
+    voucher id 自动补全、store.card_defs（_build_cards 已先执行）做候选卡存在性校验。
+    """
+    sv_list = data.get('select_voucher', [])
+    if not sv_list:
+        store.select_vouchers = []
+        return
+
+    known_card_ids = {c.card_id for c in store.card_defs}
+    seen_vouchers: set = set()
+    vouchers = []
+    for i, item in enumerate(sv_list):
+        if not isinstance(item, dict):
+            raise ConfigError(f"select_voucher[{i}] 必须是表（dict），当前为 {type(item).__name__}")
+        raw_voucher = item.get('voucher', '')
+        if not isinstance(raw_voucher, str):
+            raise ConfigError(f"select_voucher[{i}] voucher 字段必须是字符串，当前为 {type(raw_voucher).__name__}")
+        voucher = raw_voucher.strip()
+        if not voucher:
+            raise ConfigError(f"select_voucher[{i}] 缺少 voucher 字段")
+        # ISSUE-111：voucher id 唯一性
+        if voucher in seen_vouchers:
+            raise ConfigError(f"select_voucher voucher id 重复: '{voucher}'")
+        seen_vouchers.add(voucher)
+
+        cards = item.get('cards', [])
+        if not isinstance(cards, list):
+            raise ConfigError(f"select_voucher '{voucher}' cards 必须是数组，当前为 {type(cards).__name__}")
+        # ISSUE-111：候选卡存在性校验
+        for cid in cards:
+            if not isinstance(cid, str) or cid not in known_card_ids:
+                raise ConfigError(
+                    f"select_voucher '{voucher}' cards 引用不存在的 card_id: '{cid}'")
+        # ISSUE-111：空候选集允许（可兑换空集，模拟不崩溃）但发 warning（ISSUE-105 通道）
+        if not cards:
+            warnings.warn(
+                f"select_voucher '{voucher}' 候选集为空（cards = []）——可兑换空集，"
+                "确认是否笔误（P78，ISSUE-105 通道）")
+        # ISSUE-005/119：voucher id 自动补全 resource_defs——setdefault 保留既有显示名
+        store.resource_defs.setdefault(voucher, voucher)
+
+        vouchers.append(SelectVoucherDef(voucher=voucher, cards=list(cards)))
+
+    store.select_vouchers = vouchers
+
+
+def _validate_milestone_dict(md_dict: dict, known_card_ids: set) -> MilestoneDef:
+    """校验单个里程碑 dict 并构造 MilestoneDef（P78 ISSUE-114/606）。
+
+    供 set_config 恢复路径（config_panel 跨模块复用，ISSUE-125 契约——与
+    `_normalize_permanent_banners` 先例同构）构造 MilestoneDef 前校验——校验范围
+    与 `_build_milestone` 全量同构（name/threshold/max_triggers/repeat/banner/
+    bonus_reward/alternate_rewards/offset），保证「同一非法配置经 TOML 与
+    set_config 两入口均被拒」；D6/D7/ISSUE-120 warning 亦同强度复跑（ISSUE-707）。
+
+    Args:
+        md_dict: 里程碑配置 dict（get_config 输出或外部 JSON 恢复源）。
+        known_card_ids: 已知卡 id 集合（cards/random_cards 存在性校验，ISSUE-201）。
+
+    Returns:
+        校验后的 MilestoneDef 实例。
+
+    Raises:
+        ConfigError: 任一字段非法（与 _build_milestone 同强度）。
+    """
+    # name
+    raw_name = md_dict.get('name', '')
+    if not isinstance(raw_name, str):
+        raise ConfigError(
+            f"里程碑 name 字段必须是字符串，当前为 {type(raw_name).__name__}")
+    name = raw_name.strip()
+    if not name:
+        raise ConfigError("里程碑缺少 name 字段")
+
+    # threshold/max_triggers——拒 bool/float（ISSUE-606 全量同构）
+    for field, default in (('threshold', 40), ('max_triggers', 0)):
+        val = md_dict.get(field, default)
+        if isinstance(val, bool) or not isinstance(val, int):
+            raise ConfigError(
+                f"里程碑 '{name}' {field} 必须为整数，当前为 {type(val).__name__}"
+                f"（值 {val!r}）")
+    threshold = md_dict['threshold'] if 'threshold' in md_dict else 40
+    max_triggers = md_dict['max_triggers'] if 'max_triggers' in md_dict else 0
+    if threshold < 1:
+        raise ConfigError(f"里程碑 '{name}' 阈值必须 ≥ 1，当前为 {threshold}")
+    if max_triggers < 0:
+        raise ConfigError(
+            f"里程碑 '{name}' max_triggers 必须 ≥ 0（0=无限触发），当前为 {max_triggers}")
+
+    # repeat——拒字符串 truthy
+    repeat = md_dict.get('repeat', False)
+    if not isinstance(repeat, bool):
+        raise ConfigError(
+            f"里程碑 '{name}' repeat 必须是布尔值，当前为 {type(repeat).__name__}")
+
+    # banner——类型
+    raw_banner = md_dict.get('banner', '')
+    if not isinstance(raw_banner, str):
+        raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
+
+    # bonus_reward——委托 _validate_reward_dict（allow_empty=True，空 {} 合法，ISSUE-503）
+    br = md_dict.get('bonus_reward', {})
+    if not isinstance(br, dict):
+        raise ConfigError(
+            f"里程碑 '{name}' bonus_reward 必须是表（dict），当前为 {type(br).__name__}")
+    bonus_reward = _validate_reward_dict(br, known_card_ids, allow_empty=True)
+
+    # alternate_rewards——与 _build_milestone 同构（ISSUE-112/120）
+    alt_key_present = 'alternate_rewards' in md_dict
+    alt_raw = md_dict.get('alternate_rewards', [])
+    if alt_key_present and not isinstance(alt_raw, list):
+        raise ConfigError(
+            f"里程碑 '{name}' alternate_rewards 必须是数组，当前为 {type(alt_raw).__name__}")
+    if alt_key_present and len(alt_raw) == 0:
+        raise ConfigError(
+            f"里程碑 '{name}' 显式配置了空 alternate_rewards = []——"
+            "交替奖励为空却声明该键（与未配置等效却易误导），请删除该键或填写交替项")
+    if len(alt_raw) == 1:
+        warnings.warn(
+            f"里程碑 '{name}' alternate_rewards 仅 1 项——单元素交替列表等价于 "
+            "bonus_reward（% len(...) 恒返回同一项），确认是否笔误（P78，ISSUE-105 通道）")
+    alternate_rewards: list = []
+    for _i, item in enumerate(alt_raw):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"里程碑 '{name}' alternate_rewards[{_i}] 必须是表（dict），"
+                f"当前为 {type(item).__name__}")
+        if not item:
+            raise ConfigError(
+                f"里程碑 '{name}' alternate_rewards[{_i}] 为空项 {{}}——"
+                "至少含 cards/resources/random_cards 之一")
+        alternate_rewards.append(
+            _validate_reward_dict(item, known_card_ids, allow_empty=False))
+
+    # offset——ISSUE-007（int、≥0、threshold+offset≥1）
+    offset = md_dict.get('offset', 0)
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        raise ConfigError(
+            f"里程碑 '{name}' offset 必须为整数，当前为 {type(offset).__name__}"
+            f"（值 {offset!r}）")
+    if offset < 0:
+        raise ConfigError(
+            f"里程碑 '{name}' offset 必须 ≥ 0（负 offset 非法——首节点不得早于 threshold），"
+            f"当前为 {offset}")
+    if threshold + offset < 1:
+        raise ConfigError(
+            f"里程碑 '{name}' threshold + offset 必须 ≥ 1，当前为 {threshold + offset}")
+
+    # D6/D7 warning 同强度复跑（ISSUE-707）
+    if offset != 0 and not repeat:
+        warnings.warn(
+            f"里程碑 '{name}' 配置了 offset={offset} 但 repeat=False（at=N 单次触发）——"
+            "offset 仅推后单次触发点（首节点 = threshold+offset），确认语义正确（P78，ISSUE-105 通道）")
+    if alternate_rewards and not repeat:
+        warnings.warn(
+            f"里程碑 '{name}' 配置了 alternate_rewards 但 repeat=False（at=N 单次触发）——"
+            "交替序列仅触发一次、只取第一项 A，B 及后续永不使用，确认是否笔误（P78，ISSUE-105 通道）")
+
+    return MilestoneDef(
+        name=name,
+        threshold=threshold,
+        repeat=repeat,
+        max_triggers=max_triggers,
+        bonus_reward=bonus_reward,
+        banner=raw_banner,
+        alternate_rewards=alternate_rewards,
+        offset=offset,
+    )
+
+
+def _validate_select_voucher_dict(sv_list: list, known_card_ids: set) -> list:
+    """校验 select_voucher 条目列表并返回 SelectVoucherDef 列表（P78 ISSUE-116）。
+
+    供 set_config 恢复路径跨模块复用——校验范围与 `_build_select_voucher` 全量同构
+    （voucher 类型/空/去重 + cards 类型/候选卡存在性 + 空候选集 warning），保证
+    「同一非法配置经 TOML 与 set_config 两入口均被拒」且 warning 强度一致。
+
+    Args:
+        sv_list: select_voucher 条目 dict 列表（get_config 输出或外部 JSON 恢复源，
+            条目格式与 TOML `[[select_voucher]]` 段同构：{'voucher', 'cards'}）。
+        known_card_ids: 已知卡 id 集合（ISSUE-201）。
+
+    Returns:
+        校验后的 SelectVoucherDef 列表。
+
+    Raises:
+        ConfigError: 任一条目非法。
+    """
+    if not isinstance(sv_list, list):
+        raise ConfigError(
+            f"select_voucher 必须是数组，当前为 {type(sv_list).__name__}")
+    seen_vouchers: set = set()
+    result = []
+    for i, item in enumerate(sv_list):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"select_voucher[{i}] 必须是表（dict），当前为 {type(item).__name__}")
+        raw_voucher = item.get('voucher', '')
+        if not isinstance(raw_voucher, str):
+            raise ConfigError(
+                f"select_voucher[{i}] voucher 字段必须是字符串，当前为 {type(raw_voucher).__name__}")
+        voucher = raw_voucher.strip()
+        if not voucher:
+            raise ConfigError(f"select_voucher[{i}] 缺少 voucher 字段")
+        if voucher in seen_vouchers:
+            raise ConfigError(f"select_voucher voucher id 重复: '{voucher}'")
+        seen_vouchers.add(voucher)
+
+        cards = item.get('cards', [])
+        if not isinstance(cards, list):
+            raise ConfigError(
+                f"select_voucher '{voucher}' cards 必须是数组，当前为 {type(cards).__name__}")
+        for cid in cards:
+            if not isinstance(cid, str) or cid not in known_card_ids:
+                raise ConfigError(
+                    f"select_voucher '{voucher}' cards 引用不存在的 card_id: '{cid}'")
+        if not cards:
+            warnings.warn(
+                f"select_voucher '{voucher}' 候选集为空（cards = []）——可兑换空集，"
+                "确认是否笔误（P78，ISSUE-105 通道）")
+        result.append(SelectVoucherDef(voucher=voucher, cards=list(cards)))
+    return result
+
+
 def _build_milestone(data: dict, store: ConfigStore) -> None:
     """[[milestone]] → store.milestone（P58 累抽奖励段）。
 
@@ -654,90 +1002,90 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
             raise ConfigError(
                 f"里程碑 '{name}' bonus_reward 必须是表（dict），当前为 {type(br).__name__}")
 
-        # ── cards 校验（存在性 + 类型）──
-        cards = br.get('cards', [])
-        if not isinstance(cards, list):
-            raise ConfigError(
-                f"里程碑 '{name}' bonus_reward.cards 必须是数组，当前为 {type(cards).__name__}")
-        for cid in cards:
-            if cid not in known_card_ids:
-                raise ConfigError(
-                    f"里程碑 '{name}' bonus_reward.cards 引用不存在的 card_id: '{cid}'")
+        # ── bonus_reward 校验（P78 委托 _validate_reward_dict，allow_empty=True——空 {} 合法，ISSUE-503）──
+        bonus_reward = _validate_reward_dict(br, known_card_ids, allow_empty=True)
 
-        # ── resources 校验（类型 + 值数值——ISSUE-303）──
-        resources = br.get('resources', {})
-        if not isinstance(resources, dict):
+        # ── P78: alternate_rewards 解析（交替奖励序列——ISSUE-006/112）──
+        # 区分「键存在与否」：显式空列表抛 ConfigError（用户写了以为在交替、实际静默
+        # 回退 bonus_reward），键缺失走默认值 []（不配置旧 TOML 行为完全不变）。
+        alt_key_present = 'alternate_rewards' in m
+        alternate_rewards_raw = m.get('alternate_rewards', [])
+        if alt_key_present and not isinstance(alternate_rewards_raw, list):
             raise ConfigError(
-                f"里程碑 '{name}' bonus_reward.resources 必须是键值对，当前为 {type(resources).__name__}")
-        for _rk, _rv in resources.items():
-            if not isinstance(_rv, (int, float)) or isinstance(_rv, bool):
+                f"里程碑 '{name}' alternate_rewards 必须是数组，当前为 {type(alternate_rewards_raw).__name__}")
+        if alt_key_present and len(alternate_rewards_raw) == 0:
+            raise ConfigError(
+                f"里程碑 '{name}' 显式配置了空 alternate_rewards = []——"
+                "交替奖励为空却声明该键（与未配置等效却易误导），请删除该键或填写交替项")
+        # ISSUE-120：单元素交替列表发 warning（等价于 bonus_reward，疑似笔误）
+        if len(alternate_rewards_raw) == 1:
+            warnings.warn(
+                f"里程碑 '{name}' alternate_rewards 仅 1 项——单元素交替列表等价于 "
+                "bonus_reward（% len(...) 恒返回同一项），确认是否笔误（P78，ISSUE-105 通道）")
+        # 逐项校验（allow_empty=False——空 {} 项拒，ISSUE-112 规则 2）
+        alternate_rewards: list = []
+        for _i, item in enumerate(alternate_rewards_raw):
+            if not isinstance(item, dict):
                 raise ConfigError(
-                    f"里程碑 '{name}' bonus_reward.resources['{_rk}'] 值必须为数值（int/float），"
-                    f"当前为 {type(_rv).__name__}")
+                    f"里程碑 '{name}' alternate_rewards[{_i}] 必须是表（dict），"
+                    f"当前为 {type(item).__name__}")
+            # ISSUE-112 规则 2：空项 {}（无 cards/resources/random_cards 任一）抛 ConfigError
+            if not item:
+                raise ConfigError(
+                    f"里程碑 '{name}' alternate_rewards[{_i}] 为空项 {{}}——"
+                    "至少含 cards/resources/random_cards 之一")
+            alternate_rewards.append(
+                _validate_reward_dict(item, known_card_ids, allow_empty=False))
 
-        # ── random_cards 校验（类型 + candidates 存在性 + weights 数值 + count ≥1）──
-        random_cards = br.get('random_cards', [])
-        if not isinstance(random_cards, list):
+        # 代码审查 F3（2026-08-05）：repeat 拒绝字符串 truthy（如 repeat = "false" 被当 True）
+        # P78：提前到 offset/alternate_rewards 之前——D6/D7 warning 需判断 repeat
+        repeat = m.get('repeat', False)
+        if not isinstance(repeat, bool):
             raise ConfigError(
-                f"里程碑 '{name}' bonus_reward.random_cards 必须是数组，当前为 {type(random_cards).__name__}")
-        for i, rc in enumerate(random_cards):
-            candidates = rc.get('candidates', [])
-            if not candidates:
-                raise ConfigError(f"里程碑 '{name}' random_cards[{i}].candidates 不得为空")
-            for cid in candidates:
-                if cid not in known_card_ids:
-                    raise ConfigError(
-                        f"里程碑 '{name}' random_cards[{i}].candidates 引用不存在的 card_id: '{cid}'")
-            if 'weights' in rc and len(rc['weights']) != len(candidates):
-                raise ConfigError(
-                    f"里程碑 '{name}' random_cards[{i}].weights 长度({len(rc['weights'])})"
-                    f"与 candidates({len(candidates)})不匹配")
-            # ISSUE-302：权重逐项 float 数值校验 + 规范化写回（非数字 → ConfigError，不靠 all() 短路）
-            wlist = rc.get('weights', [1.0] * len(candidates))
-            w_norm: list = []
-            for w in wlist:
-                try:
-                    w_norm.append(float(w))
-                except (TypeError, ValueError):
-                    raise ConfigError(
-                        f"里程碑 '{name}' random_cards[{i}].weights 含非数字值 '{w}'"
-                        f"（类型 {type(w).__name__}）——必须为数值")
-            if w_norm and all(w == 0.0 for w in w_norm):
-                raise ConfigError(
-                    f"里程碑 '{name}' random_cards[{i}].weights 全为零——random.choices 无法抽样，至少一个权重 > 0")
-            rc['weights'] = w_norm
-            # ISSUE-301：count 解析期校验（负数/非整数 → ConfigError）
-            try:
-                count = int(rc.get('count', 1))
-            except (TypeError, ValueError):
-                raise ConfigError(f"里程碑 '{name}' random_cards[{i}].count 必须为整数")
-            if count < 1:
-                raise ConfigError(
-                    f"里程碑 '{name}' random_cards[{i}].count 必须 ≥ 1（正整数），当前为 {count}")
-            rc['count'] = count
+                f"里程碑 '{name}' repeat 必须是布尔值，当前为 {type(repeat).__name__}")
+
+        # ── P78: offset 解析（ISSUE-007——int 拒 bool/float、offset ≥ 0、threshold+offset ≥ 1）──
+        offset = m.get('offset', 0)
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            raise ConfigError(
+                f"里程碑 '{name}' offset 必须为整数，当前为 {type(offset).__name__}"
+                f"（值 {offset!r}）")
+        # ISSUE-501：显式 offset ≥ 0（原「threshold+offset ≥ 1 兜底」数学上不成立——threshold+offset
+        # 恒 = 首次触发，GUI 已保证 ≥ 1，永不触发拒绝；须显式 offset ≥ 0 拒绝负 offset）
+        if offset < 0:
+            raise ConfigError(
+                f"里程碑 '{name}' offset 必须 ≥ 0（负 offset 非法——首节点不得早于 threshold），"
+                f"当前为 {offset}")
+        if threshold + offset < 1:
+            raise ConfigError(
+                f"里程碑 '{name}' threshold + offset 必须 ≥ 1，当前为 {threshold + offset}")
+
+        # D6：offset × at=N（repeat=False）语义易混淆 → warning（非 ConfigError）
+        if offset != 0 and not repeat:
+            warnings.warn(
+                f"里程碑 '{name}' 配置了 offset={offset} 但 repeat=False（at=N 单次触发）——"
+                "offset 仅推后单次触发点（首节点 = threshold+offset），确认语义正确（P78，ISSUE-105 通道）")
+        # D7：alternate_rewards × repeat=False 只取 A → warning（非 ConfigError）
+        if alternate_rewards and not repeat:
+            warnings.warn(
+                f"里程碑 '{name}' 配置了 alternate_rewards 但 repeat=False（at=N 单次触发）——"
+                "交替序列仅触发一次、只取第一项 A，B 及后续永不使用，确认是否笔误（P78，ISSUE-105 通道）")
 
         # ── banner 过滤（类型检查；存在性校验推迟到 M9——P61 已落地，见计划）──
         raw_banner = m.get('banner', '')
         if not isinstance(raw_banner, str):
             raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
 
-        # 代码审查 F3（2026-08-05）：repeat 拒绝字符串 truthy（如 repeat = "false" 被当 True）
-        repeat = m.get('repeat', False)
-        if not isinstance(repeat, bool):
-            raise ConfigError(
-                f"里程碑 '{name}' repeat 必须是布尔值，当前为 {type(repeat).__name__}")
-
         milestones.append(MilestoneDef(
             name=name,
             threshold=threshold,
             repeat=repeat,
             max_triggers=max_triggers,
-            bonus_reward={
-                'cards': list(cards),
-                'resources': dict(resources),
-                'random_cards': list(random_cards),
-            },
+            bonus_reward=bonus_reward,
             banner=raw_banner,
+            # ── P78 新增（解析期已校验）──
+            alternate_rewards=alternate_rewards,
+            offset=offset,
         ))
 
     store.milestone = MilestoneConfig(enabled=True, milestones=milestones)

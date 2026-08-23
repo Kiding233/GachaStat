@@ -389,6 +389,12 @@ class ConfigPanel(QWidget):
         self._setup_card_def_tab(card_def_tab)
         self.left_tabs.addTab(card_def_tab, "卡牌定义")
 
+        # P78（方案 X）：资源定义独立 Tab——左列表 + 右详情，与卡牌定义/保底/累抽格式统一。
+        # 数据层 resource_defs: Dict[str, str] 一字不动（11 个分析面板零改动）。
+        resource_def_tab = QWidget()
+        self._setup_resource_def_tab(resource_def_tab)
+        self.left_tabs.addTab(resource_def_tab, "资源定义")
+
         resource_tab_scroll = QScrollArea()
         resource_tab_scroll.verticalScrollBar().setSingleStep(15)
         resource_tab_scroll.setWidgetResizable(True)
@@ -3543,40 +3549,119 @@ class ConfigPanel(QWidget):
             self.weight_table.setCellWidget(i, 4, value_spin)
         self.weight_table.blockSignals(False)
 
+    def _setup_resource_def_tab(self, parent):
+        """「资源定义」独立 Tab（P78 方案 X）——左列表 + 右详情表单。
+
+        数据层 resource_defs: Dict[str, str] 一字不动（11 个分析面板零改动）——
+        本 Tab 是 ConfigStore.resource_defs 的编辑视图：左 QListWidget 列资源 id，
+        右详情表单编辑 display_name / initial_amount。自选券候选集区域（select_voucher）
+        在 5b 挂接。
+        """
+        # ── 实例变量 ──
+        self.resource_defs: list = []          # List[dict] —— 内部数据（同 _card_defs 模式）
+        self._current_resource_idx: int = -1   # 当前选中索引
+
+        outer = QVBoxLayout(parent)
+
+        # ═══ 水平两栏 ═══
+        main_layout = QHBoxLayout()
+
+        # ── 左栏：资源列表 ──
+        left_layout = QVBoxLayout()
+        self._resource_list = QListWidget()
+        self._resource_list.currentRowChanged.connect(self._on_resource_selected)
+        left_layout.addWidget(self._resource_list)
+
+        res_btn_layout = QHBoxLayout()
+        add_btn = QPushButton("添加")
+        add_btn.clicked.connect(self._add_resource_def)
+        remove_btn = QPushButton("移除选中")
+        remove_btn.clicked.connect(self._remove_resource_def)
+        auto_btn = QPushButton("自动生成")
+        auto_btn.clicked.connect(self._auto_generate_resource_defs)
+        res_btn_layout.addWidget(add_btn)
+        res_btn_layout.addWidget(remove_btn)
+        res_btn_layout.addWidget(auto_btn)
+        res_btn_layout.addStretch()
+        left_layout.addLayout(res_btn_layout)
+
+        main_layout.addLayout(left_layout, 1)
+
+        # ── 右栏：详情面板 ──
+        self._resource_detail_group = QGroupBox("资源详情")
+        self._resource_detail_group.setEnabled(False)
+        detail_form = QFormLayout(self._resource_detail_group)
+
+        self._resource_id_edit = QLineEdit()
+        self._resource_id_edit.textChanged.connect(self._on_resource_def_changed)
+        detail_form.addRow("资源ID:", self._resource_id_edit)
+
+        self._resource_name_edit = QLineEdit()
+        self._resource_name_edit.textChanged.connect(self._on_resource_def_changed)
+        detail_form.addRow("显示名称:", self._resource_name_edit)
+
+        self._resource_init_spin = QSpinBox()
+        self._resource_init_spin.setRange(0, 9999999)
+        self._resource_init_spin.setSingleStep(100)
+        self._resource_init_spin.valueChanged.connect(self._on_resource_def_changed)
+        detail_form.addRow("初始数量:", self._resource_init_spin)
+
+        # P78：自选券候选集区域（5b 挂接 select_voucher 段编辑）
+        self._voucher_group = QGroupBox("自选券候选集")
+        voucher_layout = QVBoxLayout(self._voucher_group)
+        self._voucher_hint_label = QLabel("该资源为自选券时，在此编辑可兑换候选卡列表。")
+        self._voucher_hint_label.setWordWrap(True)
+        voucher_layout.addWidget(self._voucher_hint_label)
+        self._voucher_cards_list = QListWidget()
+        self._voucher_cards_list.setMaximumHeight(120)
+        voucher_layout.addWidget(self._voucher_cards_list)
+        detail_form.addRow(self._voucher_group)
+
+        main_layout.addWidget(self._resource_detail_group, 2)
+
+        outer.addLayout(main_layout)
+
+        # P78：资源获取规则 / 指定日期等仍在「资源管理」Tab——本 Tab 仅资源定义
+
+    def _on_resource_selected(self, row: int):
+        """左列表切换 → 保存当前编辑 → 填充新资源详情。"""
+        self._flush_resource_detail()
+        if row < 0 or row >= len(self.resource_defs):
+            self._resource_detail_group.setEnabled(False)
+            self._current_resource_idx = -1
+            return
+        self._current_resource_idx = row
+        self._resource_detail_group.setEnabled(True)
+        self._populate_resource_detail(self.resource_defs[row])
+
+    def _flush_resource_detail(self):
+        """从右侧控件读取当前值 → 写回 self.resource_defs[idx]。"""
+        if self._current_resource_idx < 0 or self._current_resource_idx >= len(self.resource_defs):
+            return
+        res = self.resource_defs[self._current_resource_idx]
+        res['resource_id'] = self._resource_id_edit.text().strip()
+        res['display_name'] = self._resource_name_edit.text().strip()
+        res['initial_amount'] = self._resource_init_spin.value()
+        # 更新左列表显示
+        label = f"{res['resource_id']} ({res['display_name']})" if res['display_name'] else res['resource_id']
+        self._resource_list.item(self._current_resource_idx).setText(label)
+
+    def _populate_resource_detail(self, res: dict):
+        """将单条资源数据填入右侧控件（阻断信号——防逐字段触发 _flush 串扰）。"""
+        for w in (self._resource_id_edit, self._resource_name_edit, self._resource_init_spin):
+            w.blockSignals(True)
+        self._resource_id_edit.setText(res.get('resource_id', ''))
+        self._resource_name_edit.setText(res.get('display_name', ''))
+        self._resource_init_spin.setValue(int(res.get('initial_amount', 0)))
+        for w in (self._resource_id_edit, self._resource_name_edit, self._resource_init_spin):
+            w.blockSignals(False)
+
     def _setup_resource_tab(self, parent):
-        defs_group = QGroupBox("资源定义")
-        defs_layout = QVBoxLayout(defs_group)
+        """「资源管理」Tab——资源获取规则 / 指定日期资源获取 / 日历预览。
 
-        self.resource_defs_table = QTableWidget()
-        self.resource_defs_table.setColumnCount(3)
-        self.resource_defs_table.setHorizontalHeaderLabels(["资源ID", "显示名称", "初始数量"])
-        header = self.resource_defs_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.resource_defs_table.setColumnWidth(2, 120)
-        self.resource_defs_table.verticalHeader().setVisible(False)
-        self.resource_defs_table.setAlternatingRowColors(True)
-        self.resource_defs_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.resource_defs_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.resource_defs_table.setMinimumHeight(100)
-        defs_layout.addWidget(self.resource_defs_table)
-
-        defs_btn_layout = QHBoxLayout()
-        auto_gen_btn = QPushButton("自动生成")
-        auto_gen_btn.clicked.connect(self._auto_generate_resource_defs)
-        add_def_btn = QPushButton("添加")
-        add_def_btn.clicked.connect(self._add_resource_def)
-        remove_def_btn = QPushButton("移除选中")
-        remove_def_btn.clicked.connect(self._remove_resource_def)
-        defs_btn_layout.addWidget(auto_gen_btn)
-        defs_btn_layout.addWidget(add_def_btn)
-        defs_btn_layout.addWidget(remove_def_btn)
-        defs_btn_layout.addStretch()
-        defs_layout.addLayout(defs_btn_layout)
-
-        parent.addWidget(defs_group)
-
+        P78（方案 X）：资源定义已拆为独立「资源定义」Tab（_setup_resource_def_tab）——
+        本 Tab 仅保留资源获取规则、指定日期资源获取、日历预览三块。
+        """
         gain_group = QGroupBox("资源获取规则")
         gain_layout = QVBoxLayout(gain_group)
 
@@ -3661,7 +3746,6 @@ class ConfigPanel(QWidget):
 
         parent.addStretch()
 
-        self.resource_defs = []
         self.resource_gain_rules = []
         self.resource_day_overrides = []
 
@@ -3670,7 +3754,6 @@ class ConfigPanel(QWidget):
         self._cached_schedule_key = None
         self._cached_start_date = None  # 用于清除旧高亮
 
-        self.resource_defs_table.cellChanged.connect(self._on_resource_def_changed)
         self.gain_rules_table.cellChanged.connect(self._update_preview)
         self.day_overrides_table.cellChanged.connect(self._update_preview)
 
@@ -4630,17 +4713,12 @@ class ConfigPanel(QWidget):
         existing = self._get_resource_ids()
         if resource_id in existing:
             return
-        row = self.resource_defs_table.rowCount()
-        self.resource_defs_table.blockSignals(True)
-        self.resource_defs_table.insertRow(row)
-        self.resource_defs_table.setItem(row, 0, QTableWidgetItem(resource_id))
-        self.resource_defs_table.setItem(row, 1, QTableWidgetItem(display_name or resource_id))
-        spin = QSpinBox()
-        spin.setRange(0, 9999999)
-        spin.setValue(0)
-        spin.setSingleStep(100)
-        self.resource_defs_table.setCellWidget(row, 2, spin)
-        self.resource_defs_table.blockSignals(False)
+        self.resource_defs.append({
+            'resource_id': resource_id,
+            'display_name': display_name or resource_id,
+            'initial_amount': 0,
+        })
+        self._rebuild_resource_list()
         self._refresh_resource_combos()
 
     def get_config(self):
@@ -5087,17 +5165,13 @@ class ConfigPanel(QWidget):
     # _filter_card_defs / _search_card_defs / _on_card_def_changed 已由
     # P65 的 _filter_card_list 替代——见 _setup_card_def_tab 区域
 
-    def _on_resource_def_changed(self, row, col):
+    def _on_resource_def_changed(self, *_args):
+        self._flush_resource_detail()
         self._refresh_resource_combos()
         self._update_preview()
 
     def _get_resource_ids(self):
-        ids = []
-        for i in range(self.resource_defs_table.rowCount()):
-            id_item = self.resource_defs_table.item(i, 0)
-            if id_item and id_item.text().strip():
-                ids.append(id_item.text().strip())
-        return ids
+        return [d.get('resource_id', '') for d in self.resource_defs if d.get('resource_id', '').strip()]
 
     def _update_param_placeholder(self, row: int, gui_type: str):
         """更新指定行参数列的 placeholder 提示文本。"""
@@ -5131,34 +5205,43 @@ class ConfigPanel(QWidget):
                 if idx >= 0:
                     widget.setCurrentIndex(idx)
                 widget.blockSignals(False)
+        # P78 ISSUE-122：ml_resources_table（里程碑赠送资源）第 0 列同样是资源下拉——
+        # 资源定义增删后刷新既有行选项（可编辑 combo，保留当前文本）
+        for i in range(self.ml_resources_table.rowCount()):
+            widget = self.ml_resources_table.cellWidget(i, 0)
+            if isinstance(widget, QComboBox):
+                current = widget.currentText()
+                widget.blockSignals(True)
+                widget.clear()
+                widget.addItems(resource_ids)
+                idx = widget.findText(current)
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+                else:
+                    # 可编辑 combo——当前值不在新列表中时保留手输文本
+                    widget.setEditText(current)
+                widget.blockSignals(False)
 
     def get_resource_defs(self):
-        defs = []
-        for i in range(self.resource_defs_table.rowCount()):
-            id_item = self.resource_defs_table.item(i, 0)
-            name_item = self.resource_defs_table.item(i, 1)
-            amt_widget = self.resource_defs_table.cellWidget(i, 2)
-            rid = id_item.text().strip() if id_item else ''
-            name = name_item.text().strip() if name_item else ''
-            amt = amt_widget.value() if amt_widget else 0
-            if rid:
-                defs.append({'resource_id': rid, 'display_name': name, 'initial_amount': amt})
-        return defs
+        return [dict(d) for d in self.resource_defs]
 
     def set_resource_defs(self, defs):
-        self.resource_defs = list(defs)
-        self.resource_defs_table.blockSignals(True)
-        self.resource_defs_table.setRowCount(len(defs))
-        for i, d in enumerate(defs):
-            self.resource_defs_table.setItem(i, 0, QTableWidgetItem(d.get('resource_id', '')))
-            self.resource_defs_table.setItem(i, 1, QTableWidgetItem(d.get('display_name', '')))
-            spin = QSpinBox()
-            spin.setRange(0, 9999999)
-            spin.setValue(int(d.get('initial_amount', 0)))
-            spin.setSingleStep(100)
-            self.resource_defs_table.setCellWidget(i, 2, spin)
-        self.resource_defs_table.blockSignals(False)
+        self.resource_defs = [dict(d) for d in defs]
+        self._rebuild_resource_list()
         self._refresh_resource_combos()
+
+    def _rebuild_resource_list(self):
+        """重建左列表——清空后逐条追加 resource_id (display_name)。"""
+        self._resource_list.blockSignals(True)
+        self._resource_list.clear()
+        for d in self.resource_defs:
+            rid = d.get('resource_id', '')
+            name = d.get('display_name', '')
+            label = f"{rid} ({name})" if name else rid
+            self._resource_list.addItem(label)
+        self._resource_list.blockSignals(False)
+        self._current_resource_idx = -1
+        self._resource_detail_group.setEnabled(False)
 
     def get_resource_gain_rules(self):
         rules = []
@@ -5249,28 +5332,35 @@ class ConfigPanel(QWidget):
 
     def _auto_generate_resource_defs(self):
         defs = [
-            {'resource_id': 'draw_resource', 'display_name': '抽卡资源'},
-            {'resource_id': 'exchange_currency', 'display_name': '兑换货币'},
+            {'resource_id': 'draw_resource', 'display_name': '抽卡资源', 'initial_amount': 0},
+            {'resource_id': 'exchange_currency', 'display_name': '兑换货币', 'initial_amount': 0},
         ]
         self.set_resource_defs(defs)
 
     def _add_resource_def(self):
-        row = self.resource_defs_table.rowCount()
-        self.resource_defs_table.blockSignals(True)
-        self.resource_defs_table.insertRow(row)
-        self.resource_defs_table.setItem(row, 0, QTableWidgetItem(""))
-        self.resource_defs_table.setItem(row, 1, QTableWidgetItem(""))
-        spin = QSpinBox()
-        spin.setRange(0, 9999999)
-        spin.setValue(0)
-        spin.setSingleStep(100)
-        self.resource_defs_table.setCellWidget(row, 2, spin)
-        self.resource_defs_table.blockSignals(False)
+        self.resource_defs.append({'resource_id': '', 'display_name': '', 'initial_amount': 0})
+        self._rebuild_resource_list()
+        # 选中新行并聚焦详情编辑
+        row = len(self.resource_defs) - 1
+        self._resource_list.setCurrentRow(row)
 
     def _remove_resource_def(self):
-        rows = sorted([r.row() for r in self.resource_defs_table.selectionModel().selectedRows()], reverse=True)
-        for row in rows:
-            self.resource_defs_table.removeRow(row)
+        row = self._resource_list.currentRow()
+        if row < 0 or row >= len(self.resource_defs):
+            return
+        # P78 ISSUE-123：先弹确认、确认后才删——取消=整体回滚（资源行与 select_voucher 条目均保留）
+        rid = self.resource_defs[row].get('resource_id', '')
+        msg = f"确定删除资源「{rid}」？" if rid else "确定删除该资源？"
+        if rid:
+            msg += "\n该资源的自选券候选集条目将一并移除。"
+        ret = QMessageBox.question(self, "删除资源", msg,
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        del self.resource_defs[row]
+        self._rebuild_resource_list()
+        # P78 ISSUE-117：级联删除孤儿 select_voucher 条目（apply_to_store 重建时执行，此处仅清理 GUI 列表）
         self._refresh_resource_combos()
         self._update_preview()
 

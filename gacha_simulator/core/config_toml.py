@@ -787,6 +787,11 @@ def _validate_milestone_dict(md_dict: dict, known_card_ids: set) -> MilestoneDef
     Raises:
         ConfigError: 任一字段非法（与 _build_milestone 同强度）。
     """
+    # ISSUE-606：与 _build_milestone 同构——非 dict 类型守卫（set_config 注入 None/str
+    # 时抛 ConfigError 而非裸 AttributeError，两入口错误通道一致）
+    if not isinstance(md_dict, dict):
+        raise ConfigError(
+            f"里程碑配置项必须是表（dict），当前为 {type(md_dict).__name__}")
     # name
     raw_name = md_dict.get('name', '')
     if not isinstance(raw_name, str):

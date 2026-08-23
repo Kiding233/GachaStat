@@ -5539,11 +5539,21 @@ class ConfigPanel(QWidget):
             _validate_milestone_dict,
             _validate_select_voucher_dict,
         )
+        from ..core.config_store import ConfigError
         known_card_ids = {c.card_id for c in store.card_defs}
         # milestone 恢复（ISSUE-102：get_config→set_config round-trip 里程碑整段存活）
         ml_cfg = config.get('milestone', {})
         store.milestone.enabled = ml_cfg.get('enabled', True)
+        # ISSUE-606：set_config 入口与 _build_milestone 同构——列表级 name 去重（TOML 路径
+        # 有 seen_names ConfigError；set_config 注入重复 name 静默通过会致引擎后覆盖前，
+        # 「两入口校验强度一致」对 name 去重不成立）
+        _seen_ml_names: set = set()
         for md_dict in ml_cfg.get('milestones', []) or []:
+            _name = md_dict.get('name', '') if isinstance(md_dict, dict) else ''
+            if _name in _seen_ml_names:
+                raise ConfigError(f"里程碑名称重复: '{_name}'")
+            if _name:
+                _seen_ml_names.add(_name)
             store.milestone.milestones.append(
                 _validate_milestone_dict(md_dict, known_card_ids))
         # select_vouchers 恢复（ISSUE-102/116/602：同构校验 + resource_defs 补全）
@@ -6065,6 +6075,15 @@ class ConfigPanel(QWidget):
                     self._warned_milestone_resource_ids.add(rid)
                     QMessageBox.warning(self, "未定义资源",
                                         f"资源 ID '{rid}' 未在资源管理 Tab 定义，模拟时可能无法识别")
+            # P78（ISSUE-005/109）：交替奖励项内资源同样纳入一次性警告（与 bonus_reward 同构）
+            for alt_item in md.get('alternate_rewards', []) or []:
+                if not isinstance(alt_item, dict):
+                    continue
+                for rid in alt_item.get('resources', {}):
+                    if rid and rid not in store.resource_defs and rid not in self._warned_milestone_resource_ids:
+                        self._warned_milestone_resource_ids.add(rid)
+                        QMessageBox.warning(self, "未定义资源",
+                                            f"资源 ID '{rid}' 未在资源管理 Tab 定义，模拟时可能无法识别")
             # REVIEW-R1-FIX: ISSUE-305 —— 写出前过滤空候选随机池（_build_milestone 对空 candidates 抛 ConfigError）
             # REVIEW-R1-FIX: ISSUE-304 —— 过滤条件扩展为「candidates 为空 或 weights 全零」
             #   （UI 允许权重全 0，直接保存会触发 _build_milestone 全零权重校验抛 ConfigError）

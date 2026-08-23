@@ -378,6 +378,14 @@ def test_validate_select_voucher_dict_interface():
         _validate_select_voucher_dict([{'voucher': 'v', 'cards': []}, {'voucher': 'v', 'cards': []}], kc)
 
 
+def test_validate_milestone_dict_type_guard():
+    """ISSUE-606：_validate_milestone_dict 非 dict 类型守卫——抛 ConfigError 而非裸 AttributeError。"""
+    with pytest.raises(ConfigError):
+        _validate_milestone_dict(None, {'c1'})
+    with pytest.raises(ConfigError):
+        _validate_milestone_dict('not_a_dict', {'c1'})
+
+
 def test_validate_milestone_dict_normalizes_string_weights():
     """ISSUE-701：set_config 入口字符串数值权重规范化写回——引擎 rng.choices 不崩。"""
     kc = {'c1', 'c2'}

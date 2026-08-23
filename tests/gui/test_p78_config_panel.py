@@ -234,6 +234,33 @@ def test_apply_to_store_cascades_orphan_voucher(qapp):
     assert len(out) == 1 and out[0].voucher == 'v1', f'孤儿未级联删除: {out}'
 
 
+def test_set_config_rejects_duplicate_milestone_name(qapp):
+    """ISSUE-606：set_config 注入重复 milestone name 被拒（与 TOML 路径同强度）。"""
+    from gacha_simulator.core.config_store import ConfigError
+    p = _make_panel(ConfigStore())
+    cfg = {
+        'card_defs': [{'card_id': 'c1', 'name': '卡1', 'rarity': 'ssr'}],
+        'milestone': {'enabled': True, 'milestones': [
+            {'name': 'dup', 'threshold': 10},
+            {'name': 'dup', 'threshold': 20},
+        ]},
+    }
+    with pytest.raises(ConfigError):
+        p.set_config(cfg)
+
+
+def test_set_config_rejects_non_dict_milestone(qapp):
+    """ISSUE-606：set_config 注入非 dict milestones 抛 ConfigError（非裸 AttributeError）。"""
+    from gacha_simulator.core.config_store import ConfigError
+    p = _make_panel(ConfigStore())
+    cfg = {
+        'card_defs': [{'card_id': 'c1', 'name': '卡1', 'rarity': 'ssr'}],
+        'milestone': {'enabled': True, 'milestones': ['bad']},
+    }
+    with pytest.raises(ConfigError):
+        p.set_config(cfg)
+
+
 def test_voucher_candidates_edit_roundtrip(qapp):
     """ISSUE-004/605：资源详情面板候选集编辑——勾选写回 + 回填。"""
     p = _make_panel(_make_store())

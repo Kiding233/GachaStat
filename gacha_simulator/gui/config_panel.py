@@ -2029,10 +2029,21 @@ class ConfigPanel(QWidget):
         self.ml_name_edit = QLineEdit()
         detail_form.addRow("名称:", self.ml_name_edit)
 
-        self.ml_threshold_spin = QSpinBox()
+        # P78（ISSUE-110/128）：threshold/offset 编辑入口改为用户心智模型的「首次触发 / 循环周期」
+        # 双输入框。ml_threshold_spin 改名为「循环周期」spin（语义 = threshold，既有 L2149 回填/
+        # L2203 写回/信号连接天然成立）；新增「首次触发」spin 承载 offset 分支。
+        # 换算：写回 threshold=循环周期、offset=首次触发-循环周期；回填 首次触发=threshold+offset。
+        # at=N（repeat 未勾选）：循环周期禁用不参与写回，写回 threshold=首次触发、offset 省略（ISSUE-502）。
+        self.ml_first_trigger_spin = QSpinBox()
+        self.ml_first_trigger_spin.setRange(1, 9999)
+        self.ml_first_trigger_spin.setValue(40)
+        detail_form.addRow("首次触发(抽):", self.ml_first_trigger_spin)
+
+        self.ml_threshold_spin = QSpinBox()   # 现代表「循环周期」
         self.ml_threshold_spin.setRange(1, 9999)
         self.ml_threshold_spin.setValue(40)
-        detail_form.addRow("触发阈值(抽):", self.ml_threshold_spin)
+        detail_form.addRow("循环周期(抽):", self.ml_threshold_spin)
+        self.ml_threshold_spin.setToolTip("可重复触发时生效——每 N 抽循环一次；单次触发(at=N)时禁用，只填首次触发。")
 
         self.ml_repeat_check = QCheckBox("可重复触发")
         detail_form.addRow("触发模式:", self.ml_repeat_check)
@@ -2104,10 +2115,17 @@ class ConfigPanel(QWidget):
         #   _flush_milestone_current_detail 读 _current_milestone_row 而非 currentRow()。
         for w in [self.ml_name_edit, self.ml_banner_edit]:
             w.textChanged.connect(self._flush_milestone_current_detail)
-        for w in [self.ml_threshold_spin, self.ml_max_triggers_spin]:
+        for w in [self.ml_first_trigger_spin, self.ml_threshold_spin, self.ml_max_triggers_spin]:
             w.valueChanged.connect(self._flush_milestone_current_detail)
-        self.ml_repeat_check.stateChanged.connect(self._flush_milestone_current_detail)
+        self.ml_repeat_check.stateChanged.connect(self._on_milestone_repeat_changed)
         self.milestone_enabled.stateChanged.connect(self._update_preview)
+
+    def _on_milestone_repeat_changed(self):
+        """repeat 勾选状态变化——at=N（未勾选）时循环周期 spin 禁用（ISSUE-502）。"""
+        repeat = self.ml_repeat_check.isChecked()
+        self.ml_threshold_spin.setEnabled(repeat)
+        self._flush_milestone_current_detail()
+        self._update_preview()
 
     # REVIEW-R1-FIX: ISSUE-010 —— 调用点见 §3.8.5a 回填段（_refresh_from_store_impl 内 store 就绪后）
     def _populate_milestone_cards_list(self):
@@ -2139,15 +2157,22 @@ class ConfigPanel(QWidget):
 
         # REVIEW-R1-FIX: ISSUE-310 —— 回填段 blockSignals：阻断级联 flush
         #   （否则未更新的控件残留上一行值被写入新行 bonus_reward）
-        _bs_widgets = [self.ml_name_edit, self.ml_threshold_spin, self.ml_repeat_check,
-                       self.ml_max_triggers_spin, self.ml_banner_edit]
+        # P78（ISSUE-127）：_bs_widgets 扩展——纳入首次触发 spin（循环周期=ml_threshold_spin 保留）
+        _bs_widgets = [self.ml_name_edit, self.ml_first_trigger_spin, self.ml_threshold_spin,
+                       self.ml_repeat_check, self.ml_max_triggers_spin, self.ml_banner_edit]
         for w in _bs_widgets:
             w.blockSignals(True)
         try:
             # 基础字段
             self.ml_name_edit.setText(md.get('name', ''))
-            self.ml_threshold_spin.setValue(md.get('threshold', 40))
+            # P78（ISSUE-110/502）回填换算：首次触发 = threshold + offset；
+            # 循环周期 = threshold（at=N 时禁用、回填 threshold 值展示「单次触发」）
+            _threshold = md.get('threshold', 40)
+            _offset = md.get('offset', 0)
+            self.ml_first_trigger_spin.setValue(_threshold + _offset)
+            self.ml_threshold_spin.setValue(_threshold)
             self.ml_repeat_check.setChecked(md.get('repeat', False))
+            self.ml_threshold_spin.setEnabled(md.get('repeat', False))   # ISSUE-502：at=N 循环周期禁用
             self.ml_max_triggers_spin.setValue(md.get('max_triggers', 0))
             self.ml_banner_edit.setText(md.get('banner', ''))
 
@@ -2200,8 +2225,30 @@ class ConfigPanel(QWidget):
         old_name = self.milestone_list.item(row).text()
         if old_name != new_name and old_name in self._milestone_random_pools:
             self._milestone_random_pools[new_name] = self._milestone_random_pools.pop(old_name)
-        md['threshold'] = self.ml_threshold_spin.value()
-        md['repeat'] = self.ml_repeat_check.isChecked()
+        # P78（ISSUE-110/502）写回换算：
+        #   every：threshold = 循环周期、offset = 首次触发 - 循环周期
+        #   at=N（repeat 未勾选）：threshold = 首次触发、offset 省略（0）——循环周期 spin 禁用残留值不得参与换算
+        _repeat = self.ml_repeat_check.isChecked()
+        _first = self.ml_first_trigger_spin.value()
+        if _repeat:
+            _cycle = self.ml_threshold_spin.value()
+            md['threshold'] = _cycle
+            md['offset'] = _first - _cycle
+            # P78（ISSUE-501）：首次触发 ≥ 循环周期（换算后 offset ≥ 0）——仅 every 场景；
+            # 负 offset 由解析期 ISSUE-007 显式拒绝（offset ≥ 0），GUI 侧一次性警告（ISSUE-104 通道）
+            if _first < _cycle:
+                QMessageBox.warning(self, "偏移冲突",
+                                    f"首次触发({_first}) 不得小于循环周期({_cycle})——"
+                                    f"否则换算后 offset 为负（首节点早于周期），请调整数值。")
+                # 不写回非法换算——恢复控件为合法组合（首次触发 = 循环周期）
+                self.ml_first_trigger_spin.blockSignals(True)
+                self.ml_first_trigger_spin.setValue(_cycle)
+                self.ml_first_trigger_spin.blockSignals(False)
+                md['offset'] = 0
+        else:
+            md['threshold'] = _first
+            md['offset'] = 0
+        md['repeat'] = _repeat
         md['max_triggers'] = self.ml_max_triggers_spin.value()
         md['banner'] = self.ml_banner_edit.text().strip()
 
@@ -2251,7 +2298,9 @@ class ConfigPanel(QWidget):
             n += 1
         md = {'name': f'milestone_{n}', 'threshold': 40,
               'repeat': False, 'max_triggers': 0, 'banner': '',
-              'bonus_reward': {'cards': [], 'resources': {}, 'random_cards': []}}
+              'bonus_reward': {'cards': [], 'resources': {}, 'random_cards': []},
+              # P78（ISSUE-110）：默认 offset 0 / 交替空列表
+              'offset': 0, 'alternate_rewards': []}
         self._milestone_defs.append(md)
         self.milestone_list.addItem(md['name'])
         self.milestone_list.setCurrentRow(len(self._milestone_defs) - 1)

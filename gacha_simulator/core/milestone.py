@@ -38,6 +38,8 @@ class MilestoneEngine:
         self._triggered: Dict[str, int] = {d.name: 0 for d in defs}
         # 独立 RNG——保证可复现性
         self._rng = random.Random(seed)
+        # P78：交替奖励当前索引（跨触发保持，不随计数器归零重置）
+        self._alt_index: Dict[str, int] = {}
 
     def after_draw(self, banner_id: str, pool_id: str) -> List[dict]:
         """判定并返回触发的 bonus 列表。
@@ -70,11 +72,23 @@ class MilestoneEngine:
             c = self._counters.get(name, 0) + 1
             self._counters[name] = c
 
-            if c < md.threshold:
+            # P78 ISSUE-001：offset 仅作用于首节点——threshold_eff 只在从未触发时
+            # 叠加 offset，触发后 repeat 归零回到裸 threshold，保证节点序列
+            # 100/180/260/340（threshold+offset, +threshold…）而非 100/200/300。
+            # 实现纪律（ISSUE-704）：self._triggered[name] += 1 必须保留在触发块
+            # 末尾（下移会令 threshold_eff 永不叠加、首节点漂移到 80）。
+            threshold_eff = md.threshold + (md.offset if self._triggered.get(name, 0) == 0 else 0)
+            if c < threshold_eff:
                 continue
 
             # ── 触发！解析 bonus ──
-            bonus = self._resolve_bonus(md)
+            if md.alternate_rewards:
+                # P78：交替奖励——每次触发取下一条，索引模长度自然循环
+                reward = md.alternate_rewards[self._alt_index.get(name, 0) % len(md.alternate_rewards)]
+                self._alt_index[name] = self._alt_index.get(name, 0) + 1
+                bonus = self._resolve_bonus_from(reward)
+            else:
+                bonus = self._resolve_bonus(md)
             bonuses.append({'name': name, 'bonus': bonus})
 
             # ── 生命周期管理 ──
@@ -94,12 +108,21 @@ class MilestoneEngine:
 
         返回 {'card_ids': [...], 'resources': {...}}——调用方同时消费两者。
         """
-        br = md.bonus_reward
-        result: dict = {'card_ids': list(br.get('cards', [])),
-                        'resources': dict(br.get('resources', {}))}
+        return self._resolve_bonus_from(md.bonus_reward)
+
+    def _resolve_bonus_from(self, reward: dict) -> dict:
+        """从单个 reward dict 解析 bonus——cards / resources / random_cards 可任意组合。
+
+        P78 抽取（ISSUE-006 同构）：bonus_reward 与 alternate_rewards 每个交替项
+        共用——交替项与 bonus_reward 同为卡片/资源/随机池三字段。
+
+        返回 {'card_ids': [...], 'resources': {...}}——调用方同时消费两者。
+        """
+        result: dict = {'card_ids': list(reward.get('cards', [])),
+                        'resources': dict(reward.get('resources', {}))}
 
         # 随机卡——从候选池中抽取（使用 self._rng 保证可复现）
-        for rc in br.get('random_cards', []):
+        for rc in reward.get('random_cards', []):
             candidates = rc['candidates']
             weights = rc.get('weights') or [1.0] * len(candidates)   # 空列表/缺失 → 等权兜底
             count = rc.get('count', 1)
@@ -111,7 +134,13 @@ class MilestoneEngine:
     # ── 查询接口（供策略层消费） ──
 
     def get_counter(self, name: str) -> int:
-        """当前累计抽数（已抽次数）。余量 = md.threshold - get_counter(name)。"""
+        """当前累计抽数（已抽次数）。余量 = threshold - get_counter(name)。
+
+        P78（ISSUE-104）：offset 语义下该值为「相对计数器」（未叠加 offset 的原始
+        累计值）——首节点阶段（offset 生效区间）实际触发点 = threshold + offset，
+        调用方按「余量 = threshold - counter」预测会低估首节点到 80（实际 100）。
+        策略消费时如需精确余量，应叠加 offset（首节点阶段）或读 `get_def(name).offset`。
+        """
         return self._counters.get(name, 0)
 
     def is_active(self, name: str) -> bool:

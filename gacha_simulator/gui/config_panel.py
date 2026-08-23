@@ -19,6 +19,7 @@ from ..core.config_store import (
     PityDef, PityConfig, GainRule, DayOverride, TargetCardEntry, CardWeightEntry,
     BannerEntry, BannerPoolEntry, LifecycleRuleEntry, DAY, derive_pool_type_from_distribution,
     MilestoneDef,   # ← P58 里程碑奖励（apply_to_store 写回）
+    SelectVoucherDef,   # ← P78 自选券候选集（apply_to_store 写回）
 )
 from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
@@ -1989,6 +1990,7 @@ class ConfigPanel(QWidget):
     def _setup_milestone_config(self, parent):
         """[[milestone]] 配置 UI——与 _setup_pity_config() 统一模式（§3.8.5）"""
         self._milestone_defs = []
+        self._select_vouchers: list = []     # P78：自选券候选集（List[SelectVoucherDef] 同构 dict）
         self._milestone_random_pools = {}   # milestone_name → [{candidates, weights, count}]
         self._selected_random_pool_idx = 0  # 当前选中编辑的候选池索引（由池列表行选中维护，REVIEW-R1-FIX: ISSUE-003）
         self._current_milestone_row = -1    # REVIEW-R1-FIX: ISSUE-001 —— 追踪当前编辑行（仿 _current_pity_row 模式）
@@ -3606,14 +3608,17 @@ class ConfigPanel(QWidget):
         self._resource_init_spin.valueChanged.connect(self._on_resource_def_changed)
         detail_form.addRow("初始数量:", self._resource_init_spin)
 
-        # P78：自选券候选集区域（5b 挂接 select_voucher 段编辑）
+        # P78：自选券候选集区域（ISSUE-004——详情面板按资源 id 关联编辑候选集）
         self._voucher_group = QGroupBox("自选券候选集")
         voucher_layout = QVBoxLayout(self._voucher_group)
-        self._voucher_hint_label = QLabel("该资源为自选券时，在此编辑可兑换候选卡列表。")
+        self._voucher_hint_label = QLabel("勾选该资源可兑换的候选卡（未勾选 = 非自选券/无候选）。")
         self._voucher_hint_label.setWordWrap(True)
         voucher_layout.addWidget(self._voucher_hint_label)
         self._voucher_cards_list = QListWidget()
-        self._voucher_cards_list.setMaximumHeight(120)
+        self._voucher_cards_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self._voucher_cards_list.setMaximumHeight(150)
+        # 变更实时写回 self._select_vouchers（ISSUE-004 数据流）
+        self._voucher_cards_list.itemSelectionChanged.connect(self._on_voucher_selection_changed)
         voucher_layout.addWidget(self._voucher_cards_list)
         detail_form.addRow(self._voucher_group)
 
@@ -3655,6 +3660,65 @@ class ConfigPanel(QWidget):
         self._resource_init_spin.setValue(int(res.get('initial_amount', 0)))
         for w in (self._resource_id_edit, self._resource_name_edit, self._resource_init_spin):
             w.blockSignals(False)
+        # P78（ISSUE-004）：候选集回填——填充全部卡 id + 勾选当前资源的候选集
+        self._populate_voucher_candidates(res.get('resource_id', ''))
+
+    def _populate_voucher_candidates(self, resource_id: str):
+        """填充自选券候选卡列表——全部 card_defs 可勾选，勾选态 = 该资源的候选集。
+
+        数据源 store.card_defs（全部卡 id）；当前资源的候选集优先读 GUI 内部
+        self._select_vouchers（实时——GUI 编辑期间 store 仅 apply_to_store/load 时
+        同步，读 store 会回填滞后），fallback store.get_select_voucher_candidates。
+        """
+        self._voucher_cards_list.blockSignals(True)
+        self._voucher_cards_list.clear()
+        cards = list(self._store.card_defs) if self._store else []
+        selected = set()
+        if resource_id:
+            for sv in self._select_vouchers:
+                if sv['voucher'] == resource_id:
+                    selected = set(sv['cards'])
+                    break
+            else:
+                selected = set(self._store.get_select_voucher_candidates(resource_id)) if self._store else set()
+        for entry in cards:
+            cid = entry.card_id
+            item = QListWidgetItem(f"{cid} ({entry.name})" if entry.name else cid)
+            item.setData(Qt.ItemDataRole.UserRole, cid)
+            item.setSelected(cid in selected)
+            self._voucher_cards_list.addItem(item)
+        self._voucher_cards_list.blockSignals(False)
+
+    def _on_voucher_selection_changed(self):
+        """候选卡勾选变化 → 实时写回 self._select_vouchers（ISSUE-004 数据流）。
+
+        当前资源 id = _resource_id_edit 文本；勾选集作为候选集。空候选集 = 移除
+        select_voucher 条目（该资源非自选券）——经 store.get_select_voucher_candidates
+        与 apply_to_store 重建保持单一真相（GUI 编辑期间 store 未同步，此处只维护
+        self._select_vouchers，apply_to_store 时以 store 重建为准，ISSUE-117/702）。
+        """
+        rid = self._resource_id_edit.text().strip()
+        if not rid:
+            return
+        selected = []
+        for i in range(self._voucher_cards_list.count()):
+            item = self._voucher_cards_list.item(i)
+            if item.isSelected():
+                cid = item.data(Qt.ItemDataRole.UserRole)
+                if cid:
+                    selected.append(cid)
+        # 更新或移除 self._select_vouchers 中该资源条目
+        for sv in self._select_vouchers:
+            if sv['voucher'] == rid:
+                if selected:
+                    sv['cards'] = selected
+                else:
+                    self._select_vouchers.remove(sv)
+                break
+        else:
+            if selected:
+                self._select_vouchers.append({'voucher': rid, 'cards': selected})
+        self._update_preview()
 
     def _setup_resource_tab(self, parent):
         """「资源管理」Tab——资源获取规则 / 指定日期资源获取 / 日历预览。
@@ -4613,6 +4677,28 @@ class ConfigPanel(QWidget):
             lines = []
             for md in ml_cfg['milestones']:
                 mode = f"every={md['threshold']}" if md.get('repeat') else f"at={md['threshold']}"
+                # P78（ISSUE-101）：交替里程碑——交替项优先，offset 首节点用用户心智模型表述
+                alt = md.get('alternate_rewards', [])
+                if alt:
+                    parts = []
+                    # 交替项奖励类型统计（items 可能是 cards/resources/random_cards 组合）
+                    card_n = sum(len(a.get('cards', [])) for a in alt)
+                    res_n = sum(len(a.get('resources', {})) for a in alt)
+                    rnd_n = sum(len(a.get('random_cards', [])) for a in alt)
+                    if card_n:
+                        parts.append(f"{card_n}张固定卡")
+                    if res_n:
+                        parts.append(f"{res_n}项资源")
+                    if rnd_n:
+                        parts.append(f"{rnd_n}个随机池")
+                    offset = md.get('offset', 0)
+                    threshold = md.get('threshold', 0)
+                    first = threshold + offset
+                    if md.get('repeat'):
+                        lines.append(f"  {md['name']}: {len(alt)}项交替 → {', '.join(parts) or '无奖励'} · 首次触发 {first} · 每 {threshold} 抽循环")
+                    else:
+                        lines.append(f"  {md['name']}: at={first} → {', '.join(parts) or '无奖励'}（交替仅首项生效）")
+                    continue
                 br = md.get('bonus_reward', {})
                 parts = []
                 if br.get('cards'):
@@ -4868,13 +4954,29 @@ class ConfigPanel(QWidget):
             # P58（§3.8.5a，REVIEW-FIX-PREV: ISSUE-003）：追加里程碑键——供 _do_update_preview 累抽摘要段读取
             'milestone': {
                 'enabled': store.milestone.enabled,
-                'milestones': [
-                    {'name': m.name, 'threshold': m.threshold, 'repeat': m.repeat,
-                     'max_triggers': m.max_triggers, 'banner': m.banner, 'bonus_reward': m.bonus_reward}
-                    for m in store.milestone.milestones
-                ],
+                'milestones': [self._milestone_to_dict(m) for m in store.milestone.milestones],
             },
+            # P78（ISSUE-703 契约）：select_vouchers 键名 + 条目格式与 TOML [[select_voucher]] 段同构
+            'select_vouchers': [
+                {'voucher': sv.voucher, 'cards': list(sv.cards)}
+                for sv in store.select_vouchers
+            ],
         }
+
+    def _milestone_to_dict(self, m) -> dict:
+        """MilestoneDef → config dict（P78 ISSUE-121：条件省略键）。
+
+        与 save_toml 写盘侧同规则——无交替/零偏移里程碑省略 alternate_rewards/offset 键
+        （set_config 恢复过 _validate_milestone_dict 时无法区分「用户显式空」与「程序默认空」，
+        省略键走默认值路径不抛 ConfigError；含交替/非零偏移里程碑键存在、round-trip 存活）。
+        """
+        entry = {'name': m.name, 'threshold': m.threshold, 'repeat': m.repeat,
+                 'max_triggers': m.max_triggers, 'banner': m.banner, 'bonus_reward': m.bonus_reward}
+        if m.alternate_rewards:
+            entry['alternate_rewards'] = m.alternate_rewards
+        if m.offset:
+            entry['offset'] = m.offset
+        return entry
 
     def _get_sim_params(self):
         if self._store is not None:
@@ -5113,6 +5215,29 @@ class ConfigPanel(QWidget):
         # Phase 2: 恢复模拟起始日期
         import datetime as _dt
         store.sim_start_date = config.get('sim_start_date') or _dt.date.today().isoformat()
+
+        # ── P78（ISSUE-202/102/114/116/602）：里程碑 + 自选券恢复块 ──
+        # 置于 store.card_defs 填充（L5085-5095）之后、refresh_from_store（L5139）之前——
+        # 两校验器 _validate_milestone_dict/_validate_select_voucher_dict 均需 known_card_ids
+        # （从刚填充的 card_defs 派生），card_defs 为空时合法候选卡全被误拒。
+        from ..core.config_toml import (
+            _validate_milestone_dict,
+            _validate_select_voucher_dict,
+        )
+        known_card_ids = {c.card_id for c in store.card_defs}
+        # milestone 恢复（ISSUE-102：get_config→set_config round-trip 里程碑整段存活）
+        ml_cfg = config.get('milestone', {})
+        store.milestone.enabled = ml_cfg.get('enabled', True)
+        for md_dict in ml_cfg.get('milestones', []) or []:
+            store.milestone.milestones.append(
+                _validate_milestone_dict(md_dict, known_card_ids))
+        # select_vouchers 恢复（ISSUE-102/116/602：同构校验 + resource_defs 补全）
+        sv_list = config.get('select_vouchers') or []
+        if sv_list:
+            store.select_vouchers = _validate_select_voucher_dict(sv_list, known_card_ids)
+            # ISSUE-602：恢复 select_vouchers 时同步补全 resource_defs（setdefault——既有显示名保留）
+            for item in sv_list:
+                store.resource_defs.setdefault(item.get('voucher', ''), item.get('voucher', ''))
 
         # P60：统一填充 featured_card_ids
         for pool in store.pools:
@@ -5359,8 +5484,10 @@ class ConfigPanel(QWidget):
         if ret != QMessageBox.StandardButton.Yes:
             return
         del self.resource_defs[row]
+        # P78（ISSUE-117）：级联删除该资源的 select_voucher 条目（GUI 内部列表——
+        # apply_to_store 重建时再以 store.resource_defs 为准过滤，ISSUE-702 静默级联）
+        self._select_vouchers = [sv for sv in self._select_vouchers if sv['voucher'] != rid]
         self._rebuild_resource_list()
-        # P78 ISSUE-117：级联删除孤儿 select_voucher 条目（apply_to_store 重建时执行，此处仅清理 GUI 列表）
         self._refresh_resource_combos()
         self._update_preview()
 
@@ -5638,7 +5765,41 @@ class ConfigPanel(QWidget):
                 max_triggers=md.get('max_triggers', 0),
                 banner=md.get('banner', ''),
                 bonus_reward=_br,
+                # ── P78 透传（ISSUE-002/101 round-trip 纪律）──
+                offset=md.get('offset', 0),
+                alternate_rewards=self._filter_alternate_rewards(md.get('alternate_rewards', [])),
             ))
+
+        # P78：select_vouchers 写回 + 级联删除孤儿条目（ISSUE-117/702）
+        # 以重建后的 resource_defs 为准——不在其中的 voucher id 级联删除（静默、不弹框，
+        # 防 500ms 去抖预览链弹框风暴；确认框唯一弹出点为 _remove_resource_def，ISSUE-702）
+        store.select_vouchers = [
+            SelectVoucherDef(voucher=sv['voucher'], cards=list(sv['cards']))
+            for sv in self._select_vouchers
+            if sv['voucher'] in store.resource_defs
+        ]
+
+    def _filter_alternate_rewards(self, alt_rewards):
+        """P78 ISSUE-601：保存侧防线——过滤 alternate_rewards 空 dict 项与空 candidates/全零权重随机卡。
+
+        与 bonus_reward 的 _filter_random_cards 同构（防两处过滤逻辑复制漂移）——
+        空项丢弃、空 candidates/全零权重 random_cards 过滤。过滤后全空 → 调用方
+        经条件写键自动省略 alternate_rewards 键（ISSUE-113）。
+        """
+        result = []
+        for item in alt_rewards or []:
+            if not item or not isinstance(item, dict):
+                continue                     # 空 dict 项 / 非 dict → 丢弃（ISSUE-601）
+            if not any(item.get(k) for k in ('cards', 'resources', 'random_cards')):
+                continue                     # 无任何有效字段 → 丢弃
+            rc = item.get('random_cards', [])
+            if rc:
+                item['random_cards'] = [
+                    r for r in rc
+                    if r.get('candidates') and not (r.get('weights') and all(float(w) == 0.0 for w in r.get('weights')))
+                ]
+            result.append(item)
+        return result
 
     def refresh_from_store(self):
         if self._store is None:
@@ -5836,8 +5997,18 @@ class ConfigPanel(QWidget):
                     'resources': dict(md.bonus_reward.get('resources', {})),
                     'random_cards': list(md.bonus_reward.get('random_cards', [])),
                 },
+                # P78：回填复制新字段（ISSUE-002/101 round-trip 纪律——_flush 原地改写保留未知键，
+                # load/save 两处补键；否则 apply_to_store 时 get('offset',0) 恒 0、交替恒空）
+                'offset': md.offset,
+                'alternate_rewards': [dict(a) for a in md.alternate_rewards],
             })
             self.milestone_list.addItem(md.name)
+        # P78：select_vouchers 回填（ISSUE-004 数据流挂接）——复制到 GUI 内部列表，
+        # 详情面板按资源 id 关联编辑候选集（5b 挂接）
+        self._select_vouchers = [
+            {'voucher': sv.voucher, 'cards': list(sv.cards)}
+            for sv in store.select_vouchers
+        ]
         # REVIEW-R1-FIX: ISSUE-010 —— _populate_milestone_cards_list 调用时机：store 就绪后立即填充
         #   固定卡多选区域（否则 ml_cards_list 恒空，bonus_reward.cards 固定卡多选无法 GUI 编辑）
         self._populate_milestone_cards_list()

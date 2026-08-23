@@ -166,6 +166,8 @@ class MilestoneDef:
     threshold 触发阈值（抽数）；repeat=False 一次性（at=N）、repeat=True 周期（every=N）；
     max_triggers 最大触发次数（0=无限）；bonus_reward 三字段任意组合
     （cards / resources / random_cards）；banner 精确指向一个 Banner（空 = 全部，P61 协作）。
+    P78：alternate_rewards 交替奖励序列（周期触发时按索引循环取奖励，空=原行为）；
+    offset 首节点相位偏移（首节点 = threshold + offset，后续每 threshold，仅首节点生效）。
     """
     name: str
     threshold: int = 40
@@ -173,6 +175,16 @@ class MilestoneDef:
     max_triggers: int = 0
     bonus_reward: dict = field(default_factory=dict)
     banner: str = ""
+    # ── P78 新增（全部带默认值，向后兼容）──
+    alternate_rewards: List[dict] = field(default_factory=list)  # 交替奖励序列（空=原行为）
+    offset: int = 0            # 首节点相位偏移（0=从 threshold 起，仅首节点生效）
+
+
+@dataclass
+class SelectVoucherDef:
+    """自选券候选集定义（P78）——资源 id → 可兑换卡片显式列表。"""
+    voucher: str            # 关联资源 id
+    cards: List[str] = field(default_factory=list)   # 候选卡片显式列表
 
 
 @dataclass
@@ -228,6 +240,7 @@ class ConfigStore:
     banner: BannerConfig = field(default_factory=BannerConfig)
     pity: PityConfig = field(default_factory=PityConfig)
     milestone: MilestoneConfig = field(default_factory=MilestoneConfig)  # ← P58
+    select_vouchers: List[SelectVoucherDef] = field(default_factory=list)  # ← P78：自选券候选集
     gain_rules: List[GainRule] = field(default_factory=list)
     day_overrides: List[DayOverride] = field(default_factory=list)
     initial_resources: Dict[str, float] = field(default_factory=dict)
@@ -260,6 +273,7 @@ class ConfigStore:
         self.banner.banners.clear()
         self.pity = PityConfig()
         self.milestone = MilestoneConfig()                            # ← P58
+        self.select_vouchers.clear()                                   # ← P78
         self.gain_rules.clear()
         self.day_overrides.clear()
         self.initial_resources.clear()
@@ -280,6 +294,22 @@ class ConfigStore:
         self.rarity_defaults.clear()                                  # ← P63
         self.card_overflow_map.clear()                                # ← P63
         self._migrated_from_legacy = False                            # ← P55
+
+    # ── P78 读取接口（ISSUE-603 契约）────────────────────────────────
+    # GUI 回填（ISSUE-004）与校验（ISSUE-111/116）一律经此接口、禁止直读
+    # store.select_vouchers 列表自行扫描。未注册 voucher id 与空候选集
+    # 统一返回空列表 []（不抛异常），返回副本（不污染 store）。
+
+    def get_select_voucher_candidates(self, voucher_id: str) -> List[str]:
+        """按资源 id 取自选券候选集——未注册/空候选集返回空列表 []，返回副本。"""
+        for sv in self.select_vouchers:
+            if sv.voucher == voucher_id:
+                return list(sv.cards)
+        return []
+
+    def is_select_voucher(self, voucher_id: str) -> bool:
+        """该资源 id 是否注册为自选券。"""
+        return any(sv.voucher == voucher_id for sv in self.select_vouchers)
 
     # ── P61（Ph3/D3 裁决）：store.pools 只读展平视图 ────────────────
     # store.banner 是运行时唯一数据源；pools 为只读 @property，遍历

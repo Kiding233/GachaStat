@@ -21,6 +21,7 @@ from .pity import (
     SoftPityMixin, _redistribute_scope,
 )
 from .milestone import MilestoneEngine, MilestoneDef, MilestoneConfig, register_milestone_engine  # P58
+from .config_store import SelectVoucherDef  # P78
 from .strategy import (
     Strategy, StrategyContext, StrategyMeta, register_strategy,
     SmartStrategy, PoolQuotaStrategy, PityReserveStrategy, StopOnTargetStrategy,
@@ -123,6 +124,7 @@ __all__ = [
     'TargetedBehavior', 'TargetedSoftBehavior',
     'SoftPityMixin', '_redistribute_scope',
     'MilestoneEngine', 'MilestoneDef', 'MilestoneConfig', 'register_milestone_engine',
+    'SelectVoucherDef',
     'Strategy', 'StrategyContext', 'StrategyMeta', 'register_strategy',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',

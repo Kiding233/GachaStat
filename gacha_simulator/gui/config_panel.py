@@ -5549,7 +5549,9 @@ class ConfigPanel(QWidget):
         # 「两入口校验强度一致」对 name 去重不成立）
         _seen_ml_names: set = set()
         for md_dict in ml_cfg.get('milestones', []) or []:
-            _name = md_dict.get('name', '') if isinstance(md_dict, dict) else ''
+            # 与 _build_milestone 同构：去重用 strip 后 name（原始含空格 name 在不同字符串
+            # 下不判重复，strip 后 'dup' 与 ' dup ' 均为 'dup'——两入口完全同构）
+            _name = md_dict.get('name', '').strip() if isinstance(md_dict, dict) else ''
             if _name in _seen_ml_names:
                 raise ConfigError(f"里程碑名称重复: '{_name}'")
             if _name:

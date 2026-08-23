@@ -261,6 +261,21 @@ def test_set_config_rejects_non_dict_milestone(qapp):
         p.set_config(cfg)
 
 
+def test_set_config_rejects_duplicate_name_with_spaces(qapp):
+    """ISSUE-606：strip 后重名（含空格变体）set_config 同样拒绝——两入口完全同构。"""
+    from gacha_simulator.core.config_store import ConfigError
+    p = _make_panel(ConfigStore())
+    cfg = {
+        'card_defs': [{'card_id': 'c1', 'name': '卡1', 'rarity': 'ssr'}],
+        'milestone': {'enabled': True, 'milestones': [
+            {'name': 'dup', 'threshold': 10},
+            {'name': ' dup ', 'threshold': 20},
+        ]},
+    }
+    with pytest.raises(ConfigError):
+        p.set_config(cfg)
+
+
 def test_voucher_candidates_edit_roundtrip(qapp):
     """ISSUE-004/605：资源详情面板候选集编辑——勾选写回 + 回填。"""
     p = _make_panel(_make_store())
@@ -272,3 +287,29 @@ def test_voucher_candidates_edit_roundtrip(qapp):
         if p._voucher_cards_list.item(i).isSelected():
             selected.append(p._voucher_cards_list.item(i).data(Qt.ItemDataRole.UserRole))
     assert set(selected) == {'c1', 'c2'}, f'候选集回填错误: {selected}'
+
+
+def test_alternate_resource_undef_warning_once(qapp, monkeypatch):
+    """ISSUE-005/109：交替项内未定义资源 id 触发一次性警告——首次弹、二次静默。"""
+    from PyQt6.QtWidgets import QMessageBox
+    warnings_called = []
+
+    def _fake_warning(*a, **k):
+        warnings_called.append(a[2] if len(a) > 2 else '')   # (parent, title, text) 的 text
+
+    monkeypatch.setattr(QMessageBox, 'warning', staticmethod(_fake_warning))
+    p = _make_panel(ConfigStore())
+    p._store.card_defs = [CardDefEntry(card_id='c1', rarity='ssr')]
+    p._store.resource_defs = {'draw_resource': '抽卡资源'}
+    p._warned_milestone_resource_ids = set()
+    # 交替项引用未定义资源 ghost_res
+    p._milestone_defs = [{'name': 'm', 'threshold': 10, 'repeat': True,
+                          'alternate_rewards': [{'resources': {'ghost_res': 1}}, {'cards': ['c1']}],
+                          'bonus_reward': {}}]
+    # 首次 apply_to_store → 弹一次警告
+    p.apply_to_store()
+    assert len(warnings_called) == 1, f'首次应弹 1 次警告: {warnings_called}'
+    assert 'ghost_res' in warnings_called[0]
+    # 二次 apply_to_store → 静默（_warned_milestone_resource_ids 已含 ghost_res）
+    p.apply_to_store()
+    assert len(warnings_called) == 1, f'二次应静默: {warnings_called}'

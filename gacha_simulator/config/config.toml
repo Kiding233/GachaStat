@@ -1,206 +1,90 @@
 # ============================================================
-# GachaStat 统一配置文件 —— config.toml
+# GachaStat 统一配置文件 —— 由 GachaStat GUI 自动生成
 # ============================================================
-# 此文件等价于原有 10 个 txt 配置文件 + pools/ 子目录的集合。
 # 语法速查：
 #   key = value          标量（整数/浮点/布尔/字符串）
 #   [section]            表（字典）—— . 号嵌套子表
 #   [[array]]            数组表——每个 [[array]] 是数组中的一个元素
 #   { k = v, k = v }     内联表——写在一行的小字典
 # ============================================================
+# 完整格式说明见 GUI 帮助→关于→配置文件指南
 
-# ── 资源定义（原 resources.txt） ────────────────────────────
+card = [
+    { card_id = "limited_ssr_1", name = "限定角色1", rarity = "ssr", initial_count = 0 },
+    { card_id = "limited_ssr_2", name = "限定角色2", rarity = "ssr", initial_count = 0 },
+    { card_id = "limited_ssr_3", name = "限定角色3", rarity = "ssr", initial_count = 0 },
+    { card_id = "limited_ssr_4", name = "限定角色4", rarity = "ssr", initial_count = 0 },
+    { card_id = "limited_ssr_5", name = "限定角色5", rarity = "ssr", initial_count = 0 },
+    { card_id = "limited_ssr_6", name = "限定角色6", rarity = "ssr", initial_count = 0 },
+    { card_id = "standard_ssr_1", name = "常驻角色1", rarity = "ssr", initial_count = 0 },
+    { card_id = "standard_ssr_2", name = "常驻角色2", rarity = "ssr", initial_count = 0 },
+    { card_id = "standard_ssr_3", name = "常驻角色3", rarity = "ssr", initial_count = 0 },
+    { card_id = "standard_ssr_4", name = "常驻角色4", rarity = "ssr", initial_count = 0 },
+    { card_id = "standard_ssr_5", name = "常驻角色5", rarity = "ssr", initial_count = 0 },
+    { card_id = "standard_ssr_6", name = "常驻角色6", rarity = "ssr", initial_count = 0 },
+    { card_id = "sr_1", name = "SR角色1", rarity = "sr", initial_count = 0 },
+    { card_id = "sr_2", name = "SR角色2", rarity = "sr", initial_count = 0 },
+    { card_id = "sr_3", name = "SR角色3", rarity = "sr", initial_count = 0 },
+    { card_id = "sr_4", name = "SR角色4", rarity = "sr", initial_count = 0 },
+    { card_id = "sr_5", name = "SR角色5", rarity = "sr", initial_count = 0 },
+    { card_id = "sr_6", name = "SR角色6", rarity = "sr", initial_count = 0 },
+    { card_id = "r_1", name = "R角色1", rarity = "r", initial_count = 0 },
+    { card_id = "r_2", name = "R角色2", rarity = "r", initial_count = 0 },
+    { card_id = "r_3", name = "R角色3", rarity = "r", initial_count = 0 },
+    { card_id = "r_4", name = "R角色4", rarity = "r", initial_count = 0 },
+    { card_id = "r_5", name = "R角色5", rarity = "r", initial_count = 0 },
+    { card_id = "r_6", name = "R角色6", rarity = "r", initial_count = 0 },
+]
+weights = [
+    { card_id = "limited_ssr_1", desire = 1.0, miss_cost = 1.0, card_value = 1.0 },
+    { card_id = "limited_ssr_2", desire = 1.0, miss_cost = 1.0, card_value = 1.0 },
+    { card_id = "limited_ssr_3", desire = 1.0, miss_cost = 1.0, card_value = 1.0 },
+    { card_id = "limited_ssr_4", desire = 1.0, miss_cost = 1.0, card_value = 1.0 },
+    { card_id = "limited_ssr_5", desire = 1.0, miss_cost = 1.0, card_value = 1.0 },
+    { card_id = "limited_ssr_6", desire = 1.0, miss_cost = 1.0, card_value = 1.0 },
+    { card_id = "standard_ssr_1", desire = 1.0, miss_cost = 1.0, card_value = 0.3 },
+    { card_id = "standard_ssr_2", desire = 1.0, miss_cost = 1.0, card_value = 0.3 },
+    { card_id = "standard_ssr_3", desire = 1.0, miss_cost = 1.0, card_value = 0.3 },
+    { card_id = "standard_ssr_4", desire = 1.0, miss_cost = 1.0, card_value = 0.3 },
+    { card_id = "standard_ssr_5", desire = 1.0, miss_cost = 1.0, card_value = 0.3 },
+    { card_id = "standard_ssr_6", desire = 1.0, miss_cost = 1.0, card_value = 0.3 },
+    { card_id = "sr_1", desire = 1.0, miss_cost = 1.0, card_value = 0.1 },
+    { card_id = "sr_2", desire = 1.0, miss_cost = 1.0, card_value = 0.1 },
+    { card_id = "sr_3", desire = 1.0, miss_cost = 1.0, card_value = 0.1 },
+    { card_id = "sr_4", desire = 1.0, miss_cost = 1.0, card_value = 0.1 },
+    { card_id = "sr_5", desire = 1.0, miss_cost = 1.0, card_value = 0.1 },
+    { card_id = "sr_6", desire = 1.0, miss_cost = 1.0, card_value = 0.1 },
+    { card_id = "r_1", desire = 1.0, miss_cost = 1.0, card_value = 0.0 },
+    { card_id = "r_2", desire = 1.0, miss_cost = 1.0, card_value = 0.0 },
+    { card_id = "r_3", desire = 1.0, miss_cost = 1.0, card_value = 0.0 },
+    { card_id = "r_4", desire = 1.0, miss_cost = 1.0, card_value = 0.0 },
+    { card_id = "r_5", desire = 1.0, miss_cost = 1.0, card_value = 0.0 },
+    { card_id = "r_6", desire = 1.0, miss_cost = 1.0, card_value = 0.0 },
+]
+
+[resources]
+gain_rules = [
+    { type = "every_n_days", param = "", gains = { draw_resource = 60 } },
+    { type = "monthly_day", param = "1", gains = { exchange_currency = 50 } },
+]
+day_overrides = [
+    { day = 0, gains = { draw_resource = 200 } },
+    { day = 21, gains = { draw_resource = 200 } },
+    { day = 42, gains = { draw_resource = 200 } },
+    { day = 63, gains = { draw_resource = 200 } },
+    { day = 84, gains = { draw_resource = 200 } },
+    { day = 105, gains = { draw_resource = 200 } },
+    { day = 126, gains = { draw_resource = 200 } },
+    { day = 147, gains = { draw_resource = 200 } },
+]
+
 [resources.defs]
 draw_resource = "抽卡资源"
 exchange_currency = "兑换货币"
+endfield_supply_voucher = "武库箱券"   # P78：自选券资源（[[select_voucher]] 候选集段关联）
 
-# ── 初始资源（原 initial_resources.txt） ────────────────────
 [resources.initial]
 draw_resource = 55000
-
-# ── 资源获取规则（原 gains.txt） ────────────────────────────
-# type 取值：every_n_days | weekly | monthly_day | monthly_week
-
-[[resources.gain_rules]]
-type = "every_n_days"
-param = "1"
-gains = { draw_resource = 60 }
-
-[[resources.gain_rules]]
-type = "monthly_day"
-param = "1"
-gains = { exchange_currency = 50 }
-
-# ── 指定日期覆盖（原 gains.txt day: 行） ────────────────────
-[[resources.day_overrides]]
-day = 0
-gains = { draw_resource = 200 }
-
-[[resources.day_overrides]]
-day = 21
-gains = { draw_resource = 200 }
-
-[[resources.day_overrides]]
-day = 42
-gains = { draw_resource = 200 }
-
-[[resources.day_overrides]]
-day = 63
-gains = { draw_resource = 200 }
-
-[[resources.day_overrides]]
-day = 84
-gains = { draw_resource = 200 }
-
-[[resources.day_overrides]]
-day = 105
-gains = { draw_resource = 200 }
-
-[[resources.day_overrides]]
-day = 126
-gains = { draw_resource = 200 }
-
-[[resources.day_overrides]]
-day = 147
-gains = { draw_resource = 200 }
-
-# ── 卡牌定义（原 cards.txt） ────────────────────────────────
-# === 限定 SSR ===
-[[card]]
-card_id = "limited_ssr_1"
-name = "限定角色1"
-rarity = "ssr"
-
-[[card]]
-card_id = "limited_ssr_2"
-name = "限定角色2"
-rarity = "ssr"
-
-[[card]]
-card_id = "limited_ssr_3"
-name = "限定角色3"
-rarity = "ssr"
-
-[[card]]
-card_id = "limited_ssr_4"
-name = "限定角色4"
-rarity = "ssr"
-
-[[card]]
-card_id = "limited_ssr_5"
-name = "限定角色5"
-rarity = "ssr"
-
-[[card]]
-card_id = "limited_ssr_6"
-name = "限定角色6"
-rarity = "ssr"
-
-# === 常驻 SSR ===
-[[card]]
-card_id = "standard_ssr_1"
-name = "常驻角色1"
-rarity = "ssr"
-
-[[card]]
-card_id = "standard_ssr_2"
-name = "常驻角色2"
-rarity = "ssr"
-
-[[card]]
-card_id = "standard_ssr_3"
-name = "常驻角色3"
-rarity = "ssr"
-
-[[card]]
-card_id = "standard_ssr_4"
-name = "常驻角色4"
-rarity = "ssr"
-
-[[card]]
-card_id = "standard_ssr_5"
-name = "常驻角色5"
-rarity = "ssr"
-
-[[card]]
-card_id = "standard_ssr_6"
-name = "常驻角色6"
-rarity = "ssr"
-
-# === SR ===
-[[card]]
-card_id = "sr_1"
-name = "SR角色1"
-rarity = "sr"
-
-[[card]]
-card_id = "sr_2"
-name = "SR角色2"
-rarity = "sr"
-
-[[card]]
-card_id = "sr_3"
-name = "SR角色3"
-rarity = "sr"
-
-[[card]]
-card_id = "sr_4"
-name = "SR角色4"
-rarity = "sr"
-
-[[card]]
-card_id = "sr_5"
-name = "SR角色5"
-rarity = "sr"
-
-[[card]]
-card_id = "sr_6"
-name = "SR角色6"
-rarity = "sr"
-
-# === R ===
-[[card]]
-card_id = "r_1"
-name = "R角色1"
-rarity = "r"
-
-[[card]]
-card_id = "r_2"
-name = "R角色2"
-rarity = "r"
-
-[[card]]
-card_id = "r_3"
-name = "R角色3"
-rarity = "r"
-
-[[card]]
-card_id = "r_4"
-name = "R角色4"
-rarity = "r"
-
-[[card]]
-card_id = "r_5"
-name = "R角色5"
-rarity = "r"
-
-[[card]]
-card_id = "r_6"
-name = "R角色6"
-rarity = "r"
-
-# ── 稀有度层级注册（P60 新增） ──
-[rarities]
-ranks = [
-    ["SSR"],
-    ["SR"],
-    ["R"],
-]
-
-# ── Banner 池子定义（P61 迁移：旧 [[pools]] + 分布模板 → [[banner]]） ──
-# 每个旧 [[pools]] → 一个 [[banner]]（pool 进 [[banner.pool]]，id="main"）；
-# distribution_template + bindings 已展开为内联 [[banner.pool.reward]]。
-# start_day/end_day 为 banner 级时间窗口（天），解析边界 *DAY 换秒。
 
 [[banner]]
 id = "pool_c1"
@@ -222,85 +106,109 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner]]
 id = "pool_c2"
@@ -322,85 +230,109 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner]]
 id = "pool_c3"
@@ -422,85 +354,109 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner]]
 id = "pool_c4"
@@ -522,85 +478,109 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner]]
 id = "pool_c5"
@@ -622,85 +602,109 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner]]
 id = "pool_c6"
@@ -722,85 +726,109 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner]]
 id = "pool_c7"
@@ -822,85 +850,109 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner]]
 id = "pool_c8"
@@ -922,359 +974,224 @@ featured = true
 card_id = "standard_ssr_1"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_2"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_3"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_4"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_5"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "standard_ssr_6"
 probability = 0.03333333333333333
 rarity = "ssr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_1"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_2"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_3"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_4"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_5"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "sr_6"
 probability = 0.8499999999999999
 rarity = "sr"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_1"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_2"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_3"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_4"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_5"
 probability = 15.75
+rarity = "r"
+featured = false
 
 [[banner.pool.reward]]
 card_id = "r_6"
 probability = 15.75
-
-# ── 保底配置（P55 扁平化格式） ──────────────────────────────
-# 支持 type: soft_interval / soft_additive / soft_step / hard
-# 事件驱动型 (rotating/targeted 等) 由 P56 交付
+rarity = "r"
+featured = false
 
 [[pity]]
 name = "ssr_soft"
 type = "soft_interval"
 scope = "ssr"
-start = 80
-end = 90
 target_featured = true
 reset = "featured"
-pools = ["pool_c*.main"]
-counter_init = 0
+start = 80
+end = 90
 
-# [[pity]]
-# name = "ssr_hard"
-# type = "hard"
-# scope = "ssr"
-# threshold = 180
-# target_featured = true
-# pools = ["pool_c1"]
-
-# [[pity]]
-# name = "sr_soft"
-# type = "soft_additive"
-# scope = "sr"
-# start = 10
-# increment = 10.0
-# pools = ["*"]
-
-# ── 目标卡（原 targets.txt） ─────────────────────────────────
-
-[[targets]]
-card_id = "limited_ssr_1"
-quantity = 1
-pool_ids = ["pool_c1", "pool_c7"]
-
-[[targets]]
-card_id = "limited_ssr_2"
-quantity = 1
-pool_ids = ["pool_c2", "pool_c8"]
-
-[[targets]]
-card_id = "limited_ssr_3"
-quantity = 1
-pool_ids = ["pool_c3"]
-
-[[targets]]
-card_id = "limited_ssr_4"
-quantity = 1
-pool_ids = ["pool_c4"]
-
-[[targets]]
-card_id = "limited_ssr_5"
-quantity = 1
-pool_ids = ["pool_c5"]
-
-[[targets]]
-card_id = "limited_ssr_6"
-quantity = 1
-pool_ids = ["pool_c6"]
-
-# ── 卡牌权重（原 weights.txt） ──────────────────────────────
-# 格式：[[weights]] 数组表，每张卡一个条目。
-# desire / miss_cost / card_value 可以是数值或字符串表达式（动态权重），
-# 未来可扩展字段：expr_engine / condition / priority 等。
-
-# === 限定 SSR ===
-[[weights]]
-card_id = "limited_ssr_1"
-desire = 1.0
-miss_cost = 1.0
-card_value = 1.0
-
-[[weights]]
-card_id = "limited_ssr_2"
-desire = 1.0
-miss_cost = 1.0
-card_value = 1.0
-
-[[weights]]
-card_id = "limited_ssr_3"
-desire = 1.0
-miss_cost = 1.0
-card_value = 1.0
-
-[[weights]]
-card_id = "limited_ssr_4"
-desire = 1.0
-miss_cost = 1.0
-card_value = 1.0
-
-[[weights]]
-card_id = "limited_ssr_5"
-desire = 1.0
-miss_cost = 1.0
-card_value = 1.0
-
-[[weights]]
-card_id = "limited_ssr_6"
-desire = 1.0
-miss_cost = 1.0
-card_value = 1.0
-
-# === 常驻 SSR ===
-[[weights]]
-card_id = "standard_ssr_1"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.3
-
-[[weights]]
-card_id = "standard_ssr_2"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.3
-
-[[weights]]
-card_id = "standard_ssr_3"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.3
-
-[[weights]]
-card_id = "standard_ssr_4"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.3
-
-[[weights]]
-card_id = "standard_ssr_5"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.3
-
-[[weights]]
-card_id = "standard_ssr_6"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.3
-
-# === SR ===
-[[weights]]
-card_id = "sr_1"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.1
-
-[[weights]]
-card_id = "sr_2"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.1
-
-[[weights]]
-card_id = "sr_3"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.1
-
-[[weights]]
-card_id = "sr_4"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.1
-
-[[weights]]
-card_id = "sr_5"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.1
-
-[[weights]]
-card_id = "sr_6"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.1
-
-# === R ===
-[[weights]]
-card_id = "r_1"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.0
-
-[[weights]]
-card_id = "r_2"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.0
-
-[[weights]]
-card_id = "r_3"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.0
-
-[[weights]]
-card_id = "r_4"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.0
-
-[[weights]]
-card_id = "r_5"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.0
-
-[[weights]]
-card_id = "r_6"
-desire = 1.0
-miss_cost = 1.0
-card_value = 0.0
-
-# ── P63：稀有度默认溢出规则（取消注释以启用） ──────────────────
-# 卡片获得时根据 total_holding 匹配分段表，命中区间即产出资源。
-# 优先级：卡片显式配置 > 稀有度默认；键名大小写不敏感。
-#
-# [rarity_defaults.ssr]
-# [[rarity_defaults.ssr.overflow_bands]]
-# range = [1, 1]
-# resources = { exchange_currency = 10 }
-#
-# [[rarity_defaults.ssr.overflow_bands]]
-# range = [2, 7]
-# resources = { exchange_currency = 10 }
-#
-# [[rarity_defaults.ssr.overflow_bands]]
-# range = [8, "inf"]
-# resources = { exchange_currency = 25 }
-#
-# [rarity_defaults.sr]
-# [[rarity_defaults.sr.overflow_bands]]
-# range = [1, 7]
-# resources = { exchange_currency = 2 }
-#
-# [[rarity_defaults.sr.overflow_bands]]
-# range = [8, "inf"]
-# resources = { exchange_currency = 5 }
-#
-# ── 卡片级溢出覆盖（取消注释以启用） ──────────────────────────
-# 如需为单张卡片配置不同于稀有度默认的溢出规则：
-#
-# [[card]]
-# card_id = "limited_ssr_1"
-# name = "限定角色1"
-# rarity = "ssr"
-# [card.overflow]
-# first_time_bonus = { exchange_currency = 10 }
-# excess_bonus = { threshold = 7, resources = { exchange_currency = 25 } }
-
-# ── P58：累抽奖励（独立于保底体系——不修改概率、旁路注入） ──────
-# bonus_reward 三字段可任意组合——cards + resources + random_cards 并行。
-# at=N：一次性（repeat=false）；every=N：周期（repeat=true，触发后归零继续）。
-# banner：精确指向一个 Banner（空字符串 = 全部 Banner）。
-# 示例引用现有卡（limited_ssr_1）与现有资源（exchange_currency），可直接加载。
-
-# every=N：每 10 抽赠送 1 兑换货币，无限重复（火影忍者碎片模型）
 [[milestone]]
 name = "milestone_example_every"
 threshold = 10
 repeat = true
 max_triggers = 0
 banner = ""
-bonus_reward = { resources = { exchange_currency = 1 } }
 
-# at=N：300 抽赠送当期限定卡 + 补偿资源，仅一次（明日方舟 300 井模型）
+[milestone.bonus_reward]
+cards = []
+random_cards = []
+
+[milestone.bonus_reward.resources]
+exchange_currency = 1
+
 [[milestone]]
 name = "milestone_example_at"
 threshold = 300
 repeat = false
 max_triggers = 1
 banner = ""
-bonus_reward = { cards = ["limited_ssr_1"], resources = { exchange_currency = 300 } }
+
+[milestone.bonus_reward]
+cards = []
+random_cards = []
+
+[milestone.bonus_reward.resources]
+exchange_currency = 300
+
+# ═══ P78 交替里程碑示例——周期触发时奖励 A/B 交替循环（如终末地武器池 100/180/260/340）═══
+# offset = 首节点相位偏移（threshold + offset = 首次触发，如 80 + 20 = 100）
+# alternate_rewards = 交替奖励序列——每次触发取下一条、索引模长度循环
+# 注意：无交替/零偏移里程碑不必写 alternate_rewards/offset 键（条件写键自动省略）
+[[milestone]]
+name = "milestone_example_alternate"
+threshold = 80
+offset = 20
+repeat = true
+max_triggers = 0
+banner = ""
+alternate_rewards = [
+    { resources = { endfield_supply_voucher = 1 } },   # 100, 260, 420…  武库箱券
+    { cards = ["standard_ssr_1"] },                    # 180, 340, 500…  UP 卡
+]
+
+# ═══ P78 自选券候选集——资源 id → 可兑换卡片显式列表（只记券不落卡，供查询/展示）═══
+[[select_voucher]]
+voucher = "endfield_supply_voucher"
+cards = ["standard_ssr_2", "standard_ssr_3", "standard_ssr_4"]
+
+[strategy]
+key = "smart"
+
+[[targets]]
+card_id = "limited_ssr_1"
+quantity = 1
+pool_ids = [
+    "pool_c1.main",
+    "pool_c7.main",
+]
+
+[[targets]]
+card_id = "limited_ssr_2"
+quantity = 1
+pool_ids = [
+    "pool_c2.main",
+    "pool_c8.main",
+]
+
+[[targets]]
+card_id = "limited_ssr_3"
+quantity = 1
+pool_ids = [
+    "pool_c3.main",
+]
+
+[[targets]]
+card_id = "limited_ssr_4"
+quantity = 1
+pool_ids = [
+    "pool_c4.main",
+]
+
+[[targets]]
+card_id = "limited_ssr_5"
+quantity = 1
+pool_ids = [
+    "pool_c5.main",
+]
+
+[[targets]]
+card_id = "limited_ssr_6"
+quantity = 1
+pool_ids = [
+    "pool_c6.main",
+]
+
+[rarities]
+ranks = [
+    [
+        "SSR",
+    ],
+    [
+        "SR",
+    ],
+    [
+        "R",
+    ],
+]

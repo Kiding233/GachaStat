@@ -357,6 +357,176 @@ class RandomCardPoolDialog(QDialog):
         }
 
 
+class MilestoneAlternateDialog(QDialog):
+    """P78 交替奖励项编辑对话框（ISSUE-110）——编辑单个交替项 dict。
+
+    交替项与 bonus_reward 同为 cards/resources/random_cards 三字段，编辑逻辑
+    （固定卡多选 / 资源表 / 随机池）与 bonus_reward 区同构。ISSUE-706：交替项
+    random_cards 编辑状态由本对话框自持（打开从 item['random_cards'] 载入、
+    Accept 整体写回）——不引入 name 级平行存储；未 Accept 编辑关闭即丢弃。
+    ISSUE-605：打开时从 store.resource_defs 实时填充资源选项（不缓存旧快照）。
+
+    result() 返回编辑后的 reward dict（{'cards','resources','random_cards'}）。
+    """
+
+    def __init__(self, store, item_data, parent=None):
+        super().__init__(parent)
+        self._store = store
+        self.setWindowTitle("编辑交替奖励项")
+        self.setMinimumSize(520, 420)
+
+        layout = QVBoxLayout(self)
+
+        # ── 固定卡牌（多选）──
+        layout.addWidget(QLabel("固定赠送卡牌:"))
+        self.cards_list = QListWidget()
+        self.cards_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.cards_list.setMaximumHeight(110)
+        layout.addWidget(self.cards_list)
+        card_ids = set((item_data or {}).get('cards', []))
+        if store is not None:
+            for entry in store.card_defs:
+                cid = entry.card_id
+                display = f"{cid} ({entry.name})" if entry.name else cid
+                it = QListWidgetItem(display)
+                it.setData(Qt.ItemDataRole.UserRole, cid)
+                self.cards_list.addItem(it)          # 先 addItem 再 setSelected（未入列表的 item 选中态不生效）
+                it.setSelected(cid in card_ids)
+
+        # ── 资源（可编辑下拉 + 数量）──
+        layout.addWidget(QLabel("赠送资源:"))
+        self.resources_table = QTableWidget()
+        self.resources_table.setColumnCount(2)
+        self.resources_table.setHorizontalHeaderLabels(["资源", "数量"])
+        self.resources_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.resources_table.setMaximumHeight(120)
+        layout.addWidget(self.resources_table)
+
+        res_btn = QHBoxLayout()
+        add_r = QPushButton("添加")
+        add_r.clicked.connect(self._add_resource_row)
+        rem_r = QPushButton("移除选中")
+        rem_r.clicked.connect(self._remove_resource_row)
+        res_btn.addWidget(add_r)
+        res_btn.addWidget(rem_r)
+        res_btn.addStretch()
+        layout.addLayout(res_btn)
+
+        # 回填既有资源
+        resources = (item_data or {}).get('resources', {}) or {}
+        for rid, amt in resources.items():
+            self._append_resource_row(rid, amt)
+
+        # ── 随机卡池（复用 RandomCardPoolDialog，ISSUE-706 自持）──
+        layout.addWidget(QLabel("随机卡池:"))
+        self.rand_pool_list = QListWidget()
+        self.rand_pool_list.setMaximumHeight(90)
+        layout.addWidget(self.rand_pool_list)
+
+        rand_btn = QHBoxLayout()
+        edit_rp = QPushButton("编辑")
+        edit_rp.clicked.connect(self._edit_random_pool)
+        add_rp = QPushButton("添加")
+        add_rp.clicked.connect(self._add_random_pool)
+        rem_rp = QPushButton("移除选中")
+        rem_rp.clicked.connect(self._remove_random_pool)
+        rand_btn.addWidget(edit_rp)
+        rand_btn.addWidget(add_rp)
+        rand_btn.addWidget(rem_rp)
+        rand_btn.addStretch()
+        layout.addLayout(rand_btn)
+
+        self._random_pools = [dict(p) for p in ((item_data or {}).get('random_cards', []) or [])]
+        self._selected_pool_idx = 0
+        self._refresh_random_pool_summary()
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    # ── 资源行操作 ──
+    def _append_resource_row(self, rid='', amount=0):
+        row = self.resources_table.rowCount()
+        self.resources_table.insertRow(row)
+        combo = QComboBox()
+        known = list(self._store.resource_defs.keys()) if self._store else []
+        combo.addItems(known)
+        combo.setEditable(True)
+        if rid:
+            combo.setEditText(rid)      # ISSUE-605：打开时实时填充（可编辑兜底手输）
+        self.resources_table.setCellWidget(row, 0, combo)
+        amt_item = QTableWidgetItem()
+        amt_item.setData(Qt.ItemDataRole.EditRole, float(amount))
+        self.resources_table.setItem(row, 1, amt_item)
+
+    def _add_resource_row(self):
+        self._append_resource_row()
+
+    def _remove_resource_row(self):
+        row = self.resources_table.currentRow()
+        if row >= 0:
+            self.resources_table.removeRow(row)
+
+    # ── 随机池操作（ISSUE-706 自持）──
+    def _refresh_random_pool_summary(self):
+        self.rand_pool_list.clear()
+        for i, pool in enumerate(self._random_pools):
+            names = [c[:6] for c in pool.get('candidates', [])]
+            self.rand_pool_list.addItem(f"池{i+1}: {', '.join(names[:3])}{'...' if len(names)>3 else ''}, 抽{pool.get('count',1)}张")
+
+    def _add_random_pool(self):
+        self._random_pools.append({'candidates': [], 'weights': [], 'count': 1})
+        self._refresh_random_pool_summary()
+
+    def _remove_random_pool(self):
+        idx = self.rand_pool_list.currentRow()
+        if 0 <= idx < len(self._random_pools):
+            self._random_pools.pop(idx)
+            self._refresh_random_pool_summary()
+
+    def _edit_random_pool(self):
+        idx = self.rand_pool_list.currentRow()
+        if idx < 0 and self._random_pools:
+            idx = 0
+        if idx < 0 or idx >= len(self._random_pools):
+            self._add_random_pool()
+            idx = len(self._random_pools) - 1
+        dialog = RandomCardPoolDialog(self._store, self._random_pools[idx], self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._random_pools[idx] = dialog.result()
+            self._refresh_random_pool_summary()
+
+    def result(self):
+        """返回编辑后的 reward dict。"""
+        cards = []
+        for i in range(self.cards_list.count()):
+            it = self.cards_list.item(i)
+            if it.isSelected():
+                cid = it.data(Qt.ItemDataRole.UserRole)
+                if cid:
+                    cards.append(cid)
+        resources = {}
+        for i in range(self.resources_table.rowCount()):
+            combo = self.resources_table.cellWidget(i, 0)
+            amt_item = self.resources_table.item(i, 1)
+            rid = ''
+            if combo is not None and hasattr(combo, 'currentText'):
+                rid = combo.currentText().strip()
+            if rid and amt_item:
+                try:
+                    amount = float(amt_item.data(Qt.ItemDataRole.EditRole) or 0)
+                except (TypeError, ValueError):
+                    amount = 0.0
+                if amount != 0:
+                    resources[rid] = amount
+        return {
+            'cards': cards,
+            'resources': resources,
+            'random_cards': [dict(p) for p in self._random_pools],
+        }
+
+
 class ConfigPanel(QWidget):
 
     config_changed = pyqtSignal(dict)
@@ -1991,6 +2161,7 @@ class ConfigPanel(QWidget):
         """[[milestone]] 配置 UI——与 _setup_pity_config() 统一模式（§3.8.5）"""
         self._milestone_defs = []
         self._select_vouchers: list = []     # P78：自选券候选集（List[SelectVoucherDef] 同构 dict）
+        self._selected_alternate_idx = 0     # P78：当前选中编辑的交替项索引
         self._milestone_random_pools = {}   # milestone_name → [{candidates, weights, count}]
         self._selected_random_pool_idx = 0  # 当前选中编辑的候选池索引（由池列表行选中维护，REVIEW-R1-FIX: ISSUE-003）
         self._current_milestone_row = -1    # REVIEW-R1-FIX: ISSUE-001 —— 追踪当前编辑行（仿 _current_pity_row 模式）
@@ -2107,6 +2278,27 @@ class ConfigPanel(QWidget):
         rand_btn_layout.addStretch()
         detail_form.addRow(rand_btn_layout)
 
+        # ── P78（ISSUE-110 对话框部分）：交替奖励分组 ──
+        # 交替序列——每次触发取下一项、索引模长度循环。摘要 QListWidget + 添加/编辑/移除。
+        detail_form.addRow("── 交替奖励（可选，周期触发时按序循环） ──", QLabel(""))
+        self.ml_alternate_list = QListWidget()
+        self.ml_alternate_list.setMaximumHeight(100)
+        self.ml_alternate_list.currentRowChanged.connect(self._on_alternate_selected)
+        detail_form.addRow("交替项:", self.ml_alternate_list)
+
+        alt_btn_layout = QHBoxLayout()
+        add_alt_btn = QPushButton("添加")
+        add_alt_btn.clicked.connect(self._add_milestone_alternate)
+        edit_alt_btn = QPushButton("编辑")
+        edit_alt_btn.clicked.connect(self._edit_milestone_alternate)
+        remove_alt_btn = QPushButton("移除选中")
+        remove_alt_btn.clicked.connect(self._remove_milestone_alternate)
+        alt_btn_layout.addWidget(add_alt_btn)
+        alt_btn_layout.addWidget(edit_alt_btn)
+        alt_btn_layout.addWidget(remove_alt_btn)
+        alt_btn_layout.addStretch()
+        detail_form.addRow(alt_btn_layout)
+
         main_layout.addWidget(detail_group, 2)
         parent.addLayout(main_layout)
 
@@ -2196,6 +2388,9 @@ class ConfigPanel(QWidget):
             self._milestone_random_pools[md['name']] = md.get('bonus_reward', {}).get('random_cards', [])
             self._selected_random_pool_idx = 0   # REVIEW-R1-FIX: ISSUE-003 —— 切换里程碑时重置池选中
             self._update_milestone_random_summary()
+            # P78（ISSUE-115）：交替项摘要刷新——回填后立即刷新（防行切换残留旧行数据）
+            self._selected_alternate_idx = 0
+            self._refresh_milestone_alternate_summary(row)
         finally:
             for w in _bs_widgets:
                 w.blockSignals(False)
@@ -2286,6 +2481,9 @@ class ConfigPanel(QWidget):
         # 随机卡——从 _milestone_random_pools 回写
         pools = self._milestone_random_pools.get(md['name'], [])
         md.setdefault('bonus_reward', {})['random_cards'] = list(pools)
+
+        # P78（ISSUE-115）：编辑实时刷新交替摘要（行切换后由 _on_milestone_selected 刷新）
+        self._refresh_milestone_alternate_summary(row)
 
         self.milestone_list.item(row).setText(md['name'])
         self._update_preview()
@@ -2416,6 +2614,74 @@ class ConfigPanel(QWidget):
         # REVIEW-R1-FIX: ISSUE-003 —— 恢复选中到当前池（clamp 到有效范围）
         idx = min(self._selected_random_pool_idx, len(pools) - 1)
         self.ml_random_pool_list.setCurrentRow(idx)
+
+    # ── P78（ISSUE-110 交替奖励操作）──
+
+    def _add_milestone_alternate(self):
+        """追加一个空交替项（默认空奖励，弹窗编辑）。"""
+        row = self._current_milestone_row
+        if row < 0:
+            return
+        md = self._milestone_defs[row]
+        md.setdefault('alternate_rewards', []).append({'cards': [], 'resources': {}, 'random_cards': []})
+        # 编辑新项
+        self._selected_alternate_idx = len(md['alternate_rewards']) - 1
+        self._edit_milestone_alternate()
+
+    def _edit_milestone_alternate(self):
+        """打开 MilestoneAlternateDialog 编辑当前选中的交替项（ISSUE-706 对话框自持状态）。"""
+        row = self._current_milestone_row
+        if row < 0:
+            return
+        md = self._milestone_defs[row]
+        alt = md.setdefault('alternate_rewards', [])
+        if not alt:
+            return
+        idx = getattr(self, '_selected_alternate_idx', 0)
+        if idx >= len(alt):
+            idx = 0
+        dialog = MilestoneAlternateDialog(self._store, alt[idx], self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            alt[idx] = dialog.result()      # ISSUE-706：Accept 整体写回第 idx 项
+            self._refresh_milestone_alternate_summary(row)
+            self._flush_milestone_current_detail()
+
+    def _remove_milestone_alternate(self):
+        """移除当前选中的交替项。"""
+        row = self._current_milestone_row
+        if row < 0:
+            return
+        md = self._milestone_defs[row]
+        alt = md.get('alternate_rewards', [])
+        idx = getattr(self, '_selected_alternate_idx', -1)
+        if 0 <= idx < len(alt):
+            alt.pop(idx)
+            self._selected_alternate_idx = max(0, idx - 1)
+            self._refresh_milestone_alternate_summary(row)
+            self._flush_milestone_current_detail()
+
+    def _refresh_milestone_alternate_summary(self, row: int = None):
+        """刷新交替奖励列表摘要（ISSUE-115——行切换后也调用，防显示旧行数据）。"""
+        if row is None:
+            row = self._current_milestone_row
+        self.ml_alternate_list.clear()
+        if row < 0 or row >= len(self._milestone_defs):
+            return
+        md = self._milestone_defs[row]
+        alt = md.get('alternate_rewards', [])
+        for i, item in enumerate(alt):
+            cards = len(item.get('cards', []))
+            res = len(item.get('resources', {}))
+            rnd = len(item.get('random_cards', []))
+            self.ml_alternate_list.addItem(f"项{i+1}: {cards}卡 + {res}资源 + {rnd}随机池")
+        # 恢复选中（若仍在范围内）
+        idx = getattr(self, '_selected_alternate_idx', 0)
+        if 0 <= idx < len(alt):
+            self.ml_alternate_list.setCurrentRow(idx)
+
+    def _on_alternate_selected(self, row):
+        """交替项列表行选中 → 记录当前编辑目标索引。"""
+        self._selected_alternate_idx = row if row >= 0 else 0
 
     # ── 动态控件构建 ──
 
@@ -3734,8 +4000,8 @@ class ConfigPanel(QWidget):
             cid = entry.card_id
             item = QListWidgetItem(f"{cid} ({entry.name})" if entry.name else cid)
             item.setData(Qt.ItemDataRole.UserRole, cid)
+            self._voucher_cards_list.addItem(item)   # 先 addItem 再 setSelected（未入列表的 item 选中态不生效）
             item.setSelected(cid in selected)
-            self._voucher_cards_list.addItem(item)
         self._voucher_cards_list.blockSignals(False)
 
     def _on_voucher_selection_changed(self):

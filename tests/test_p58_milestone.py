@@ -626,10 +626,9 @@ class TestShippedConfigLoads:
         from gacha_simulator.core.config_toml import load_toml
         store = load_toml('gacha_simulator/config/config.toml')
         assert store.milestone.milestones, 'config.toml 应含 [[milestone]] 示例段'
-        # 既有示例（milestone_example_every/at）空 banner = 全部；P78 交替示例显式绑定 pool_c1
-        # （ISSUE-103：banner='' 时多 Banner 下节点按全池合计抽数计，示例须显式绑定演示）
+        # 示例段空 banner = 全部（P78 示例已从默认配置移除，保持基线行为不变）
         for m in store.milestone.milestones:
-            assert m.banner in ('', 'pool_c1'), f"示例里程碑 banner 异常: {m.name} → {m.banner}"
+            assert m.banner == '', f"示例里程碑 banner 异常: {m.name} → {m.banner}"
         # round-trip：加载 → 保存 → 再加载
         import tempfile
         import os

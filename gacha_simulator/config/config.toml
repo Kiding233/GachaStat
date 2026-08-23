@@ -81,7 +81,6 @@ day_overrides = [
 [resources.defs]
 draw_resource = "抽卡资源"
 exchange_currency = "兑换货币"
-endfield_supply_voucher = "武库箱券"   # P78：自选券资源（[[select_voucher]] 候选集段关联）
 
 [resources.initial]
 draw_resource = 55000
@@ -1115,29 +1114,9 @@ random_cards = []
 [milestone.bonus_reward.resources]
 exchange_currency = 300
 
-# ═══ P78 交替里程碑示例——周期触发时奖励 A/B 交替循环（如终末地武器池 100/180/260/340）═══
-# offset = 首节点相位偏移（threshold + offset = 首次触发，如 80 + 20 = 100）
-# alternate_rewards = 交替奖励序列——每次触发取下一条、索引模长度循环
-# banner = 必须显式绑定一个 Banner（ISSUE-103）：banner='' 时计数器对每个 Banner 的
-#   每次 after_draw 都递增，多 Banner 下节点按全池合计抽数计（首节点漂移）。此处绑定
-#   pool_c1 作演示——真实终末地武器池场景须绑定对应武器池 Banner id。
-# 注意：无交替/零偏移里程碑不必写 alternate_rewards/offset 键（条件写键自动省略）
-[[milestone]]
-name = "milestone_example_alternate"
-threshold = 80
-offset = 20
-repeat = true
-max_triggers = 0
-banner = "pool_c1"
-alternate_rewards = [
-    { resources = { endfield_supply_voucher = 1 } },   # 100, 260, 420…  武库箱券
-    { cards = ["standard_ssr_1"] },                    # 180, 340, 500…  UP 卡
-]
-
-# ═══ P78 自选券候选集——资源 id → 可兑换卡片显式列表（只记券不落卡，供查询/展示）═══
-[[select_voucher]]
-voucher = "endfield_supply_voucher"
-cards = ["standard_ssr_2", "standard_ssr_3", "standard_ssr_4"]
+# P78 交替里程碑 / [[select_voucher]] 自选券段：默认配置不内置示例（保持基线行为不变），
+# 用法见 docs/01-活跃/subsystems/模拟服务层/P78 里程碑序列与自选券扩展——交替奖励·偏移·自选券建模.md
+# §3.3 与手册 §十六（终末地武器池 100/180/260/340 交替循环）。
 
 [strategy]
 key = "smart"

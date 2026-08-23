@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtWidgets import QSizePolicy
 
 from ..core.config_store import (
     CardDefEntry,
@@ -3931,7 +3932,12 @@ class ConfigPanel(QWidget):
         voucher_layout.addWidget(self._voucher_hint_label)
         self._voucher_cards_list = QListWidget()
         self._voucher_cards_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        self._voucher_cards_list.setMaximumHeight(150)
+        # P78 布局修复：不再固定 150 上限（否则 group 内下方大片空白）——改为
+        # Expanding 让列表铺满 group 剩余空间；最小高度 80 保证可用性。P77 交接：
+        # 详情面板后续加 lifecycle 占位区时，Expanding 让本列表与 P77 区域动态分配高度。
+        self._voucher_cards_list.setMinimumHeight(80)
+        self._voucher_cards_list.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                               QSizePolicy.Policy.Expanding)
         # 变更实时写回 self._select_vouchers（ISSUE-004 数据流）
         self._voucher_cards_list.itemSelectionChanged.connect(self._on_voucher_selection_changed)
         voucher_layout.addWidget(self._voucher_cards_list)

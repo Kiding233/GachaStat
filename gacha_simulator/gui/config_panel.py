@@ -574,7 +574,7 @@ class ConfigPanel(QWidget):
         resource_tab_layout = QVBoxLayout(resource_tab_content)
         self._setup_resource_tab(resource_tab_layout)
         resource_tab_scroll.setWidget(resource_tab_content)
-        self.left_tabs.addTab(resource_tab_scroll, "资源管理")
+        self.left_tabs.addTab(resource_tab_scroll, "资源获取")
 
         pool_tab_scroll = QScrollArea()
         pool_tab_scroll.verticalScrollBar().setSingleStep(15)
@@ -3947,7 +3947,7 @@ class ConfigPanel(QWidget):
 
         outer.addLayout(main_layout)
 
-        # P78：资源获取规则 / 指定日期等仍在「资源管理」Tab——本 Tab 仅资源定义
+        # P78：资源获取规则 / 指定日期等仍在「资源获取」Tab——本 Tab 仅资源定义
 
     def _on_resource_selected(self, row: int):
         """左列表切换 → 保存当前编辑 → 填充新资源详情。"""
@@ -4042,7 +4042,7 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _setup_resource_tab(self, parent):
-        """「资源管理」Tab——资源获取规则 / 指定日期资源获取 / 日历预览。
+        """「资源获取」Tab——资源获取规则 / 指定日期资源获取 / 日历预览。
 
         P78（方案 X）：资源定义已拆为独立「资源定义」Tab（_setup_resource_def_tab）——
         本 Tab 仅保留资源获取规则、指定日期资源获取、日历预览三块。
@@ -5100,7 +5100,7 @@ class ConfigPanel(QWidget):
         """从 Banner 视图注册资源（§3.10.7 正向同步）：Pool cost + rewards resources_gained。
 
         P61 Ph8 改写：原遍历 pool_table 行（pools 参数），现遍历 _banner_defs
-        （banner → pools[*]）自动补全「资源管理」Tab 的资源定义。
+        （banner → pools[*]）自动补全「资源获取」Tab 的资源定义。
         """
         for b in self._banner_defs:
             for p in b.get('pools', []):
@@ -5789,11 +5789,40 @@ class ConfigPanel(QWidget):
         self.day_overrides_table.blockSignals(False)
 
     def _auto_generate_resource_defs(self):
-        defs = [
-            {'resource_id': 'draw_resource', 'display_name': '抽卡资源', 'initial_amount': 0},
-            {'resource_id': 'exchange_currency', 'display_name': '兑换货币', 'initial_amount': 0},
-        ]
-        self.set_resource_defs(defs)
+        """从全配置汇总缺失资源，只补不覆盖（替代原硬编码覆盖式）。
+
+        两个用途兼容：
+          ① 兜底（_set_defaults / 空 store 加载）——全空时给 2 个默认资源（ISSUE-124）
+          ② 按钮点击——扫描卡池 cost/rewards + 里程碑奖励 + 自选券 voucher id，
+             只补不覆盖，堵死原「点击覆盖成 2 个固定款」误操作陷阱。
+
+        兜底后不 return：加默认后继续扫描（缺陷 B）——空 resource_defs 时也能补全
+        milestone/select_voucher 引入的其它资源，完全吻合「汇总扫描」目标。
+        """
+        # 兜底：全空时也给两个默认（保持 ISSUE-124 文档验收项），但不 return——
+        # 加默认后继续扫描，让「汇总扫描」真正覆盖所有配置源。
+        if not self.resource_defs:
+            defs = [
+                {'resource_id': 'draw_resource', 'display_name': '抽卡资源', 'initial_amount': 0},
+                {'resource_id': 'exchange_currency', 'display_name': '兑换货币', 'initial_amount': 0},
+            ]
+            self.set_resource_defs(defs)
+
+        # 汇总扫描：卡池 cost/rewards（复用 _register_resources_from_pools）
+        # 守卫用 getattr——若 _banner_defs 从未初始化，直接访问会抛 AttributeError。
+        if getattr(self, '_banner_defs', []):
+            self._register_resources_from_pools()
+        # 里程碑奖励（bonus_reward + alternate_rewards 同构）
+        for md in getattr(self, '_milestone_defs', []):
+            for rid in md.get('bonus_reward', {}).get('resources', {}):
+                self._ensure_resource_registered(rid)
+            for alt in md.get('alternate_rewards', []) or []:
+                if isinstance(alt, dict):
+                    for rid in alt.get('resources', {}):
+                        self._ensure_resource_registered(rid)
+        # 自选券 voucher id
+        for sv in getattr(self, '_select_vouchers', []):
+            self._ensure_resource_registered(sv.get('voucher', ''))
 
     def _add_resource_def(self):
         self.resource_defs.append({'resource_id': '', 'display_name': '', 'initial_amount': 0})
@@ -6082,7 +6111,7 @@ class ConfigPanel(QWidget):
                 if rid and rid not in store.resource_defs and rid not in self._warned_milestone_resource_ids:
                     self._warned_milestone_resource_ids.add(rid)
                     QMessageBox.warning(self, "未定义资源",
-                                        f"资源 ID '{rid}' 未在资源管理 Tab 定义，模拟时可能无法识别")
+                                        f"资源 ID '{rid}' 未在资源获取 Tab 定义，模拟时可能无法识别")
             # P78（ISSUE-005/109）：交替奖励项内资源同样纳入一次性警告（与 bonus_reward 同构）
             for alt_item in md.get('alternate_rewards', []) or []:
                 if not isinstance(alt_item, dict):
@@ -6091,7 +6120,7 @@ class ConfigPanel(QWidget):
                     if rid and rid not in store.resource_defs and rid not in self._warned_milestone_resource_ids:
                         self._warned_milestone_resource_ids.add(rid)
                         QMessageBox.warning(self, "未定义资源",
-                                            f"资源 ID '{rid}' 未在资源管理 Tab 定义，模拟时可能无法识别")
+                                            f"资源 ID '{rid}' 未在资源获取 Tab 定义，模拟时可能无法识别")
             # REVIEW-R1-FIX: ISSUE-305 —— 写出前过滤空候选随机池（_build_milestone 对空 candidates 抛 ConfigError）
             # REVIEW-R1-FIX: ISSUE-304 —— 过滤条件扩展为「candidates 为空 或 weights 全零」
             #   （UI 允许权重全 0，直接保存会触发 _build_milestone 全零权重校验抛 ConfigError）

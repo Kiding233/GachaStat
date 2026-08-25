@@ -313,3 +313,29 @@ def test_alternate_resource_undef_warning_once(qapp, monkeypatch):
     # 二次 apply_to_store → 静默（_warned_milestone_resource_ids 已含 ghost_res）
     p.apply_to_store()
     assert len(warnings_called) == 1, f'二次应静默: {warnings_called}'
+
+
+def test_auto_generate_empty_fallback(qapp):
+    """ISSUE-124：空 resource_defs 时 _auto_generate_resource_defs 走兜底 → 默认 draw_resource/exchange_currency。"""
+    p = _make_panel(ConfigStore())   # ConfigStore() 默认 resource_defs = {}（field default_factory=dict）
+    p.resource_defs = []             # 显式清空，避免依赖 _set_defaults 初始化副作用
+    p._auto_generate_resource_defs()
+    ids = p._get_resource_ids()
+    assert 'draw_resource' in ids and 'exchange_currency' in ids, f'空兜底失败: {ids}'
+    assert p._resource_list.count() >= 2, '资源定义左列表应出现默认资源'
+
+
+def test_auto_generate_preserves_existing(qapp):
+    """Ps04 缺陷 A 回填：非空时 _auto_generate 只补不覆盖——已有资源 initial_amount 不变、新资源追加、不重复。"""
+    p = _make_panel(ConfigStore())
+    p.resource_defs = [{'resource_id': 'user_res', 'display_name': '用户资源', 'initial_amount': 50}]
+    p._rebuild_resource_list()
+    p._banner_defs = [{'id': 'b1', 'pools': [{'cost': 'user_res:100 & voucher_new:200', 'rewards': []}]}]
+    p._milestone_defs = [{'name': 'm1', 'bonus_reward': {'resources': {'milestone_res': 5}}, 'alternate_rewards': []}]
+    p._select_vouchers = [{'voucher': 'voucher_new', 'cards': ['c1']}]
+    p._auto_generate_resource_defs()
+    ids = p._get_resource_ids()
+    assert 'user_res' in ids and 'voucher_new' in ids and 'milestone_res' in ids, f'汇总扫描缺失: {ids}'
+    user = [d for d in p.resource_defs if d['resource_id'] == 'user_res'][0]
+    assert user['initial_amount'] == 50, f'已有资源被覆盖: {user}'
+    assert ids.count('user_res') == 1, f'重复注册: {ids}'

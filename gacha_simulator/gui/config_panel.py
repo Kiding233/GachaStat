@@ -1201,10 +1201,21 @@ class ConfigPanel(QWidget):
         b = self._banner_defs[bidx]
         b['name'] = self.banner_name_edit.text().strip()
         new_id = self.banner_id_edit.text().strip() or b.get('id', '')
-        if new_id != b.get('id', ''):
+        _prev_bid = b.get('id', '')
+        if new_id != _prev_bid:
             # §3.10.3 id 变更 → 级联更新保底绑定/卡牌归属中的全限定键
-            self._rename_banner_references(b.get('id', ''), new_id)
+            # （P77：同时改写生命周期规则的 expire_banner 引用）
+            self._rename_banner_references(_prev_bid, new_id)
         b['id'] = new_id
+        if _prev_bid and new_id != _prev_bid and hasattr(self, '_lifecycle_banner_combo'):
+            # P77：下拉候选随 _banner_defs 变更重建；控件原值若指向被重命名的 banner，
+            # 须同步指向新 id，否则保留逻辑会把旧 id 当悬垂项留下、写回时覆盖已改写的值
+            _was = self._lifecycle_banner_combo.currentText()
+            self._refresh_lifecycle_banner_combo(preserve_current=False)
+            _tgt = new_id if _was == _prev_bid else _was
+            _bi = self._lifecycle_banner_combo.findText(_tgt)
+            if _bi >= 0:
+                self._lifecycle_banner_combo.setCurrentIndex(_bi)
         md = self.banner_max_draws_spin.value()
         b['max_draws'] = int(md) if md > 0 else None
         b['available_from'] = self.banner_from_spin.value()
@@ -1246,6 +1257,11 @@ class ConfigPanel(QWidget):
                 changed = True
         if changed:
             self.set_card_defs(existing)
+        # P77：资源生命周期规则的到期对齐目标同步改写。不改写则该规则因 banner
+        # 悬垂在 apply_to_store 重建时被静默过滤（重命名 banner 即丢失引用它的规则）
+        for d in self.resource_defs:
+            if d.get('expire_banner') == old_id:
+                d['expire_banner'] = new_id
 
     # ── Pool 操作 ──
 
@@ -4155,12 +4171,39 @@ class ConfigPanel(QWidget):
         self._resource_detail_group.setEnabled(True)
         self._populate_resource_detail(self.resource_defs[row])
 
+    def _rename_lifecycle_references(self, old_id: str, new_id: str):
+        """资源重命名时同步改写生命周期规则中的转换目标（P77 §3.6 外键级联）。
+
+        仅改写引用方的 on_expire.convert_to；被重命名资源自身的 resource_id 由
+        _flush_resource_detail 直接写入，不在此处理。当前行的转换目标下拉若指向
+        旧 id 需一并更新，否则随后读控件写回时会用旧值覆盖改写结果。
+
+        范围不含 select_vouchers（P78 自选券的资源引用），那属 P78 的外键语义。
+        """
+        if hasattr(self, '_lifecycle_target_combo'):
+            if self._lifecycle_target_combo.currentText() == old_id:
+                self._refresh_lifecycle_target_combo(preserve_current=False)
+                _idx = self._lifecycle_target_combo.findText(new_id)
+                if _idx >= 0:
+                    self._lifecycle_target_combo.setCurrentIndex(_idx)
+        for d in self.resource_defs:
+            on_expire = d.get('on_expire') or {}
+            if on_expire.get('convert_to') == old_id:
+                d['on_expire'] = dict(on_expire, convert_to=new_id)
+
     def _flush_resource_detail(self):
         """从右侧控件读取当前值 → 写回 self.resource_defs[idx]。"""
         if self._current_resource_idx < 0 or self._current_resource_idx >= len(self.resource_defs):
             return
         res = self.resource_defs[self._current_resource_idx]
-        res['resource_id'] = self._resource_id_edit.text().strip()
+        _old_id = res.get('resource_id', '')
+        _new_id = self._resource_id_edit.text().strip()
+        res['resource_id'] = _new_id
+        # P77（§3.6 外键级联）：资源重命名时同步改写引用方的转换目标。放在写入自身
+        # resource_id 之后，使下拉候选已含新 id；不改写则引用方规则会因目标悬垂
+        # 在 apply_to_store 重建时被静默过滤（重命名资源即丢失别的资源的转换规则）。
+        if _old_id and _new_id and _old_id != _new_id:
+            self._rename_lifecycle_references(_old_id, _new_id)
         res['display_name'] = self._resource_name_edit.text().strip()
         res['initial_amount'] = self._resource_init_spin.value()
         # P77：生命周期字段写回（三态 → 归一化存储，供 _lifecycle_rule_from_detail 汇总）

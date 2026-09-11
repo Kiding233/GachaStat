@@ -382,3 +382,121 @@ class TestDetailFlushAndCascade:
         panel._rebuild_resource_list()
         panel.apply_to_store()
         assert panel._store.resource_lifecycle.rules == []
+
+    def test_rename_target_rewrites_referencing_rule(self, qapp, monkeypatch):
+        """重命名被引用资源后，引用方的转换目标同步改写（规则不因悬垂丢失）。
+
+        计划 §3.6 要求重命名时「同步改写旧 id」；若只做删除语义的静默过滤，
+        用户重命名一个被引用的资源会连带丢掉别的资源的转换规则。
+        """
+        from PyQt6.QtWidgets import QMessageBox
+        monkeypatch.setattr(QMessageBox, 'warning',
+                            staticmethod(lambda *a, **k: None))
+
+        panel = _make_panel()
+        panel._resource_list.setCurrentRow(0)
+        panel._lifecycle_expire_mode.setCurrentIndex(2)
+        panel._lifecycle_days_spin.setValue(5.0)
+        panel._lifecycle_action_combo.setCurrentIndex(1)      # 转换到
+        idx = panel._lifecycle_target_combo.findText('exchange_currency')
+        assert idx >= 0
+        panel._lifecycle_target_combo.setCurrentIndex(idx)
+        panel.apply_to_store()
+        assert (panel._store.resource_lifecycle.rules[0].on_expire['convert_to']
+                == 'exchange_currency')
+
+        # 重命名被引用的资源
+        target_row = next(i for i, d in enumerate(panel.resource_defs)
+                          if d['resource_id'] == 'exchange_currency')
+        panel._resource_list.setCurrentRow(target_row)
+        panel._resource_id_edit.setText('renamed_currency')
+        panel._flush_resource_detail()
+        panel.apply_to_store()
+
+        rules = panel._store.resource_lifecycle.rules
+        assert len(rules) == 1, "重命名不应丢失引用方的规则"
+        assert rules[0].on_expire['convert_to'] == 'renamed_currency'
+
+
+# ══════════════════════════════════════════════════════════════════
+# 键空间互通：顶层（config dict）与嵌套（TOML 段）
+# ══════════════════════════════════════════════════════════════════
+class TestKeySpaceInterop:
+    def test_nested_and_top_key_roundtrip(self, qapp, tmp_path):
+        """同一规则经顶层键与嵌套键两条路径往返一致。
+
+        顶层路径：get_config/set_config 用 `resource_lifecycle` 键；
+        嵌套路径：save_toml/load_toml 用 `data['resources']['lifecycle']`。
+        计划 §3.8 6b 要求两路径均一致且互通。
+        """
+        import os
+
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        panel = _make_panel()
+
+        # 顶层键写入
+        cfg = panel.get_config()
+        cfg['resource_lifecycle'] = {
+            'enabled': True,
+            'rules': [{'resource_id': 'draw_resource', 'expire_at': 3.0,
+                       'on_expire': {'convert_to': 'exchange_currency',
+                                     'from': 2, 'to': 1}}],
+        }
+        panel.set_config(cfg)
+        assert len(panel._store.resource_lifecycle.rules) == 1
+
+        # 顶层键读回
+        top_rules = panel.get_config()['resource_lifecycle']['rules']
+        assert top_rules[0]['resource_id'] == 'draw_resource'
+        assert top_rules[0]['on_expire'] == {'convert_to': 'exchange_currency',
+                                             'from': 2, 'to': 1}
+
+        # 嵌套键写盘并读回
+        path = os.path.join(str(tmp_path), 'interop.toml')
+        save_toml(panel._store, path)
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+        assert '[resources.lifecycle]' in text, "应写出嵌套段"
+
+        store2 = load_toml(path)
+        r0 = panel._store.resource_lifecycle.rules[0]
+        r1 = store2.resource_lifecycle.rules[0]
+        assert (r1.resource_id, r1.expire_at, r1.on_expire) == \
+            (r0.resource_id, r0.expire_at, r0.on_expire)
+        assert r1.expire_at == 3 * 86400, "天到秒换算在两路径间应一致"
+
+
+class TestBannerRenameCascade:
+    def test_rename_banner_rewrites_alignment_reference(self, qapp, monkeypatch):
+        """重命名被对齐的 banner 后，生命周期规则的到期对齐目标同步改写。
+
+        banner id 可编辑（banner_id_edit），不改写则该规则因 banner 悬垂在
+        apply_to_store 重建时被静默过滤（重命名 banner 即丢失引用它的规则）。
+        """
+        from PyQt6.QtWidgets import QMessageBox
+        monkeypatch.setattr(QMessageBox, 'warning',
+                            staticmethod(lambda *a, **k: None))
+
+        panel = _make_panel()
+        panel._resource_list.setCurrentRow(0)
+        panel._lifecycle_expire_mode.setCurrentIndex(1)          # 随卡池下架
+        assert panel._lifecycle_banner_combo.count() > 0, "默认配置应有可对齐的 banner"
+        target_bid = panel._lifecycle_banner_combo.itemText(0)
+        panel._lifecycle_banner_combo.setCurrentIndex(0)
+        panel._lifecycle_action_combo.setCurrentIndex(2)         # 清零
+        panel.apply_to_store()
+        assert (panel._store.resource_lifecycle.rules[0].expire_with_banner
+                == target_bid)
+
+        # 在 banner 列表选中该 banner 并重命名
+        brow = next(i for i, b in enumerate(panel._banner_defs)
+                    if b.get('id') == target_bid)
+        panel._on_banner_selected(brow)
+        panel.banner_id_edit.setText('renamed_banner_x')
+        panel._flush_banner_current_detail()
+        panel.apply_to_store()
+
+        rules = panel._store.resource_lifecycle.rules
+        assert len(rules) == 1, "重命名 banner 不应丢失引用它的规则"
+        assert rules[0].expire_with_banner == 'renamed_banner_x'

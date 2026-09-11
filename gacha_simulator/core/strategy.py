@@ -80,6 +80,18 @@ def register_strategy(
 
 
 @dataclass
+class ResourceExpiryPreview:
+    """策略可读的资源到期预览（P77），与 TransitionPreview 同处策略域。"""
+
+    resource_id: str
+    balance: float
+    remaining: int
+    expire_at: float
+    on_expire: Optional[dict] = None
+    description: str = ""
+
+
+@dataclass
 class StrategyContext:
     state: 'GachaState'
     current_pools: List['Pool']
@@ -111,6 +123,8 @@ class StrategyContext:
     all_banners: List = field(default_factory=list)
     # P58（M4a）：里程碑引擎（代理查询，只读——策略不可修改计数器）
     _milestone_engine: Optional['MilestoneEngine'] = field(default=None, repr=False)
+    # P77：资源到期预览（带空列表默认值，P69 契约）
+    resource_expiry: List['ResourceExpiryPreview'] = field(default_factory=list)
 
     def get_milestone_counter(self, name: str) -> int:
         """当前累计抽数（已抽次数），不存在 → 0。余量 = md.threshold - get_milestone_counter(name)。

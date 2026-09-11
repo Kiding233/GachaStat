@@ -85,6 +85,26 @@ exchange_currency = "兑换货币"
 [resources.initial]
 draw_resource = 55000
 
+# ── 资源生命周期（P77，可选段，此处为注释示例）──
+# 限时货币到期处理：到期时刻自动转换或清零。启用时移除段首 # 号。
+# 约束：resource_id 须已在 [resources.defs] 声明；expire_with_banner 须指向
+# 有 end_day 的 banner（永久池不可对齐）；到期时刻与 on_expire 必须成对出现。
+# 三示例对应手册 §二十一 G6：
+#
+# [resources.lifecycle]
+# enabled = true
+# rules = [
+#     # 1) 等额转换（幻塔回火铸金 → 黑市铸金），对齐卡池下架时刻
+#     { resource_id = "tof_token_a", expire_with_banner = "pool_c1",
+#       on_expire = { convert_to = "tof_token_black", from = 1, to = 1 } },
+#     # 2) 非等额精确比例（每 3 个换 2 个，零头随源作废）
+#     { resource_id = "uma_spark_points", expire_at = 12,
+#       on_expire = { convert_to = "uma_clover", from = 3, to = 2 } },
+#     # 3) 到期清零（FGO 天井点数，不转任何常驻货币）
+#     { resource_id = "fgo_spark_points", expire_at = 12,
+#       on_expire = { clear = true } },
+# ]
+
 [[banner]]
 id = "pool_c1"
 name = "角色池1"

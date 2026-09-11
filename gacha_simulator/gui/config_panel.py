@@ -24,6 +24,7 @@ from ..core.config_store import (
 )
 from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
+from ..core.resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig   # P77
 
 
 class PoolDistributionDialog(QDialog):
@@ -911,6 +912,8 @@ class ConfigPanel(QWidget):
         if select_idx >= 0 and select_idx < len(self._banner_defs):
             self.banner_list.setCurrentRow(select_idx)
         self.banner_list.blockSignals(False)
+        # P77：Banner 增删后刷新生命周期「对齐卡池」下拉（数据源为 _banner_defs）
+        self._refresh_lifecycle_combos()
 
     def _on_banner_item_changed(self, item):
         """Banner 列表行勾选状态 → 写回 _banner_defs[idx]['enabled']。"""
@@ -3878,6 +3881,7 @@ class ConfigPanel(QWidget):
         # ── 实例变量 ──
         self.resource_defs: list = []          # List[dict] —— 内部数据（同 _card_defs 模式）
         self._current_resource_idx: int = -1   # 当前选中索引
+        self._resource_lifecycle_enabled: bool = True   # P77：生命周期全局开关（总闸）
 
         outer = QVBoxLayout(parent)
 
@@ -3943,11 +3947,185 @@ class ConfigPanel(QWidget):
         voucher_layout.addWidget(self._voucher_cards_list)
         detail_form.addRow(self._voucher_group)
 
+        # P77：资源生命周期区域（到期时刻 + 到期行为，按资源 id 关联编辑）
+        self._setup_resource_lifecycle_group(detail_form)
+
         main_layout.addWidget(self._resource_detail_group, 2)
 
         outer.addLayout(main_layout)
 
         # P78：资源获取规则 / 指定日期等仍在「资源获取」Tab——本 Tab 仅资源定义
+
+    # ── P77：资源生命周期区域（UI + 读写 + 下拉数据源）──────────────────
+
+    def _setup_resource_lifecycle_group(self, detail_form):
+        """资源生命周期区域：到期时刻（三态）+ 到期行为（三态）+ 转换比例。
+
+        挂载于资源详情表单下（P78 预留的 lifecycle 占位区），按资源 id 关联编辑：
+        字段写回 self.resource_defs[idx]，apply_to_store 时汇总为
+        store.resource_lifecycle.rules。三态与从属控件的联动见 _sync_lifecycle_controls。
+        """
+        self._lifecycle_group = QGroupBox("资源生命周期")
+        lc_outer = QVBoxLayout(self._lifecycle_group)
+
+        self._lifecycle_enabled_cb = QCheckBox("启用资源生命周期")
+        self._lifecycle_enabled_cb.setChecked(True)
+        self._lifecycle_enabled_cb.setToolTip(
+            "全局开关。关闭时已配置的规则仍保留，但模拟不执行到期结算（往返不丢配置）")
+        self._lifecycle_enabled_cb.toggled.connect(self._on_lifecycle_enabled_toggled)
+        lc_outer.addWidget(self._lifecycle_enabled_cb)
+
+        lc_form = QFormLayout()
+
+        self._lifecycle_expire_mode = QComboBox()
+        self._lifecycle_expire_mode.addItems(["永不过期", "对齐卡池", "绝对时间"])
+        self._lifecycle_expire_mode.currentIndexChanged.connect(
+            self._on_lifecycle_expire_mode_changed)
+        lc_form.addRow("到期时刻:", self._lifecycle_expire_mode)
+
+        self._lifecycle_banner_combo = QComboBox()
+        self._lifecycle_banner_combo.currentIndexChanged.connect(
+            self._on_resource_lifecycle_changed)
+        lc_form.addRow("对齐卡池:", self._lifecycle_banner_combo)
+
+        self._lifecycle_days_spin = QDoubleSpinBox()
+        self._lifecycle_days_spin.setRange(0.0, 9999.0)
+        self._lifecycle_days_spin.setDecimals(1)
+        self._lifecycle_days_spin.setSingleStep(1.0)
+        self._lifecycle_days_spin.valueChanged.connect(self._on_resource_lifecycle_changed)
+        lc_form.addRow("到期天数:", self._lifecycle_days_spin)
+
+        self._lifecycle_action_combo = QComboBox()
+        self._lifecycle_action_combo.addItems(["不转换", "转换到", "清零"])
+        self._lifecycle_action_combo.currentIndexChanged.connect(
+            self._on_lifecycle_action_changed)
+        lc_form.addRow("到期行为:", self._lifecycle_action_combo)
+
+        self._lifecycle_target_combo = QComboBox()
+        self._lifecycle_target_combo.currentIndexChanged.connect(
+            self._on_resource_lifecycle_changed)
+        lc_form.addRow("转换目标:", self._lifecycle_target_combo)
+
+        ratio_row = QHBoxLayout()
+        self._lifecycle_from_spin = QSpinBox()
+        self._lifecycle_from_spin.setRange(1, 99999)
+        self._lifecycle_from_spin.valueChanged.connect(self._on_resource_lifecycle_changed)
+        self._lifecycle_to_spin = QSpinBox()
+        self._lifecycle_to_spin.setRange(1, 99999)
+        self._lifecycle_to_spin.valueChanged.connect(self._on_resource_lifecycle_changed)
+        ratio_row.addWidget(QLabel("每"))
+        ratio_row.addWidget(self._lifecycle_from_spin)
+        ratio_row.addWidget(QLabel("个 换"))
+        ratio_row.addWidget(self._lifecycle_to_spin)
+        ratio_row.addWidget(QLabel("个"))
+        ratio_row.addStretch()
+        lc_form.addRow("转换比例:", ratio_row)
+
+        lc_outer.addLayout(lc_form)
+        detail_form.addRow(self._lifecycle_group)
+        self._sync_lifecycle_controls()
+
+    def _on_lifecycle_enabled_toggled(self, checked):
+        """总闸切换：从属控件置灰但值保留（总闸自身始终可点），并刷新预览。"""
+        self._resource_lifecycle_enabled = bool(checked)
+        self._sync_lifecycle_controls()
+        self._update_preview()
+
+    def _on_lifecycle_expire_mode_changed(self):
+        self._sync_lifecycle_controls()
+        self._on_resource_lifecycle_changed()
+
+    def _on_lifecycle_action_changed(self):
+        self._sync_lifecycle_controls()
+        self._on_resource_lifecycle_changed()
+
+    def _sync_lifecycle_controls(self):
+        """三态联动：按当前选择启用从属控件（未选中的保留值但不写入规则）。"""
+        enabled = getattr(self, '_resource_lifecycle_enabled', True)
+        mode = self._lifecycle_expire_mode.currentIndex()
+        self._lifecycle_expire_mode.setEnabled(enabled)
+        self._lifecycle_banner_combo.setEnabled(enabled and mode == 1)
+        self._lifecycle_days_spin.setEnabled(enabled and mode == 2)
+        self._lifecycle_action_combo.setEnabled(enabled)
+
+        is_convert = (self._lifecycle_action_combo.currentIndex() == 1)
+        self._lifecycle_target_combo.setEnabled(enabled and is_convert)
+        self._lifecycle_from_spin.setEnabled(enabled and is_convert)
+        self._lifecycle_to_spin.setEnabled(enabled and is_convert)
+
+    def _on_resource_lifecycle_changed(self):
+        """生命周期控件变更：实时写回当前资源详情并刷新预览。"""
+        self._flush_resource_detail()
+        self._update_preview()
+
+    def _refresh_lifecycle_banner_combo(self):
+        """到期对齐下拉数据源：仅列「有结束时间且非永久池」的 banner id。
+
+        与解析期校验同口径（_is_permanent 原始标记），避免下拉可选但保存后
+        重载报 ConfigError 的口径分叉（P77 ISSUE-302）。
+        """
+        current = self._lifecycle_banner_combo.currentText()
+        self._lifecycle_banner_combo.blockSignals(True)
+        self._lifecycle_banner_combo.clear()
+        for b in getattr(self, '_banner_defs', []) or []:
+            bid = b.get('id', '')
+            if not bid or b.get('is_permanent'):
+                continue
+            if b.get('available_until') is None:
+                continue
+            self._lifecycle_banner_combo.addItem(bid)
+        if current:
+            idx = self._lifecycle_banner_combo.findText(current)
+            if idx >= 0:
+                self._lifecycle_banner_combo.setCurrentIndex(idx)
+        self._lifecycle_banner_combo.blockSignals(False)
+
+    def _refresh_lifecycle_target_combo(self):
+        """转换目标下拉数据源：全部已注册资源 id。"""
+        current = self._lifecycle_target_combo.currentText()
+        self._lifecycle_target_combo.blockSignals(True)
+        self._lifecycle_target_combo.clear()
+        for rid in self._get_resource_ids():
+            self._lifecycle_target_combo.addItem(rid)
+        if current:
+            idx = self._lifecycle_target_combo.findText(current)
+            if idx >= 0:
+                self._lifecycle_target_combo.setCurrentIndex(idx)
+        self._lifecycle_target_combo.blockSignals(False)
+
+    def _refresh_lifecycle_combos(self):
+        """两个下拉数据源一并刷新（资源/Banner 增删后调用）。"""
+        if not hasattr(self, '_lifecycle_banner_combo'):
+            return
+        self._refresh_lifecycle_banner_combo()
+        self._refresh_lifecycle_target_combo()
+
+    def _lifecycle_rule_from_detail(self, res: dict):
+        """资源详情 dict → 生命周期规则 dict；无有效规则返回 None。
+
+        有效性判定：到期时刻已选（banner 或天数）且到期行为已选
+        （转换含目标与比例，或清零）。resource_id 为空亦视为无效。
+        """
+        rid = res.get('resource_id', '')
+        if not rid:
+            return None
+
+        mode = res.get('expire_mode', 'none')
+        if mode == 'banner':
+            banner_id = res.get('expire_banner', '')
+            if not banner_id:
+                return None
+            rule = {'resource_id': rid, 'expire_with_banner': banner_id}
+        elif mode == 'at':
+            rule = {'resource_id': rid, 'expire_at': float(res.get('expire_at') or 0.0)}
+        else:
+            return None
+
+        on_expire = res.get('on_expire')
+        if not on_expire:
+            return None
+        rule['on_expire'] = dict(on_expire)
+        return rule
 
     def _on_resource_selected(self, row: int):
         """左列表切换 → 保存当前编辑 → 填充新资源详情。"""
@@ -3968,19 +4146,69 @@ class ConfigPanel(QWidget):
         res['resource_id'] = self._resource_id_edit.text().strip()
         res['display_name'] = self._resource_name_edit.text().strip()
         res['initial_amount'] = self._resource_init_spin.value()
+        # P77：生命周期字段写回（三态 → 归一化存储，供 _lifecycle_rule_from_detail 汇总）
+        if hasattr(self, '_lifecycle_expire_mode'):
+            mode = self._lifecycle_expire_mode.currentIndex()
+            res['expire_mode'] = ('none', 'banner', 'at')[mode]
+            res['expire_banner'] = (self._lifecycle_banner_combo.currentText()
+                                    if mode == 1 else '')
+            res['expire_at'] = (float(self._lifecycle_days_spin.value())
+                                if mode == 2 else None)
+            action = self._lifecycle_action_combo.currentIndex()
+            if action == 1:
+                res['on_expire'] = {
+                    'convert_to': self._lifecycle_target_combo.currentText(),
+                    'from': int(self._lifecycle_from_spin.value()),
+                    'to': int(self._lifecycle_to_spin.value()),
+                }
+            elif action == 2:
+                res['on_expire'] = {'clear': True}
+            else:
+                res['on_expire'] = None
         # 更新左列表显示
         label = f"{res['resource_id']} ({res['display_name']})" if res['display_name'] else res['resource_id']
         self._resource_list.item(self._current_resource_idx).setText(label)
 
     def _populate_resource_detail(self, res: dict):
         """将单条资源数据填入右侧控件（阻断信号——防逐字段触发 _flush 串扰）。"""
-        for w in (self._resource_id_edit, self._resource_name_edit, self._resource_init_spin):
+        # P77：生命周期控件一并纳入同一阻断区间（回填中途态不得被判为脏而触发写回链）
+        widgets = [self._resource_id_edit, self._resource_name_edit, self._resource_init_spin]
+        if hasattr(self, '_lifecycle_expire_mode'):
+            widgets += [self._lifecycle_expire_mode, self._lifecycle_banner_combo,
+                        self._lifecycle_days_spin, self._lifecycle_action_combo,
+                        self._lifecycle_target_combo, self._lifecycle_from_spin,
+                        self._lifecycle_to_spin]
+        for w in widgets:
             w.blockSignals(True)
         self._resource_id_edit.setText(res.get('resource_id', ''))
         self._resource_name_edit.setText(res.get('display_name', ''))
         self._resource_init_spin.setValue(int(res.get('initial_amount', 0)))
-        for w in (self._resource_id_edit, self._resource_name_edit, self._resource_init_spin):
+        # P77：生命周期字段回填（先刷新下拉数据源，再选值）
+        if hasattr(self, '_lifecycle_expire_mode'):
+            self._refresh_lifecycle_combos()
+            mode = res.get('expire_mode', 'none')
+            self._lifecycle_expire_mode.setCurrentIndex({'none': 0, 'banner': 1, 'at': 2}.get(mode, 0))
+            if res.get('expire_banner'):
+                idx = self._lifecycle_banner_combo.findText(res['expire_banner'])
+                if idx >= 0:
+                    self._lifecycle_banner_combo.setCurrentIndex(idx)
+            self._lifecycle_days_spin.setValue(float(res.get('expire_at') or 0.0))
+            on_expire = res.get('on_expire') or {}
+            if 'convert_to' in on_expire:
+                self._lifecycle_action_combo.setCurrentIndex(1)
+                idx = self._lifecycle_target_combo.findText(on_expire['convert_to'])
+                if idx >= 0:
+                    self._lifecycle_target_combo.setCurrentIndex(idx)
+                self._lifecycle_from_spin.setValue(int(on_expire.get('from', 1)))
+                self._lifecycle_to_spin.setValue(int(on_expire.get('to', 1)))
+            elif on_expire.get('clear'):
+                self._lifecycle_action_combo.setCurrentIndex(2)
+            else:
+                self._lifecycle_action_combo.setCurrentIndex(0)
+        for w in widgets:
             w.blockSignals(False)
+        if hasattr(self, '_lifecycle_expire_mode'):
+            self._sync_lifecycle_controls()
         # P78（ISSUE-004）：候选集回填——填充全部卡 id + 勾选当前资源的候选集
         self._populate_voucher_candidates(res.get('resource_id', ''))
 
@@ -5282,7 +5510,60 @@ class ConfigPanel(QWidget):
                 {'voucher': sv.voucher, 'cards': list(sv.cards)}
                 for sv in store.select_vouchers
             ],
+            # P77：resource_lifecycle 顶层键（与 Store 字段同名；TOML 层落点为嵌套
+            # data['resources']['lifecycle']，两层由 config_toml/config_panel 显式适配）
+            'resource_lifecycle': {
+                'enabled': store.resource_lifecycle.enabled,
+                'rules': [self._lifecycle_rule_to_config(r)
+                          for r in store.resource_lifecycle.rules],
+            },
         }
+
+    def _lifecycle_rule_to_config(self, rule) -> dict:
+        """ResourceLifecycle → config dict（expire_at 以天书写，与 TOML 段同构）。"""
+        entry = {'resource_id': rule.resource_id}
+        if rule.expire_at is not None:
+            entry['expire_at'] = float(rule.expire_at) / DAY
+        elif rule.expire_with_banner:
+            entry['expire_with_banner'] = rule.expire_with_banner
+        entry['on_expire'] = dict(rule.on_expire) if rule.on_expire else {}
+        return entry
+
+    def _lifecycle_config_from_dict(self, cfg: dict):
+        """config dict → ResourceLifecycleConfig（天 → 秒换算；结构非法条目跳过）。
+
+        外键存在性（banner / 转换目标）在此不拒绝：GUI 保存侧
+        _collect_lifecycle_rules 已按当前资源与 Banner 集合做级联过滤，
+        且写盘后重载走解析期完整校验（config_toml._build_resource_lifecycle）。
+        此处只做结构层兜底，避免单条畸形条目导致整体恢复失败。
+        """
+        from ..core.resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig
+
+        rules = []
+        raw_rules = cfg.get('rules', [])
+        if isinstance(raw_rules, list):
+            for item in raw_rules:
+                if not isinstance(item, dict):
+                    continue
+                rid = str(item.get('resource_id', '')).strip()
+                if not rid:
+                    continue
+                rule = ResourceLifecycle(resource_id=rid)
+                if item.get('expire_with_banner'):
+                    rule.expire_with_banner = str(item['expire_with_banner'])
+                elif item.get('expire_at') is not None:
+                    try:
+                        rule.expire_at = float(item['expire_at']) * DAY
+                    except (TypeError, ValueError):
+                        continue
+                else:
+                    continue
+                on_expire = item.get('on_expire')
+                if not isinstance(on_expire, dict) or not on_expire:
+                    continue
+                rule.on_expire = dict(on_expire)
+                rules.append(rule)
+        return ResourceLifecycleConfig(enabled=bool(cfg.get('enabled', True)), rules=rules)
 
     def _milestone_to_dict(self, m) -> dict:
         """MilestoneDef → config dict（P78 ISSUE-121：条件省略键）。
@@ -5572,6 +5853,11 @@ class ConfigPanel(QWidget):
             for item in sv_list:
                 store.resource_defs.setdefault(item.get('voucher', ''), item.get('voucher', ''))
 
+        # P77：resource_lifecycle 恢复（新键优先，兼容一次性旧 lifecycle 键；天 → 秒换算）
+        lc_cfg = config.get('resource_lifecycle', config.get('lifecycle'))
+        if isinstance(lc_cfg, dict):
+            store.resource_lifecycle = self._lifecycle_config_from_dict(lc_cfg)
+
         # P60：统一填充 featured_card_ids
         for pool in store.pools:
             pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
@@ -5698,6 +5984,8 @@ class ConfigPanel(QWidget):
             label = f"{rid} ({name})" if name else rid
             self._resource_list.addItem(label)
         self._resource_list.blockSignals(False)
+        # P77：资源增删后刷新生命周期「转换目标」下拉（数据源为资源 id 集合）
+        self._refresh_lifecycle_combos()
         self._current_resource_idx = -1
         self._resource_detail_group.setEnabled(False)
 
@@ -6150,6 +6438,47 @@ class ConfigPanel(QWidget):
             if sv['voucher'] in store.resource_defs
         ]
 
+        # P77：资源生命周期写回（扫描资源详情汇总；外键级联过滤见 _collect_lifecycle_rules）
+        store.resource_lifecycle = ResourceLifecycleConfig(
+            enabled=getattr(self, '_resource_lifecycle_enabled', True),
+            rules=self._collect_lifecycle_rules(set(store.resource_defs.keys())),
+        )
+
+    def _collect_lifecycle_rules(self, valid_resource_ids):
+        """扫描资源详情汇总生命周期规则；外键失效或自环的规则静默过滤。
+
+        过滤强度与 select_vouchers 级联（ISSUE-702）一致：
+        资源已删除或重命名、banner 不再可对齐（被删或为永久池）、转换目标
+        不在当前资源集合内，均丢弃该条目而非写出悬垂引用。
+        """
+        self._flush_resource_detail()   # 当前编辑行可能未失焦，先落盘再扫描
+        valid_banners = {b.get('id', '') for b in getattr(self, '_banner_defs', []) or []
+                         if b.get('id') and not b.get('is_permanent')
+                         and b.get('available_until') is not None}
+        rules = []
+        seen = set()
+        for d in self.resource_defs:
+            rule = self._lifecycle_rule_from_detail(d)
+            if rule is None:
+                continue
+            rid = rule['resource_id']
+            if rid not in valid_resource_ids or rid in seen:
+                continue
+            if 'expire_with_banner' in rule and rule['expire_with_banner'] not in valid_banners:
+                continue
+            on_expire = rule.get('on_expire') or {}
+            target = on_expire.get('convert_to')
+            if target is not None and (target not in valid_resource_ids or target == rid):
+                continue    # 悬垂目标或自环（解析期亦拒绝自环）
+            seen.add(rid)
+            rules.append(ResourceLifecycle(
+                resource_id=rid,
+                expire_at=(rule['expire_at'] * DAY if 'expire_at' in rule else None),
+                expire_with_banner=rule.get('expire_with_banner'),
+                on_expire=dict(on_expire),
+            ))
+        return rules
+
     def _filter_alternate_rewards(self, alt_rewards):
         """P78 ISSUE-601：保存侧防线——过滤 alternate_rewards 空 dict 项与空 candidates/全零权重随机卡。
 
@@ -6219,6 +6548,8 @@ class ConfigPanel(QWidget):
                 'max_draws': getattr(b, 'max_draws', None),
                 'available_from': b.available_from / DAY if b.available_from is not None else None,
                 'available_until': b.available_until / DAY if b.available_until is not None else None,
+                # P77：归一前永久池标记（供生命周期「对齐卡池」下拉过滤，与解析期校验同口径）
+                'is_permanent': getattr(b, '_is_permanent', False),
                 'pools': pools,
                 'lifecycle': lifecycle,
             })
@@ -6380,6 +6711,32 @@ class ConfigPanel(QWidget):
             {'voucher': sv.voucher, 'cards': list(sv.cards)}
             for sv in store.select_vouchers
         ]
+        # P77：资源生命周期回填——全局开关 + 按 resource_id 索引写回各资源详情 dict
+        self._resource_lifecycle_enabled = store.resource_lifecycle.enabled
+        if hasattr(self, '_lifecycle_enabled_cb'):
+            self._lifecycle_enabled_cb.blockSignals(True)
+            self._lifecycle_enabled_cb.setChecked(self._resource_lifecycle_enabled)
+            self._lifecycle_enabled_cb.blockSignals(False)
+        _lc_by_res = {r.resource_id: r for r in store.resource_lifecycle.rules}
+        for _d in self.resource_defs:
+            _rule = _lc_by_res.get(_d.get('resource_id', ''))
+            if _rule is None:
+                _d['expire_mode'] = 'none'
+                _d['expire_banner'] = ''
+                _d['expire_at'] = None
+                _d['on_expire'] = None
+                continue
+            if _rule.expire_with_banner:
+                _d['expire_mode'] = 'banner'
+                _d['expire_banner'] = _rule.expire_with_banner
+                _d['expire_at'] = None
+            else:
+                _d['expire_mode'] = 'at'
+                _d['expire_banner'] = ''
+                _d['expire_at'] = ((_rule.expire_at / DAY)
+                                   if _rule.expire_at is not None else 0.0)
+            _d['on_expire'] = dict(_rule.on_expire) if _rule.on_expire else None
+        self._refresh_lifecycle_combos()
         # REVIEW-R1-FIX: ISSUE-010 —— _populate_milestone_cards_list 调用时机：store 就绪后立即填充
         #   固定卡多选区域（否则 ml_cards_list 恒空，bonus_reward.cards 固定卡多选无法 GUI 编辑）
         self._populate_milestone_cards_list()

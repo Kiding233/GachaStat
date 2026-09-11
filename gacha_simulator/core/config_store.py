@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
 from .overflow import OverflowBand
+from .resource_lifecycle import ResourceLifecycleConfig
 
 # P61：秒/天换算——Banner 时间窗口（秒，§3.13.4）与展平视图 start_day/end_day（天）换算。
 # 每个模块自带一份（banner.py/resource_gain.py 等同口径），config_store 展平视图消费。
@@ -104,6 +105,9 @@ class BannerEntry:
     available_until: Optional[float] = None
     pools: List[BannerPoolEntry] = field(default_factory=list)
     lifecycle: List[LifecycleRuleEntry] = field(default_factory=list)
+    # P77：归一前原始「永久池」标记（TOML 缺 end_day）。归一后 available_until 恒非 None，
+    # 无法据此区分永久池，故保留原始标记供 expire_with_banner 校验与 GUI 下拉过滤同口径判定。
+    _is_permanent: bool = False
 
 
 @dataclass
@@ -241,6 +245,7 @@ class ConfigStore:
     pity: PityConfig = field(default_factory=PityConfig)
     milestone: MilestoneConfig = field(default_factory=MilestoneConfig)  # ← P58
     select_vouchers: List[SelectVoucherDef] = field(default_factory=list)  # ← P78：自选券候选集
+    resource_lifecycle: ResourceLifecycleConfig = field(default_factory=ResourceLifecycleConfig)  # ← P77：限时货币生命周期
     gain_rules: List[GainRule] = field(default_factory=list)
     day_overrides: List[DayOverride] = field(default_factory=list)
     initial_resources: Dict[str, float] = field(default_factory=dict)
@@ -274,6 +279,7 @@ class ConfigStore:
         self.pity = PityConfig()
         self.milestone = MilestoneConfig()                            # ← P58
         self.select_vouchers.clear()                                   # ← P78
+        self.resource_lifecycle = ResourceLifecycleConfig()            # ← P77：避免二次加载残留
         self.gain_rules.clear()
         self.day_overrides.clear()
         self.initial_resources.clear()

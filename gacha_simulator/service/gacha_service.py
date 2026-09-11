@@ -1,12 +1,15 @@
 from typing import Dict, List, Optional, Union
+import math
 import time
 import uuid
+import warnings
 from ..core import (
     Banner, GachaState, Pool, DrawAction, WaitAction, NonDrawAction,
     InfoVector, Strategy, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
     build_strategy_context,
     SimulationCollector, InfoVectorCollector, CompactCollector,
     MilestoneEngine,   # P58（M4a）：里程碑引擎类型注解
+    ResourceLifecycle, resolve_expire_time,   # P77：资源生命周期
 )
 from ..core.action import NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from ..core.pity import PityEngine, PityState
@@ -82,6 +85,7 @@ class GachaService:
         card_overflow_map: Optional[Dict[str, list]] = None,
         notifier: Optional[Notifier] = None,  # P61 Ph0：装配层注入共享实例，None 时服务内 fallback 自建
         milestone_engine: Optional['MilestoneEngine'] = None,  # P58：里程碑引擎（策略层查询 + M4 inline 消费），None 时无里程碑行为
+        resource_lifecycle_rules: Optional[List[ResourceLifecycle]] = None,  # P77：资源生命周期规则，None 时无到期行为
     ):
         # ── P61（§3.5 要点 10）：构造桥——双型收纳为运行时 Banner 字典 ──
         # 元素为 Pool → 就地单池包装 Banner(id=p.id, pools={'main': p})（原子提交→Ph6 间
@@ -112,6 +116,31 @@ class GachaService:
         self.milestone_engine = milestone_engine or None   # P58：None 时无里程碑行为
         self._notifier = notifier or Notifier()
         self.session_id = str(uuid.uuid4())
+
+        # ── P77：资源生命周期索引：到期规则表 + 到期时刻排序表 ──
+        # 两结构同源派生（先 _expire_rules_by_res 再排序表），避免双结构漂移。
+        # expire_with_banner 在构造期展开为具体到期时刻；无法映射（如 worst_impact
+        # 合成 banner id）的规则发 warning 跳过，不阻断模拟（P77 §3.1.5 豁免路径）。
+        self._resource_lifecycle_rules: List[ResourceLifecycle] = list(resource_lifecycle_rules or [])
+        self._expire_rules_by_res: Dict[str, ResourceLifecycle] = {}
+        _banner_until = {b.id: b.available_until for b in self._banners.values()}
+        for _rule in self._resource_lifecycle_rules:
+            if resolve_expire_time(_rule, _banner_until) is None:
+                warnings.warn(
+                    f"资源生命周期规则 '{_rule.resource_id}' 的 expire_with_banner="
+                    f"'{_rule.expire_with_banner}' 无法映射到期时刻（banner 不存在或无结束时间）"
+                    f"，该规则已跳过（P77：限时货币在此路径不会过期）"
+                )
+                continue
+            self._expire_rules_by_res[_rule.resource_id] = _rule
+        self.resource_expiry_times_sorted: List[tuple] = sorted(
+            [(rid, resolve_expire_time(r, _banner_until))
+             for rid, r in self._expire_rules_by_res.items()],
+            key=lambda x: x[1],
+        )
+        # 策略预览数据源（不可变 tuple，避免每次迭代重复构造列表）
+        self._lifecycle_rules_for_ctx = tuple(self._expire_rules_by_res.values())
+
         # ── P61（Ph2）：单抽粒度 after_draw 订阅——生命周期转换唯一触发点之一 ──
         # priority=1：P58 以 priority=0 订阅（里程碑资源注入先执行），P61 转换后执行。
         # handler 透传 card_id / state.real_time（card_obtained / time_window 求值输入，ISSUE-001）。
@@ -125,6 +154,70 @@ class GachaService:
         if banner is None:
             return
         banner._check_transitions(card_id=card_id, real_time=state.real_time)
+
+    # ── P77：资源到期结算 ─────────────────────────────────────────
+
+    def _check_resource_expiries(self, real_time, state, total_consumed, total_gained, recorded):
+        """P77：资源到期检查，到期即结算（幂等，结算后移出待结算集合）。
+
+        调用点：run_simulation 循环前一次（首迭代前置，保证策略首次取上下文时
+        已结算）+ 等待期 / 每抽后 / 循环收尾三处时间检查块。
+
+        同到期时刻多资源按「到期瞬间余额快照」两阶段结算（P77 ISSUE-303）：
+        阶段一快照各源资源余额，阶段二依次执行，避免 A→B 后膨胀的 B 在同一次
+        检查内被 B→C 规则重复转换，导致零头作废语义分叉。
+
+        recorded: 已结算 resource_id 集合（幂等守卫，real_time 继续推进不重复转换）。
+        """
+        if not self.resource_expiry_times_sorted:
+            return
+        due: List[str] = []
+        for rid, ret in self.resource_expiry_times_sorted:
+            if real_time < ret:
+                break                       # 已按到期时刻升序，后续均未到期
+            if rid not in recorded:
+                due.append(rid)
+        if not due:
+            return
+        snapshot = {rid: state.resources.get(rid, 0) for rid in due}
+        for rid in due:
+            recorded.add(rid)
+            self._settle_resource_expiry(
+                self._expire_rules_by_res[rid], snapshot[rid],
+                state, total_consumed, total_gained,
+            )
+
+    def _settle_resource_expiry(self, rule, balance, state, total_consumed, total_gained):
+        """P77：单条规则结算，balance 为到期瞬间快照余额。
+
+        转换 = 源全额扣减（含零头）+ 目标按完整兑换对入账：
+        可换数量 = (floor(balance) // from) * to，零头随源作废（到期即作废，无找回）。
+        清零 = 源全额扣减，无目标入账。
+
+        记账（记账语义见 P77 §3.5）：转换记源 total_consumed + 目标 total_gained；
+        清零记源 total_consumed。仅紧凑路径有汇总账（total_* 非 None），明细路径
+        （InfoVector）无汇总账可写，只做余额变更，两条路径资源余额变化完全一致。
+        """
+        if balance <= 0:
+            return
+        on_expire = rule.on_expire or {}
+        if 'convert_to' in on_expire:
+            f = on_expire['from']
+            t = on_expire['to']
+            q, _r = divmod(math.floor(balance), f)   # 完整兑换对；零头随源作废
+            amount = q * t
+            state.spend({rule.resource_id: balance})
+            if amount > 0:
+                state.gain({on_expire['convert_to']: amount})
+            if total_consumed is not None:
+                total_consumed[rule.resource_id] = total_consumed.get(rule.resource_id, 0) + balance
+                if amount > 0:
+                    total_gained[on_expire['convert_to']] = (
+                        total_gained.get(on_expire['convert_to'], 0) + amount)
+        elif on_expire.get('clear'):
+            state.spend({rule.resource_id: balance})
+            if total_consumed is not None:
+                total_consumed[rule.resource_id] = total_consumed.get(rule.resource_id, 0) + balance
 
     # ── P56：非抽卡动作（定轨切换/取消） ──
 
@@ -223,6 +316,16 @@ class GachaService:
         total_consumed = {} if _is_compact else None
         total_gained = {} if _is_compact else None
 
+        # ── P77：资源到期结算状态（移出 _is_compact 守卫，明细/InfoVector 路径亦须
+        # 触发到期，ISSUE-203；记账侧 total_* 在明细路径为 None，_settle 内已做保护）──
+        recorded_resource_expiries: set = set()
+
+        # P77（ISSUE-035）：首迭代前置结算，保证策略首次 build_strategy_context 前已完成
+        # 到期结算（初始 real_time 已越过到期点时，ctx.resource_expiry 的 remaining==0
+        # 与「资源已清算」状态一致，避免策略基于已到期状态却读到未结算余额）
+        self._check_resource_expiries(
+            real_time, state, total_consumed, total_gained, recorded_resource_expiries)
+
         for iteration in range(max_iterations):
             if _check(state, [], stats):
                 break
@@ -250,6 +353,7 @@ class GachaService:
                 lookahead=_lookahead,
                 resource_gain=_resource_gain,
                 _milestone_engine=self.milestone_engine,   # P58（M4a）：里程碑查询
+                resource_lifecycle_rules=self._lifecycle_rules_for_ctx,   # P77：资源到期预览
             )
 
             action = _strategy.select_action(ctx)
@@ -371,6 +475,10 @@ class GachaService:
                 for b in active_banners:
                     b._check_transitions(real_time=state.real_time)
 
+                # P77：资源到期结算先于 banner 快照（ISSUE-306：快照须含转换收尾结果）
+                self._check_resource_expiries(
+                    real_time, state, total_consumed, total_gained, recorded_resource_expiries)
+
                 if _is_compact:
                     for bid, bet in banner_end_times_sorted:
                         if bid not in recorded_banner_ends and real_time >= bet:
@@ -390,6 +498,10 @@ class GachaService:
             else:
                 raise ValueError(f"Unknown action type: {action}")
 
+            # P77：资源到期结算先于 banner 快照（ISSUE-306）
+            self._check_resource_expiries(
+                real_time, state, total_consumed, total_gained, recorded_resource_expiries)
+
             if _is_compact:
                 for bid, bet in banner_end_times_sorted:
                     if bid not in recorded_banner_ends and real_time >= bet:
@@ -401,6 +513,10 @@ class GachaService:
 
         state.real_time = real_time
         state.resources = resources
+
+        # P77：循环收尾的资源到期结算（ISSUE-306 同序：先资源后 banner 快照）
+        self._check_resource_expiries(
+            real_time, state, total_consumed, total_gained, recorded_resource_expiries)
 
         if _is_compact:
             for bid, bet in banner_end_times_sorted:

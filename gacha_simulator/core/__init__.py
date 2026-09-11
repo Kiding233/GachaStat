@@ -22,6 +22,7 @@ from .pity import (
 )
 from .milestone import MilestoneEngine, MilestoneDef, MilestoneConfig, register_milestone_engine  # P58
 from .config_store import SelectVoucherDef  # P78
+from .resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig, resolve_expire_time  # ← P77
 from .strategy import (
     Strategy, StrategyContext, StrategyMeta, register_strategy,
     SmartStrategy, PoolQuotaStrategy, PityReserveStrategy, StopOnTargetStrategy,
@@ -125,6 +126,7 @@ __all__ = [
     'SoftPityMixin', '_redistribute_scope',
     'MilestoneEngine', 'MilestoneDef', 'MilestoneConfig', 'register_milestone_engine',
     'SelectVoucherDef',
+    'ResourceLifecycle', 'ResourceLifecycleConfig', 'resolve_expire_time',
     'Strategy', 'StrategyContext', 'StrategyMeta', 'register_strategy',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',

@@ -17,6 +17,7 @@ from typing import Dict, Any, Optional, Callable
 from multiprocessing import Pool as MPPool
 from dataclasses import dataclass, field as dc_field
 
+from gacha_simulator.core.config_store import ConfigError   # P77：from_dict 类型守卫异常通道
 from gacha_simulator.core.stop_condition import AllPoolsEndCondition
 from gacha_simulator.core.strategy import (
     create_strategy,
@@ -85,6 +86,10 @@ class SimulationEnv:
     # ⚠ P58 纠正（P61 落点 #1）：本字段保留 None 兜底【不激活】——配置由 milestone_defs 承接。
     # 装配块条件由 `env.milestone_engine is not None` 改写为 `env.milestone_defs`（M4b）。
     milestone_engine: Any = None
+    # P77：资源生命周期规则（List[ResourceLifecycle]），from_config_store 按 enabled
+    # 门控填充（关闭时为空列表，GachaService 不建到期索引）；_run_single 透传至
+    # GachaService。带默认值保证跨进程 pickle 兼容。
+    resource_lifecycle_rules: list = dc_field(default_factory=list)
 
 
 def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None, rarity_rank=None):
@@ -305,6 +310,8 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
         card_overflow_map=env.card_overflow_map,
         notifier=notifier,
         milestone_engine=_milestone_engine,   # P58（M4b）：策略层查询 + M4a 传参（None 时无里程碑行为）
+        # P77：资源生命周期规则（env 侧已按 enabled 门控；规则为纯数据，浅拷贝列表隔离）
+        resource_lifecycle_rules=list(env.resource_lifecycle_rules or []),
     )
     state = GachaState(resources=dict(initial_resources))
     return service.run_simulation_compact(state)
@@ -783,6 +790,13 @@ class SimulationEnvBuilder:
         _ms_cfg = getattr(config_store, 'milestone', MilestoneConfig())
         _milestone_defs = list(_ms_cfg.milestones) if _ms_cfg.enabled else []
 
+        # P77：资源生命周期规则提取：enabled 总闸门控（关闭时透传空列表，GachaService
+        # 构造期不建到期索引、跳过到期检查）。深拷贝隔离跨模拟状态。
+        import copy as _copy
+        from gacha_simulator.core.resource_lifecycle import ResourceLifecycleConfig
+        _lc_cfg = getattr(config_store, 'resource_lifecycle', ResourceLifecycleConfig())
+        _lifecycle_rules = _copy.deepcopy(list(_lc_cfg.rules)) if _lc_cfg.enabled else []
+
         return SimulationEnv(
             pools=banners,
             schedule_mgr=schedule_mgr,
@@ -806,11 +820,21 @@ class SimulationEnvBuilder:
             milestone_defs=_milestone_defs,
             # P61 已落地的 milestone_engine 字段传 None（不激活）——由 milestone_defs 承接
             milestone_engine=None,
+            # P77：资源生命周期规则（enabled 门控后）
+            resource_lifecycle_rules=_lifecycle_rules,
         )
 
     @staticmethod
     def from_dict(config: dict) -> 'SimulationEnv':
         """从字典构造 SimulationEnv（供 worst_impact.py 等不使用 ConfigStore 的调用方使用）。"""
+        # P77：仅接受单一规范键 resource_lifecycle_rules（不回退顶层 resource_lifecycle，
+        # 该名与 ConfigStore.resource_lifecycle: ResourceLifecycleConfig 同名，回退分支可能
+        # 取到配置对象而非 List[ResourceLifecycle]，遍历期类型错误且与 TOML 嵌套路径混淆）
+        _lc = config.get('resource_lifecycle_rules', [])
+        if not isinstance(_lc, list):
+            raise ConfigError(
+                'resource_lifecycle_rules 须为 List[ResourceLifecycle]，'
+                f'当前为 {type(_lc).__name__}')
         return SimulationEnv(
             pools=config['pools'],
             schedule_mgr=config['schedule_mgr'],
@@ -826,6 +850,7 @@ class SimulationEnvBuilder:
             stop_condition=config.get('stop_condition'),
             card_overflow_map=config.get('card_overflow_map', {}),
             milestone_defs=config.get('milestone_defs', []),   # ← P58：worst_impact 等非 ConfigStore 调用方不丢失
+            resource_lifecycle_rules=_lc,                       # ← P77
         )
 
     @staticmethod

@@ -96,6 +96,9 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     # P63：构建 card_overflow_map（必须在 _build_cards 和 _build_rarity_defaults 之后）
     _build_card_overflow_map(store)
 
+    # P77：资源生命周期段（须在 _build_banners/_normalize_permanent_banners 之后，依赖永久池标记）
+    _build_resource_lifecycle(data, store)
+
     return store
 
 
@@ -159,6 +162,9 @@ def save_toml(store: ConfigStore, path: str) -> None:
 
     # P61：Banner 段（[[banner]] + [[banner.pool]] + [[banner.pool.reward]] + [[banner.lifecycle]]）
     _save_banners(store, data)
+
+    # P77：资源生命周期段（两档条件写键）
+    _save_resource_lifecycle(store, data)
 
     # pity（P55 扁平化格式）
     if store.pity.enabled and store.pity.pities:
@@ -1096,6 +1102,180 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
     store.milestone = MilestoneConfig(enabled=True, milestones=milestones)
 
 
+def _build_resource_lifecycle(data: dict, store: ConfigStore) -> None:
+    """[resources.lifecycle] → store.resource_lifecycle（P77）。
+
+    enabled 开关：顶层启用标志。关闭时 rules 仍解析校验，透传期收敛为空
+    （见 batch_simulator）。显式报错而非静默漂移：
+    到期时刻二选一 / banner 引用 / 永久池拒绝 / resource_id 存在性 / 去重 /
+    on_expire 两态 / 自环 / 到期与动作成对 / from,to 正整数。
+    """
+    from .resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig
+
+    raw = data.get('resources', {}).get('lifecycle')
+    if raw is None:
+        store.resource_lifecycle = ResourceLifecycleConfig(enabled=True, rules=[])
+        return
+    if not isinstance(raw, dict):
+        raise ConfigError("resources.lifecycle 必须是表（dict）")
+    enabled = raw.get('enabled', True)
+    if not isinstance(enabled, bool):
+        raise ConfigError("resources.lifecycle.enabled 必须是布尔值")
+    rules_raw = raw.get('rules', [])
+    if not isinstance(rules_raw, list):
+        raise ConfigError("resources.lifecycle.rules 必须是数组")
+
+    # banner id → available_until 映射（用于 expire_with_banner 展开与引用校验）
+    banner_until = {b.id: b.available_until for b in store.banner.banners}
+    banner_ids = set(banner_until.keys())
+    # 归一前永久池（无 end_day）：不可作为到期对齐目标（复用虚假归一时间）
+    permanent_ids = {b.id for b in store.banner.banners
+                     if getattr(b, '_is_permanent', False)}
+
+    seen_resource = set()
+    rules: List[ResourceLifecycle] = []
+    for idx, item in enumerate(rules_raw):
+        if not isinstance(item, dict):
+            raise ConfigError(f"resources.lifecycle.rules[{idx}] 必须是表（dict）")
+        rid = item.get('resource_id', '')
+        if not isinstance(rid, str) or not rid.strip():
+            raise ConfigError(f"resources.lifecycle.rules[{idx}] 缺少 resource_id")
+        rid = rid.strip()
+        # 同一 resource_id 只允许一条
+        if rid in seen_resource:
+            raise ConfigError(f"resources.lifecycle: resource_id '{rid}' 重复，一个资源只允许一条生命周期")
+        seen_resource.add(rid)
+        # resource_id 必须已在 resource_defs 中定义
+        if rid not in store.resource_defs:
+            raise ConfigError(f"resources.lifecycle.rules[{idx}] 的 resource_id '{rid}' 未在 [resources.defs] 中定义")
+
+        has_at = 'expire_at' in item
+        has_banner = 'expire_with_banner' in item
+        if has_at == has_banner:
+            raise ConfigError(
+                f"resources.lifecycle.rules[{idx}] 的 expire_at 与 expire_with_banner 必须二选一"
+            )
+
+        expire_at_sec = None
+        expire_with_banner = None
+        if has_at:
+            try:
+                expire_at_sec = float(item['expire_at']) * DAY
+            except Exception:
+                raise ConfigError(f"resources.lifecycle.rules[{idx}] 的 expire_at 必须为数值（天）")
+        else:
+            eb = item.get('expire_with_banner', '')
+            if not isinstance(eb, str) or not eb.strip():
+                raise ConfigError(f"resources.lifecycle.rules[{idx}] 的 expire_with_banner 必须为非空字符串")
+            eb = eb.strip()
+            if eb not in banner_ids:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_with_banner '{eb}' 不存在"
+                )
+            if eb in permanent_ids:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_with_banner '{eb}' 指向永久 Banner"
+                    "（归一前无结束时间，需为该 Banner 显式配置 end_day）"
+                )
+            avail = banner_until.get(eb)
+            if avail is None:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_with_banner '{eb}' 无可用结束时间"
+                )
+            expire_with_banner = eb
+
+        on_expire = item.get('on_expire')
+        if on_expire is None or not isinstance(on_expire, dict) or not on_expire:
+            raise ConfigError(
+                f"resources.lifecycle.rules[{idx}] 缺少 on_expire 或 on_expire 既不是转换也不是清零"
+                "，到期时间与 on_expire 必须成对出现"
+            )
+        has_convert = 'convert_to' in on_expire
+        has_clear = 'clear' in on_expire
+        if has_convert == has_clear:
+            raise ConfigError(
+                f"resources.lifecycle.rules[{idx}] 的 on_expire 必须二选一："
+                "转换（convert_to+from/to）或清零（clear）"
+            )
+        if has_convert:
+            tgt = on_expire.get('convert_to', '')
+            if not isinstance(tgt, str) or not tgt.strip():
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.convert_to 必须为非空字符串"
+                )
+            tgt = tgt.strip()
+            if tgt == rid:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 convert_to 不能与 resource_id 相同（自环无意义）"
+                )
+            # from/to 正整数
+            fval = on_expire.get('from')
+            tval = on_expire.get('to')
+            if isinstance(fval, bool) or not isinstance(fval, int):
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.from 必须为正整数"
+                )
+            if isinstance(tval, bool) or not isinstance(tval, int):
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.to 必须为正整数"
+                )
+            if fval < 1 or tval < 1:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.from/to 必须 ≥ 1"
+                )
+            on_expire_norm = {'convert_to': tgt, 'from': int(fval), 'to': int(tval)}
+        else:
+            # clear 分支：值任意 truthy 均视为清零（与示例 clear=true 同构）
+            on_expire_norm = {'clear': True}
+
+        rules.append(ResourceLifecycle(
+            resource_id=rid,
+            expire_at=expire_at_sec,
+            expire_with_banner=expire_with_banner,
+            on_expire=on_expire_norm,
+        ))
+
+    store.resource_lifecycle = ResourceLifecycleConfig(enabled=bool(enabled), rules=rules)
+
+
+def _save_resource_lifecycle(store: ConfigStore, data: dict) -> None:
+    """将 store.resource_lifecycle 写回 data['resources']['lifecycle']（P77）。
+
+    两档条件写键：
+    - enabled==False 恒写（保留关闭态，避免往返丢失）
+    - enabled==True 且 rules 非空才写段，空列表省略段
+    """
+    lc = getattr(store, 'resource_lifecycle', None)
+    if lc is None:
+        return
+    if not lc.enabled:
+        # 关闭态恒写（rules 可空亦保留开关）
+        rules_out = []
+        for r in lc.rules:
+            item = {'resource_id': r.resource_id}
+            if r.expire_at is not None:
+                item['expire_at'] = float(r.expire_at) / DAY
+            elif r.expire_with_banner:
+                item['expire_with_banner'] = r.expire_with_banner
+            item['on_expire'] = dict(r.on_expire) if r.on_expire else {}
+            rules_out.append(item)
+        data['resources']['lifecycle'] = {'enabled': False, 'rules': rules_out}
+        return
+    if not lc.rules:
+        return
+    rules_out = []
+    for r in lc.rules:
+        item = {'resource_id': r.resource_id}
+        if r.expire_at is not None:
+            item['expire_at'] = float(r.expire_at) / DAY
+        elif r.expire_with_banner:
+            item['expire_with_banner'] = r.expire_with_banner
+        item['on_expire'] = dict(r.on_expire) if r.on_expire else {}
+        rules_out.append(item)
+    data['resources']['lifecycle'] = {'enabled': True, 'rules': rules_out}
+
+
+
 def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linear') -> tuple:
     """将 soft_interval / soft_additive 语法糖展开为 deltas。
 
@@ -1438,13 +1618,16 @@ def _build_banners(data: dict, store: ConfigStore) -> None:
     """
     for b in data.get('banner', []):
         banner_id = b['id']
+        _raw_end_day = b.get('end_day')
         banner_entry = BannerEntry(
             id=banner_id,
             name=b.get('name', banner_id),
             enabled=b.get('enabled', True),
             max_draws=_normalize_max_draws(b.get('max_draws')),
             available_from=_days_to_sec(b.get('start_day')),
-            available_until=_days_to_sec(b.get('end_day')),
+            available_until=_days_to_sec(_raw_end_day),
+            # P77：记录归一前永久池标记（end_day 缺省）——归一后 available_until 恒非 None
+            _is_permanent=(_raw_end_day is None),
         )
 
         for bp in b.get('pool', []):

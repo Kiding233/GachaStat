@@ -4,16 +4,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+import importlib.util
+
 import numpy as np
 # scipy 仅在需要时惰性导入——避免 Windows multiprocessing spawn 时
 # 每个子进程都加载 scipy DLL，触发"页面文件太小"错误
 
-# PySDTest 可选依赖——Donald-Hsu 2016 选择性重中心化 SD 检验
-try:
-    from pysdtest import test_sd_SR
-    _PYSDTEST_AVAILABLE = True
-except ImportError:
-    _PYSDTEST_AVAILABLE = False
+# PySDTest 可选依赖——Donald-Hsu 2016 选择性重中心化 SD 检验。
+# 【禁止模块顶层 import pysdtest】：pysdtest/__init__ → pysdtest.py → matplotlib.pyplot，
+# 而 matplotlib 是重量级库（数十个模块 + 大 DLL）。本模块经 core/__init__ 顶层导入，
+# 若在此处实际导入 pysdtest，则 Windows spawn 下每个 worker 进程启动时都要加载
+# matplotlib，多 worker 并发触发物理内存/页面文件耗尽（黑屏、MemoryError、
+# OSError Errno 22），与 scipy 同源问题（见 core/__init__.py 的 BootstrapEngine 惰性导入）。
+# 可用性探测改用 find_spec（只查规格、不执行模块代码，零加载开销）。
+_PYSDTEST_AVAILABLE = importlib.util.find_spec('pysdtest') is not None
 
 
 @dataclass
@@ -454,6 +458,10 @@ def dd_bootstrap_test_v2(
             "PySDTest 未安装。请执行: pip install pysdtest\n"
             "或回退使用 dd_bootstrap_test (等式中心化，精度较低)"
         )
+
+    # 惰性导入：仅在实际调用本检验时加载 pysdtest（连带 matplotlib），
+    # 不在模块导入期加载（否则每个 spawn worker 都会拉起 matplotlib）
+    from pysdtest import test_sd_SR
 
     if seed is not None:
         np.random.seed(seed)

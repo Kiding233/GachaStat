@@ -215,12 +215,27 @@ class TestConfigDictRoundTrip:
 
 class TestComboSources:
     def test_banner_combo_excludes_permanent(self, qapp):
-        """对齐卡池下拉不含永久池（与解析期校验同口径）。"""
+        """对齐卡池下拉含有限池、不含永久池（与解析期校验同口径）。
+
+        注入显式的永久池与有限池，使断言非空集（默认配置无永久池，空集相交恒真）。
+        """
         panel = _make_panel()
-        permanent = {b.get('id') for b in panel._banner_defs if b.get('is_permanent')}
+        panel._banner_defs.append({
+            'id': 'zz_perm_banner', 'name': '永久池', 'enabled': True,
+            'max_draws': None, 'available_from': 0.0, 'available_until': 10.0,
+            'is_permanent': True, 'pools': [], 'lifecycle': [],
+        })
+        panel._banner_defs.append({
+            'id': 'zz_finite_banner', 'name': '限时池', 'enabled': True,
+            'max_draws': None, 'available_from': 0.0, 'available_until': 10.0,
+            'is_permanent': False, 'pools': [], 'lifecycle': [],
+        })
+        panel._refresh_lifecycle_banner_combo()
+
         options = {panel._lifecycle_banner_combo.itemText(i)
                    for i in range(panel._lifecycle_banner_combo.count())}
-        assert not (permanent & options), "永久池不得出现在到期对齐下拉"
+        assert 'zz_finite_banner' in options, "有限池应可选"
+        assert 'zz_perm_banner' not in options, "永久池不得出现在到期对齐下拉"
 
     def test_target_combo_lists_resources(self, qapp):
         """转换目标下拉列出全部已注册资源。"""
@@ -240,3 +255,130 @@ class TestComboSources:
         options = {panel._lifecycle_target_combo.itemText(i)
                    for i in range(panel._lifecycle_target_combo.count())}
         assert 'new_coin' in options
+
+
+# ══════════════════════════════════════════════════════════════════
+# set_config 恢复路径的校验强度（与解析期同强度）
+# ══════════════════════════════════════════════════════════════════
+
+class TestSetConfigValidation:
+    def _cfg_with_rule(self, panel, rule):
+        cfg = panel.get_config()
+        cfg['resource_lifecycle'] = {'enabled': True, 'rules': [rule]}
+        return cfg
+
+    def test_rejects_zero_from(self, qapp):
+        """from=0 被拒（否则模拟期 divmod 除零崩溃）。"""
+        from gacha_simulator.core.config_store import ConfigError
+
+        panel = _make_panel()
+        cfg = self._cfg_with_rule(panel, {
+            'resource_id': 'draw_resource', 'expire_at': 10.0,
+            'on_expire': {'convert_to': 'exchange_currency', 'from': 0, 'to': 1}})
+        with pytest.raises(ConfigError):
+            panel.set_config(cfg)
+
+    def test_rejects_self_loop(self, qapp):
+        """自环转换被拒。"""
+        from gacha_simulator.core.config_store import ConfigError
+
+        panel = _make_panel()
+        cfg = self._cfg_with_rule(panel, {
+            'resource_id': 'draw_resource', 'expire_at': 10.0,
+            'on_expire': {'convert_to': 'draw_resource', 'from': 1, 'to': 1}})
+        with pytest.raises(ConfigError):
+            panel.set_config(cfg)
+
+    def test_rejects_dangling_target(self, qapp):
+        """转换目标未声明被拒（防 GUI 回填静默改写目标）。"""
+        from gacha_simulator.core.config_store import ConfigError
+
+        panel = _make_panel()
+        cfg = self._cfg_with_rule(panel, {
+            'resource_id': 'draw_resource', 'expire_at': 10.0,
+            'on_expire': {'convert_to': 'ghost_target', 'from': 1, 'to': 1}})
+        with pytest.raises(ConfigError):
+            panel.set_config(cfg)
+
+    def test_rejects_expire_mutex(self, qapp):
+        """expire_at 与 expire_with_banner 同时给出被拒。"""
+        from gacha_simulator.core.config_store import ConfigError
+
+        panel = _make_panel()
+        cfg = self._cfg_with_rule(panel, {
+            'resource_id': 'draw_resource', 'expire_at': 10.0,
+            'expire_with_banner': 'pool_c1',
+            'on_expire': {'clear': True}})
+        with pytest.raises(ConfigError):
+            panel.set_config(cfg)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 详情刷写与级联
+# ══════════════════════════════════════════════════════════════════
+
+class TestDetailFlushAndCascade:
+    def test_row_switch_preserves_edit(self, qapp):
+        """切换资源行再切回，生命周期编辑不丢失。"""
+        panel = _make_panel()
+        assert len(panel.resource_defs) >= 2
+        panel._resource_list.setCurrentRow(0)
+        panel._lifecycle_expire_mode.setCurrentIndex(2)
+        panel._lifecycle_days_spin.setValue(6.0)
+        panel._lifecycle_action_combo.setCurrentIndex(2)      # 清零
+
+        panel._resource_list.setCurrentRow(1)
+        panel._resource_list.setCurrentRow(0)
+
+        assert panel._lifecycle_expire_mode.currentIndex() == 2
+        assert panel._lifecycle_days_spin.value() == 6.0
+        assert panel._lifecycle_action_combo.currentIndex() == 2
+
+    def test_cascade_drops_rule_on_target_delete(self, qapp, monkeypatch):
+        """转换目标资源被删除后，规则被静默级联过滤（不写出悬垂引用）。"""
+        from PyQt6.QtWidgets import QMessageBox
+        # 删除资源后 apply_to_store 会对 gain_rules/initial 里的悬垂引用弹模态警告，
+        # 测试环境需屏蔽（否则阻塞等待用户点击）
+        monkeypatch.setattr(QMessageBox, 'warning',
+                            staticmethod(lambda *a, **k: None))
+
+        panel = _make_panel()
+        panel._resource_list.setCurrentRow(0)
+        rid0 = panel.resource_defs[0]['resource_id']
+        panel._lifecycle_expire_mode.setCurrentIndex(2)
+        panel._lifecycle_days_spin.setValue(5.0)
+        panel._lifecycle_action_combo.setCurrentIndex(1)      # 转换到
+        idx = panel._lifecycle_target_combo.findText('exchange_currency')
+        assert idx >= 0
+        panel._lifecycle_target_combo.setCurrentIndex(idx)
+        panel.apply_to_store()
+        assert len(panel._store.resource_lifecycle.rules) == 1
+        assert panel._store.resource_lifecycle.rules[0].resource_id == rid0
+
+        # 删除目标资源后重新汇总：规则因悬垂目标被过滤
+        panel.resource_defs = [d for d in panel.resource_defs
+                               if d['resource_id'] != 'exchange_currency']
+        panel._rebuild_resource_list()
+        panel.apply_to_store()
+        assert panel._store.resource_lifecycle.rules == []
+
+    def test_cascade_drops_rule_on_source_delete(self, qapp, monkeypatch):
+        """源资源被删除后，其生命周期规则一并消失。"""
+        from PyQt6.QtWidgets import QMessageBox
+        monkeypatch.setattr(QMessageBox, 'warning',
+                            staticmethod(lambda *a, **k: None))
+
+        panel = _make_panel()
+        panel._resource_list.setCurrentRow(0)
+        rid0 = panel.resource_defs[0]['resource_id']
+        panel._lifecycle_expire_mode.setCurrentIndex(2)
+        panel._lifecycle_days_spin.setValue(4.0)
+        panel._lifecycle_action_combo.setCurrentIndex(2)
+        panel.apply_to_store()
+        assert len(panel._store.resource_lifecycle.rules) == 1
+
+        panel.resource_defs = [d for d in panel.resource_defs
+                               if d['resource_id'] != rid0]
+        panel._rebuild_resource_list()
+        panel.apply_to_store()
+        assert panel._store.resource_lifecycle.rules == []

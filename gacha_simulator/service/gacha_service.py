@@ -181,6 +181,9 @@ class GachaService:
             return
         snapshot = {rid: state.resources.get(rid, 0) for rid in due}
         for rid in due:
+            # 先登记再结算：到期瞬间余额为 0 的资源同样标记为已结算（_settle 内早退），
+            # 即「余额为 0 不触发任何操作」包含「后续再获得余额也不再过期」的语义
+            # （到期时点已过，规则一次性作废）。
             recorded.add(rid)
             self._settle_resource_expiry(
                 self._expire_rules_by_res[rid], snapshot[rid],

@@ -451,9 +451,19 @@ class TestResourceLifecycleValidation:
 
     def test_validate_convert_ratio_from_zero(self):
         """from < 1 → ConfigError（正整数约束）。"""
-        with pytest.raises(ConfigError, match='≥ 1'):
+        with pytest.raises(ConfigError, match='不小于 1'):
             _load_str(_p77_toml(
                 on_expire='convert_to = "perm_b"\nfrom = 0\nto = 2'))
+
+    def test_validate_convert_target_unknown(self):
+        """convert_to 目标未在 [resources.defs] 声明 → ConfigError。
+
+        防 GUI 回填时 findText 失败静默落到 index 0、写回时改写转换目标
+        （独立审查发现的配置损坏路径）。
+        """
+        with pytest.raises(ConfigError, match='未在'):
+            _load_str(_p77_toml(
+                on_expire='convert_to = "ghost_target"\nfrom = 1\nto = 1'))
 
     def test_validate_convert_ratio_non_int(self):
         """to 非整数 → ConfigError。"""

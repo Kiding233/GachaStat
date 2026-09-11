@@ -285,3 +285,150 @@ class TestAssembly:
             'pity_engine': None, 'card_defs': [],
         })
         assert env.resource_lifecycle_rules == []
+
+
+# ══════════════════════════════════════════════════════════════════
+# 非紧凑（InfoVector）路径
+# ══════════════════════════════════════════════════════════════════
+
+class TestNonCompactPath:
+    def test_non_compact_triggers_without_accounting(self, monkeypatch):
+        """InfoVector 路径同样触发到期（ISSUE-203），且该路径不记账（total 为 None）。
+
+        非紧凑路径的余额变更落在内部 clone 的 state 上（外部不可观察），
+        故以 spy 捕获结算调用与传入的记账账本。
+        """
+        from gacha_simulator.core.collector import InfoVectorCollector
+
+        calls = []
+        original = GachaService._settle_resource_expiry
+
+        def _spy(self, rule, balance, state, total_consumed, total_gained):
+            calls.append((rule.resource_id, balance, total_consumed is None))
+            return original(self, rule, balance, state, total_consumed, total_gained)
+
+        monkeypatch.setattr(GachaService, '_settle_resource_expiry', _spy)
+
+        svc = GachaService([_make_banner()], _WaitStrategy(),
+                           AllPoolsEndCondition(10 * DAY), TargetCardSet([]),
+                           resource_lifecycle_rules=[_convert('a', 'b')])
+        history = svc.run_simulation(
+            GachaState(resources={**_BASE, 'a': 100.0}),
+            max_iterations=20, collector=InfoVectorCollector(),
+        )
+
+        assert isinstance(history, list)
+        assert len(calls) == 1, "非紧凑路径应触发一次到期结算"
+        assert calls[0][0] == 'a'
+        assert calls[0][1] == 100.0
+        assert calls[0][2] is True, "非紧凑路径无汇总账（total_consumed 为 None）"
+
+
+# ══════════════════════════════════════════════════════════════════
+# TOML 驱动的端到端（G6：幻塔等额转换）
+# ══════════════════════════════════════════════════════════════════
+
+_G6_TOML = '''
+[resources.defs]
+draw_resource = "抽卡资源"
+tof_token_a = "回火铸金"
+tof_token_black = "黑市铸金"
+
+[resources.initial]
+draw_resource = 100000
+tof_token_a = 100
+
+[[card]]
+card_id = "c1"
+name = "卡1"
+rarity = "ssr"
+
+[[banner]]
+id = "banner_tof_weapon_a"
+name = "武器池"
+start_day = 0
+end_day = 10
+
+[[banner.pool]]
+id = "main"
+cost = "draw_resource:160"
+
+[[banner.pool.reward]]
+card_id = "c1"
+probability = 100
+rarity = "ssr"
+
+[resources.lifecycle]
+enabled = true
+
+[[resources.lifecycle.rules]]
+resource_id = "tof_token_a"
+expire_with_banner = "banner_tof_weapon_a"
+
+[resources.lifecycle.rules.on_expire]
+convert_to = "tof_token_black"
+from = 1
+to = 1
+'''
+
+
+class TestTomlEndToEnd:
+    def test_g6_toml_full_chain(self, tmp_path):
+        """TOML 文本 → load_toml → from_config_store → 含等待模拟 → 转换生效。"""
+        import os
+
+        from gacha_simulator.core.config_toml import load_toml
+        from gacha_simulator.service.batch_simulator import (
+            SimulationEnvBuilder, run_batch_parallel,
+        )
+
+        path = os.path.join(str(tmp_path), 'g6.toml')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(_G6_TOML)
+
+        store = load_toml(path)
+        assert len(store.resource_lifecycle.rules) == 1
+
+        env = SimulationEnvBuilder.from_config_store(store)
+        assert len(env.resource_lifecycle_rules) == 1
+
+        batch = run_batch_parallel(
+            env=env, target_specs={}, initial_resources=env.initial_resources,
+            num_simulations=1, max_workers=1, seed=42,
+            strategy_key='no_draw', strategy_params={})
+        result = batch.results[0]
+
+        # 卡池下架时刻触发等额转换
+        assert result.final_resources['tof_token_a'] == 0
+        assert result.final_resources['tof_token_black'] == 100
+        assert result.total_consumed.get('tof_token_a') == 100.0
+        assert result.total_gained.get('tof_token_black') == 100
+
+        # 对账恒等式
+        assert (store.initial_resources['tof_token_a']
+                + result.total_gained.get('tof_token_a', 0)
+                - result.total_consumed.get('tof_token_a', 0)) == 0.0
+
+    def test_g6_toml_no_wait_strategy_never_triggers(self, tmp_path):
+        """无等待动作的策略不推进 real_time，到期永不触发（模拟边界，非缺陷）。"""
+        import os
+
+        from gacha_simulator.core.config_toml import load_toml
+        from gacha_simulator.service.batch_simulator import (
+            SimulationEnvBuilder, run_batch_parallel,
+        )
+
+        path = os.path.join(str(tmp_path), 'g6.toml')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(_G6_TOML)
+
+        env = SimulationEnvBuilder.from_config_store(load_toml(path))
+        batch = run_batch_parallel(
+            env=env, target_specs={}, initial_resources=env.initial_resources,
+            num_simulations=1, max_workers=1, seed=42,
+            strategy_key='fixed_count', strategy_params={'count': 5})
+        result = batch.results[0]
+
+        # 抽 5 次即停（real_time 未推进到 banner 下架时刻），限时币原样保留
+        assert result.final_resources['tof_token_a'] == 100
+        assert result.final_resources.get('tof_token_black', 0) == 0

@@ -4,8 +4,6 @@
 build_strategy_context 产出的 resource_expiry 预览（余额 / 剩余天数契约 / 到期行为）。
 """
 
-import pytest
-
 from gacha_simulator.core.resource_lifecycle import (
     ResourceLifecycle,
     ResourceLifecycleConfig,

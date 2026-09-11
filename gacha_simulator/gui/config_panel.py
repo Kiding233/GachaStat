@@ -3978,7 +3978,10 @@ class ConfigPanel(QWidget):
         lc_form = QFormLayout()
 
         self._lifecycle_expire_mode = QComboBox()
-        self._lifecycle_expire_mode.addItems(["永不过期", "对齐卡池", "绝对时间"])
+        self._lifecycle_expire_mode.addItems(["永不过期", "随卡池下架", "指定天数"])
+        self._lifecycle_expire_mode.setToolTip(
+            "到期时刻。随卡池下架 = 取所选卡池的结束时间（卡池下架时刻资源失效）；"
+            "指定天数 = 模拟开始后第 N 天失效")
         self._lifecycle_expire_mode.currentIndexChanged.connect(
             self._on_lifecycle_expire_mode_changed)
         lc_form.addRow("到期时刻:", self._lifecycle_expire_mode)
@@ -3986,7 +3989,7 @@ class ConfigPanel(QWidget):
         self._lifecycle_banner_combo = QComboBox()
         self._lifecycle_banner_combo.currentIndexChanged.connect(
             self._on_resource_lifecycle_changed)
-        lc_form.addRow("对齐卡池:", self._lifecycle_banner_combo)
+        lc_form.addRow("下架卡池:", self._lifecycle_banner_combo)
 
         self._lifecycle_days_spin = QDoubleSpinBox()
         self._lifecycle_days_spin.setRange(0.0, 9999.0)
@@ -3996,7 +3999,7 @@ class ConfigPanel(QWidget):
         lc_form.addRow("到期天数:", self._lifecycle_days_spin)
 
         self._lifecycle_action_combo = QComboBox()
-        self._lifecycle_action_combo.addItems(["不转换", "转换到", "清零"])
+        self._lifecycle_action_combo.addItems(["（未设置）", "转换到", "清零"])
         self._lifecycle_action_combo.currentIndexChanged.connect(
             self._on_lifecycle_action_changed)
         lc_form.addRow("到期行为:", self._lifecycle_action_combo)

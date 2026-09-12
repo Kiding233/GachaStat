@@ -912,9 +912,16 @@ phase('Gate')
 
 let gatePassed = false
 let gateFixAttempts = 0
+// 硬轮次上限：跨「退回周期」累计，不随 gateFixAttempts 重置。
+// 历史实测（b4a82411 = 5 轮、b5425638 = 3 轮）门控 3~5 轮即通过，故取 6 为上限。
+// 无此上限时，门控返 NEEDS_FIX 会走「内层 3 次重试 → 退回空转 → 计数器归零」循环，
+// 需累计 8 次退回（约 36 轮门控）才触发全局熔断，实测耗时以小时计（2026-09-12 P79 run）。
+let gateTotalRuns = 0
+const maxGateTotalRuns = 6
 
 // 门控内部修复循环
 while (!gatePassed && gateFixAttempts <= maxGateRetries) {
+    gateTotalRuns++
     const gateResult = await agent(
       GATE_PROMPT(planFilePath, classification),
       { label: gateFixAttempts === 0 ? 'gate' : `gate-retry-${gateFixAttempts}`, phase: 'Gate', schema: GATE_SCHEMA }
@@ -934,6 +941,16 @@ while (!gatePassed && gateFixAttempts <= maxGateRetries) {
     if (gateResult.overall === 'PASS') {
       log('✅ 可行性门控通过')
       gatePassed = true
+      break
+    }
+
+    // 硬轮次上限：到点直接收口，不再走「内层重试 / 退回空转」两条路径
+    if (gateTotalRuns >= maxGateTotalRuns) {
+      log(`🛑 门控硬上限: 累计 ${gateTotalRuns} 轮未通过（上限 ${maxGateTotalRuns}）`)
+      await agent(
+        `Read ${planFilePath}，在末尾「## ⚠ 自动化审查阻塞项」章节补充一条: 门控硬上限——累计 ${gateTotalRuns} 轮可行性门控未通过（上限 ${maxGateTotalRuns}），非 PASS 项为 ${JSON.stringify(gateResult.checks.filter(c => c.verdict !== 'PASS'))}。若该章节不存在则创建。`,
+        { label: 'gate-cap-writer', phase: 'Gate' }
+      )
       break
     }
 
@@ -988,8 +1005,11 @@ while (!gatePassed && gateFixAttempts <= maxGateRetries) {
       }
 
       // 将 FAIL 项转为发现者问题 → 重跑阶段 2（简化为一轮快速修复）
+      // 门控返 NEEDS_FIX 时不存在 FAIL 项，原实现取 FAIL 项得空数组，
+      // 使退回分支变成「空手空转 + gateFixAttempts 归零」，白白烧掉一个周期。
+      // 此处按非 PASS 项兜底，保证每次退回都带真实待办回到对抗循环。
       const failIssues = gateResult.checks
-        .filter(c => c.verdict === 'FAIL')
+        .filter(c => c.verdict === 'FAIL' || c.verdict === 'NEEDS_SPLIT' || c.verdict === 'NEEDS_CLARIFY')
         .map(c => ({
           issue_id: `GATE-FAIL-${c.id}`, description: c.detail, dimension: '可行性门控',
         }))

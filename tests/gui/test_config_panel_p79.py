@@ -437,3 +437,58 @@ def test_empty_condition_list_disables_expression_row(panel):
 
     _set_three(panel)
     assert panel.stop_condition_expr_edit.isEnabled()
+
+
+# ── 4d2b3：即时校验与应用流程 ────────────────────────────────────
+
+def test_inline_validation_reports_syntax_error(panel):
+    _set_three(panel)
+    panel.stop_condition_expr_edit.setText('a and (b')
+    assert panel.stop_condition_expr_status.text() == '✗'
+    assert '括号' in panel.stop_condition_error_label.text()
+    # 不阻断输入：表达式行仍可用
+    assert panel.stop_condition_expr_edit.isEnabled()
+
+
+def test_inline_validation_reports_dangling_reference(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 2.0}], 'a or b')
+    # 直接改内存态模拟「条件被删但表达式仍引用」的错误态
+    panel._stop_condition_conditions.pop()
+    panel._refresh_stop_condition_expr_widget()
+    assert panel.stop_condition_expr_status.text() == '✗'
+    assert "'b'" in panel.stop_condition_error_label.text()
+    assert '已被删除' in panel.stop_condition_error_label.text()
+
+
+def test_inline_validation_ok(panel):
+    _set_three(panel)
+    panel.stop_condition_expr_edit.setText('a or b')
+    assert panel.stop_condition_expr_status.text() == '✔'
+    assert panel.stop_condition_error_label.text() == ''
+
+
+def test_apply_refuses_on_invalid_and_keeps_previous(panel, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    _set_three(panel)
+    panel.stop_condition_expr_edit.setText('a or b')
+    panel.apply_to_store()
+    good = panel._store.stop_condition
+    assert good is not None
+
+    calls = []
+    monkeypatch.setattr(QMessageBox, 'warning', lambda *a, **k: calls.append(a))
+    panel.stop_condition_expr_edit.setText('a and (')
+    panel._on_stop_condition_apply()
+    assert calls, '非法表达式必须拒绝应用并提示'
+    assert panel._store.stop_condition == good, '失败时必须保留原态'
+
+
+def test_apply_succeeds_on_valid(panel):
+    _set_three(panel)
+    panel.stop_condition_expr_edit.setText('a or b')
+    panel._on_stop_condition_apply()
+    assert panel._store.stop_condition is not None
+    assert '已应用' in panel.stop_condition_error_label.text()

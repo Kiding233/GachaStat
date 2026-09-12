@@ -3808,6 +3808,7 @@ class ConfigPanel(QWidget):
         self._stop_condition_conditions.pop(row)
         self._refresh_stop_condition_table()
         self._refresh_stop_condition_expr_widget()
+        self._refresh_stop_condition_error_hint()
 
     def _move_stop_condition(self, delta: int):
         """上移 / 下移选中条件（列表顺序即表达式追加顺序）。"""
@@ -3954,7 +3955,19 @@ class ConfigPanel(QWidget):
         self.stop_condition_expr_edit.textChanged.connect(
             self._on_stop_condition_expr_edited)
         expr_row.addWidget(self.stop_condition_expr_edit, 1)
+        # 行尾校验图标（5.7 布局）：即时反馈，不阻断输入
+        self.stop_condition_expr_status = QLabel()
+        expr_row.addWidget(self.stop_condition_expr_status)
+        self.stop_condition_apply_btn = QPushButton("应用")
+        self.stop_condition_apply_btn.clicked.connect(self._on_stop_condition_apply)
+        expr_row.addWidget(self.stop_condition_apply_btn)
         self._stop_condition_compose_layout.addLayout(expr_row)
+
+        # 错误行：红字反馈。**不阻断输入**——用户可继续敲到合法为止
+        self.stop_condition_error_label = QLabel()
+        self.stop_condition_error_label.setWordWrap(True)
+        self.stop_condition_error_label.setStyleSheet("color: #c0392b;")
+        self._stop_condition_compose_layout.addWidget(self.stop_condition_error_label)
 
         self._refresh_stop_condition_expr_widget()
 
@@ -4013,6 +4026,8 @@ class ConfigPanel(QWidget):
         else:
             edit.setPlaceholderText("例：a or (b and not c)")
 
+        self._refresh_stop_condition_error_hint()
+
     def _on_stop_condition_mode_toggled(self, mode: str, checked: bool):
         """单选 → 表达式重写（规则 1）。「自定义」不重写，它只标记手改后的状态。"""
         if not checked or mode == 'custom':
@@ -4061,6 +4076,63 @@ class ConfigPanel(QWidget):
         expr = (self._stop_condition_expr or '').strip()
         self._stop_condition_expr = f'{expr} or {node_id}' if expr else node_id
         self._refresh_stop_condition_expr_widget()
+
+    # ── 停止条件：即时校验与应用（4d2b3）────────────────────────
+
+    def _stop_condition_expr_error(self) -> Optional[str]:
+        """校验当前表达式；合法返回 None，非法返回面向用户的可读消息。
+
+        两类问题：语法非法；引用了已被删除的条件 id。
+        """
+        from gacha_simulator.core.stop_condition_expr import (
+            StopConditionExprError, parse_stop_condition_expr,
+        )
+
+        expr = (self._stop_condition_expr or '').strip()
+        if not expr:
+            return None
+        ids = {c['id'] for c in self._stop_condition_conditions}
+        try:
+            parse_stop_condition_expr(expr)
+        except StopConditionExprError as exc:
+            return str(exc)
+
+        dangling = [rid for rid in _collect_expr_ids(expr) if rid not in ids]
+        if dangling:
+            return ("以下条件已被删除，但仍被表达式引用："
+                    + '、'.join(f"'{d}'" for d in dangling))
+        return None
+
+    def _refresh_stop_condition_error_hint(self):
+        """刷新行尾图标与错误行（即时校验，不阻断输入）。"""
+        status = getattr(self, 'stop_condition_expr_status', None)
+        label = getattr(self, 'stop_condition_error_label', None)
+        if status is None or label is None:
+            return
+        error = self._stop_condition_expr_error()
+        if error:
+            status.setText('✗')
+            status.setStyleSheet("color: #c0392b;")
+            label.setText(error)
+        else:
+            status.setText('✔' if (self._stop_condition_expr or '').strip() else '')
+            status.setStyleSheet("color: #27ae60;")
+            label.setText('')
+
+    def _on_stop_condition_apply(self):
+        """应用：把面板内存态提交到条件树并落 store（5.7 交互规则 5）。
+
+        校验不通过则**拒绝应用并保留原态**——表达式 → 条件树 → 写 store 的链路
+        不写入半成品；错误另有行内红字反馈与保存阻断（validate_banners）。
+        """
+        error = self._stop_condition_expr_error()
+        if error:
+            QMessageBox.warning(
+                self, "停止条件表达式非法",
+                f"{error}\n\n已保留上一次的有效配置，本次未应用。")
+            return
+        self.apply_to_store()
+        self.stop_condition_error_label.setText('已应用到配置')
 
     def _refresh_stop_condition_hint(self):
         """顶部只读提示：模拟将在 end_time（所有卡池关闭时刻）后强制结束。

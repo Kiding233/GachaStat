@@ -253,8 +253,13 @@ class ConfigStore:
     strategy_key: str = 'smart'
     strategy_params: Dict[str, Any] = field(default_factory=dict)
     _unknown_strategy_raw: Optional[Dict[str, Any]] = None  # 未知 key 降级保留
-    stop_condition_type: str = '所有池结束'
-    stop_condition_params: Dict[str, Any] = field(default_factory=dict)
+    # P79：递归条件树（None = 空树 = 仅引擎硬边界收口）。三形态见计划 5.6——
+    # 复合节点 {mode: any|all, conditions: [...]}、否定节点 {mode: 'not',
+    # conditions: [恰 1 项]}、叶子节点 {type: <registry key>, ...平铺参数}。
+    stop_condition: Optional[dict] = None
+    # P79：解析期校验告警的载体（5.4 告警通道）。config_toml 的 warnings.warn 只落
+    # stderr、gui 目录内无任何捕获，故加载期校验结果一律经此上浮、由 MainWindow 展示。
+    load_warnings: List[str] = field(default_factory=list)
     auto_wait: bool = True
     card_weights: Dict[str, CardWeightEntry] = field(default_factory=dict)
     sim_start_date: str = field(default_factory=lambda: _dt.date.today().isoformat())
@@ -287,8 +292,11 @@ class ConfigStore:
         self.strategy_key = 'smart'
         self.strategy_params.clear()
         self._unknown_strategy_raw = None
-        self.stop_condition_type = '所有池结束'
-        self.stop_condition_params.clear()
+        # P79：字段为可变 dict，须显式置 None。漏改不报错——ConfigStore 无
+        # __slots__，写旧字段名会静默新建游离属性，复用同一 store 的二次加载
+        # （main_window 导入配置 / webui）会残留上一次的停止条件树。
+        self.stop_condition = None
+        self.load_warnings.clear()
         self.auto_wait = True
         self.card_weights.clear()
         self.sim_start_date = _dt.date.today().isoformat()

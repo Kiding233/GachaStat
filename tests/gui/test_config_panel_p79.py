@@ -531,13 +531,24 @@ def test_validate_banners_safe_on_bare_panel(qapp):
     bare.deleteLater()
 
 
-def test_export_config_gate_blocks_dangling_state(qapp, monkeypatch, tmp_path):
-    """保存闸门被触发：非法停止条件不得落盘。"""
-    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+def test_export_config_gate_blocks_dangling_state(panel, monkeypatch, tmp_path):
+    """保存闸门被触发：非法停止条件不得落盘。
+
+    以轻量 QWidget 替身驱动 MainWindow.export_config（未绑定调用）——本方法在
+    拦截路径上只用到 self.config_panel。**不构造真实 MainWindow**：那会初始化
+    QtWebEngine，与 tests/gui/test_startup.py 的 MainWindow 用例相互干扰，
+    实测会触发 access violation（全量套件段错误）。
+    """
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
     from gacha_simulator.gui.main_window import MainWindow
 
-    window = MainWindow()
+    class _StubWindow(QWidget):
+        def __init__(self, config_panel):
+            super().__init__()
+            self.config_panel = config_panel
+
+    stub = _StubWindow(panel)
     try:
         target = tmp_path / 'p79_out.toml'
         monkeypatch.setattr(QFileDialog, 'getSaveFileName',
@@ -546,12 +557,10 @@ def test_export_config_gate_blocks_dangling_state(qapp, monkeypatch, tmp_path):
         monkeypatch.setattr(QMessageBox, 'warning',
                             lambda *a, **k: calls.append(a))
 
-        _make_dangling(window.config_panel)
-        window.export_config()
+        _make_dangling(panel)
+        MainWindow.export_config(stub)
 
         assert calls, '保存闸门未触发'
         assert not target.exists(), '非法状态不得写出配置文件'
     finally:
-        # 不调 close()：closeEvent 会因未保存变更弹 QMessageBox.question（模态，
-        # 测试环境无人应答即挂起）。直接释放即可。
-        window.deleteLater()
+        stub.deleteLater()

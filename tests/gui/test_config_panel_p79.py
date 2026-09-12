@@ -192,3 +192,62 @@ def test_param_area_collects_before_rebuild(panel):
     # 幂等：再重建一次值不变
     panel._rebuild_stop_condition_params()
     assert panel._stop_condition_param_widgets['a']['max_actions'][1].value() == 42
+
+
+# ── 4c2b：内存态 ↔ store 的全量重建与回填 ────────────────────────
+
+def test_apply_to_store_writes_tree_and_is_idempotent(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'fixed_action_count', 'max_actions': 5},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 100.0}], 'a or b')
+
+    panel.apply_to_store()
+    first = panel._store.stop_condition
+    assert first is not None and first['mode'] == 'any'
+    assert len(first['conditions']) == 2
+
+    # 幂等：反复写回不得清空或改变条件树（apply_to_store 挂在预览去抖与导出两条
+    # 高频路径上）
+    for _ in range(3):
+        panel.apply_to_store()
+    assert panel._store.stop_condition == first
+
+
+def test_apply_to_store_empty_expression_writes_none(panel):
+    panel.set_stop_condition_conditions([], '')
+    panel.apply_to_store()
+    assert panel._store.stop_condition is None
+
+
+def test_apply_to_store_keeps_last_valid_tree_on_bad_expression(panel):
+    """表达式非法时保守返回上一次的有效树，不写入半成品。"""
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 100.0}], 'a')
+    panel.apply_to_store()
+    good = panel._store.stop_condition
+
+    panel._stop_condition_expr = 'a and ('      # 未闭合括号
+    panel.apply_to_store()
+    assert panel._store.stop_condition == good
+
+
+def test_load_from_store_round_trip(panel):
+    """store.stop_condition → 条件列表与表达式 → 写回，逐字段一致。"""
+    from gacha_simulator.core.config_toml import load_toml
+
+    store = load_toml(CONFIG)
+    store.stop_condition = {
+        'mode': 'any',
+        'conditions': [
+            {'type': 'fixed_action_count', 'max_actions': 5},
+            {'mode': 'not', 'conditions': [
+                {'type': 'target_acquired', 'target_id': 'x', 'quantity': 1}]},
+        ],
+    }
+    panel.set_store(store)
+    panel._load_stop_condition_from_store(store)
+
+    assert [c['id'] for c in panel._stop_condition_conditions] == ['a', 'b']
+    assert panel._stop_condition_expr == 'a or not b'
+    panel.apply_to_store()
+    assert panel._store.stop_condition == store.stop_condition

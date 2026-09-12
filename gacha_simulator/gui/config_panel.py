@@ -3746,6 +3746,45 @@ class ConfigPanel(QWidget):
         if group is not None:
             group.setVisible(bool(conds))
 
+    # ── 停止条件：内存态 ↔ store（4c2b）──────────────────────────
+
+    def _build_stop_condition_tree(self):
+        """由编辑期内存态（条件列表 + 表达式）重建条件树。
+
+        **表达式是组合的唯一真相源**（5.7 交互规则 1）。表达式为空 → ``None``
+        （空树 = 仅引擎硬边界收口）。
+
+        表达式非法或引用了不存在的 id 时**保守返回上一次的有效树**，不写入半成品：
+        本方法经 apply_to_store 挂在预览去抖与导出两条高频路径上，写入中间态会把
+        用户正在编辑的条件树写坏。语法错误本身由即时校验（4d2b3）行内提示、
+        由 validate_banners（4d3）阻断保存，不在此静默吞掉。
+        """
+        from gacha_simulator.core.stop_condition_expr import (
+            StopConditionExprError, expr_to_tree,
+        )
+
+        try:
+            tree = expr_to_tree(self._stop_condition_expr,
+                                self._stop_condition_conditions)
+        except StopConditionExprError:
+            return self._stop_condition_tree
+        self._stop_condition_tree = tree
+        return self._stop_condition_tree
+
+    def _load_stop_condition_from_store(self, store):
+        """从 ``store.stop_condition`` 回填条件列表与表达式。
+
+        走 4d2a 的「树 → (条件列表, 表达式)」方向；空树得到 ``([], '')``。
+        """
+        from gacha_simulator.core.stop_condition_expr import (
+            tree_to_conditions_and_expr,
+        )
+
+        tree = getattr(store, 'stop_condition', None)
+        self._stop_condition_tree = tree
+        conditions, expr = tree_to_conditions_and_expr(tree)
+        self.set_stop_condition_conditions(conditions, expr)
+
     def _refresh_stop_condition_hint(self):
         """顶部只读提示：模拟将在 end_time（所有卡池关闭时刻）后强制结束。
 
@@ -6720,6 +6759,12 @@ class ConfigPanel(QWidget):
         store.strategy_params = self._get_strategy_params_from_widgets()
         store.auto_wait = self.auto_wait.isChecked()
 
+        # P79：停止条件条件树全量重建（5.7「条件树存放位置」）。面板持内存态、
+        # apply_to_store 从内存态重建；重建幂等，反复写回不会清空条件树——
+        # 本方法被 get_config() 无条件调用，而 get_config 又被 500ms 去抖预览
+        # 与 main_window 导出高频触发，非幂等会直接毁掉用户正在编辑的条件。
+        store.stop_condition = self._build_stop_condition_tree()
+
         store.target_cards = []
         for tc in self._get_target_cards():
             store.target_cards.append(TargetCardEntry(
@@ -7010,6 +7055,7 @@ class ConfigPanel(QWidget):
         strategy_idx = self._strategy_display_names.index(display_name) if display_name in self._strategy_display_names else 0
         self.strategy_type.setCurrentIndex(strategy_idx)
         self._set_strategy_params_to_widgets(store.strategy_params)
+        self._load_stop_condition_from_store(store)
         self.auto_wait.setChecked(store.auto_wait)
 
         target_data = [{'card_id': tc.card_id, 'quantity': tc.quantity, 'pools': tc.pool_ids}

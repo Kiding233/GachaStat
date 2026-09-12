@@ -135,3 +135,102 @@ def test_matrix_covers_all_dimensions(env_and_targets):
     state = GachaState(resources={'draw_resource': 0})
     # 纯否定条件在「不可得卡 + 空历史」下恒真，是 8.1 表里的边界形态
     assert build_stop_conditions(env.end_time)['pure_not'].check(state, []) is True
+
+
+# ══════════════════════════════════════════════════════════════════
+# 5d：断言 2（按策略 max_step）+ 非默认 end_time 行 + 断言 4
+# ══════════════════════════════════════════════════════════════════
+
+# 断言 2 的容差按**策略分别取值**，不得一刀切：
+# - helper 系（next_event_wait 的 86400 硬上限）与 no_draw 的固定 86400
+# - target_hunting 是固定 3600 的粗粒度等待，不纳入 helper 化
+MAX_STEP_BY_STRATEGY = {
+    'smart': 86400.0, 'pool_quota': 86400.0, 'pity_reserve': 86400.0,
+    'stop_on_target': 86400.0, 'fixed_count': 86400.0, 'no_draw': 86400.0,
+    'draw_target': 86400.0, 'plugin/example_phased': 86400.0,
+    'target_hunting': 3600.0,
+}
+
+
+@pytest.mark.parametrize('strategy_key', STRATEGY_KEYS)
+def test_matrix_final_time_within_one_step(env_and_targets, strategy_key):
+    """断言 2：`final_time` 必须抵达时间线终点，且上溢不超过一个动作步长。
+
+    主循环对等待不做端点夹取（`real_time += action.duration`），越界后由下一轮循环
+    顶部的硬边界收口，故可上溢至多一个步长。
+    """
+    assert set(MAX_STEP_BY_STRATEGY) == set(STRATEGY_KEYS)
+    env, _ = env_and_targets
+    # 不可达条件 → 只能由硬边界收口
+    condition = TargetAcquiredCondition(_MISSING_CARD, quantity=1)
+    result = run_matrix_case(env_and_targets, strategy_key, condition)
+
+    step = MAX_STEP_BY_STRATEGY[strategy_key]
+    assert result.final_time >= env.end_time, '未抵达时间线终点（硬边界未收口）'
+    assert result.final_time <= env.end_time + step, (
+        f'{strategy_key}: final_time={result.final_time} 上溢超过一个步长 {step}')
+
+
+def test_matrix_non_default_end_time_bounds(env_and_targets):
+    """非默认 end_time 的矩阵行（断言 2 的容差口径必须在此验证）。
+
+    默认配置 168 天 = 14515200 秒**同时被 86400 与 3600 整除**，于是
+    `final_time == env.end_time` 恰好成立——这个巧合会掩盖步长取值错误。故在
+    非整除的 end_time 上复验：helper 系仍恰好落在终点（其步长自适应到最近关闭
+    时刻），target_hunting 则会真实上溢（固定 3600 步长）。
+    """
+    from gacha_simulator.core.config_toml import load_toml
+    from gacha_simulator.service.batch_simulator import (
+        SimulationEnvBuilder, _build_target_set, _run_single,
+    )
+
+    store = load_toml(CONFIG)
+    finite = [b for b in store.banner.banners if b.available_until is not None]
+    latest = max(finite, key=lambda b: b.available_until)
+    base = float(latest.available_until)
+    latest.available_until = base + 12345.0        # 不被 86400 / 3600 整除
+
+    env = SimulationEnvBuilder.from_config_store(store)
+    assert env.end_time == base + 12345.0
+    specs = {tc.card_id: tc.quantity for tc in store.target_cards}
+    target_set = _build_target_set(env.card_defs, specs)
+
+    for strategy_key in ('smart', 'target_hunting'):
+        env.strategy_key = strategy_key
+        env.strategy_params = {}
+        env.stop_condition = None                  # 仅硬边界
+        result = _run_single(env, target_set, SEED, env.initial_resources)
+        step = MAX_STEP_BY_STRATEGY[strategy_key]
+        assert env.end_time <= result.final_time <= env.end_time + step, \
+            f'{strategy_key}: final_time={result.final_time} end_time={env.end_time}'
+
+    # target_hunting 用固定 3600 步长，非整除时确实会越过终点（容差被真实用到）
+    env.strategy_key = 'target_hunting'
+    env.strategy_params = {}
+    env.stop_condition = None
+    hunting = _run_single(env, target_set, SEED, env.initial_resources)
+    assert hunting.final_time > env.end_time
+
+
+def test_matrix_warning_expectations(env_and_targets):
+    """断言 4：正常组合不产生告警；零进度组合命中且告警含策略 key 与动作类型。"""
+    from gacha_simulator.service.batch_simulator import _run_single
+
+    env, target_set = env_and_targets
+
+    # 正常组合：不应命中
+    env.strategy_key = 'smart'
+    env.strategy_params = {}
+    env.stop_condition = AllPoolsEndCondition(env.end_time)
+    normal = _run_single(env, target_set, SEED, env.initial_resources)
+    assert normal.warnings == [], normal.warnings
+
+    # 零进度组合（资源耗尽后空转）：应命中，且文案含策略 key 与最后动作类型
+    env.strategy_key = 'fixed_count'
+    env.strategy_params = {'count': 50000}
+    env.stop_condition = AllPoolsEndCondition(env.end_time)
+    stalled = _run_single(env, target_set, SEED, env.initial_resources)
+    assert stalled.warnings, '零进度组合未被兜住'
+    assert 'fixed_count' in stalled.warnings[0]
+    assert 'DrawAction' in stalled.warnings[0]
+    assert stalled.iterations < COARSE_ITERATION_CAP

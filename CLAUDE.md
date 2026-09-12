@@ -91,6 +91,8 @@ gacha_simulator/
 
 **复合策略**（`core/strategy.py`，代码级 building block——不进入 TOML/GUI）：`DrawSegmentStrategy`（按抽数分段）/ `PriorityChainStrategy`（优先级降级链）/ `ConditionalStrategy`（lambda 条件分支）。三者均设 `_strategy_key = None` 哨兵。旧 `CompositeStrategy` 保留并发出 `DeprecationWarning`。
 
+**枯竭态契约（P79）：** 策略在「不再有任何想做的事」时必须返回**推进时间**的等待，不得返回 `WaitAction(duration=0)`（后者让 `real_time` 冻结、时间型停止条件永远够不着，循环只能烧满 `max_iterations`）。统一入口是 `core/strategy.py` 的 `next_event_wait(ctx) -> float`（86400 秒硬上限），调用点一律写 `return WaitAction(duration=next_event_wait(ctx))`——helper 返回时长而非 Action，直接返回 float 会让动作分发三路 `isinstance` 全部落空并抛 `ValueError`。
+
 **P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。**P56 新增：** `NonDrawAction`（`type='non_draw'`）——策略可返回非抽卡动作（`switch_epitomized_target` 切换定轨目标 / `cancel_epitomized_path` 取消定轨），由 `gacha_service._apply_non_draw()` 分发执行。
 
 ### 保底 (`core/pity.py`)
@@ -142,8 +144,8 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 | 新 GDR | `core/gdr.py` + `UNIFIED_GDR_REGISTRY` 注册 `GDRDefinition` |
 | 新溢出规则 | `core/overflow.py` → `CardDefEntry.overflow_bands` / `[rarity_defaults]` TOML 段 / GUI「满突溢出」标签页 |
 | 新 Banner 生命周期规则 | `[[banner.lifecycle]]` TOML 段（P61）——`condition`（pool_draws/banner_draws/card_obtained/pool_exhausted/time_window）+ `action`（switch_to/exhaust_banner）；`card_obtained` 的匹配值存 `pool` 字段（`match`=card_id/rarity）；`time_window` 的 `at` 为秒（UI/TOML 层以天书写，解析边界 `*DAY`） |
-| 新策略 | `strategies/builtin/` 或 `strategies/` 插件目录 —— `@register_strategy` 装饰器 + `Strategy` ABC |
-| 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
+| 新策略 | `strategies/builtin/` 或 `strategies/` 插件目录 —— `@register_strategy` 装饰器 + `Strategy` ABC；枯竭态须返回推进时间的等待，用 `core/strategy.py` 的 `next_event_wait(ctx)`（见「策略」一节的枯竭态契约） |
+| 新停止条件 | ① 在 `core/stop_condition.py` 实现条件类（`check()` + `description()`）并在 `STOP_CONDITION_REGISTRY` 注册条目——`params` 为 `List[ParamDescriptor]`（`core/param_descriptor.py`）② 声明它在 `[stop_condition]` TOML 段中的嵌套形态（复合节点带 `mode`+`conditions`、否定节点 `mode='not'` 恰带一子节点、叶子节点带 `type`+平铺参数），工厂 `create_stop_condition(tree)` 按「`conditions` → `mode` → `type`」分派 ③ 表达式（GUI 编辑视图，不落盘）由 `core/stop_condition_expr.py` 解析 |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |
 | 新里程碑 | `core/milestone.py` → `MilestoneEngine` 计数器引擎 + `[[milestone]]` TOML 段（P58）——`threshold`/`repeat`/`max_triggers`/`banner`/`bonus_reward`（cards/resources/random_cards 三字段任意组合）；`register_milestone_engine(notifier, engine)` 订阅 `after_draw` 事件（priority=0，P61 装配点）。P78：`alternate_rewards`（交替奖励序列——每次触发取下一条、索引模长度循环）+ `offset`（首节点相位偏移，仅首节点生效）；无交替/零偏移里程碑条件写键省略（round-trip 纪律） |

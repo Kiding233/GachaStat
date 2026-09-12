@@ -31,11 +31,15 @@ logger = logging.getLogger(__name__)
 class BatchResult:
     """批量模拟结果容器——向后兼容 list 接口，同时携带 worker 提取数据。"""
 
-    __slots__ = ('results', 'extraction')
+    __slots__ = ('results', 'extraction', 'warnings')
 
-    def __init__(self, results, extraction=None):
+    def __init__(self, results, extraction=None, warnings=None):
         self.results = results if results is not None else []
         self.extraction = extraction
+        # P79（阶段 3）：零进度 / 迭代预算耗尽告警的父进程载体。槽与构造签名必须
+        # 同批改——只加槽不改 __init__ 则新槽永不被赋值、__slots__ 下访问即
+        # AttributeError。
+        self.warnings = warnings if warnings is not None else []
 
     def __getitem__(self, i):
         return self.results[i]
@@ -329,18 +333,26 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
 def _wk_run_single(args):
     """子进程 worker 入口——模拟 + 本地提取。
 
-    return_compact=True（默认）时返回 (compact, extraction) 元组以兼容 on_result 回调。
-    return_compact=False 时只返回 extraction，节省 pickle 传输开销。
+    统一返回 **三元组** ``(compact_or_None, extraction, warnings)``：``return_compact``
+    只决定 compact 位是否为 None，**不再决定是否携带告警**。P79（阶段 3）：GUI 抽卡
+    面板与 WebUI 在跑主模拟前置 ``env.return_compact = False`` 且默认 ``max_workers=4``，
+    若告警随 compact 一并丢弃（原实现 False 分支只 ``return extraction``），子进程写进
+    ``CompactResult.warnings`` 的告警从未跨进程回传，而测试以 ``max_workers=1`` 走进程内
+    路径恰好全绿。
+
+    ⚠ 四条 return 的 arity 必须一致为 3：只改末条时两条早退返回的 ``None`` / 2 元组会在
+    父进程的新守卫（``len(result) == 3``）下全部落入 else 分支被整体当作 ext_pkt，
+    compact 与 warnings 双丢且无告警。
     """
     seed, initial_resources = args
     try:
         compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
     except Exception:
         traceback.print_exc()
-        return (None, None) if _wk_return_compact else None
+        return (None, None, [])
 
     if compact is None:
-        return (None, None) if _wk_return_compact else None
+        return (None, None, [])
 
     extraction = None
     if _wk_extractor is not None:
@@ -349,9 +361,10 @@ def _wk_run_single(args):
         except Exception:
             traceback.print_exc()
 
+    warnings = list(getattr(compact, 'warnings', []) or [])
     if _wk_return_compact:
-        return (compact, extraction)
-    return extraction
+        return (compact, extraction, warnings)
+    return (None, extraction, warnings)
 
 
 # --- 公共批量模拟接口 ---
@@ -380,6 +393,11 @@ def run_batch_parallel(
 
     # 构建 TargetCardSet（单/多进程共用）
     target_set = _build_target_set(env.card_defs, target_specs)
+
+    # P79（阶段 3）：三条执行路径（进程内 / MPPool / mp_failed 兜底）各自的告警
+    # 统一累加到此，在各自的终点写入 BatchResult.warnings——兜底路径正是 MPPool
+    # 异常时 GUI / WebUI 主模拟实际走的路径，漏汇总即静默丢失告警。
+    warnings_acc: list = []
 
     if max_workers <= 1:
         # 单进程路径：直接调用 _run_single，同时本地提取
@@ -411,6 +429,7 @@ def run_batch_parallel(
                     pass
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
+                warnings_acc.extend(getattr(result, 'warnings', []) or [])
             if on_result is not None:
                 if result is not None:
                     on_result(result)
@@ -429,7 +448,8 @@ def run_batch_parallel(
             extraction_packets,
             heatmap_config={'n_heatmap_bins': getattr(env, 'n_heatmap_bins', 50), 'max_keep': 200},
         ) if extraction_packets else None
-        return BatchResult(results if on_result is None else [], merged_ext)
+        return BatchResult(results if on_result is None else [], merged_ext,
+                           warnings=warnings_acc)
 
     seeds = [seed + i if seed >= 0 else random.randint(0, 999999) for i in range(num_simulations)]
     tasks = [(s, initial_resources) for s in seeds]
@@ -454,14 +474,17 @@ def run_batch_parallel(
                 extraction_packets = []
                 n_failed = 0
                 for i, result in enumerate(mp_pool.imap_unordered(_wk_run_single, tasks, chunksize=chunksize)):
-                    # 解包 worker 返回值：
-                    # - tuple (compact, extraction)：return_compact=True 路径（兼容 on_result 回调）
-                    # - 非 tuple：return_compact=False 路径，直接是 extraction_packet
-                    if isinstance(result, tuple) and len(result) == 2:
-                        compact, ext_pkt = result
+                    # 解包 worker 返回值：统一为三元组
+                    # (compact_or_None, extraction, warnings)——return_compact 只决定
+                    # compact 位是否为 None。守卫长度须随三元组由 2 改为 3。
+                    if isinstance(result, tuple) and len(result) == 3:
+                        compact, ext_pkt, warns = result
                     else:
                         compact = None
                         ext_pkt = result
+                        warns = []
+                    if warns:
+                        warnings_acc.extend(warns)
 
                     if on_result is not None:
                         if compact is not None:
@@ -532,6 +555,7 @@ def run_batch_parallel(
                     results.append(compact)
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
+                warnings_acc.extend(getattr(compact, 'warnings', []) or [])
             else:
                 n_failed += 1
             if progress_callback:
@@ -550,7 +574,8 @@ def run_batch_parallel(
         )
 
     raw_results = results if on_result is None else []
-    return BatchResult(raw_results, merged_extraction)
+    # 统一终点：兼作 MPPool 与 mp_failed 兜底的汇合点
+    return BatchResult(raw_results, merged_extraction, warnings=warnings_acc)
 
 
 class SimulationEnvBuilder:

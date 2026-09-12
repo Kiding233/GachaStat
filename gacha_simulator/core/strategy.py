@@ -301,7 +301,7 @@ class DrawSegmentStrategy(Strategy):
             if ctx.total_draws >= start and (end is None or ctx.total_draws < end):
                 return strategy.select_action(ctx)
         from .action import WaitAction
-        return WaitAction(duration=0)
+        return WaitAction(duration=next_event_wait(ctx))
 
 
 class PriorityChainStrategy(Strategy):
@@ -309,8 +309,10 @@ class PriorityChainStrategy(Strategy):
 
     strategies: List[Strategy]
         按优先级排列的策略列表。每个策略依次调用 select_action()，
-        第一个返回非 None 且非 WaitAction(duration=0) 的结果被采纳。
-        若全部返回 WaitAction(0)，则返回最后一个。
+        返回第一个非 None 的结果；全部为 None 时返回推进时间的等待。
+        （P79 5.3：兜底不得返回 WaitAction(duration=0)——那会让 real_time
+        冻结、时间型停止条件永远够不着。此处不补 WaitAction(0) 过滤：
+        会改变本 building block 的既有行为并波及插件策略的组合语义。）
     """
 
     _strategy_key = None  # 哨兵——非注册策略，无 key
@@ -328,7 +330,7 @@ class PriorityChainStrategy(Strategy):
             if action is not None:
                 return action
         from .action import WaitAction
-        return WaitAction(duration=0)
+        return WaitAction(duration=next_event_wait(ctx))
 
 
 class ConditionalStrategy(Strategy):

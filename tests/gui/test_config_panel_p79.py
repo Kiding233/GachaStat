@@ -251,3 +251,88 @@ def test_load_from_store_round_trip(panel):
     assert panel._stop_condition_expr == 'a or not b'
     panel.apply_to_store()
     assert panel._store.stop_condition == store.stop_condition
+
+
+# ── 4d2b1：id 管理体系 ──────────────────────────────────────────
+
+def test_allocate_id_skips_taken_and_reserved(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'c', 'type': 'time_limit', 'max_time': 2.0}], 'a or c')
+    assert panel._allocate_stop_condition_id() == 'b'
+    assert panel._allocate_stop_condition_id() not in ('and', 'or', 'not')
+
+
+@pytest.mark.parametrize('bad,expected_frag', [
+    ('', '不能为空'),
+    ('and', '保留字'),
+    ('or', '保留字'),
+    ('not', '保留字'),
+    ('1a', '合法'),
+    ('a b', '合法'),
+    ('a-b', '合法'),
+])
+def test_validate_id_rejects(panel, bad, expected_frag):
+    msg = panel._validate_stop_condition_id(bad)
+    assert msg and expected_frag in msg
+
+
+def test_validate_id_rejects_duplicate(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 2.0}], 'a or b')
+    msg = panel._validate_stop_condition_id('b', current_id='a')
+    assert msg and '占用' in msg
+    assert panel._validate_stop_condition_id('a', current_id='a') is None
+
+
+def test_rename_replaces_all_references_in_expression(panel):
+    """含同一 id 在表达式中多次出现的情形。"""
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 2.0}],
+        'a and (b or a)')
+    panel._rename_stop_condition_id('a', 'x')
+    assert panel._stop_condition_expr == 'x and (b or x)'
+
+
+def test_rename_does_not_touch_lookalike_identifiers(panel):
+    """AST 改写而非字符串替换——`ab` 中的 `a` 不得被误改。"""
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'ab', 'type': 'time_limit', 'max_time': 2.0}], 'a or ab')
+    panel._rename_stop_condition_id('a', 'z')
+    assert panel._stop_condition_expr == 'z or ab'
+
+
+def test_item_changed_applies_rename_and_reverts_on_error(panel, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 2.0}], 'a or b')
+
+    # 阻塞信号后手动改文本再显式调用处理器：真实路径下 setText 会自行触发
+    # itemChanged，而处理器内的表格刷新会重建 QTableWidgetItem（旧包装器失效）
+    table = panel.stop_condition_table
+    table.blockSignals(True)
+    item = table.item(0, 0)
+    item.setText('x')
+    table.blockSignals(False)
+    panel._on_stop_condition_item_changed(item)
+    assert panel._stop_condition_conditions[0]['id'] == 'x'
+    assert panel._stop_condition_expr == 'x or b'
+
+    calls = []
+    monkeypatch.setattr(QMessageBox, 'warning', lambda *a, **k: calls.append(a))
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 2.0}], 'a or b')
+    table.blockSignals(True)
+    item = table.item(0, 0)
+    item.setText('b')
+    table.blockSignals(False)
+    panel._on_stop_condition_item_changed(item)
+    assert calls, '非法 id 必须给出可读提示'
+    assert panel._stop_condition_conditions[0]['id'] == 'a'
+    assert panel.stop_condition_table.item(0, 0).text() == 'a'

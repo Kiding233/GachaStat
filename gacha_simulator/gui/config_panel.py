@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """配置面板"""
 
-from typing import List
+from typing import List, Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
@@ -25,6 +25,10 @@ from ..core.config_store import (
 from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
 from ..core.resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig   # P77
+
+
+# P79 4d2b1：表达式保留字——条件 id 不得与运算符同名，否则表达式无法解析
+_EXPR_RESERVED_WORDS = ('and', 'or', 'not')
 
 
 class PoolDistributionDialog(QDialog):
@@ -3519,11 +3523,14 @@ class ConfigPanel(QWidget):
             QAbstractItemView.SelectionBehavior.SelectRows)
         self.stop_condition_table.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection)
-        # id 列的可编辑性与重命名纪律归 4d2b1（id 管理体系）
+        # id 列可编辑（4d2b1 的 id 管理体系）；其余两列是渲染结果，不可编辑
         self.stop_condition_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers)
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed)
         self.stop_condition_table.itemSelectionChanged.connect(
             self._on_stop_condition_selection_changed)
+        self.stop_condition_table.itemChanged.connect(
+            self._on_stop_condition_item_changed)
         self._stop_condition_list_layout.addWidget(self.stop_condition_table)
 
         btn_row = QHBoxLayout()
@@ -3540,12 +3547,99 @@ class ConfigPanel(QWidget):
 
         self._refresh_stop_condition_table()
 
+    # ── 停止条件：id 管理体系（4d2b1）────────────────────────────
+
+    def _validate_stop_condition_id(self, new_id: str,
+                                    current_id: Optional[str] = None) -> Optional[str]:
+        """校验条件 id；合法返回 None，非法返回面向用户的可读消息。"""
+        import re as _re
+
+        if not new_id:
+            return "条件 id 不能为空"
+        if new_id in _EXPR_RESERVED_WORDS:
+            return (f"id '{new_id}' 是表达式保留字"
+                    f"（{' / '.join(_EXPR_RESERVED_WORDS)}），请换一个")
+        if not _re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', new_id):
+            return (f"id '{new_id}' 不是合法的标识符——"
+                    f"只能由字母、数字、下划线组成，且不以数字开头")
+        taken = {c['id'] for c in self._stop_condition_conditions}
+        if new_id != current_id and new_id in taken:
+            return f"id '{new_id}' 已被占用，条件 id 必须唯一"
+        return None
+
+    def _rename_stop_condition_id(self, old_id: str, new_id: str) -> None:
+        """重命名条件 id 并**同步替换表达式内的全部引用**（含同一 id 多次出现）。
+
+        走 AST 改写而非字符串替换：字符串替换会把 `ab` 中的 `a` 一并改掉，且无法
+        区分运算符名。表达式本身非法时退化为按标识符边界替换，尽力保持一致。
+        """
+        import re as _re
+
+        from gacha_simulator.core.stop_condition_expr import (
+            StopConditionExprError, expr_ast_to_text, parse_stop_condition_expr,
+        )
+
+        expr = self._stop_condition_expr
+        if not expr or not expr.strip():
+            return
+        try:
+            ast = parse_stop_condition_expr(expr)
+        except StopConditionExprError:
+            self._stop_condition_expr = _re.sub(
+                rf'\b{_re.escape(old_id)}\b', new_id, expr)
+            return
+
+        def subst(node):
+            if node[0] == 'id':
+                return ('id', new_id if node[1] == old_id else node[1])
+            if node[0] == 'not':
+                return ('not', subst(node[1]))
+            return (node[0], subst(node[1]), subst(node[2]))
+
+        self._stop_condition_expr = expr_ast_to_text(subst(ast))
+        refresh = getattr(self, '_refresh_stop_condition_expr_widget', None)
+        if refresh is not None:
+            refresh()
+
+    def _on_stop_condition_item_changed(self, item):
+        """id 列编辑：校验通过则重命名并同步替换表达式引用，否则回退并提示。
+
+        「重名 / 空 id / 与保留字冲突」一律给出可读提示，**不静默改名**。
+        """
+        if item is None or item.column() != 0:
+            return
+        row = item.row()
+        if not (0 <= row < len(self._stop_condition_conditions)):
+            return
+        old_id = self._stop_condition_conditions[row]['id']
+        new_id = item.text().strip()
+        if new_id == old_id:
+            return
+
+        error = self._validate_stop_condition_id(new_id, current_id=old_id)
+        if error is not None:
+            QMessageBox.warning(self, "条件 id 非法", error)
+            self.stop_condition_table.blockSignals(True)
+            item.setText(old_id)
+            self.stop_condition_table.blockSignals(False)
+            return
+
+        self._stop_condition_conditions[row]['id'] = new_id
+        self._rename_stop_condition_id(old_id, new_id)
+        if self._stop_condition_selected_id == old_id:
+            self._stop_condition_selected_id = new_id
+        # ⚠ 此处**不得**整表刷新：本方法是 QTableWidget.itemChanged 的槽，而
+        # setRowCount()/setItem() 会删除正在发信的那个 QTableWidgetItem——
+        # 在信号处理中删除发信项是隐患（实测会拿到已析构的包装器）。
+        # 重命名只改模型与表达式，id 单元格已由用户输入，其余两列与 id 无关，
+        # 无需刷新。
+
     def _allocate_stop_condition_id(self) -> str:
         """分配未占用的条件 id（a/b/c…，用尽后退化为 c1/c2…）。
 
-        完整体系（重命名同步替换引用、唯一性与合法性校验）归 4d2b1。
+        避开既有 id 与表达式保留字（and / or / not）。
         """
-        used = {c['id'] for c in self._stop_condition_conditions}
+        used = {c['id'] for c in self._stop_condition_conditions} | set(_EXPR_RESERVED_WORDS)
         for i in range(26):
             cid = chr(ord('a') + i)
             if cid not in used:

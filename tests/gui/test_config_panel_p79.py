@@ -564,3 +564,50 @@ def test_export_config_gate_blocks_dangling_state(panel, monkeypatch, tmp_path):
         assert not target.exists(), '非法状态不得写出配置文件'
     finally:
         stub.deleteLater()
+
+
+# ── 5c2b：8.1 断言 6（同轴条件预填不得被控件钳位）─────────────────
+
+@pytest.mark.parametrize('type_key,pkey,registry_default', [
+    ('all_pools_end', 'end_time', 0.0),
+    ('time_limit', 'max_time', 86400.0),
+])
+def test_coaxial_condition_prefill_not_clamped(panel, type_key, pkey,
+                                               registry_default):
+    """阈值控件的读回值 == store.end_time，且 maximum() >= end_time。
+
+    默认配置 end_time = 168 天 = 14515200 秒，远超 FloatParam 类默认上限
+    99999.0——未做范围放宽时 Qt 会把预填值静默钳到 99999（约 1.16 天），
+    控件不报错、回显为合法值，预填设计完全落空。
+    """
+    end = panel._store.end_time
+    assert end > 99999.0, '前提：默认配置的 end_time 远超 FloatParam 类默认上限'
+
+    panel.set_stop_condition_conditions([{'id': 'a', 'type': type_key}], 'a')
+    panel._rebuild_stop_condition_params()
+    widget = panel._stop_condition_param_widgets['a'][pkey][1]
+
+    assert widget.value() == end, '预填值被钳位或未生效'
+    assert widget.value() != registry_default, '仍是注册表默认（预填未生效）'
+    assert widget.maximum() >= end, '控件范围未放宽，预填会被静默钳位'
+    # 模型同步为预填值：apply 落盘的应是 end_time 而非旧默认
+    assert panel._stop_condition_conditions[0][pkey] == end
+
+
+def test_user_customized_coaxial_threshold_is_not_overwritten(panel):
+    """用户已自定义阈值时不得被预填覆盖。"""
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 3600.0}], 'a')
+    panel._rebuild_stop_condition_params()
+    widget = panel._stop_condition_param_widgets['a']['max_time'][1]
+    assert widget.value() == 3600.0
+    assert panel._stop_condition_conditions[0]['max_time'] == 3600.0
+
+
+def test_non_coaxial_condition_keeps_registry_default(panel):
+    """非同一轴条件的默认值仍来自 ParamDescriptor（5.7 预填只针对两条同轴条件）。"""
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'fixed_action_count'}], 'a')
+    panel._rebuild_stop_condition_params()
+    widget = panel._stop_condition_param_widgets['a']['max_actions'][1]
+    assert widget.value() == 100          # IntParam default=100

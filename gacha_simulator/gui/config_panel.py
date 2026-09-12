@@ -3826,6 +3826,46 @@ class ConfigPanel(QWidget):
 
     # ── 停止条件：条件参数区（4c2a）──────────────────────────────
 
+    def _prefill_coaxial_threshold(self, cond, params, widget_map):
+        """与硬边界同轴条件（all_pools_end / time_limit）的阈值预填（P79 5.7）。
+
+        注册表默认值 0.0 / 86400.0（= 0 天 / 1 天）远早于 env.end_time（默认 168 天），
+        用户添加后不改即让模拟在第 0 轮结束（`any(用户条件, 硬边界)` 恒真），
+        `final_time = 0` 还会把 `_obtainable` 系列 GDR 的分母收窄。以 env.end_time
+        预填后，用户不改即为与硬边界同值、条件退化为冗余而不再截断模拟。
+
+        ⚠ **必须先放宽控件范围再 setValue**：Qt 对超范围 setValue 不报错、不回显真实
+        值，直接钳到上限并显示为合法值（FloatParam 类默认 max_val=99999.0 ≈ 1.16 天），
+        预填会静默变成「1.16 天收口」。静态范围（4b2a 的 MAX_SIM_TIME）与这里的
+        动态放宽**二者须同时满足**。
+        """
+        from gacha_simulator.core.stop_condition import COAXIAL_THRESHOLD_KEYS
+
+        pkey = COAXIAL_THRESHOLD_KEYS.get(cond.get('type'))
+        if pkey is None:
+            return
+        entry = widget_map.get(pkey)
+        pdesc = next((p for p in params if p.key == pkey), None)
+        if entry is None or pdesc is None:
+            return
+        _ptype, widget = entry
+
+        # 用户已自定义则不动它（判据：与注册表默认值不同）
+        current = cond.get(pkey)
+        if current is not None and current != pdesc.default:
+            return
+
+        store = getattr(self, '_store', None)
+        end_time = getattr(store, 'end_time', None) if store is not None else None
+        if not end_time:
+            return
+
+        widget.setRange(float(getattr(pdesc, 'min_val', 0.0)),
+                        max(float(widget.maximum()), float(end_time)))
+        widget.setValue(float(end_time))
+        # 同步模型：apply 落盘的应是预填值（否则界面显示 end_time、落盘仍是旧默认）
+        cond[pkey] = float(end_time)
+
     def _sync_stop_condition_params(self):
         """把参数区控件的当前值收回模型。
 
@@ -3884,6 +3924,7 @@ class ConfigPanel(QWidget):
 
             node = {k: v for k, v in cond.items() if k != 'id'}
             set_params_to_widgets(params, widget_map, node)
+            self._prefill_coaxial_threshold(cond, params, widget_map)
 
         selected = self._stop_condition_selected_id
         for cid, container in self._stop_condition_param_containers.items():

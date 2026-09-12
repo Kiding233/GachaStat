@@ -185,6 +185,11 @@ class NotCondition(StopCondition):
         return f"非({self.child.description()})"
 
 
+# P79 5.5 第 4 类 / 5.7 预填共用：与引擎硬边界同轴的条件类型 → 其阈值参数键。
+# 这些条件的判据是 real_time >= limit，与硬边界同一根轴——阈值早于 end_time 即
+# 让模拟提前收口。解析期校验与 GUI 参数区预填都以本映射为单一真相源。
+COAXIAL_THRESHOLD_KEYS = {'all_pools_end': 'end_time', 'time_limit': 'max_time'}
+
 # P79 5.6：与硬边界同轴条件（all_pools_end / time_limit）的阈值上界。
 # 默认配置 end_time = 168 天 = 14515200 秒，远超 FloatParam 的类默认 max_val
 # （99999.0，约 1.16 天）——沿用类默认会让 5.7 的「以 env.end_time 秒预填」被

@@ -13,6 +13,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
+from .stop_condition import COAXIAL_THRESHOLD_KEYS   # P79：同轴条件的阈值参数键（单一真相源）
 from .config_store import (
     BannerEntry,
     BannerPoolEntry,
@@ -1250,8 +1251,7 @@ def _save_stop_condition(store: ConfigStore, data: dict) -> None:
         data['stop_condition'] = tree
 
 
-# P79 5.5：与硬边界同轴的条件类型 → 其阈值参数键
-_COAXIAL_THRESHOLD_KEYS = {'all_pools_end': 'end_time', 'time_limit': 'max_time'}
+
 
 # P79 5.5 第 5 类：resource_threshold 的运算符白名单。
 # ResourceThresholdCondition.check 只对这三个值分支求值，其余值（含 => / =< /
@@ -1338,9 +1338,9 @@ def _validate_stop_condition_config(data: dict, store: ConfigStore) -> None:
                     f"资源中（可用：{', '.join(sorted(store.resource_defs)) or '（无）'}）"
                     f"——查询恒取 0，该条件将退化为常量判据")
 
-        elif ctype in _COAXIAL_THRESHOLD_KEYS:
+        elif ctype in COAXIAL_THRESHOLD_KEYS:
             # 第 4 类：与硬边界同轴条件的阈值早于硬边界
-            pkey = _COAXIAL_THRESHOLD_KEYS[ctype]
+            pkey = COAXIAL_THRESHOLD_KEYS[ctype]
             val = leaf.get(pkey)
             if isinstance(val, (int, float)) and not isinstance(val, bool):
                 if val <= 0:

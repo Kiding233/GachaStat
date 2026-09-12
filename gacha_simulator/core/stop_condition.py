@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional, List, Dict, Any
 
+from .param_descriptor import (
+    FloatParam, IntParam, StrParam, ListParam, DictParam,
+)
+
 if TYPE_CHECKING:
     from .state import GachaState
     from .info_vector import InfoVector
@@ -159,63 +163,63 @@ STOP_CONDITION_REGISTRY = {
         'display_name': '所有池结束',
         'description': '所有池子到期后停止',
         'class': AllPoolsEndCondition,
-        'params': {
-            'end_time': {'type': 'float', 'default': 0.0, 'label': '结束时间(秒)'},
-        },
+        'params': [
+            FloatParam('end_time', '结束时间(秒)', default=0.0),
+        ],
     },
     'fixed_action_count': {
         'display_name': '固定次数',
         'description': '抽满指定次数后停止',
         'class': FixedActionCountCondition,
-        'params': {
-            'max_actions': {'type': 'int', 'default': 100, 'label': '最大操作数'},
-        },
+        'params': [
+            IntParam('max_actions', '最大操作数', default=100),
+        ],
     },
     'resource_threshold': {
         'display_name': '资源阈值',
         'description': '资源达到阈值时停止',
         'class': ResourceThresholdCondition,
-        'params': {
-            'resource': {'type': 'str', 'default': 'draw_resource', 'label': '资源名'},
-            'threshold': {'type': 'float', 'default': 0.0, 'label': '阈值'},
-            'operator': {'type': 'str', 'default': '<=', 'label': '比较运算符'},
-        },
+        'params': [
+            StrParam('resource', '资源名', default='draw_resource'),
+            FloatParam('threshold', '阈值', default=0.0),
+            StrParam('operator', '比较运算符', default='<='),
+        ],
     },
     'target_acquired': {
         'display_name': '目标获得',
         'description': '获得指定目标卡后停止',
         'class': TargetAcquiredCondition,
-        'params': {
-            'target_id': {'type': 'str', 'default': '', 'label': '目标卡ID'},
-            'quantity': {'type': 'int', 'default': 1, 'label': '数量'},
-        },
+        'params': [
+            StrParam('target_id', '目标卡ID', default=''),
+            IntParam('quantity', '数量', default=1),
+        ],
     },
     'last_draw_card': {
         'display_name': '抽到即停',
         'description': '最后一次抽到指定卡时停止',
         'class': LastDrawCardCondition,
-        'params': {
-            'card_id': {'type': 'str', 'default': '', 'label': '卡牌ID'},
-        },
+        'params': [
+            StrParam('card_id', '卡牌ID', default=''),
+        ],
     },
     'time_limit': {
         'display_name': '时间限制',
         'description': '模拟时间达到限制后停止',
         'class': TimeLimitCondition,
-        'params': {
-            'max_time': {'type': 'float', 'default': 86400.0, 'label': '最大时间(秒)'},
-        },
+        'params': [
+            FloatParam('max_time', '最大时间(秒)', default=86400.0),
+        ],
     },
     'consecutive_pool_target': {
         'display_name': '连续池目标',
         'description': '资源耗尽或连续池目标未达成时停止',
         'class': ConsecutivePoolTargetCondition,
-        'params': {
-            'pool_schedules': {'type': 'list', 'default': [], 'label': '池时间表'},
-            'pool_targets': {'type': 'dict', 'default': {}, 'label': '池目标卡'},
-            'resource_name': {'type': 'str', 'default': 'draw_resource', 'label': '资源名'},
-            'end_time': {'type': 'float', 'default': 0.0, 'label': '最大时间(秒)'},
-        },
+        'params': [
+            ListParam('pool_schedules', '池时间表'),
+            DictParam('pool_targets', '池目标卡'),
+            StrParam('resource_name', '资源名', default='draw_resource'),
+            FloatParam('end_time', '最大时间(秒)', default=0.0),
+        ],
         'internal': True,
     },
 }
@@ -228,10 +232,15 @@ def create_stop_condition(name: str, params: Optional[Dict[str, Any]] = None) ->
                          f"Available: {list(STOP_CONDITION_REGISTRY.keys())}")
     cls = entry['class']
     resolved = dict(params) if params else {}
-    param_defs = entry.get('params', {})
-    for pname, pdef in param_defs.items():
-        if pname not in resolved:
-            resolved[pname] = pdef['default']
+    # P79 4b2b1：参数元数据由 dict 改为 List[ParamDescriptor]（与
+    # StrategyMeta.params 同形）。漏改任一条目仍是 dict，`for` 迭代出 str 键、
+    # pdesc.key 即抛 AttributeError；渲染侧由 4b3 按同一形状分派。
+    # ⚠ 不调用 ParamDescriptor.validate()——见计划 5.6：预填值 env.end_time
+    # 会撞上 FloatParam 的范围检查，把「静默钳位」换成「显式失败」，两种形态
+    # 都使 5.7 的预填设计不可用。
+    for pdesc in entry.get('params', []):
+        if pdesc.key not in resolved:
+            resolved[pdesc.key] = pdesc.default
     return cls(**resolved)
 
 

@@ -4,11 +4,24 @@
 不预填入 initial_count。initial_count 单独保留，用于 bonus 计算时
 确定总持有量（= initial_count + newly_acquired）。
 """
+import copy
+import os
+import tempfile
+
 from gacha_simulator.core import (
     Pool, Reward, GachaState, TargetCard, TargetCardSet,
     SmartStrategy, AllPoolsEndCondition,
 )
-from gacha_simulator.service.gacha_service import GachaService
+from gacha_simulator.core.action import NonDrawAction, WaitAction
+from gacha_simulator.core.config_toml import load_toml
+from gacha_simulator.core.pity import PityState
+from gacha_simulator.core.strategy import Strategy
+from gacha_simulator.service.batch_simulator import (
+    SimulationEnvBuilder, run_batch_parallel,
+)
+from gacha_simulator.service.gacha_service import (
+    GachaService, SimulationStats, _progress_signature,
+)
 
 
 def _make_pool(pool_id="test_pool"):
@@ -175,3 +188,221 @@ def test_env_builder_from_config_store_smoke():
     # P61（Ph6 / ISSUE-011）：banner_defs 与 pools 同源（_run_single 深拷贝隔离用）
     assert env.banner_defs is not None and len(env.banner_defs) == 1
     assert env.end_time == 21 * DAY
+
+
+# ══════════════════════════════════════════════════════════════════
+# P79（阶段 3）：零进度兜底
+#
+# 回传断言的并行度纪律：直接断言 result.warnings / result.iterations 的用例
+# 统一以 max_workers=1 运行（走进程内路径，规避子进程回传不确定性）；
+# return_compact=False 且 max_workers>1 的生产形态另立一条回归（3e）。
+# ══════════════════════════════════════════════════════════════════
+
+_MAIN_CONFIG = 'gacha_simulator/config/config.toml'
+
+# 带 targeted 保底的池——供 NonDrawAction 改写保底状态（防误杀用例）
+_TARGETED_TOML = """[meta]
+version = "2.3.0"
+
+[rarities]
+ranks = [
+    ["SSR"],
+    ["SR"],
+    ["R"],
+]
+
+[[banner]]
+id = "test_pool"
+name = "测试池"
+start_day = 0
+end_day = 21
+
+[[banner.pool]]
+id = "main"
+cost = "draw_resource:160"
+
+[[banner.pool.reward]]
+card_id = "c1"
+probability = 0.5
+rarity = "SSR"
+featured = true
+
+[[banner.pool.reward]]
+card_id = "c2"
+probability = 0.5
+rarity = "SSR"
+featured = false
+
+[[pity]]
+name = "epi"
+type = "targeted"
+scope = "ssr"
+fate_threshold = 1
+switch_allowed = true
+switch_resets_progress = true
+"""
+
+
+class _ZeroWaitStrategy(Strategy):
+    """类型 1 复现：恒返回零等待，real_time 永久冻结。"""
+
+    @classmethod
+    def description(cls) -> str:
+        return '始终零等待（类型 1 复现）'
+
+    def select_action(self, ctx):
+        return WaitAction(duration=0)
+
+
+class _NonDrawSpinStrategy(Strategy):
+    """防误杀：前 N 轮只发 NonDrawAction——不抽卡、不推进时间，但改写保底状态。
+
+    在 c1 / c2 之间交替切换定轨目标，使「保底状态」这一维度逐轮变化。
+    """
+
+    def __init__(self, rounds: int = 4):
+        self.rounds = rounds
+        self.n = 0
+
+    @classmethod
+    def description(cls) -> str:
+        return '前 N 轮交替切换定轨目标（合法多轮 NonDrawAction）'
+
+    def select_action(self, ctx):
+        if self.n < self.rounds:
+            self.n += 1
+            card = 'c1' if self.n % 2 else 'c2'
+            # Banner 型 service 须用全限定键 {banner}.{pool}——_pool_id_to_banner
+            # 只在裸 Pool 输入路径下填充，裸 id 会抛「引用了不存在的池子」
+            return NonDrawAction(action_id='switch_epitomized_target',
+                                 params={'pool_id': 'test_pool.main', 'card_id': card})
+        return WaitAction(duration=86400)
+
+
+def _run_with(strategy, stop_cond, max_iterations=1000):
+    """以自建 service 跑一次（自建池为 100% 单卡池，不依赖外部配置）。"""
+    pool = _make_pool()
+    target = TargetCardSet(
+        [TargetCard(card_id="card_A", pool_ids=["test_pool"], quantity_needed=1)])
+    svc = GachaService([pool], strategy, stop_cond, target,
+                       card_defs=[{"card_id": "card_A", "initial_count": 0}])
+    state = GachaState(resources={"draw_resource": 100000})
+    return svc.run_simulation_compact(state, max_iterations=max_iterations)
+
+
+def _write_targeted_config():
+    fd, path = tempfile.mkstemp(suffix='.toml')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(_TARGETED_TOML)
+    return path
+
+
+def test_zero_progress_dead_loop_is_caught():
+    """四例之一：真死循环（恒返回 WaitAction(0)）被兜住并打 warning。"""
+    r = _run_with(_ZeroWaitStrategy(), AllPoolsEndCondition(1000.0))
+    assert r.warnings, '零等待死循环未被兜住'
+    assert '零进度兜底' in r.warnings[0]
+    # 连续 3 轮签名相同即 break（首轮只记录），故远小于迭代预算
+    assert 3 <= r.iterations <= 6
+    assert r.total_draws == 0
+
+
+def test_zero_progress_affordability_spin_is_caught():
+    """四例之二：affordability 空转（fixed_count count=50000 资源耗尽后抽不动）。
+
+    该空转轮返回的正是 DrawAction（动作已产出后才被 affordability 拦下），
+    是「判据不得取动作类型」的直接验证；空转走 continue 跳过循环体尾部，
+    是「检测必须落循环体顶部」的直接验证。
+    """
+    store = load_toml(_MAIN_CONFIG)
+    env = SimulationEnvBuilder.from_config_store(store)
+    specs = {tc.card_id: tc.quantity for tc in store.target_cards}
+    env.strategy_key = 'fixed_count'
+    env.strategy_params = {'count': 50000}
+
+    r = run_batch_parallel(
+        env=env, target_specs=specs, initial_resources=env.initial_resources,
+        num_simulations=1, max_workers=1, seed=42).results[0]
+
+    assert r.warnings and '零进度兜底' in r.warnings[0]
+    assert r.iterations < 1000          # 现状为 100000
+    assert r.total_draws > 0            # 空转前确实抽过卡
+
+
+def test_zero_progress_does_not_kill_legit_non_draw_rounds():
+    """四例之三：防误杀——合法多轮 NonDrawAction（改写保底状态）不被终止。"""
+    path = _write_targeted_config()
+    try:
+        store = load_toml(path)
+        env = SimulationEnvBuilder.from_config_store(store)
+        env.strategy_key = 'no_draw'
+        env.strategy_params = {}
+
+        rounds = 4
+        strategy = _NonDrawSpinStrategy(rounds=rounds)
+        import gacha_simulator.service.batch_simulator as _bs
+        orig = _bs.create_strategy
+        _bs.create_strategy = lambda key, params=None: strategy
+        try:
+            batch = run_batch_parallel(
+                env=env, target_specs={}, initial_resources=env.initial_resources,
+                num_simulations=1, max_workers=1, seed=42)
+            r = batch.results[0]
+        finally:
+            _bs.create_strategy = orig
+
+        assert r.warnings == [], f'合法 NonDrawAction 被误杀: {r.warnings}'
+        assert r.iterations > rounds, '未越过 NonDrawAction 阶段即结束'
+        assert r.total_draws == 0
+    finally:
+        os.unlink(path)
+
+
+def test_progress_signature_covers_all_dimensions():
+    """四例之四：进度信号完备性——逐项构造单一维度变化，签名均须随之变化。"""
+    store = load_toml(_MAIN_CONFIG)
+    env = SimulationEnvBuilder.from_config_store(store)
+    banners = {b.id: b for b in env.pools}
+    pity = PityState()
+
+    def sig(state=None, stats=None, bs=None, real_time=0.0, ps=None):
+        return _progress_signature(
+            state if state is not None
+            else GachaState(resources={'draw_resource': 100}, acquired={'c1': 1}),
+            stats if stats is not None else SimulationStats(),
+            bs if bs is not None else banners,
+            real_time,
+            ps if ps is not None else pity)
+
+    base = sig()
+    # 同态深拷贝必须产出同一签名（否则检测会持续误判为「有进度」）
+    assert sig(bs=copy.deepcopy(banners)) == base
+
+    variants = {}
+    variants['资源余额'] = sig(
+        state=GachaState(resources={'draw_resource': 101}, acquired={'c1': 1}))
+    variants['持卡数量'] = sig(
+        state=GachaState(resources={'draw_resource': 100}, acquired={'c1': 2}))
+    variants['时间'] = sig(real_time=1.0)
+
+    ss_draws = SimulationStats()
+    ss_draws.total_draws = 1
+    variants['抽数'] = sig(stats=ss_draws)
+    ss_pool = SimulationStats()
+    ss_pool.pool_draw_counts = {'pool_c1.main': 1}
+    variants['池抽数'] = sig(stats=ss_pool)
+    ss_pity = SimulationStats()
+    ss_pity.last_draw_pity_triggered = True
+    variants['上次抽卡触发保底'] = sig(stats=ss_pity)
+
+    ps2 = PityState()
+    ps2.set('p1', 'counter', 5)
+    variants['保底状态'] = sig(ps=ps2)
+
+    deep = copy.deepcopy(banners)
+    deep[next(iter(banners))]._exhaust()
+    variants['banner 耗尽标记'] = sig(bs=deep)
+
+    assert len(variants) == 8
+    unchanged = [name for name, v in variants.items() if v == base]
+    assert not unchanged, f'以下维度未被签名覆盖: {unchanged}'

@@ -19,11 +19,14 @@ tokenizer——表达式解析器（4d1）、条件树 ↔ 表达式双向互转
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 __all__ = [
     'StopConditionExprError',
     'parse_stop_condition_expr',
+    'expr_ast_to_text',
+    'tree_to_conditions_and_expr',
+    'expr_to_tree',
 ]
 
 # 条件 id 的合法形态：ASCII 标识符（GUI 侧自动分配 a/b/c…）
@@ -168,3 +171,119 @@ def parse_stop_condition_expr(text: str,
     """
     return _Parser(_tokenize(text or ''),
                    known_ids).parse()
+
+
+# ══════════════════════════════════════════════════════════════════
+# 树 ↔ 表达式双向互转（4d2a）
+# ══════════════════════════════════════════════════════════════════
+
+_PRECEDENCE = {'or': 1, 'and': 2, 'not': 3}
+
+
+def expr_ast_to_text(node: ExprNode, parent_prec: int = 0) -> str:
+    """AST → 表达式文本；按优先级只加必要括号。"""
+    kind = node[0]
+    if kind == 'id':
+        return node[1]
+    if kind == 'not':
+        text = f"not {expr_ast_to_text(node[1], _PRECEDENCE['not'])}"
+        return f"({text})" if _PRECEDENCE['not'] < parent_prec else text
+    prec = _PRECEDENCE[kind]
+    text = (f"{expr_ast_to_text(node[1], prec)} {kind} "
+            f"{expr_ast_to_text(node[2], prec + 1)}")
+    return f"({text})" if prec < parent_prec else text
+
+
+def _next_letter_id(used: Set[str]) -> str:
+    """分配未占用的短 id（a/b/c…，用尽后退化为 c1/c2…）。"""
+    for i in range(26):
+        cid = chr(ord('a') + i)
+        if cid not in used:
+            return cid
+    n = 1
+    while f'c{n}' in used:
+        n += 1
+    return f'c{n}'
+
+
+def tree_to_conditions_and_expr(tree: Optional[Dict[str, Any]]):
+    """条件树 → (条件列表, 表达式文本)。
+
+    条件列表为 ``[{'id': 'a', 'type': ..., ...参数}, ...]``，叶子按**深度优先
+    首次出现顺序**编号（即在表达式中的出现顺序）；表达式为对应的规范化文本。
+    ``tree`` 为空时返回 ``([], '')``。
+
+    「单层 + 全同运算符」的树得到 ``a or b or c`` / ``a and b and c`` 形态，供 GUI
+    的「任一满足 / 全部满足」单选识别。
+    """
+    if not tree:
+        return [], ''
+
+    conditions: List[Dict[str, Any]] = []
+
+    def walk(node: Dict[str, Any]) -> ExprNode:
+        children = node.get('conditions') if isinstance(node, dict) else None
+        if children is None:
+            cid = _next_letter_id({c['id'] for c in conditions})
+            conditions.append({'id': cid, **node})
+            return ('id', cid)
+        if node.get('mode') == 'not':
+            if len(children) != 1:
+                raise StopConditionExprError(
+                    f"否定节点（mode='not'）恰带一个子节点，当前 {len(children)} 个")
+            return ('not', walk(children[0]))
+        mode = node.get('mode')
+        if mode not in ('any', 'all'):
+            raise StopConditionExprError(
+                f"复合节点的 mode 须为 'any' / 'all' / 'not'，收到 {mode!r}")
+        if not children:
+            raise StopConditionExprError("复合节点的 conditions 不得为空")
+        op = 'or' if mode == 'any' else 'and'
+        acc = walk(children[0])
+        for child in children[1:]:
+            acc = (op, acc, walk(child))
+        return acc
+
+    ast = walk(tree)
+    return conditions, expr_ast_to_text(ast)
+
+
+def _ast_to_tree(node: ExprNode, by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """AST → 条件树。
+
+    **同运算符的链会被拉平为单个 n 叉节点**（``a or b or c`` → 一个 3 子节点的
+    ``any``）。这是结合律等价的规范化：不拉平则往返会得到左嵌套结构，与原始树
+    结构不等（语义等价但结构不同）。
+    """
+    kind = node[0]
+    if kind == 'id':
+        cond = by_id[node[1]]
+        return {k: v for k, v in cond.items() if k != 'id'}
+    if kind == 'not':
+        return {'mode': 'not', 'conditions': [_ast_to_tree(node[1], by_id)]}
+
+    children: List[Dict[str, Any]] = []
+
+    def collect(n: ExprNode) -> None:
+        if n[0] == kind:
+            collect(n[1])
+            collect(n[2])
+        else:
+            children.append(_ast_to_tree(n, by_id))
+
+    collect(node)
+    return {'mode': 'any' if kind == 'or' else 'all', 'conditions': children}
+
+
+def expr_to_tree(text: str,
+                 conditions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """表达式 + 条件列表 → 条件树。
+
+    ``text`` 为空时返回 ``None``（空树 = 仅引擎硬边界收口，与 5.6 的空树规范化
+    同口径）。表达式引用了列表中不存在的 id 时抛 ``StopConditionExprError``。
+    """
+    if not text or not text.strip():
+        return None
+    by_id = {c['id']: c for c in conditions}
+    ast = parse_stop_condition_expr(text, known_ids=set(by_id))
+    return _ast_to_tree(ast, by_id)

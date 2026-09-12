@@ -178,3 +178,48 @@ class TestForwardMethod:
             {'card_a': 1, 'card_b': 1, 'card_c': 1}
         )
         assert len(result.points) == 1
+
+
+# ══════════════════════════════════════════════════════════════════
+# P79 8.2：退避搜索的两条时间线都不继承用户停止条件
+# ══════════════════════════════════════════════════════════════════
+
+_CONF = 'gacha_simulator/config/config.toml'
+
+
+def _store_with_condition():
+    from gacha_simulator.core.config_toml import load_toml
+
+    store = load_toml(_CONF)
+    store.stop_condition = {
+        'mode': 'any',
+        'conditions': [{'type': 'fixed_action_count', 'max_actions': 20}],
+    }
+    return store
+
+
+def test_build_env_full_timeline_drops_condition():
+    """完整时间线分支（from_pool_id=None）。"""
+    store = _store_with_condition()
+    env = RetreatSearchEngine(config_store=store)._build_env(50000)
+    assert env.stop_condition is None
+
+
+def test_build_env_truncated_timeline_drops_condition():
+    """截断时间线分支（from_pool_id 非空）——两条时间线语义必须一致。"""
+    store = _store_with_condition()
+    pool_id = store.pools[1].pool_id
+    env = RetreatSearchEngine(config_store=store,
+                              from_pool_id=pool_id)._build_env(50000)
+    assert env.stop_condition is None
+
+
+def test_search_engine_env_condition_none_but_builder_wires_it():
+    """前提断言：同一个 store 经 from_config_store 会带上条件。
+
+    否则上面的「为 None」可能只是接线失效导致的假通过。
+    """
+    from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
+
+    store = _store_with_condition()
+    assert SimulationEnvBuilder.from_config_store(store).stop_condition is not None

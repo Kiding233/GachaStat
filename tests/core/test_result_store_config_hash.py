@@ -90,3 +90,61 @@ def test_hash_legacy_pool_entry_branch():
     h2 = compute_config_hash(
         [SimpleNamespace(pool_id='pool_c1', cost='draw_resource:320')], None, [])
     assert h1 != h2
+
+
+# ══════════════════════════════════════════════════════════════════
+# P79 8.2：停止条件的可比性指纹（摘要含参数值 + 纳入 config_hash）
+# ══════════════════════════════════════════════════════════════════
+
+def _summary(tree):
+    from gacha_simulator.core.result_store import canonical_stop_condition_summary
+    return canonical_stop_condition_summary(tree)
+
+
+def test_summary_empty_tree_sentinel():
+    """空树（None）产出固定哨兵 ''，与任何真实树都不同。"""
+    assert _summary(None) == ''
+    assert _summary({'type': 'time_limit', 'max_time': 1.0}) != ''
+
+
+def test_summary_is_key_order_independent():
+    """sort_keys 消除 TOML 解析与 GUI 重建两条路径的键序差异。"""
+    a = {'mode': 'any', 'conditions': [{'type': 'time_limit', 'max_time': 1.0}]}
+    b = {'conditions': [{'max_time': 1.0, 'type': 'time_limit'}], 'mode': 'any'}
+    assert _summary(a) == _summary(b)
+
+
+def test_summary_differs_on_parameter_value_only():
+    """两组的差异**仅在参数值**（条件 id / 形态完全相同）时摘要仍须不同。
+
+    这是「摘要须含参数值、不能只渲染条件 id」的直接验证——表达式渲染只含 id，
+    两组仅阈值不同的配置会产出同一表达式串。
+    """
+    a = {'mode': 'any', 'conditions': [{'type': 'time_limit', 'max_time': 1.0}]}
+    b = {'mode': 'any', 'conditions': [{'type': 'time_limit', 'max_time': 2.0}]}
+    assert _summary(a) != _summary(b)
+
+
+def test_config_hash_differs_on_stop_condition_only():
+    """两组不同 [stop_condition] 的配置产出不同 config_hash。
+
+    不纳入时这两组会被判为 same 维度，可比性结论与真实情况相反。
+    """
+    a = {'mode': 'any', 'conditions': [{'type': 'time_limit', 'max_time': 1.0}]}
+    b = {'mode': 'all', 'conditions': [
+        {'type': 'time_limit', 'max_time': 1.0},
+        {'type': 'resource_threshold', 'resource': 'draw_resource',
+         'operator': '<=', 'threshold': 0}]}
+    banner = _banner()
+    h_a = compute_config_hash([banner], None, [], stop_condition_summary=_summary(a))
+    h_b = compute_config_hash([banner], None, [], stop_condition_summary=_summary(b))
+    assert h_a != h_b
+
+
+def test_config_hash_unchanged_by_old_call_shapes():
+    """既有三参 / 四参位置调用不受新参数影响（同一 hash）。"""
+    banner = _banner()
+    assert (compute_config_hash([banner], None, []) ==
+            compute_config_hash([banner], None, [], None))
+    assert (compute_config_hash([banner], None, []) ==
+            compute_config_hash([banner], None, [], None, None))

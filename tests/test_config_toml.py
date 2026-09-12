@@ -526,3 +526,101 @@ class TestResourceLifecycleRoundTrip:
         store = _load_into(_p77_toml(section=''), store)
         assert store.resource_lifecycle.rules == []
         assert store.resource_lifecycle.enabled is True
+
+
+# ══════════════════════════════════════════════════════════════════
+# P79 8.1 断言 5：解析期校验不得在 banner 归一化前触发
+# ══════════════════════════════════════════════════════════════════
+
+_P79_PERMANENT_TOML = """[meta]
+version = "2.4.0"
+
+[resources.defs]
+draw_resource = "抽卡资源"
+
+[resources.initial]
+draw_resource = 55000
+
+[rarities]
+ranks = [
+    ["SSR"],
+    ["SR"],
+    ["R"],
+]
+
+[[banner]]
+id = "perm"
+name = "永久池"
+start_day = 0
+
+[[banner.pool]]
+id = "main"
+cost = "draw_resource:160"
+
+[[banner.pool.reward]]
+card_id = "c1"
+probability = 1.0
+rarity = "SSR"
+
+[[banner]]
+id = "finite"
+name = "限期池"
+start_day = 0
+end_day = 168
+
+[[banner.pool]]
+id = "main"
+cost = "draw_resource:160"
+
+[[banner.pool.reward]]
+card_id = "c2"
+probability = 1.0
+rarity = "SSR"
+"""
+
+
+def _p79_write(tmp_path, text):
+    path = tmp_path / 'p79_assert5.toml'
+    path.write_text(text, encoding='utf-8')
+    return str(path)
+
+
+def test_p79_assert5_no_false_positives_with_permanent_banner(tmp_path):
+    """含永久 banner（available_until=None）的配置：load_warnings 为空。
+
+    若校验函数被排在 _build_banners 之前，store.end_time 走空输入分支返回 0，
+    生命周期规则与用户条件会被全量误判——该断言即用来固化调用序纪律。
+    """
+    store = load_toml(_p79_write(tmp_path, _P79_PERMANENT_TOML))
+
+    assert store.load_warnings == [], store.load_warnings
+    # 归一化后：永久 banner 的 available_until 被置为 max(有限 banner 的 available_until)
+    assert store.end_time != 0
+    assert store.end_time == 168 * 86400
+    assert store.end_time == max(b.available_until for b in store.banner.banners)
+
+
+def test_p79_assert5_validation_actually_ran(tmp_path):
+    """在同配置上加一条真死规则：必须恰好命中该条——证明校验真的跑了。
+
+    「load_warnings 为空」本身分不清「跑了但没发现问题」与「根本没跑」，
+    故补这一条正向断言。
+    """
+    text = _P79_PERMANENT_TOML + """
+[resources.lifecycle]
+enabled = true
+
+[[resources.lifecycle.rules]]
+resource_id = "draw_resource"
+expire_at = 9999.0
+
+[resources.lifecycle.rules.on_expire]
+clear = true
+"""
+    store = load_toml(_p79_write(tmp_path, text))
+
+    dead = [w for w in store.load_warnings if '永不触发' in w]
+    assert len(dead) == 1, store.load_warnings
+    assert 'expire_at' in dead[0]
+    # 阈值按归一化后的 end_time（168 天）判定，而非 0
+    assert '168.0 天' in dead[0]

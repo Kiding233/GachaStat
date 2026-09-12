@@ -12,13 +12,14 @@ from_config_store 的接线用例（含 getattr 容忍断言）不在此处，�
 4a3 解析 / 4b2b2 树分派三者，落子任务 4a5、同为该文件。
 """
 import copy
+import os
 import pickle
 
 from gacha_simulator.core.config_toml import load_toml
 from gacha_simulator.core.state import GachaState
 from gacha_simulator.core.stop_condition import (
     AllPoolsEndCondition, CompositeStopCondition, FixedActionCountCondition,
-    ResourceThresholdCondition, TargetAcquiredCondition,
+    NotCondition, ResourceThresholdCondition, TargetAcquiredCondition,
 )
 from gacha_simulator.service.batch_simulator import (
     SimulationEnvBuilder, run_batch_parallel,
@@ -123,3 +124,99 @@ def test_pickled_condition_survives_deepcopy_of_env():
     assert env.stop_condition is not None
     assert isinstance(env.stop_condition, FixedActionCountCondition)
     assert clone.stop_condition is None
+
+
+# ══════════════════════════════════════════════════════════════════
+# P79 4a5：from_config_store 的条件树接线（缺陷 A 的闭合点）
+#
+# 依赖 4a1 的字段 / 4a3 的解析 / 4b2b2 的树分派三者，故排在它们之后交付。
+# ══════════════════════════════════════════════════════════════════
+
+# 顶层取 all 而非 any：any(fixed_action_count, not target_acquired) 中「未持有 →
+# not 为真」会让条件在 iteration 0 即成立（0 抽），夹具失去意义。all 下由
+# fixed_action_count(20) 作真实闸门，not 节点仍参与求值。
+_STOP_SECTION = """
+[stop_condition]
+mode = "all"
+
+[[stop_condition.conditions]]
+type = "fixed_action_count"
+max_actions = 20
+
+[[stop_condition.conditions]]
+mode = "not"
+
+[[stop_condition.conditions.conditions]]
+type = "target_acquired"
+target_id = "no_such_card"
+quantity = 1
+"""
+
+
+def test_from_config_store_wires_stop_condition_tree():
+    """条件树 → create_stop_condition → env.stop_condition（等价对象）。"""
+    store = load_toml(CONFIG)
+    store.stop_condition = {
+        'mode': 'any',
+        'conditions': [
+            {'type': 'fixed_action_count', 'max_actions': 20},
+            {'mode': 'not', 'conditions': [
+                {'type': 'target_acquired', 'target_id': 'x', 'quantity': 1}]},
+        ],
+    }
+    env = SimulationEnvBuilder.from_config_store(store)
+
+    cond = env.stop_condition
+    assert isinstance(cond, CompositeStopCondition)
+    assert cond.mode == 'any'
+    assert isinstance(cond.conditions[0], FixedActionCountCondition)
+    assert cond.conditions[0].max_actions == 20
+    assert isinstance(cond.conditions[1], NotCondition)
+
+
+def test_from_config_store_empty_tree_yields_none():
+    """空树（None / 空字典）→ env.stop_condition 为 None（= 仅硬边界）。"""
+    for empty in (None, {}):
+        store = load_toml(CONFIG)
+        store.stop_condition = empty
+        assert SimulationEnvBuilder.from_config_store(store).stop_condition is None
+
+
+def test_from_config_store_tolerates_missing_field(monkeypatch):
+    """对不含 stop_condition 字段的 ConfigStore 变体不抛 AttributeError。
+
+    2b 的接线以 getattr(store, 'stop_condition', None) 读字段，正是为容忍本形态
+    ——字段由 4a1 才引入，硬取属性会使接线落地即对旧 ConfigStore 抛错。
+    """
+    from gacha_simulator.core.config_store import ConfigStore
+
+    store = load_toml(CONFIG)
+    monkeypatch.delattr(ConfigStore, 'stop_condition')
+    env = SimulationEnvBuilder.from_config_store(store)
+    assert env.stop_condition is None
+
+
+def test_toml_stop_condition_end_to_end(tmp_path):
+    """TOML [stop_condition] 段 → store → env → 用户条件真实生效。
+
+    这是缺陷 A 的端到端闭合验证：改造前即便手写该段也无人解析，模拟固定使用
+    AllPoolsEndCondition(env.end_time)。
+    """
+    base = open(CONFIG, encoding='utf-8').read()
+    path = os.path.join(str(tmp_path), 'p79.toml')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(base + _STOP_SECTION)
+
+    store = load_toml(path)
+    assert store.stop_condition is not None
+    env = SimulationEnvBuilder.from_config_store(store)
+    assert isinstance(env.stop_condition, CompositeStopCondition)
+
+    specs = {tc.card_id: tc.quantity for tc in store.target_cards}
+    r = run_batch_parallel(
+        env=env, target_specs=specs, initial_resources=env.initial_resources,
+        num_simulations=1, max_workers=1, seed=42, strategy_key='smart').results[0]
+
+    # 用户条件 fixed_action_count(20) 先于硬边界收口
+    assert r.total_draws == 20
+    assert r.final_time < env.end_time

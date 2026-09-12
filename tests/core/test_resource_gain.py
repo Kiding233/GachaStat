@@ -1,30 +1,33 @@
 from gacha_simulator.core.resource_gain import (
-    LinearResourceGain, PeriodicResourceGain, CompositeResourceGain
+    CompositeResourceGain, ScheduleResourceGain
 )
 from gacha_simulator.core.state import GachaState
 
-
-def test_linear_gain():
-    func = LinearResourceGain({'draw_resource': 10, 'mora': 100})
-    gains = func.compute(60, GachaState())
-    assert gains['draw_resource'] == 600
-    assert gains['mora'] == 6000
+DAY = 86400
 
 
-def test_periodic_gain():
-    func = PeriodicResourceGain(period=3600, reward={'daily': 600})
-    gains = func.compute(3600, GachaState())
-    assert gains['daily'] == 600
-    gains = func.compute(7199, GachaState())
-    assert gains['daily'] == 600
-    gains = func.compute(7200, GachaState())
-    assert gains['daily'] == 1200
+def test_schedule_gain():
+    """日程表按绝对天数发放，且不外推（P79 5.1：本模块只保留有界形态）。"""
+    func = ScheduleResourceGain({1: {'draw_resource': 160}}, total_days=10)
+    state = GachaState()
+
+    state.real_time = 0.0
+    assert func.compute(DAY, state) == {'draw_resource': 160}
+    # 日程表未覆盖的天不发放（无外推）
+    state.real_time = 2 * DAY
+    assert func.compute(DAY, state) == {}
 
 
 def test_composite_gain():
-    linear = LinearResourceGain({'draw_resource': 1})
-    periodic = PeriodicResourceGain(10, {'bonus': 100})
-    composite = CompositeResourceGain([linear, periodic])
-    gains = composite.compute(10, GachaState())
-    assert gains['draw_resource'] == 10
+    """CompositeResourceGain 逐函数求和。
+
+    P79 2a：原以 LinearResourceGain / PeriodicResourceGain 作 fixture，二者
+    已随无界收入类一并删除，改用两个保留的 ScheduleResourceGain 构造。
+    """
+    a = ScheduleResourceGain({1: {'draw_resource': 100}}, total_days=10)
+    b = ScheduleResourceGain({1: {'bonus': 100}}, total_days=10)
+
+    composite = CompositeResourceGain([a, b])
+    gains = composite.compute(DAY, GachaState())
+    assert gains['draw_resource'] == 100
     assert gains['bonus'] == 100

@@ -43,7 +43,7 @@ from .stop_condition import (
     STOP_CONDITION_REGISTRY, create_stop_condition,
     stop_condition_type_to_key, stop_condition_key_to_type,
 )
-from .resource_gain import ResourceGainFunction, LinearResourceGain, PeriodicResourceGain, StepResourceGain, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
+from .resource_gain import ResourceGainFunction, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
 from .generalized_drop_rate import (
     GeneralizedDropRate, RarityValueAtT, CumulativeResourceEfficiency, PityProgressAtT,
     DropRateBetweenT1T2, TotalValueAtT, TargetCardCountAtT, TargetCardPercentageAtT, TargetCardEfficiencyAtT
@@ -141,7 +141,7 @@ __all__ = [
     'AllPoolsEndCondition', 'LastDrawCardCondition',
     'STOP_CONDITION_REGISTRY', 'create_stop_condition',
     'stop_condition_type_to_key', 'stop_condition_key_to_type',
-    'ResourceGainFunction', 'LinearResourceGain', 'PeriodicResourceGain', 'StepResourceGain', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',
+    'ResourceGainFunction', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',
     'GeneralizedDropRate', 'RarityValueAtT', 'CumulativeResourceEfficiency', 'PityProgressAtT',
     'DropRateBetweenT1T2', 'TotalValueAtT', 'TargetCardCountAtT', 'TargetCardPercentageAtT', 'TargetCardEfficiencyAtT',
     'PoolSchedule', 'PoolScheduleManager',

@@ -1,13 +1,27 @@
 import logging
 import datetime as _dt
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .state import GachaState
     from .config_store import GainRule, DayOverride
 
 logger = logging.getLogger(__name__)
+
+
+# ── 资源收入的有界性纪律（P79 5.1）──────────────────────────────
+# 本模块只保留**有界**形态：ScheduleResourceGain（按模拟日历查表，绝对定位、
+# 无外推）与包装它的 CompositeResourceGain。引擎硬边界的前提是「越过
+# env.end_time 后无任何可观测量」，按时长外推的无界收入函数会破坏该前提，
+# 故 P79 删除了 LinearResourceGain / PeriodicResourceGain / StepResourceGain。
+# 三者本就不在现有配置可表达的范围内（GUI / TOML 的规则类型只有每天、每N天、
+# 每周几、每月第几天、每月第几周几、指定日期），删除不损失现有功能。
+#
+# 将来若需亚日粒度收入（如「每 6 小时回体力」）：**正确路径是给日程表加时间
+# 粒度**（把 ScheduleResourceGain.DAY 由常量改为可配 tick），因其账目为绝对
+# 定位且有界；不要复活按时长计数的周期型实现——它在「单次等待短于一个周期」
+# 时会丢弃余数。
 
 
 class ResourceGainFunction(ABC):
@@ -44,18 +58,6 @@ class ScheduleResourceGain(ResourceGainFunction):
         return f"按天获取: {len(self.schedule)} 天有资源收入"
 
 
-class LinearResourceGain(ResourceGainFunction):
-    def __init__(self, rate: Dict[str, float]):
-        self.rate = rate
-
-    def compute(self, elapsed_time: float, state: 'GachaState') -> Dict[str, float]:
-        return {k: v * elapsed_time for k, v in self.rate.items()}
-
-    def description(self) -> str:
-        rates = ', '.join(f"{k}={v}/s" for k, v in self.rate.items())
-        return f"线性获取: {rates}"
-
-
 class CompositeResourceGain(ResourceGainFunction):
     def __init__(self, functions: list):
         self.functions = functions
@@ -70,38 +72,6 @@ class CompositeResourceGain(ResourceGainFunction):
 
     def description(self) -> str:
         return ' + '.join(f.description() for f in self.functions)
-
-
-class PeriodicResourceGain(ResourceGainFunction):
-    def __init__(self, period: float, reward: Dict[str, float]):
-        self.period = period
-        self.reward = reward
-
-    def compute(self, elapsed_time: float, state: 'GachaState') -> Dict[str, float]:
-        periods = int(elapsed_time // self.period)
-        if periods <= 0:
-            return {}
-        return {k: v * periods for k, v in self.reward.items()}
-
-    def description(self) -> str:
-        rewards = ', '.join(f"{k}={v}" for k, v in self.reward.items())
-        return f"周期获取(每{self.period}s): {rewards}"
-
-
-class StepResourceGain(ResourceGainFunction):
-    def __init__(self, steps: List[Tuple[float, Dict[str, float]]]):
-        self.steps = sorted(steps, key=lambda x: x[0])
-
-    def compute(self, elapsed_time: float, state: 'GachaState') -> Dict[str, float]:
-        result: Dict[str, float] = {}
-        for threshold, reward in self.steps:
-            if elapsed_time >= threshold:
-                for k, v in reward.items():
-                    result[k] = result.get(k, 0) + v
-        return result
-
-    def description(self) -> str:
-        return f"阶梯获取: {len(self.steps)} 个阶梯"
 
 
 

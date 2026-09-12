@@ -59,7 +59,7 @@ def build_strategy_context(
         all_pools: 全部池子列表。
         real_time: 当前模拟日历时间。
         target_cards: 目标卡集合。
-        stop_condition: 停止条件。
+        stop_condition: 停止条件。**P79 起装配层传入的是含引擎硬边界的 CompositeStopCondition**（用户条件与硬边界取 any），非用户配置的条件本身。
         pity_engine: 保底引擎。
         pity_state: 保底状态。
         pool_draw_counts: 各池已抽次数。

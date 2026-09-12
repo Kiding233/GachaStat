@@ -181,3 +181,42 @@ def test_golden_dir_is_version_controlled():
     assert (ROOT / 'scripts' / 'p79_baseline.py').exists()
     assert (ROOT / 'scripts' / 'p79_verify.py').exists()
     assert os.path.exists(ROOT / 'tests' / 'test_p79_stop_condition_baseline.py')
+
+
+def test_worst_impact_self_built_condition_shares_end_time_with_env():
+    """8.3「等价对照」表第 3 行：`worst_impact` 全流程逐字段不变。
+
+    该行的依据是「硬边界与其自建条件同值」：worst_impact 自建的
+    `ConsecutivePoolTargetCondition` 的 `end_time` 已等于它传给 env 的 `end_time`，
+    故 `_run_single` 追加的硬边界在该路径上**在收口时刻上与它不可能分歧**，
+    行为因此不变。
+
+    局限（如实说明）：§8.3 未为这一行定义基线产物——9 组 golden 快照只覆盖策略键
+    （worst_impact 不是策略，走 `from_dict` 路径），故**无法**用改动前快照做逐字段
+    对照。本用例固化上述**冗余性前提**并叠加一次全流程跑通，是该行目前可达到的最强
+    载体。
+    """
+    from gacha_simulator.core.config_toml import load_toml
+    from gacha_simulator.core.worst_impact import WorstImpactAnalyzer
+    from gacha_simulator.service.batch_simulator import (
+        SimulationEnvBuilder, _build_target_set, _run_single,
+    )
+
+    store = load_toml(CONFIG)
+    analyzer = WorstImpactAnalyzer(simulation_results=[], target_specs={}, store=store)
+    analyzer._prepare_pool_info()
+    cfg = analyzer.prepare_simulation_config(worst_resource=50000.0)
+
+    # 前提：自建条件与 env 共用同一个终点时刻（硬边界因此冗余）
+    assert cfg['stop_condition'].end_time == cfg['end_time']
+
+    env = SimulationEnvBuilder.from_dict(cfg)
+    # from_dict 路径原样接收调用方传入的条件对象（计划阶段 2 的裁决）
+    assert env.stop_condition is cfg['stop_condition']
+    assert env.end_time == cfg['end_time']
+
+    target_set = _build_target_set(env.card_defs, cfg['target_specs'])
+    result = _run_single(env, target_set, SEED, env.initial_resources)
+    assert result is not None
+    assert result.final_time <= env.end_time, '追加的硬边界不得使终点外移'
+    assert result.warnings == [], result.warnings

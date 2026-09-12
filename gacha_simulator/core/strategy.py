@@ -98,6 +98,11 @@ class StrategyContext:
     all_pools: List['Pool']
     future_schedules: List[PoolSchedule]
     target_cards: TargetCardSet
+    # P79 语义变更（插件作者可见）：装配后本字段**不是**用户配置的条件本身，而是
+    # `CompositeStopCondition([用户条件, 引擎硬边界], mode='any')`——硬边界恒附，
+    # 保证任何「策略 × 停止条件」组合都在 `env.end_time` 收口（用户条件不可满足时
+    # 由硬边界兜底）。用户条件为 None 时退化为单一硬边界。策略**不应**用它判断
+    # 「我该收工了吗」——策略枯竭态请返回推进时间的等待（见 next_event_wait）。
     stop_condition: 'StopCondition'
     _pity_engine: Optional['PityEngine'] = field(default=None, repr=False)
     _pity_state: Optional['PityState'] = field(default=None, repr=False)

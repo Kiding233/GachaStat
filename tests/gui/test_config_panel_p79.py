@@ -165,12 +165,18 @@ def test_param_area_nested_map_and_fill(panel):
     wmap_a = panel._stop_condition_param_widgets['a']
     assert wmap_a['max_actions'][1].value() == 7
 
-    # 只显示选中条件对应的容器
+    # 只显示选中条件对应的容器。用 isHidden() 而非 isVisible()——后者在祖先未
+    # show() 时对两者都为 False（本用例的面板从未显示），会得到恒真的假断言。
     containers = panel._stop_condition_param_containers
-    assert containers['a'].isVisible() != containers['b'].isVisible() or True
+    assert containers['a'].isHidden() is False
+    assert containers['b'].isHidden() is True
+
     panel._stop_condition_selected_id = 'b'
     panel._rebuild_stop_condition_params()
-    assert all(k in containers for k in ('a', 'b'))
+    # 整表重建会替换容器对象（removeRow(0) 删除旧控件），须重新取引用
+    containers = panel._stop_condition_param_containers
+    assert containers['a'].isHidden() is True
+    assert containers['b'].isHidden() is False
 
 
 def test_param_area_removes_container_for_deleted_condition(panel):
@@ -611,3 +617,63 @@ def test_non_coaxial_condition_keeps_registry_default(panel):
     panel._rebuild_stop_condition_params()
     widget = panel._stop_condition_param_widgets['a']['max_actions'][1]
     assert widget.value() == 100          # IntParam default=100
+
+
+# ── 8.2「GUI」行的 R1 扩展项 + 4b3 的跳过项提示 ─────────────────
+
+def test_param_renderer_list_dict_ptype_round_trip(qapp):
+    """ListParam / DictParam 的 list / dict ptype 往返。
+
+    新增描述符若不进入 ptype 推导链与 collect 分派，控件虽能建出，**读取时会
+    静默变成裸字符串**（容器语义丢失且不报错）——本用例是该静默退化的闸门。
+    """
+    from PyQt6.QtWidgets import QFormLayout, QWidget
+
+    from gacha_simulator.core.param_descriptor import DictParam, ListParam
+    from gacha_simulator.gui.param_renderer import (
+        collect_params_from_widgets, render_param_widgets, set_params_to_widgets,
+    )
+
+    container = QWidget()
+    form = QFormLayout(container)
+    widget_map = {}
+    lp = ListParam('sched', '池时间表', default=[['pool_a', 0, 10]])
+    dp = DictParam('tgt', '池目标卡', default={'pool_a': 'c1'})
+    render_param_widgets([lp, dp], form, widget_map, parent=container)
+
+    assert widget_map['sched'][0] == 'list'
+    assert widget_map['tgt'][0] == 'dict'
+
+    got = collect_params_from_widgets(widget_map)
+    assert isinstance(got['sched'], list) and got['sched'] == [['pool_a', 0, 10]]
+    assert isinstance(got['tgt'], dict) and got['tgt'] == {'pool_a': 'c1'}
+
+    set_params_to_widgets([lp, dp], widget_map,
+                          {'sched': [[1, 2]], 'tgt': {'x': 'y'}})
+    assert collect_params_from_widgets(widget_map) == {
+        'sched': [[1, 2]], 'tgt': {'x': 'y'}}
+
+    # 空值往返不得塌成字符串 '[]' / '{}'
+    set_params_to_widgets([lp, dp], widget_map, {'sched': [], 'tgt': {}})
+    empty = collect_params_from_widgets(widget_map)
+    assert empty['sched'] == [] and empty['tgt'] == {}
+
+
+def test_param_renderer_reports_skipped_descriptor(qapp):
+    """未命中控件工厂的描述符须记入返回列表（4b3：原为静默 continue）。"""
+    from PyQt6.QtWidgets import QFormLayout, QWidget
+
+    from gacha_simulator.core.param_descriptor import ListParam
+    from gacha_simulator.gui.param_renderer import render_param_widgets
+
+    class _UnknownParam(ListParam):
+        pass
+
+    container = QWidget()
+    widget_map = {}
+    skipped = render_param_widgets(
+        [_UnknownParam('u', '未知参数')], QFormLayout(container), widget_map,
+        parent=container)
+
+    assert [p.key for p in skipped] == ['u']
+    assert widget_map == {}, '未命中工厂的描述符不得进入 widget_map'

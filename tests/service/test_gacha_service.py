@@ -403,7 +403,25 @@ def test_progress_signature_covers_all_dimensions():
     deep[next(iter(banners))]._exhaust()
     variants['banner 耗尽标记'] = sig(bs=deep)
 
-    assert len(variants) == 8
+    # banner 活跃池（active_pool_id）——默认配置每个 banner 只有单池，切换不出差异，
+    # 故手工构造一个双池 banner。该维度确实参与签名（gacha_service._progress_signature），
+    # 漏测会让它在将来被误删而无人察觉。
+    from gacha_simulator.core.banner import Banner
+
+    donor = next(iter(banners.values()))
+    extra_pool = next(iter(donor.pools.values()))
+    multi = Banner(id='multi_pool', name='多池 banner',
+                   pools={'main': extra_pool, 'alt': extra_pool})
+    with_multi = dict(banners)
+    with_multi['multi_pool'] = multi
+    baseline_multi = sig(bs=with_multi)
+
+    switched = copy.deepcopy(with_multi)
+    switched['multi_pool']._active_pool_id = 'alt'
+    variants['banner 活跃池'] = sig(bs=switched)
+    assert variants['banner 活跃池'] != baseline_multi, 'banner 活跃池未被纳入签名'
+
+    assert len(variants) == 9
     unchanged = [name for name, v in variants.items() if v == base]
     assert not unchanged, f'以下维度未被签名覆盖: {unchanged}'
 

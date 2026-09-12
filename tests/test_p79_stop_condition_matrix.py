@@ -11,8 +11,8 @@
 - ``5c2a`` / ``5c2b``：断言 5 落 tests/test_config_toml.py、断言 6 落
   tests/gui/test_config_panel_p79.py（**不在本文件**）
 
-断言 1 的上界在本项取**粗上界**（10000，足以拦住 10 万轮级失控），
-按策略的精确校准归 ``5d``。
+断言 1 的上界按 **§8.4 的口径分策略取值**（通用 1000 + ``target_hunting`` 单列），
+由本文件的 ``ITERATION_CAP_BY_STRATEGY`` 定义。
 """
 
 import pytest
@@ -37,6 +37,26 @@ STRATEGY_KEYS = [
 ]
 
 _MISSING_CARD = '不存在的卡'
+
+
+def _default_iteration_cap(end_time):
+    """通用「失控」判据——覆盖绝大多数策略与真死循环用例。"""
+    return PERF_UNIVERSAL_CAP
+
+
+def _hunting_iteration_cap(end_time):
+    """粗粒度等待策略的单列上界：ceil(end_time / 3600) + 常数。
+
+    `target_hunting` 在全部目标池不可负担时固定返回 `WaitAction(duration=3600)`，
+    跨越默认 168 天需 4032 轮——是**合法的多轮**而非失控，不能用通用上界量它。
+    """
+    import math
+    return int(math.ceil(end_time / 3600.0)) + 10
+
+
+# 断言 1 的按策略上界（§8.4）——键集合由 test_matrix_final_time_within_one_step 核验
+ITERATION_CAP_BY_STRATEGY = {k: _default_iteration_cap for k in STRATEGY_KEYS}
+ITERATION_CAP_BY_STRATEGY['target_hunting'] = _hunting_iteration_cap
 
 
 def build_stop_conditions(end_time):
@@ -105,10 +125,10 @@ def test_matrix_iterations_bounded(env_and_targets, strategy_key, condition_key)
     result = run_matrix_case(env_and_targets, strategy_key, condition)
 
     assert result is not None, f'{strategy_key} × {condition_key} 模拟失败'
-    assert result.iterations <= COARSE_ITERATION_CAP, (
+    cap = ITERATION_CAP_BY_STRATEGY[strategy_key](env.end_time)
+    assert result.iterations <= cap, (
         f'{strategy_key} × {condition_key}: iterations={result.iterations} '
-        f'超过粗上界 {COARSE_ITERATION_CAP}')
-    assert result.warnings == [] or result.iterations < COARSE_ITERATION_CAP
+        f'超过该策略的上界 {cap}')
 
 
 @pytest.mark.parametrize('strategy_key', STRATEGY_KEYS)
@@ -244,12 +264,6 @@ PERF_UNIVERSAL_CAP = 1000       # 通用「失控」判据
 PERF_WALL_CLOCK_SECONDS = 0.5   # 单次模拟耗时阈值（修复前 1.04s / 1.78s；修复后约 0.02s）
 
 
-def _hunting_cap(end_time, step=3600.0, slack=10):
-    """粗粒度等待策略的单列上界：ceil(end_time / 步长) + 常数。"""
-    import math
-    return int(math.ceil(end_time / step)) + slack
-
-
 @pytest.mark.parametrize('strategy_key,params', [
     ('fixed_count', {'count': 100}),
     ('stop_on_target', {'stop_on_featured': True}),
@@ -293,7 +307,7 @@ def test_perf_target_hunting_single_column_cap(env_and_targets):
     env.stop_condition = None
     result = _run_single(env, target_set, SEED, env.initial_resources)
 
-    cap = _hunting_cap(env.end_time)
+    cap = _hunting_iteration_cap(env.end_time)
     assert result.iterations <= cap, f'iterations={result.iterations} 超过单列上界 {cap}'
     # 该值由 §2.1 的原始实测固化（4032 轮）
     assert result.iterations == 4032

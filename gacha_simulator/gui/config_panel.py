@@ -3855,6 +3855,9 @@ class ConfigPanel(QWidget):
         if current is not None and current != pdesc.default:
             return
 
+        # 本处保留 getattr 容忍：预填是「能读到终点就预填」的便利项，不构成硬依赖；
+        # 且它不在 §11.1 声明的跨文件对（4a2 ↔ 4a4 / 4c1a）内，硬取属性会引入一个
+        # 计划未声明的失效形态。
         store = getattr(self, '_store', None)
         end_time = getattr(store, 'end_time', None) if store is not None else None
         if not end_time:
@@ -4184,8 +4187,12 @@ class ConfigPanel(QWidget):
         label = getattr(self, 'stop_condition_hint', None)
         if label is None:
             return
+        # 直读 self._store.end_time（5.5 的单一实现点），**不用 getattr 兜属性缺失**：
+        # 计划 §11.1 把「单独 revert 4a2 后 4c1a 抛 AttributeError」列为该跨文件对
+        # （4a2 ↔ 4a4 / 4c1a）的失效形态，而 getattr 会把显式失败降级为静默显示「—」，
+        # 使该回滚保护失效。这里只需容忍 `_store` 未就绪（面板构造期）。
         store = getattr(self, '_store', None)
-        end_time = getattr(store, 'end_time', None) if store is not None else None
+        end_time = store.end_time if store is not None else None
         if not end_time:
             label.setText("ℹ 模拟终点：—（配置载入后显示）")
         else:

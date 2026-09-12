@@ -803,3 +803,29 @@ threshold = 5.0
     state = GachaState(resources={'draw_resource': 10})
     assert ResourceThresholdCondition('draw_resource', 0, '<').check(state, []) is False
     assert ResourceThresholdCondition('no_such_resource', 5, '>=').check(state, []) is False
+
+
+def test_p79_empty_condition_tree_omits_toml_section(tmp_path):
+    """8.2「空配置表现」行的「**落盘为缺省**」一半。
+
+    空树（None）写侧必须省略段（不写空表头），否则下次 load 会把它当成显式的
+    空配置；读侧据此规范化为 None。
+    """
+    store = load_toml(_p79_config_with(tmp_path, ''))
+    assert store.stop_condition is None
+
+    out = tmp_path / 'p79_empty_out.toml'
+    save_toml(store, str(out))
+    text = out.read_text(encoding='utf-8')
+    assert '[stop_condition]' not in text, '空树不得写出 [stop_condition] 段'
+    assert load_toml(str(out)).stop_condition is None
+
+
+def test_p79_nonempty_condition_tree_writes_toml_section(tmp_path):
+    """反向：非空树必须落盘（否则配置静默丢失）。"""
+    store = load_toml(_p79_config_with(tmp_path, _NESTED_STOP_SECTION))
+    out = tmp_path / 'p79_full_out.toml'
+    save_toml(store, str(out))
+    text = out.read_text(encoding='utf-8')
+    assert '[stop_condition]' in text
+    assert load_toml(str(out)).stop_condition == store.stop_condition

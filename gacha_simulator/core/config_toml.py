@@ -1253,6 +1253,11 @@ def _save_stop_condition(store: ConfigStore, data: dict) -> None:
 # P79 5.5：与硬边界同轴的条件类型 → 其阈值参数键
 _COAXIAL_THRESHOLD_KEYS = {'all_pools_end': 'end_time', 'time_limit': 'max_time'}
 
+# P79 5.5 第 5 类：resource_threshold 的运算符白名单。
+# ResourceThresholdCondition.check 只对这三个值分支求值，其余值（含 => / =< /
+# 中文别名 / 空串）一律静默 return False——条件永不成立，用户看不到任何提示。
+_RESOURCE_THRESHOLD_OPERATORS = ('<=', '>=', '==')
+
 
 def _iter_stop_condition_leaves(node):
     """深度优先遍历条件树，产出所有叶子节点。
@@ -1314,6 +1319,24 @@ def _validate_stop_condition_config(data: dict, store: ConfigStore) -> None:
                     "暂态（收入日程会回血），该条件表达的是「首次暂时没钱就收工」而非"
                     "「注定失败」。若需终局判据，请叠加时间维度，如 "
                     "all(资源耗尽, 时间已到某点)")
+
+            # 第 5 类：operator / resource 非白名单值（本项由 4a6 交付）
+            # 二者在 GUI 参数区渲染为自由文本（StrParam → QLineEdit），打错一个字
+            # 即形成「配了却永不生效的停止条件」。处置取保守方案：解析期记入
+            # load_warnings 并给出合法取值集合与当前值，**不改 check() 的求值语义**
+            # （非白名单 operator 仍返回 False）、**不在解析期抛错**。
+            op = leaf.get('operator')
+            if op not in _RESOURCE_THRESHOLD_OPERATORS:
+                warn(
+                    f"停止条件 resource_threshold 的 operator 取值 {op!r} 不在白名单内"
+                    f"（合法取值：{' / '.join(_RESOURCE_THRESHOLD_OPERATORS)}）——"
+                    f"该条件将恒不成立，模拟只能由硬边界收口")
+            res = leaf.get('resource')
+            if isinstance(res, str) and res not in store.resource_defs:
+                warn(
+                    f"停止条件 resource_threshold 的 resource 取值 {res!r} 不在已定义"
+                    f"资源中（可用：{', '.join(sorted(store.resource_defs)) or '（无）'}）"
+                    f"——查询恒取 0，该条件将退化为常量判据")
 
         elif ctype in _COAXIAL_THRESHOLD_KEYS:
             # 第 4 类：与硬边界同轴条件的阈值早于硬边界

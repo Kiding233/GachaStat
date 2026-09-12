@@ -116,6 +116,36 @@ class BannerConfig:
     banners: List[BannerEntry] = field(default_factory=list)
 
 
+def resolve_banner_end_time(banners) -> float:
+    """由 banner 列表求模拟时间线终点（秒）——P79 5.5 定死的单一实现点。
+
+    GUI（读 ``ConfigStore.end_time``）、``SimulationEnvBuilder.from_config_store``
+    与解析期校验三处一律调用本函数，**不得各自复制公式**——否则形成第二真相源，
+    GUI 侧与 builder 侧各引一处即分叉。
+
+    规则：取所有 banner 的 ``available_until`` 最大值；``available_until`` 为
+    ``None`` 者按 ``available_from + 21 * DAY`` 兜底；空输入返回 ``0.0``。
+
+    **21 天兜底分支是防御性保留，当前无可达生产路径。**
+    ``_normalize_permanent_banners``（config_toml）有三个调用点
+    （``load_toml`` 经 ``_build_banners`` 内部末尾、``ConfigPanel.set_config``、
+    ``ConfigPanel.apply_to_store``），已覆盖全部 ``ConfigStore`` 生产路径，归一后
+    所有 banner 的 ``available_until`` 均非 None。若将来有调用方在归一化前读原始
+    banner 列表、或归一化位置被提前，该分支即生效。
+
+    入参为鸭子类型：``BannerEntry``（``ConfigStore.banner.banners``）与
+    ``PoolSchedule``（``from_config_store`` 内的日程表）都满足该接口。
+    """
+    ends = []
+    for b in (banners or []):
+        until = getattr(b, 'available_until', None)
+        if until is not None:
+            ends.append(until)
+        else:
+            ends.append((getattr(b, 'available_from', None) or 0) + 21 * DAY)
+    return max(ends) if ends else 0.0
+
+
 @dataclass
 class PityDef:
     """P55 扁平化：23 个独立类型字段（原 PityDefParsed 6 字段 + param 分裂）。
@@ -308,6 +338,18 @@ class ConfigStore:
         self.rarity_defaults.clear()                                  # ← P63
         self.card_overflow_map.clear()                                # ← P63
         self._migrated_from_legacy = False                            # ← P55
+
+    # ── P79：时间线终点（只读派生值）────────────────────────────────
+    @property
+    def end_time(self) -> float:
+        """模拟时间线终点（秒）。
+
+        P79 5.5：GUI（读 ``self._store.end_time``）与解析期校验的统一读口，
+        内部调 ``resolve_banner_end_time``；面板内不得重算。面板 ``_store``
+        未就绪时由调用方处理（GUI 侧显示「—」）。
+        """
+        return resolve_banner_end_time(self.banner.banners)
+
 
     # ── P78 读取接口（ISSUE-603 契约）────────────────────────────────
     # GUI 回填（ISSUE-004）与校验（ISSUE-111/116）一律经此接口、禁止直读

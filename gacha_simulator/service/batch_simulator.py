@@ -584,7 +584,8 @@ class SimulationEnvBuilder:
         from gacha_simulator.core.pool import Pool, Reward, parse_cost_string
         from gacha_simulator.core.schedule import PoolScheduleManager, PoolSchedule
 
-        DAY = 86400
+        # P79 4a2：原局部 DAY = 86400 随内联 end_time 表达式一并移除——
+        # 终点公式已提为 core 层 resolve_banner_end_time（其内自带 DAY）
         banner_entries = config_store.banner.banners
         schedules = []
         banners = []
@@ -671,13 +672,10 @@ class SimulationEnvBuilder:
             ))
 
         schedule_mgr = PoolScheduleManager(schedules)
-        # P61（Ph6 / ISSUE-001）：永久 Banner（available_until=None）兜底 21 天，
-        # end_time = max(有效结束时间)——与现状 (start_day + 21) * DAY 秒等价
-        end_time = max(
-            (s.available_until if s.available_until is not None
-             else (s.available_from or 0) + 21 * DAY)
-            for s in schedules
-        ) if schedules else 0
+        # P79 5.5：时间线终点改由 core 层单一实现点供给（原为内嵌局部表达式）。
+        # 该公式同时服务 GUI 只读提示与解析期校验，复制到别处即形成第二真相源。
+        from gacha_simulator.core.config_store import resolve_banner_end_time
+        end_time = resolve_banner_end_time(schedules)
 
         pity_cfg_dict = {'enabled': True, 'pities': [], 'counter_init': {}}
         pc = config_store.pity

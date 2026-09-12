@@ -217,7 +217,18 @@ def set_params_to_widgets(
         val = values.get(pdesc.key, pdesc.default)
 
         if ptype in ('int', 'float'):
-            widget.setValue(float(val) if val is not None else pdesc.default)
+            # P79：QSpinBox.setValue 只接受 int——原实现对 int 参数也传 float，
+            # PyQt6 抛 TypeError；该异常发生在 Qt 槽内时会被解释器升级为进程中止
+            # （实测：载入 strategy_key=fixed_count 的配置即崩）。转不动时回退默认
+            # 值并打 warning，不让 UI 路径因单个脏值整体崩掉。
+            raw = val if val is not None else pdesc.default
+            try:
+                widget.setValue(int(float(raw)) if ptype == 'int' else float(raw))
+            except (TypeError, ValueError):
+                logger.warning("参数 '%s' 的值 %r 无法转换为 %s，回退默认值",
+                               pdesc.key, raw, ptype)
+                widget.setValue(int(pdesc.default) if ptype == 'int'
+                                else float(pdesc.default))
         elif ptype == 'bool':
             widget.setChecked(bool(val) if val is not None else pdesc.default)
         elif ptype == 'string_list':

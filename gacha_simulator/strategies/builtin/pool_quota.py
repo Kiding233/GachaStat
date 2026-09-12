@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 from gacha_simulator.core.strategy import (
-    Strategy, StrategyContext, register_strategy,
+    Strategy, StrategyContext, register_strategy, next_event_wait,
 )
 from gacha_simulator.core.param_descriptor import PoolIntMapParam
 from gacha_simulator.core.action import Action
@@ -77,10 +77,4 @@ class PoolQuotaStrategy(Strategy):
                 if quota is None or drawn < quota:
                     return DrawAction(banner_id=banner.id)
 
-        wait_time = 86400
-        for banner in ctx.banners:
-            if banner.available_until and banner.available_until > ctx.state.real_time:
-                wait_time = min(wait_time, banner.available_until - ctx.state.real_time)
-        if wait_time <= 0:
-            wait_time = 3600
-        return WaitAction(duration=wait_time)
+        return WaitAction(duration=next_event_wait(ctx))

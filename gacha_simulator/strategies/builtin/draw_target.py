@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import List, Optional, Set
 
 from gacha_simulator.core.strategy import (
-    Strategy, StrategyContext, register_strategy,
+    Strategy, StrategyContext, register_strategy, next_event_wait,
 )
 from gacha_simulator.core.param_descriptor import StringListParam, StrParam
 from gacha_simulator.core.action import DrawAction, WaitAction
@@ -36,10 +36,4 @@ class DrawTargetStrategy(Strategy):
             if (not self.pool_id or banner.id == self.pool_id) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 return DrawAction(banner_id=banner.id)
 
-        wait_time = 86400
-        for banner in ctx.banners:
-            if banner.available_until is not None and banner.available_until > ctx.state.real_time:
-                wait_time = min(wait_time, banner.available_until - ctx.state.real_time)
-        if wait_time <= 0:
-            wait_time = 3600
-        return WaitAction(duration=wait_time)
+        return WaitAction(duration=next_event_wait(ctx))

@@ -18,7 +18,9 @@ from multiprocessing import Pool as MPPool
 from dataclasses import dataclass, field as dc_field
 
 from gacha_simulator.core.config_store import ConfigError   # P77：from_dict 类型守卫异常通道
-from gacha_simulator.core.stop_condition import AllPoolsEndCondition, create_stop_condition
+from gacha_simulator.core.stop_condition import (
+    AllPoolsEndCondition, CompositeStopCondition, create_stop_condition,
+)
 from gacha_simulator.core.strategy import (
     create_strategy,
 )
@@ -255,8 +257,15 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
     random.seed(seed)
 
     strategy = create_strategy(env.strategy_key, env.strategy_params)
+    # P79 引擎硬边界（5.2）：用户条件恒与硬边界取 any——用户条件可满足时按其收口；
+    # 不可满足时（时间冻结 / 时间越界 / 目标不可达）由硬边界在 env.end_time 兜底，
+    # 保证任何「策略 × 停止条件」组合都在时间线终点结束。
+    # env.stop_condition 为 None 时退化为单一硬边界，与接线前逐字段等价。
+    # 注意 from_dict 路径（worst_impact.py）自建条件并传同值 end_time，硬边界与
+    # 之一致，冗余但无害。
     if env.stop_condition is not None:
-        stop_cond = env.stop_condition
+        stop_cond = CompositeStopCondition(
+            [env.stop_condition, AllPoolsEndCondition(env.end_time)], mode='any')
     else:
         stop_cond = AllPoolsEndCondition(env.end_time)
 

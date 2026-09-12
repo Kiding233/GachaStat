@@ -35,11 +35,11 @@ class StopOnTargetStrategy(Strategy):
         from gacha_simulator.core.action import DrawAction, WaitAction
 
         if self.stop_on_featured and ctx.last_draw_pity_triggered:
-            return WaitAction(duration=0)
+            return WaitAction(duration=next_event_wait(ctx))
         if self.stop_on_any_target:
             for t in ctx.target_cards.targets:
                 if ctx.acquired.get(t.card_id, 0) >= t.quantity_needed:
-                    return WaitAction(duration=0)
+                    return WaitAction(duration=next_event_wait(ctx))
 
         for t in ctx.target_cards.targets:
             if ctx.acquired.get(t.card_id, 0) >= t.quantity_needed:

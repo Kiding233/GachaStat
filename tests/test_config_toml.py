@@ -7,6 +7,7 @@ from gacha_simulator.core.config_toml import (
     _deltas_to_soft_interval,
     _parse_deltas_value,
     load_toml,
+    save_toml,
 )
 from gacha_simulator.core.config_store import ConfigError
 import tempfile
@@ -624,3 +625,181 @@ clear = true
     assert 'expire_at' in dead[0]
     # 阈值按归一化后的 end_time（168 天）判定，而非 0
     assert '168.0 天' in dead[0]
+
+
+# ══════════════════════════════════════════════════════════════════
+# P79 8.2 剩余四组（[stop_condition] round-trip + 加载期校验三类）
+# ══════════════════════════════════════════════════════════════════
+
+_MAIN_CONFIG = 'gacha_simulator/config/config.toml'
+
+_NESTED_STOP_SECTION = """
+[stop_condition]
+mode = "any"
+
+[[stop_condition.conditions]]
+type = "target_acquired"
+target_id = "limited_ssr_1"
+quantity = 1
+
+[[stop_condition.conditions]]
+mode = "all"
+
+[[stop_condition.conditions.conditions]]
+type = "resource_threshold"
+resource = "draw_resource"
+operator = "<="
+threshold = 0
+
+[[stop_condition.conditions.conditions]]
+mode = "not"
+
+[[stop_condition.conditions.conditions.conditions]]
+type = "target_acquired"
+target_id = "limited_ssr_2"
+quantity = 1
+"""
+
+
+def _p79_config_with(tmp_path, extra, name='p79.toml'):
+    base = open(_MAIN_CONFIG, encoding='utf-8').read()
+    path = tmp_path / name
+    path.write_text(base + extra, encoding='utf-8')
+    return str(path)
+
+
+def test_p79_stop_condition_toml_round_trip_by_structure(tmp_path):
+    """8.2「TOML round-trip」：写入 → 读取 → 再写入，**按解析后的结构**逐字段一致。
+
+    不得按 TOML 文本比对：tomli_w 对复合子节点写 [[stop_condition.conditions]]
+    表头，对 mode='not' 节点的子数组写成内联 conditions = [{...}]——
+    结构相等而文本不同（实测确认）。
+    """
+    store = load_toml(_p79_config_with(tmp_path, _NESTED_STOP_SECTION))
+    tree = store.stop_condition
+    assert tree['mode'] == 'any'
+    inner = tree['conditions'][1]
+    assert inner['mode'] == 'all'
+    assert inner['conditions'][1]['mode'] == 'not'
+
+    first = tmp_path / 'out1.toml'
+    save_toml(store, str(first))
+    again = load_toml(str(first))
+    assert again.stop_condition == tree
+
+    second = tmp_path / 'out2.toml'
+    save_toml(again, str(second))
+    assert load_toml(str(second)).stop_condition == tree
+
+    # 文本形态确实不同（内联 vs 表头），印证「必须按结构比对」
+    text1 = first.read_text(encoding='utf-8')
+    assert 'conditions = [' in text1          # not 节点写内联
+    assert '[[stop_condition.conditions]]' in text1
+
+
+def test_p79_stop_condition_absent_section_normalizes_to_none(tmp_path):
+    """缺省段解析为「仅硬边界」。"""
+    store = load_toml(_p79_config_with(tmp_path, ''))
+    assert store.stop_condition is None
+
+
+def test_p79_stop_condition_empty_conditions_normalizes_to_none(tmp_path):
+    """conditions 为空数组一律规范化 None（否则 mode='all' 下 all([]) 恒真）。"""
+    store = load_toml(_p79_config_with(tmp_path, """
+[stop_condition]
+mode = "all"
+conditions = []
+"""))
+    assert store.stop_condition is None
+
+
+def test_p79_load_validation_dead_rules(tmp_path):
+    """8.2「加载期校验」：死规则两条（资源生命周期 + banner 生命周期）。"""
+    store = load_toml(_p79_config_with(tmp_path, """
+[resources.lifecycle]
+enabled = true
+
+[[resources.lifecycle.rules]]
+resource_id = "draw_resource"
+expire_at = 9999.0
+
+[resources.lifecycle.rules.on_expire]
+clear = true
+
+[[banner.lifecycle]]
+condition = "time_window"
+at = 9999
+action = "exhaust_banner"
+"""))
+    dead = [w for w in store.load_warnings if '永不触发' in w]
+    assert len(dead) == 2, store.load_warnings
+    assert any('resources.lifecycle' in w for w in dead)
+    assert any('banner.lifecycle' in w for w in dead)
+
+
+def test_p79_load_validation_coaxial_threshold(tmp_path):
+    """8.2「加载期校验」同轴阈值例：阈值 ≤ 0 或早于硬边界各一条。"""
+    store = load_toml(_p79_config_with(tmp_path, """
+[stop_condition]
+mode = "all"
+
+[[stop_condition.conditions]]
+type = "all_pools_end"
+end_time = 0.0
+
+[[stop_condition.conditions]]
+type = "time_limit"
+max_time = 864000.0
+"""))
+    coaxial = [w for w in store.load_warnings if '停止条件' in w]
+    assert len(coaxial) == 2, store.load_warnings
+    assert any('第 0 轮结束' in w for w in coaxial)      # all_pools_end(0.0)
+    assert any('早于硬边界' in w for w in coaxial)        # time_limit 10 天
+
+
+def test_p79_load_validation_semantic_trap(tmp_path):
+    """8.2「加载期校验（语义陷阱）」：resource_threshold 以 <= 比较 0。"""
+    store = load_toml(_p79_config_with(tmp_path, """
+[stop_condition]
+mode = "any"
+
+[[stop_condition.conditions]]
+type = "resource_threshold"
+resource = "draw_resource"
+operator = "<="
+threshold = 0
+"""))
+    traps = [w for w in store.load_warnings if '暂态' in w]
+    assert len(traps) == 1, store.load_warnings
+    assert '首次暂时没钱就收工' in traps[0]
+
+
+def test_p79_load_validation_whitelist_values(tmp_path):
+    """8.2「加载期校验（非法值白名单）」：operator / resource 非白名单。
+
+    并同时锁定 5.5 第 5 类的裁决——**不改 check() 的求值语义**、解析期不抛错。
+    """
+    store = load_toml(_p79_config_with(tmp_path, """
+[stop_condition]
+mode = "all"
+
+[[stop_condition.conditions]]
+type = "resource_threshold"
+resource = "no_such_resource"
+operator = "<"
+threshold = 5.0
+"""))
+    whitelist = [w for w in store.load_warnings if '白名单' in w or '不在已定义资源中' in w]
+    assert len(whitelist) == 2, store.load_warnings
+    op_msg = next(w for w in whitelist if 'operator' in w)
+    assert "'<'" in op_msg and '<= / >= / ==' in op_msg      # 给出合法取值集合与当前值
+    res_msg = next(w for w in whitelist if '的 resource 取值' in w)
+    assert "'no_such_resource'" in res_msg and 'draw_resource' in res_msg
+
+    # 求值语义未变：非白名单 operator 仍返回 False；未知 resource 查询恒取 0
+    from gacha_simulator.core.state import GachaState
+    from gacha_simulator.core.stop_condition import ResourceThresholdCondition
+
+    state = GachaState(resources={'draw_resource': 10})
+    assert ResourceThresholdCondition('draw_resource', 0, '<').check(state, []) is False
+    assert ResourceThresholdCondition('no_such_resource', 5, '>=').check(state, []) is False

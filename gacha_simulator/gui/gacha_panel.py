@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """抽卡面板 - 批量模拟"""
 
+import copy
 import traceback
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QLabel,
@@ -96,8 +97,14 @@ class SimulationThread(QThread):
             no_draw_resources = {}
             no_draw_pool_resources = {}
             try:
+                # P79：基线不继承用户停止条件——no_draw 策略全程只返回等待，
+                # fixed_action_count 一类条件会把基线截断、final_resources 偏低，
+                # 「不抽卡资源基线」这一对比基准失真且无提示。用 env 的副本置空，
+                # 不改 run_batch_parallel 的统一入口签名；基线仍由硬边界收口。
+                _baseline_env = copy.deepcopy(env)
+                _baseline_env.stop_condition = None
                 no_draw_results = run_batch_parallel(
-                    env=env,
+                    env=_baseline_env,
                     target_specs=target_specs,
                     initial_resources=env.initial_resources,
                     num_simulations=1,

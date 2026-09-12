@@ -124,6 +124,11 @@ class PlanSearchEngine:
             # 完整时间线模式
             from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
             env = SimulationEnvBuilder.from_config_store(self.config_store)
+            # P79：搜索模式不继承用户停止条件——用户在配置面板设的条件（如
+            # fixed_action_count(N) / resource_threshold(<=0)）会截断搜索模拟，
+            # 污染 GDR 成功率与「最少资源」结论。本分支与下方的截断分支一并置空，
+            # 使两条时间线语义一致，均由硬边界收口。
+            env.stop_condition = None
             ir = dict(env.initial_resources)
             ir['draw_resource'] = initial_resource_value
             env.initial_resources = ir
@@ -138,7 +143,10 @@ class PlanSearchEngine:
                 pity_counter_init=self.pity_counter_init,
             )
             from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
-            return SimulationEnvBuilder.from_config_store(truncated_store)
+            env = SimulationEnvBuilder.from_config_store(truncated_store)
+            # P79：同上——截断时间线同样不继承用户停止条件
+            env.stop_condition = None
+            return env
 
     # 保留旧方法名作为别名，向后兼容
     _build_truncated_env = _build_env

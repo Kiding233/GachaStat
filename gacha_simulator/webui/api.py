@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import copy
 import traceback
 from datetime import datetime
 
@@ -293,8 +294,11 @@ class GachaApi:
             no_draw_resources = {}
             no_draw_pool_resources = {}
             try:
+                # P79：基线不继承用户停止条件（同 gui/gacha_panel.py 的裁决）
+                _baseline_env = copy.deepcopy(env)
+                _baseline_env.stop_condition = None
                 nd = run_batch_parallel(
-                    env=env, target_specs=target_specs,
+                    env=_baseline_env, target_specs=target_specs,
                     initial_resources=env.initial_resources,
                     num_simulations=1, max_workers=1, seed=seed,
                     strategy_key='no_draw',

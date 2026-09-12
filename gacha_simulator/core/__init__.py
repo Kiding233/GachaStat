@@ -81,7 +81,8 @@ from .worst_impact import (
     WorstImpactAnalyzer, WorstImpactResult, ConditionalResourceDistribution,
 )
 from .result_store import (
-    ResultStore, StoredDataset, ComparabilityFingerprint, ComparabilityDiff, compute_config_hash,
+    ResultStore, StoredDataset, ComparabilityFingerprint, ComparabilityDiff,
+    compute_config_hash, canonical_stop_condition_summary,
 )
 from .gdr_binning import (
     BinningResult, compute_bins, detect_step_size, compute_aligned_bins,
@@ -175,6 +176,7 @@ __all__ = [
     'to_success_sequence', 'to_success_set', 'to_success_count', 'to_success_custom',
     'EVENT_MODE_MAP', 'SUCCESS_MODE_MAP',
     'ResultStore', 'StoredDataset', 'ComparabilityFingerprint', 'ComparabilityDiff', 'compute_config_hash',
+    'canonical_stop_condition_summary',
     'BinningResult', 'compute_bins', 'detect_step_size', 'compute_aligned_bins',
     'DescriptiveStats', 'HypothesisTestResult', 'ParetoFrontier',
     'ClassificationResult', 'classify_dominance',

@@ -424,7 +424,8 @@ def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dic
 
 def compute_config_hash(pools_config: List[Any], pity_config: Any,
                         schedules_config: List[Any],
-                        milestone_config: Any = None) -> str:
+                        milestone_config: Any = None,
+                        stop_condition_summary: Any = None) -> str:
     """计算配置的确定性 hash（用于可比性判断）。
 
     P61（Ph7 / ISSUE-013）：纳入 Banner 级配置。pools_config 现为
@@ -437,6 +438,11 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
     P58（REVIEW-R1-FIX: ISSUE-008）：milestone_config（store.milestone）纳入
     hash——仅 milestone 不同的数据集判「配置: 不同」（否则 only_strategy_differs()
     / mode_label() 误判纯策略比较）。None（调用方未传）→ 不纳入，兼容旧调用方。
+
+    P79：stop_condition_summary（``canonical_stop_condition_summary`` 的产物）纳入
+    hash。不纳入时「仅停止条件不同」的两组数据会被判为 same 维度，可比性结论与真实
+    情况相反，且 hash 与指纹同时失明。沿用 milestone_config 式的关键字默认 None，
+    既有三参 / 四参位置调用保持不变。
     """
     h = hashlib.sha256()
 
@@ -493,4 +499,35 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
             # 数据集判「配置: 不同」（否则交替/偏移里程碑与旧形态 hash 相同、误判可比）
             _update(str(md.alternate_rewards))
             _update(str(md.offset))
+    # 停止条件（P79）——摘要须含参数值，故由调用方经 canonical_stop_condition_summary
+    # 传入（表达式渲染只含 id，不足以承担指纹维度）
+    if stop_condition_summary is not None:
+        _update(str(stop_condition_summary))
     return h.hexdigest()[:16]
+
+
+def canonical_stop_condition_summary(tree: Optional[Dict[str, Any]]) -> str:
+    """条件树 → 可比性指纹用的**规范化摘要**（P79 阶段 4「可比性指纹」段）。
+
+    规范形态定死为 ``json.dumps(tree, sort_keys=True, separators=(',', ':'),
+    ensure_ascii=False)``：
+
+    - ``sort_keys`` 消除同一棵树经 TOML 解析与 GUI 重建两条路径的键序差异
+    - ``separators`` 去空白，保证跨 Python 版本一致
+    - ``tree is None``（空树 = 仅引擎硬边界收口）产出固定哨兵 ``''``，
+      与任何真实树都不同
+
+    只做确定性序列化，**不做语义归一**（不排序条件数组、不去重）——输入树的规范化
+    由解析期的空树规范化承担。
+
+    **本函数必须含全部参数值，不能只渲染条件 id**：表达式渲染（stop_condition_expr
+    的树 → 表达式方向）只含 id，两组仅阈值不同的停止条件会产出同一表达式串，使
+    「可比性指纹」的断言不成立，故摘要不落 ``stop_condition_expr.py``。
+
+    落本模块（与 ``ComparabilityFingerprint`` / ``compute_config_hash`` 同文件）：
+    模块已 import json（:4），零新增 import 边，且摘要正是指纹的 ``stop_condition``
+    维度。函数体置于 ``compute_config_hash`` 之后，避免上移其行号锚点。
+    """
+    if tree is None:
+        return ''
+    return json.dumps(tree, sort_keys=True, separators=(',', ':'), ensure_ascii=False)

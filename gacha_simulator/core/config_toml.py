@@ -99,6 +99,11 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     # P77：资源生命周期段（须在 _build_banners/_normalize_permanent_banners 之后，依赖永久池标记）
     _build_resource_lifecycle(data, store)
 
+    # P79：[stop_condition] 段（须在 _build_banners/_normalize_permanent_banners 之后，依赖永久池标记）
+    # ——解析期校验（死规则 / 语义陷阱 / 同轴阈值 / 非白名单值）同样依赖归一化后的
+    # end_time，故一并落在本调用点之后，不得按 TOML 段序前移。
+    _build_stop_condition(data, store)
+
     return store
 
 
@@ -165,6 +170,9 @@ def save_toml(store: ConfigStore, path: str) -> None:
 
     # P77：资源生命周期段（两档条件写键）
     _save_resource_lifecycle(store, data)
+
+    # P79：[stop_condition] 段（空树省略段）
+    _save_stop_condition(store, data)
 
     # pity（P55 扁平化格式）
     if store.pity.enabled and store.pity.pities:
@@ -1227,6 +1235,20 @@ def validate_resource_lifecycle_rules(rules_raw, resource_ids, banner_until,
     return ResourceLifecycleConfig(enabled=bool(enabled), rules=rules)
 
 
+def _save_stop_condition(store: ConfigStore, data: dict) -> None:
+    """将 ``store.stop_condition`` 写回 ``data['stop_condition']``（P79 5.6）。
+
+    空树（``None`` / 空字典）**省略段**——不写空表头，load 侧据此规范化为
+    ``None``。写出形态由 ``tomli_w`` 自行决定：复合子节点写
+    ``[[stop_condition.conditions]]`` 表头，``mode='not'`` 一类节点的子数组可能
+    写成内联 ``conditions = [{...}]``，两者**解析后结构相等而 TOML 文本不同**，
+    故 8.2 的「写入 → 读取 → 再写入」按解析后的结构比对、不按文本比对。
+    """
+    tree = getattr(store, 'stop_condition', None)
+    if tree:
+        data['stop_condition'] = tree
+
+
 def _build_resource_lifecycle(data: dict, store: ConfigStore) -> None:
     """[resources.lifecycle] 解析为 store.resource_lifecycle（P77）。
 
@@ -1252,6 +1274,63 @@ def _build_resource_lifecycle(data: dict, store: ConfigStore) -> None:
         {b.id for b in store.banner.banners if getattr(b, '_is_permanent', False)},
         enabled,
     )
+
+
+def _normalize_stop_condition_node(node):
+    """递归规范化条件树节点（P79 5.6「空树规范化」）。
+
+    ``conditions`` 为空数组（或所有子节点都被规范化为空）的节点整支丢弃、返回
+    ``None``——**不构造空复合节点**。否则 ``mode='all'`` 下 ``all([]) == True``
+    会让内层恒真，外层 ``any(用户条件, 硬边界)`` 短路，模拟在 iteration 0 结束
+    （``final_time = 0`` / ``total_draws = 0``，``_obtainable`` 系列 GDR 的分母
+    随之塌缩为 1）。
+
+    注：``mode='not'`` 节点的唯一子节点若被规范化为空，该否定节点一并丢弃——
+    保守取向是「少一个分支」而非「把否定变成恒真」。
+    """
+    if not isinstance(node, dict):
+        raise ConfigError(
+            f"stop_condition 的节点必须是表（dict），收到 {type(node).__name__}")
+
+    children = node.get('conditions')
+    if children is None:
+        return dict(node)          # 叶子节点：type + 平铺参数
+
+    if not isinstance(children, list):
+        raise ConfigError("stop_condition 的 conditions 必须是数组")
+
+    kept = []
+    for child in children:
+        norm = _normalize_stop_condition_node(child)
+        if norm is not None:
+            kept.append(norm)
+    if not kept:
+        return None
+
+    out = dict(node)
+    out['conditions'] = kept
+    return out
+
+
+def _build_stop_condition(data: dict, store: ConfigStore) -> None:
+    """``[stop_condition]`` 段解析为 ``store.stop_condition``（P79 5.6）。
+
+    存**递归嵌套表**（不存表达式字符串——表达式只是 GUI 的编辑视图）：复合节点带
+    ``mode``（``any`` / ``all``）+ ``conditions``，否定节点 ``mode='not'`` 恰带一个
+    子节点，叶子节点带 ``type`` + 平铺参数（无 ``conditions``）。
+
+    **空树规范化**：段缺失 / 顶层节点为空 / ``conditions`` 为空数组一律置
+    ``None``，使 ``env.stop_condition`` 为 ``None``、由 ``_run_single`` 退化为单一
+    硬边界——与接线前逐字段等价。
+    """
+    raw = data.get('stop_condition')
+    if raw is None:
+        store.stop_condition = None
+        return
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"stop_condition 必须是表（dict），收到 {type(raw).__name__}")
+    store.stop_condition = _normalize_stop_condition_node(raw)
 
 
 def _save_resource_lifecycle(store: ConfigStore, data: dict) -> None:

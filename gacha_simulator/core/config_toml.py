@@ -103,6 +103,7 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     # ——解析期校验（死规则 / 语义陷阱 / 同轴阈值 / 非白名单值）同样依赖归一化后的
     # end_time，故一并落在本调用点之后，不得按 TOML 段序前移。
     _build_stop_condition(data, store)
+    _validate_stop_condition_config(data, store)
 
     return store
 
@@ -1247,6 +1248,87 @@ def _save_stop_condition(store: ConfigStore, data: dict) -> None:
     tree = getattr(store, 'stop_condition', None)
     if tree:
         data['stop_condition'] = tree
+
+
+# P79 5.5：与硬边界同轴的条件类型 → 其阈值参数键
+_COAXIAL_THRESHOLD_KEYS = {'all_pools_end': 'end_time', 'time_limit': 'max_time'}
+
+
+def _iter_stop_condition_leaves(node):
+    """深度优先遍历条件树，产出所有叶子节点。
+
+    带 ``conditions`` 的节点是复合 / 否定节点，不产出自身（其参数区并非叶子参数）。
+    """
+    if not isinstance(node, dict):
+        return
+    children = node.get('conditions')
+    if children is None:
+        yield node
+        return
+    for child in children:
+        yield from _iter_stop_condition_leaves(child)
+
+
+def _validate_stop_condition_config(data: dict, store: ConfigStore) -> None:
+    """P79 5.5 的加载期轻量校验——**一律报 warning、不抛错**。
+
+    抛错会改变既有加载行为（超出本次范围）；校验结果同时写入
+    ``store.load_warnings`` 与 stderr——``warnings.warn`` 只落 stderr 且 gui 目录内
+    无任何捕获，故必须经前者上浮供 MainWindow 展示。
+
+    ``end_time`` 一律取 ``store.end_time``（core 层共用函数），**不在此复制公式**，
+    否则形成第二真相源。本函数必须排在 ``_build_banners`` 之后调用——排在之前时
+    ``store.end_time`` 走空输入分支返回 0，下列校验会全量误报。
+    """
+    def warn(msg: str) -> None:
+        store.load_warnings.append(msg)
+        warnings.warn(msg)
+
+    end_time = store.end_time
+
+    # ── 校验项 2：死规则（配置白写）──
+    if end_time > 0:
+        for rule in getattr(store.resource_lifecycle, 'rules', []):
+            if rule.expire_at is not None and rule.expire_at > end_time:
+                warn(
+                    f"[resources.lifecycle] 「{rule.resource_id}」的 expire_at"
+                    f"（{rule.expire_at / DAY:.1f} 天）晚于模拟终点"
+                    f"（{end_time / DAY:.1f} 天）——该规则永不触发")
+        for b in store.banner.banners:
+            for lc in getattr(b, 'lifecycle', []):
+                if lc.condition == 'time_window' and lc.at > end_time:
+                    warn(
+                        f"[[banner.lifecycle]] 「{b.id}」的 time_window at"
+                        f"（{lc.at / DAY:.1f} 天）晚于模拟终点"
+                        f"（{end_time / DAY:.1f} 天）——该规则永不触发")
+
+    # ── 用户条件相关校验（校验项 3 / 第 4 类）──
+    for leaf in _iter_stop_condition_leaves(getattr(store, 'stop_condition', None)):
+        ctype = leaf.get('type')
+
+        if ctype == 'resource_threshold':
+            # 校验项 3：语义陷阱——resource_threshold 以 <= 比较 0
+            if leaf.get('operator') == '<=' and leaf.get('threshold') == 0:
+                warn(
+                    "停止条件 resource_threshold 以 <= 比较 0：资源耗尽在当前引擎中是"
+                    "暂态（收入日程会回血），该条件表达的是「首次暂时没钱就收工」而非"
+                    "「注定失败」。若需终局判据，请叠加时间维度，如 "
+                    "all(资源耗尽, 时间已到某点)")
+
+        elif ctype in _COAXIAL_THRESHOLD_KEYS:
+            # 第 4 类：与硬边界同轴条件的阈值早于硬边界
+            pkey = _COAXIAL_THRESHOLD_KEYS[ctype]
+            val = leaf.get(pkey)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                if val <= 0:
+                    warn(
+                        f"停止条件 {ctype} 的 {pkey} 为 {val}（未设置或为 0）——"
+                        f"模拟将在第 0 轮结束，final_time = 0，_obtainable 系列 GDR "
+                        f"的分母随之收窄")
+                elif end_time > 0 and val < end_time:
+                    warn(
+                        f"停止条件 {ctype} 的 {pkey}（{val / DAY:.1f} 天）早于硬边界"
+                        f"（{end_time / DAY:.1f} 天）——模拟将提前结束")
 
 
 def _build_resource_lifecycle(data: dict, store: ConfigStore) -> None:

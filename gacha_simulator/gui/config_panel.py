@@ -3445,8 +3445,11 @@ class ConfigPanel(QWidget):
         条件树走「面板内存态 + apply_to_store 全量重建」的既有模式——面板持
         ``self._stop_condition_tree`` 作为编辑期真相源。
         """
-        # 编辑期真相源（条件树）。落盘形态由 apply_to_store 从它重建。
-        self._stop_condition_tree = None
+        # 编辑期真相源。5.7 定死：**表达式是组合的唯一真相源**，
+        # 条件列表持各条件的 id 与叶子节点；树是由二者派生的落盘形态。
+        self._stop_condition_conditions: List[dict] = []   # [{'id': 'a', 'type': ..., ...参数}]
+        self._stop_condition_expr: str = ''
+        self._stop_condition_tree = None                   # 派生结果（apply 时重建）
         self._stop_condition_selected_id = None
 
         # ── 顶部只读提示（5.5 校验项 1：显式化「模拟将在 X 天后强制结束」）──
@@ -3460,15 +3463,213 @@ class ConfigPanel(QWidget):
         self._stop_condition_compose_layout = QVBoxLayout(self._stop_condition_compose_group)
         parent.addWidget(self._stop_condition_compose_group)
 
-        # ── 条件列表（4c1b 填充）──
+        # ── 条件列表（4c1b）──
         self._stop_condition_list_group = QGroupBox("条件列表")
         self._stop_condition_list_layout = QVBoxLayout(self._stop_condition_list_group)
+        self._setup_stop_condition_list()
         parent.addWidget(self._stop_condition_list_group)
 
         # ── 条件参数（4c2a / 4c2b 填充）──
         self._stop_condition_params_group = QGroupBox("条件参数")
         self._stop_condition_params_layout = QFormLayout(self._stop_condition_params_group)
         parent.addWidget(self._stop_condition_params_group)
+
+    # ── 停止条件：条件列表（4c1b）────────────────────────────────
+
+    def _setup_stop_condition_list(self):
+        """条件列表块：类型下拉 + 添加 + 3 列表格 + 移除/上移/下移。
+
+        类型下拉**按 `internal` 标志过滤**——原「抽卡策略」Tab 的下拉未过滤，
+        把仅供内部使用的 consecutive_pool_target 暴露给了用户。
+        """
+        from gacha_simulator.core.stop_condition import STOP_CONDITION_REGISTRY
+
+        self._stop_condition_type_choices = [
+            (key, entry['display_name'])
+            for key, entry in STOP_CONDITION_REGISTRY.items()
+            if not entry.get('internal', False)
+        ]
+
+        add_row = QHBoxLayout()
+        add_row.addWidget(QLabel("条件类型:"))
+        self.stop_condition_type_combo = QComboBox()
+        self.stop_condition_type_combo.addItems(
+            [d for _, d in self._stop_condition_type_choices])
+        add_row.addWidget(self.stop_condition_type_combo, 1)
+        self.stop_condition_add_btn = QPushButton("添加")
+        self.stop_condition_add_btn.clicked.connect(self._on_stop_condition_add)
+        add_row.addWidget(self.stop_condition_add_btn)
+        self._stop_condition_list_layout.addLayout(add_row)
+
+        self.stop_condition_table = QTableWidget()
+        self.stop_condition_table.setColumnCount(3)
+        self.stop_condition_table.setHorizontalHeaderLabels(["id", "类型", "摘要"])
+        header = self.stop_condition_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.stop_condition_table.setColumnWidth(0, 60)
+        self.stop_condition_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.stop_condition_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection)
+        # id 列的可编辑性与重命名纪律归 4d2b1（id 管理体系）
+        self.stop_condition_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.stop_condition_table.itemSelectionChanged.connect(
+            self._on_stop_condition_selection_changed)
+        self._stop_condition_list_layout.addWidget(self.stop_condition_table)
+
+        btn_row = QHBoxLayout()
+        for text, slot in (
+            ("移除选中", self._on_stop_condition_remove),
+            ("上移", lambda: self._move_stop_condition(-1)),
+            ("下移", lambda: self._move_stop_condition(1)),
+        ):
+            btn = QPushButton(text)
+            btn.clicked.connect(slot)
+            btn_row.addWidget(btn)
+        btn_row.addStretch()
+        self._stop_condition_list_layout.addLayout(btn_row)
+
+        self._refresh_stop_condition_table()
+
+    def _allocate_stop_condition_id(self) -> str:
+        """分配未占用的条件 id（a/b/c…，用尽后退化为 c1/c2…）。
+
+        完整体系（重命名同步替换引用、唯一性与合法性校验）归 4d2b1。
+        """
+        used = {c['id'] for c in self._stop_condition_conditions}
+        for i in range(26):
+            cid = chr(ord('a') + i)
+            if cid not in used:
+                return cid
+        n = 1
+        while f'c{n}' in used:
+            n += 1
+        return f'c{n}'
+
+    @staticmethod
+    def _stop_condition_default_node(type_key: str) -> dict:
+        """按注册表默认值构造叶子节点。"""
+        from gacha_simulator.core.stop_condition import STOP_CONDITION_REGISTRY
+
+        node: dict = {'type': type_key}
+        for pdesc in STOP_CONDITION_REGISTRY[type_key].get('params', []):
+            node[pdesc.key] = pdesc.default
+        return node
+
+    @staticmethod
+    def _stop_condition_summary(node: dict) -> str:
+        """摘要列——由条件对象自身的 description() 渲染。
+
+        节点暂时非法（编辑中途）时不抛错，退化为原始字段展示。
+        """
+        from gacha_simulator.core.stop_condition import create_stop_condition
+
+        try:
+            cond = create_stop_condition(dict(node))
+            return cond.description() if cond is not None else ''
+        except Exception:
+            return ' / '.join(f'{k}={v}' for k, v in node.items() if k != 'type')
+
+    def _refresh_stop_condition_table(self):
+        """按 self._stop_condition_conditions 重建表格（幂等）。"""
+        table = getattr(self, 'stop_condition_table', None)
+        if table is None:
+            return
+        from gacha_simulator.core.stop_condition import STOP_CONDITION_REGISTRY
+
+        table.blockSignals(True)
+        table.setRowCount(len(self._stop_condition_conditions))
+        for row, cond in enumerate(self._stop_condition_conditions):
+            node = {k: v for k, v in cond.items() if k != 'id'}
+            entry = STOP_CONDITION_REGISTRY.get(node.get('type'))
+            type_name = entry['display_name'] if entry else str(node.get('type'))
+            for col, text in enumerate((cond['id'], type_name,
+                                        self._stop_condition_summary(node))):
+                table.setItem(row, col, QTableWidgetItem(text))
+        table.blockSignals(False)
+
+        # 选中态回落：优先保持原选中 id，否则选首行
+        ids = [c['id'] for c in self._stop_condition_conditions]
+        if self._stop_condition_selected_id in ids:
+            table.selectRow(ids.index(self._stop_condition_selected_id))
+        elif ids:
+            table.selectRow(0)
+            self._stop_condition_selected_id = ids[0]
+        else:
+            self._stop_condition_selected_id = None
+        self._on_stop_condition_selection_changed()
+
+    def set_stop_condition_conditions(self, conditions, expr):
+        """载入路径的入口：设置条件列表与表达式并刷新表格。"""
+        self._stop_condition_conditions = [dict(c) for c in (conditions or [])]
+        self._stop_condition_expr = expr or ''
+        self._refresh_stop_condition_table()
+
+    def _on_stop_condition_selection_changed(self):
+        """同步选中条件——条件参数区（4c2a/4c2b）以它为渲染依据。"""
+        table = getattr(self, 'stop_condition_table', None)
+        if table is None:
+            return
+        row = table.currentRow()
+        if 0 <= row < len(self._stop_condition_conditions):
+            self._stop_condition_selected_id =                 self._stop_condition_conditions[row]['id']
+        else:
+            self._stop_condition_selected_id = None
+        rebuild = getattr(self, '_rebuild_stop_condition_params', None)
+        if rebuild is not None:
+            rebuild()
+
+    def _on_stop_condition_add(self):
+        """添加条件：按当前下拉的类型与注册表默认值新建条目。
+
+        表达式侧的「新增条件自动追加到表达式末尾」（5.7 交互规则 2）归 4d2b2。
+        """
+        idx = self.stop_condition_type_combo.currentIndex()
+        if idx < 0 or idx >= len(self._stop_condition_type_choices):
+            return
+        type_key = self._stop_condition_type_choices[idx][0]
+        node = self._stop_condition_default_node(type_key)
+        node_id = self._allocate_stop_condition_id()
+        self._stop_condition_conditions.append({'id': node_id, **node})
+        self._stop_condition_selected_id = node_id
+        self._refresh_stop_condition_table()
+        self._on_stop_condition_added(node_id)
+
+    def _on_stop_condition_added(self, node_id: str):
+        """新增钩子——表达式追加（4d2b2）覆写本方法。"""
+        return None
+
+    def _on_stop_condition_remove(self):
+        """移除选中条件。
+
+        「删除仍被表达式引用的 id → 错误态 + 保存阻断」（5.7 交互规则 3）归 4d2b2；
+        本项只做列表侧的增删。
+        """
+        table = getattr(self, 'stop_condition_table', None)
+        if table is None:
+            return
+        row = table.currentRow()
+        if not (0 <= row < len(self._stop_condition_conditions)):
+            return
+        self._stop_condition_conditions.pop(row)
+        self._refresh_stop_condition_table()
+
+    def _move_stop_condition(self, delta: int):
+        """上移 / 下移选中条件（列表顺序即表达式追加顺序）。"""
+        table = getattr(self, 'stop_condition_table', None)
+        if table is None:
+            return
+        row = table.currentRow()
+        target = row + delta
+        conds = self._stop_condition_conditions
+        if not (0 <= row < len(conds)) or not (0 <= target < len(conds)):
+            return
+        conds[row], conds[target] = conds[target], conds[row]
+        self._stop_condition_selected_id = conds[target]['id']
+        self._refresh_stop_condition_table()
 
     def _refresh_stop_condition_hint(self):
         """顶部只读提示：模拟将在 end_time（所有卡池关闭时刻）后强制结束。

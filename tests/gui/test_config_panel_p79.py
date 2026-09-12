@@ -83,3 +83,61 @@ def test_hint_without_store_shows_placeholder(qapp):
     p = ConfigPanel()          # 未 set_store → _store 为 None
     assert '—' in p.stop_condition_hint.text()
     p.deleteLater()
+
+
+# ── 4c1b：条件列表 ───────────────────────────────────────────────
+
+def test_condition_table_columns_and_buttons(panel):
+    from PyQt6.QtWidgets import QPushButton
+
+    assert panel.stop_condition_table.columnCount() == 3
+    labels = [panel.stop_condition_table.horizontalHeaderItem(i).text()
+              for i in range(3)]
+    assert labels == ['id', '类型', '摘要']
+    texts = {b.text() for b in panel.findChildren(QPushButton)}
+    assert {'添加', '移除选中', '上移', '下移'} <= texts
+
+
+def test_type_combo_filters_internal(panel):
+    """类型下拉须按 internal 标志过滤——consecutive_pool_target 不得暴露给用户。"""
+    keys = [k for k, _ in panel._stop_condition_type_choices]
+    assert 'consecutive_pool_target' not in keys
+    assert 'all_pools_end' in keys and 'resource_threshold' in keys
+
+
+def test_add_remove_move_conditions(panel):
+    panel.stop_condition_type_combo.setCurrentIndex(0)
+    panel._on_stop_condition_add()
+    panel._on_stop_condition_add()
+
+    conds = panel._stop_condition_conditions
+    assert [c['id'] for c in conds] == ['a', 'b']
+    assert panel.stop_condition_table.rowCount() == 2
+    # 默认值来自注册表描述符
+    assert 'type' in conds[0]
+
+    # 摘要列取自条件对象的 description()
+    summary = panel.stop_condition_table.item(0, 2).text()
+    assert summary
+
+    # 上移 / 下移
+    panel.stop_condition_table.selectRow(1)
+    panel._move_stop_condition(-1)
+    assert [c['id'] for c in panel._stop_condition_conditions] == ['b', 'a']
+    panel._move_stop_condition(1)
+    assert [c['id'] for c in panel._stop_condition_conditions] == ['a', 'b']
+
+    # 移除选中
+    panel.stop_condition_table.selectRow(0)
+    panel._on_stop_condition_remove()
+    assert [c['id'] for c in panel._stop_condition_conditions] == ['b']
+    assert panel.stop_condition_table.rowCount() == 1
+
+
+def test_selection_syncs_selected_id(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'fixed_action_count', 'max_actions': 1},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 10.0}], 'a or b')
+    assert panel._stop_condition_selected_id == 'a'
+    panel.stop_condition_table.selectRow(1)
+    assert panel._stop_condition_selected_id == 'b'

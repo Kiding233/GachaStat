@@ -406,3 +406,46 @@ def test_progress_signature_covers_all_dimensions():
     assert len(variants) == 8
     unchanged = [name for name, v in variants.items() if v == base]
     assert not unchanged, f'以下维度未被签名覆盖: {unchanged}'
+
+def test_zero_iteration_boundary():
+    """3e：max_iterations=0 不抛 NameError，iterations==0 且耗尽告警正常写入。"""
+    pool = _make_pool()
+    target = TargetCardSet(
+        [TargetCard(card_id="card_A", pool_ids=["test_pool"], quantity_needed=1)])
+    svc = GachaService([pool], SmartStrategy(), AllPoolsEndCondition(1000.0), target,
+                       card_defs=[{"card_id": "card_A", "initial_count": 0}])
+    state = GachaState(resources={"draw_resource": 100000})
+
+    r = svc.run_simulation_compact(state, max_iterations=0)
+    assert r.iterations == 0
+    assert r.total_draws == 0
+    assert any('迭代预算耗尽' in w for w in r.warnings), r.warnings
+    # 文案不得引用未绑定的 iteration
+    assert all('iteration' not in w for w in r.warnings)
+
+    # 充足预算下不应出现该告警
+    r2 = svc.run_simulation_compact(GachaState(resources={"draw_resource": 100000}),
+                                    max_iterations=200)
+    assert not any('迭代预算耗尽' in w for w in r2.warnings), r2.warnings
+
+
+def test_return_compact_false_with_parallel_workers_propagates_warnings():
+    """3e：生产形态回归——return_compact=False 且 max_workers>1 时告警仍到达调用方。
+
+    GUI 抽卡面板与 WebUI 在跑主模拟前都置 env.return_compact = False 且默认
+    max_workers=4；只覆盖 max_workers=1 会让闸门对这两条主要入口失明。
+    """
+    store = load_toml(_MAIN_CONFIG)
+    env = SimulationEnvBuilder.from_config_store(store)
+    specs = {tc.card_id: tc.quantity for tc in store.target_cards}
+    env.return_compact = False
+    env.strategy_key = 'fixed_count'
+    env.strategy_params = {'count': 50000}
+
+    batch = run_batch_parallel(
+        env=env, target_specs=specs, initial_resources=env.initial_resources,
+        num_simulations=2, max_workers=2, seed=42)
+
+    assert batch.results == []          # return_compact=False → compact 不回传
+    assert batch.warnings, '告警未经 BatchResult.warnings 到达调用方'
+    assert all('零进度兜底' in w for w in batch.warnings)

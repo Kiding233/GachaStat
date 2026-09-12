@@ -45,7 +45,6 @@ from .stop_condition import (
     TargetAcquiredCondition, TimeLimitCondition, CompositeStopCondition,
     AllPoolsEndCondition, LastDrawCardCondition, NotCondition,
     STOP_CONDITION_REGISTRY, create_stop_condition, MAX_SIM_TIME,
-    stop_condition_type_to_key, stop_condition_key_to_type,
 )
 from .resource_gain import ResourceGainFunction, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
 from .generalized_drop_rate import (
@@ -146,7 +145,6 @@ __all__ = [
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',
     'AllPoolsEndCondition', 'LastDrawCardCondition', 'NotCondition',
     'STOP_CONDITION_REGISTRY', 'create_stop_condition', 'MAX_SIM_TIME',
-    'stop_condition_type_to_key', 'stop_condition_key_to_type',
     'ResourceGainFunction', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',
     'GeneralizedDropRate', 'RarityValueAtT', 'CumulativeResourceEfficiency', 'PityProgressAtT',
     'DropRateBetweenT1T2', 'TotalValueAtT', 'TargetCardCountAtT', 'TargetCardPercentageAtT', 'TargetCardEfficiencyAtT',

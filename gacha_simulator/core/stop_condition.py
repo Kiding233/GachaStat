@@ -325,15 +325,3 @@ def _build_stop_condition_node(node: Dict[str, Any]) -> StopCondition:
     for pdesc in param_defs:
         resolved.setdefault(pdesc.key, pdesc.default)
     return entry['class'](**resolved)
-
-
-def stop_condition_type_to_key(display_name: str) -> str:
-    for key, entry in STOP_CONDITION_REGISTRY.items():
-        if entry['display_name'] == display_name:
-            return key
-    return 'all_pools_end'
-
-
-def stop_condition_key_to_type(key: str) -> str:
-    entry = STOP_CONDITION_REGISTRY.get(key)
-    return entry['display_name'] if entry else '所有池结束'

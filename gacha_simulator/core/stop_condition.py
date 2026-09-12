@@ -148,6 +148,13 @@ class CompositeStopCondition(StopCondition):
 
     def check(self, state: 'GachaState', history: List['InfoVector'],
               stats: Optional['SimulationStats'] = None) -> bool:
+        # P79 5.6 第二道防线（第一道是解析期的空树规范化，见 config_toml 的
+        # _normalize_stop_condition_node）：空条件数组不得恒真。
+        # mode='all' 时 all([]) == True 会让内层恒真，外层
+        # any(用户条件, 硬边界) 短路，模拟在 iteration 0 结束（final_time = 0，
+        # _obtainable 系列 GDR 的分母随之塌缩为 1）。
+        if not self.conditions:
+            return False
         if self.mode == 'any':
             return any(c.check(state, history, stats) for c in self.conditions)
         else:
@@ -178,13 +185,22 @@ class NotCondition(StopCondition):
         return f"非({self.child.description()})"
 
 
+# P79 5.6：与硬边界同轴条件（all_pools_end / time_limit）的阈值上界。
+# 默认配置 end_time = 168 天 = 14515200 秒，远超 FloatParam 的类默认 max_val
+# （99999.0，约 1.16 天）——沿用类默认会让 5.7 的「以 env.end_time 秒预填」被
+# QDoubleSpinBox 静默钳位到 1.16 天，恰好构造出要防的失效形态。
+# 该常量大于 FloatParam 同时服务注册表与 8.x 断言；GUI 侧一律走
+# self._store.end_time（5.7），不得读本常量做预填，否则形成第二真相源。
+MAX_SIM_TIME = 365 * 86400 * 100          # ≈ 100 年，默认配置留约 217 倍余量
+
 STOP_CONDITION_REGISTRY = {
     'all_pools_end': {
         'display_name': '所有池结束',
         'description': '所有池子到期后停止',
         'class': AllPoolsEndCondition,
         'params': [
-            FloatParam('end_time', '结束时间(秒)', default=0.0),
+            FloatParam('end_time', '结束时间(秒)', default=0.0,
+                       min_val=0.0, max_val=MAX_SIM_TIME),
         ],
     },
     'fixed_action_count': {
@@ -227,7 +243,8 @@ STOP_CONDITION_REGISTRY = {
         'description': '模拟时间达到限制后停止',
         'class': TimeLimitCondition,
         'params': [
-            FloatParam('max_time', '最大时间(秒)', default=86400.0),
+            FloatParam('max_time', '最大时间(秒)', default=86400.0,
+                       min_val=0.0, max_val=MAX_SIM_TIME),
         ],
     },
     'consecutive_pool_target': {

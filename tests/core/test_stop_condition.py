@@ -1,9 +1,11 @@
 import pytest
 
+from gacha_simulator.core.param_descriptor import ParamDescriptor
 from gacha_simulator.core.stop_condition import (
     FixedActionCountCondition, ResourceThresholdCondition,
     TargetAcquiredCondition, CompositeStopCondition, AllPoolsEndCondition,
     NotCondition, create_stop_condition,
+    STOP_CONDITION_REGISTRY, MAX_SIM_TIME,
 )
 from gacha_simulator.core.state import GachaState
 
@@ -139,3 +141,47 @@ def test_create_stop_condition_rejects_malformed_nodes():
         create_stop_condition({'foo': 1})            # 非空但既无 conditions 也无 type
     with pytest.raises(ValueError):
         create_stop_condition({'mode': 'any', 'conditions': {'a': 1}})
+
+
+# ── P79 4b2a：复合条件的求值与元数据形状（8.2「复合条件」行）────────
+
+def test_composite_empty_conditions_not_vacuously_true():
+    """空条件数组不得恒真——mode='all' 下 all([]) == True 会让内层恒真，
+    外层 any(用户条件, 硬边界) 短路，模拟在 iteration 0 结束。"""
+    state = GachaState(resources={'draw_resource': 100})
+    assert CompositeStopCondition([], mode='all').check(state, []) is False
+    assert CompositeStopCondition([], mode='any').check(state, []) is False
+
+
+def test_composite_all_mode_evaluation():
+    state = GachaState(resources={'draw_resource': 0})
+    a = FixedActionCountCondition(2)
+    b = ResourceThresholdCondition('draw_resource', 0, '<=')
+    composite = CompositeStopCondition([a, b], mode='all')
+    # a 未满足（history 长度 0）
+    assert composite.check(state, []) is False
+    # 两者均满足
+    assert composite.check(state, [None, None]) is True
+
+
+def test_registry_param_metadata_is_descriptor_list():
+    """7 个条目的 params 均为 List[ParamDescriptor]（与 StrategyMeta.params 同形）。"""
+    assert len(STOP_CONDITION_REGISTRY) == 7
+    for key, entry in STOP_CONDITION_REGISTRY.items():
+        params = entry['params']
+        assert isinstance(params, list), key
+        for pdesc in params:
+            assert isinstance(pdesc, ParamDescriptor), f'{key}: {pdesc!r}'
+
+
+def test_coaxial_condition_range_covers_default_end_time():
+    """与硬边界同轴条件（all_pools_end / time_limit）的阈值上界须覆盖 end_time 量级。
+
+    沿用 FloatParam 类默认 max_val=99999.0（约 1.16 天）会让 5.7 的「以
+    env.end_time 秒预填」被控件静默钳位，恰好构造出要防的失效形态。
+    """
+    DEFAULT_END_TIME = 168 * 86400          # 默认配置 168 天
+    for key, pname in (('all_pools_end', 'end_time'), ('time_limit', 'max_time')):
+        pdesc = next(p for p in STOP_CONDITION_REGISTRY[key]['params'] if p.key == pname)
+        assert pdesc.max_val == MAX_SIM_TIME
+        assert pdesc.max_val > DEFAULT_END_TIME

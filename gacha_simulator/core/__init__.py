@@ -40,7 +40,7 @@ from .stop_condition import (
     StopCondition, FixedActionCountCondition, ResourceThresholdCondition,
     TargetAcquiredCondition, TimeLimitCondition, CompositeStopCondition,
     AllPoolsEndCondition, LastDrawCardCondition, NotCondition,
-    STOP_CONDITION_REGISTRY, create_stop_condition,
+    STOP_CONDITION_REGISTRY, create_stop_condition, MAX_SIM_TIME,
     stop_condition_type_to_key, stop_condition_key_to_type,
 )
 from .resource_gain import ResourceGainFunction, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
@@ -139,7 +139,7 @@ __all__ = [
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',
     'AllPoolsEndCondition', 'LastDrawCardCondition', 'NotCondition',
-    'STOP_CONDITION_REGISTRY', 'create_stop_condition',
+    'STOP_CONDITION_REGISTRY', 'create_stop_condition', 'MAX_SIM_TIME',
     'stop_condition_type_to_key', 'stop_condition_key_to_type',
     'ResourceGainFunction', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',
     'GeneralizedDropRate', 'RarityValueAtT', 'CumulativeResourceEfficiency', 'PityProgressAtT',

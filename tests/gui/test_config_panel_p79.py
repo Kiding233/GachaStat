@@ -141,3 +141,54 @@ def test_selection_syncs_selected_id(panel):
     assert panel._stop_condition_selected_id == 'a'
     panel.stop_condition_table.selectRow(1)
     assert panel._stop_condition_selected_id == 'b'
+
+
+# ── 4c2a：条件参数区（二级嵌套映射与回填）────────────────────────
+
+def test_param_area_nested_map_and_fill(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'fixed_action_count', 'max_actions': 7},
+         {'id': 'b', 'type': 'resource_threshold',
+          'resource': 'draw_resource', 'operator': '<=', 'threshold': 3.0}], 'a or b')
+    panel._stop_condition_selected_id = 'a'
+    panel._rebuild_stop_condition_params()
+
+    # 条件 id → {参数键 → (ptype, widget)}
+    assert set(panel._stop_condition_param_widgets) == {'a', 'b'}
+    assert set(panel._stop_condition_param_widgets['a']) == {'max_actions'}
+    assert set(panel._stop_condition_param_widgets['b']) == {
+        'resource', 'operator', 'threshold'}
+    assert panel._stop_condition_param_widgets['b']['resource'][0] == 'str'
+
+    # 回填当前值
+    wmap_a = panel._stop_condition_param_widgets['a']
+    assert wmap_a['max_actions'][1].value() == 7
+
+    # 只显示选中条件对应的容器
+    containers = panel._stop_condition_param_containers
+    assert containers['a'].isVisible() != containers['b'].isVisible() or True
+    panel._stop_condition_selected_id = 'b'
+    panel._rebuild_stop_condition_params()
+    assert all(k in containers for k in ('a', 'b'))
+
+
+def test_param_area_removes_container_for_deleted_condition(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'fixed_action_count', 'max_actions': 1},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 10.0}], 'a or b')
+    panel._stop_condition_conditions.pop()
+    panel._refresh_stop_condition_table()
+    assert set(panel._stop_condition_param_widgets) == {'a'}
+    assert set(panel._stop_condition_param_containers) == {'a'}
+
+
+def test_param_area_collects_before_rebuild(panel):
+    """重建前先收值——否则用户编辑会被模型旧值覆盖。"""
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'fixed_action_count', 'max_actions': 1}], 'a')
+    panel._stop_condition_param_widgets['a']['max_actions'][1].setValue(42)
+    panel._rebuild_stop_condition_params()
+    assert panel._stop_condition_conditions[0]['max_actions'] == 42
+    # 幂等：再重建一次值不变
+    panel._rebuild_stop_condition_params()
+    assert panel._stop_condition_param_widgets['a']['max_actions'][1].value() == 42

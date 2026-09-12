@@ -3469,10 +3469,16 @@ class ConfigPanel(QWidget):
         self._setup_stop_condition_list()
         parent.addWidget(self._stop_condition_list_group)
 
-        # ── 条件参数（4c2a / 4c2b 填充）──
+        # ── 条件参数（4c2a / 4c2b）──
+        # 二级嵌套映射：{条件 id → {参数键 → (ptype, widget)}}。
+        # render_param_widgets 三函数是**单条件粒度** API，而本区是「多条件 × 多参数」，
+        # 故调用侧必须自建该嵌套映射与容器管理（5.7「R1 工作量更正」）。
+        self._stop_condition_param_widgets: dict = {}
+        self._stop_condition_param_containers: dict = {}
         self._stop_condition_params_group = QGroupBox("条件参数")
         self._stop_condition_params_layout = QFormLayout(self._stop_condition_params_group)
         parent.addWidget(self._stop_condition_params_group)
+        self._rebuild_stop_condition_params()
 
     # ── 停止条件：条件列表（4c1b）────────────────────────────────
 
@@ -3670,6 +3676,75 @@ class ConfigPanel(QWidget):
         conds[row], conds[target] = conds[target], conds[row]
         self._stop_condition_selected_id = conds[target]['id']
         self._refresh_stop_condition_table()
+
+    # ── 停止条件：条件参数区（4c2a）──────────────────────────────
+
+    def _sync_stop_condition_params(self):
+        """把参数区控件的当前值收回模型。
+
+        **每次重建前必须先收**——否则 set_params_to_widgets 会用模型里的旧值覆盖
+        用户刚做的编辑（这是「重建」幂等性的前提）。
+        """
+        from gacha_simulator.gui.param_renderer import collect_params_from_widgets
+
+        for cond in self._stop_condition_conditions:
+            wmap = self._stop_condition_param_widgets.get(cond['id'])
+            if not wmap:
+                continue
+            cond.update(collect_params_from_widgets(wmap))
+
+    def _rebuild_stop_condition_params(self):
+        """按条件列表（重）建参数区容器，回填当前值，并只显示选中条件。
+
+        幂等：先收值再回填，故反复调用不改变模型与控件的内容。
+        """
+        from gacha_simulator.core.stop_condition import STOP_CONDITION_REGISTRY
+        from gacha_simulator.gui.param_renderer import (
+            render_param_widgets, set_params_to_widgets,
+        )
+
+        layout = getattr(self, '_stop_condition_params_layout', None)
+        if layout is None:
+            return
+        # 顺序不可颠倒：先收值（控件还在）→ 再整表清空（removeRow(int) 会删除控件）
+        # → 再重建。若用 removeRow(QWidget*) 逐行移除，其对控件的析构语义不确定，
+        # 事后触碰 Python 包装器会直接崩溃（实测）。
+        self._sync_stop_condition_params()
+        self._stop_condition_param_widgets = {}
+        self._stop_condition_param_containers = {}
+        while layout.rowCount():
+            layout.removeRow(0)
+
+        conds = self._stop_condition_conditions
+        for cond in conds:
+            cid = cond['id']
+            entry = STOP_CONDITION_REGISTRY.get(cond.get('type'))
+            params = entry.get('params', []) if entry else []
+
+            container = QWidget()
+            form = QFormLayout(container)
+            form.setContentsMargins(0, 0, 0, 0)
+            widget_map: dict = {}
+            skipped = render_param_widgets(
+                params, form, widget_map, parent=container)
+            if skipped:
+                form.addRow(QLabel(
+                    "以下参数无可用控件，本界面不支持配置："
+                    + "、".join(p.display_name for p in skipped)))
+            layout.addRow(container)
+            self._stop_condition_param_containers[cid] = container
+            self._stop_condition_param_widgets[cid] = widget_map
+
+            node = {k: v for k, v in cond.items() if k != 'id'}
+            set_params_to_widgets(params, widget_map, node)
+
+        selected = self._stop_condition_selected_id
+        for cid, container in self._stop_condition_param_containers.items():
+            container.setVisible(cid == selected)
+
+        group = getattr(self, '_stop_condition_params_group', None)
+        if group is not None:
+            group.setVisible(bool(conds))
 
     def _refresh_stop_condition_hint(self):
         """顶部只读提示：模拟将在 end_time（所有卡池关闭时刻）后强制结束。

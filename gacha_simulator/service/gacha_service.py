@@ -69,6 +69,37 @@ def _derive_pool_type(pool) -> str:
     return '角色'
 
 
+# ── P79（阶段 3）：零进度兜底 ──────────────────────────────────────
+_ZERO_PROGRESS_ROUNDS = 3   # 连续 N 轮上下文全签名完全相同 → 判定不可能再有变化
+
+
+def _progress_signature(state, stats, banners, real_time, pity_state) -> tuple:
+    """策略可见上下文的完整签名（P79 5.4）。
+
+    覆盖 build_strategy_context 的全部状态输入：时间、抽数、池抽数、上次抽卡是否
+    触发保底、资源、持卡、每个 banner 的（活跃池 / 是否耗尽 / 是否可用）、保底状态。
+
+    不含的两项及理由：里程碑计数器只随抽卡推进，抽卡本身已计为进度；资源到期预览
+    由 real_time 与静态规则推出，已被 real_time 覆盖。
+
+    取值时点必须是循环体顶部，与快检一致——此处读到的 state / stats 即「上一轮动作
+    结束后的状态」；一处取顶部、一处取尾部会使差分恒为零或恒非零。
+    """
+    return (
+        real_time,
+        stats.total_draws,
+        tuple(sorted(stats.pool_draw_counts.items())),
+        stats.last_draw_pity_triggered,
+        tuple(sorted((k, float(v)) for k, v in state.resources.items())),
+        tuple(sorted(state.acquired.items())),
+        tuple(sorted(
+            (b.id, b.active_pool_id, b.is_exhausted, b.is_available(real_time))
+            for b in banners.values()
+        )),
+        repr(pity_state.to_dict()) if pity_state is not None else '',
+    )
+
+
 class GachaService:
     def __init__(
         self,
@@ -309,6 +340,25 @@ class GachaService:
         _WaitAction = WaitAction
         _is_compact = isinstance(collector, CompactCollector)
 
+        # ── P79（阶段 3）：零进度兜底的状态量，一律在 `for` 之前初始化 ──
+        # 检测点位于循环体顶部，第 1 轮进入时 `ctx` 尚未构建、`action` 尚未产出，
+        # 故「上一轮快照」必须是显式的 None 哨兵：首轮只记录、不比对，否则要么
+        # 引用未绑定变量，要么把首次迭代凭空计为一次停顿（阈值被白耗一轮）。
+        _prev_quick = None          # 上一轮顶部的 (total_draws, real_time)
+        _prev_sig = None            # 上一轮顶部的上下文全签名
+        _stall_rounds = 0
+        _iterations = 0             # 零迭代保护：max_iterations <= 0 时循环体不执行
+        _stop_reason = 'exhausted'  # 'condition' | 'zero_progress' | 'exhausted'
+        _zero_progress_msg = None
+        _last_action = None
+        _strategy_key = (getattr(type(self.strategy), '_strategy_key', None)
+                         or type(self.strategy).__name__)
+        # 硬边界时刻（banner 的 available_until 最大值，与 env.end_time 同源）——
+        # 仅用于「迭代预算耗尽」告警的缺口换算
+        _hard_end_time = max(
+            (b.available_until for b in banners.values()
+             if b.available_until is not None), default=0.0)
+
         # P61（§3.5 要点 6 / ISSUE-003）：banner 结束快照——banner 级 available_until（秒）
         banner_end_times_sorted = sorted(
             [(b.id, b.available_until) for b in banners.values() if b.available_until],
@@ -331,7 +381,39 @@ class GachaService:
 
         for iteration in range(max_iterations):
             if _check(state, [], stats):
+                _stop_reason = 'condition'
                 break
+
+            # ── P79（阶段 3）零进度两级检测：位于循环体顶部（_check 之后、ctx 构建
+            # 之前）。不得置于循环体尾部——下方 `can_afford_batch` 不满足时的
+            # `continue` 会跳过整段尾部，类型 3 的空转轮一次不减、兜底完全失效。
+            _iterations = iteration + 1
+            _quick = (stats.total_draws, real_time)
+            if _prev_quick is not None and _quick == _prev_quick:
+                # 快检未通过（本轮既无抽卡、时间也未推进）→ 惰性构建全签名比对。
+                # 判据不得取动作类型：空转轮返回的正是 DrawAction（动作已产出后才被
+                # affordability 拦下），以动作类型判定会把空转误判为健康。
+                _sig = _progress_signature(state, stats, banners, real_time, pity_state)
+                if _sig == _prev_sig:
+                    _stall_rounds += 1
+                    if _stall_rounds >= _ZERO_PROGRESS_ROUNDS:
+                        _stop_reason = 'zero_progress'
+                        _zero_progress_msg = (
+                            f"零进度兜底：连续 {_ZERO_PROGRESS_ROUNDS} 轮策略上下文无任何变化"
+                            f"（迭代 {_iterations}，策略 {_strategy_key}，最后动作 "
+                            f"{type(_last_action).__name__ if _last_action is not None else '无'}）"
+                            f"——判定为不可能再有变化，提前结束"
+                        )
+                        break
+                else:
+                    _stall_rounds = 0
+                _prev_sig = _sig
+            else:
+                # 快检通过（有抽卡或时间推进）→ 清零；_prev_sig 置 None 使下一轮的
+                # 首次比对必然不等，等价于「以一整轮的间隔重新起算」
+                _stall_rounds = 0
+                _prev_sig = None
+            _prev_quick = _quick
 
             # P61（§3.5）：可用性过滤——Banner 级 is_available(real_time)，
             # 时间窗口未开/已关/已 exhausted 的 Banner 在此被排除（旧 current_pools 逐池过滤语义）
@@ -360,6 +442,7 @@ class GachaService:
             )
 
             action = _strategy.select_action(ctx)
+            _last_action = action
 
             if _isinstance(action, _DrawAction):
                 # P61（§3.5 要点 5 / ISSUE-006）：banner_id 优先；None 时按 pool_id 反查唯一 Banner
@@ -544,6 +627,24 @@ class GachaService:
             result.pity_triggers = stats.pity_triggers
             result.final_resources = dict(resources)
             result.final_time = real_time
+            # ── P79（阶段 3）：迭代数与告警（AUDIT-BREAK-2——写入点必须在紧凑分支内）。
+            # 非紧凑路径由下方 `return collector.get_result()` 返回 List[InfoVector]，
+            # 向 list 赋 .iterations / .warnings 即 AttributeError；「迭代预算耗尽」的
+            # 判定可在分支外算好，但落字段这一动作只能在此。
+            result.iterations = _iterations
+            if _zero_progress_msg is not None:
+                result.warnings.append(_zero_progress_msg)
+            if _stop_reason == 'exhausted':
+                # 第三类失效信号：迭代预算耗尽（含 max_iterations <= 0 的零迭代情形）。
+                # 此时循环既不触发零进度判据（签名每轮都在变）、也不报错，final_time
+                # 会静默停在被截断处、_obtainable 系列 GDR 的分母随之失真。
+                # 文案引用 _iterations 而非 iteration——后者在零迭代时未绑定。
+                _gap_days = max(0.0, _hard_end_time - real_time) / 86400.0
+                result.warnings.append(
+                    f"迭代预算耗尽：{max_iterations} 轮内停止条件未满足，final_time 停在"
+                    f"被截断处（迭代 {_iterations}，策略 {_strategy_key}，"
+                    f"距硬边界尚有 {_gap_days:.1f} 天）"
+                )
             # P61（§3.13.1 / ISSUE-002）：pool_types 由推导属性填充，键为全限定 {banner_id}.{pool_id}
             result.pool_types = {
                 f"{b.id}.{pk}": _derive_pool_type(p)

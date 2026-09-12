@@ -39,7 +39,7 @@ from .strategy_context_builder import build_strategy_context
 from .stop_condition import (
     StopCondition, FixedActionCountCondition, ResourceThresholdCondition,
     TargetAcquiredCondition, TimeLimitCondition, CompositeStopCondition,
-    AllPoolsEndCondition, LastDrawCardCondition,
+    AllPoolsEndCondition, LastDrawCardCondition, NotCondition,
     STOP_CONDITION_REGISTRY, create_stop_condition,
     stop_condition_type_to_key, stop_condition_key_to_type,
 )
@@ -138,7 +138,7 @@ __all__ = [
     'load_plugin_strategies', 'build_strategy_context',
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',
-    'AllPoolsEndCondition', 'LastDrawCardCondition',
+    'AllPoolsEndCondition', 'LastDrawCardCondition', 'NotCondition',
     'STOP_CONDITION_REGISTRY', 'create_stop_condition',
     'stop_condition_type_to_key', 'stop_condition_key_to_type',
     'ResourceGainFunction', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',

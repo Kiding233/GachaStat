@@ -158,6 +158,26 @@ class CompositeStopCondition(StopCondition):
         return ops.join(c.description() for c in self.conditions)
 
 
+class NotCondition(StopCondition):
+    """否定节点——对单个子条件取反（P79 5.6）。
+
+    由 ``mode='not'`` 判别，**不是** registry 的 ``type``——``not`` 是表达式的
+    运算符，不需要往 STOP_CONDITION_REGISTRY 注册。
+    """
+
+    def __init__(self, child: StopCondition):
+        self.child = child
+
+    def check(self, state: 'GachaState', history: List['InfoVector'],
+              stats: Optional['SimulationStats'] = None) -> bool:
+        return not self.child.check(state, history, stats)
+
+    def description(self) -> str:
+        # StopCondition.description 是抽象方法，且 CompositeStopCondition.description
+        # 会逐个调用子节点——漏实现会在实例化或 GUI 摘要列渲染时抛 TypeError。
+        return f"非({self.child.description()})"
+
+
 STOP_CONDITION_REGISTRY = {
     'all_pools_end': {
         'display_name': '所有池结束',
@@ -225,23 +245,69 @@ STOP_CONDITION_REGISTRY = {
 }
 
 
-def create_stop_condition(name: str, params: Optional[Dict[str, Any]] = None) -> StopCondition:
-    entry = STOP_CONDITION_REGISTRY.get(name)
+def create_stop_condition(tree: Optional[Dict[str, Any]]) -> Optional[StopCondition]:
+    """从递归条件树构造停止条件对象（P79 5.6）。
+
+    ``tree`` 为 ``None`` / 空字典时返回 ``None``——语义是「空树 = 仅引擎硬边界
+    收口」，与接线前的行为等价（见 5.6「空树规范化」）。
+
+    节点三形态互斥且穷尽，按 **「``conditions`` → ``mode`` → ``type``」** 分派：
+
+    1. 复合节点——``mode ∈ {"any", "all"}`` + ``conditions: [...]``
+    2. 否定节点——``mode = "not"`` + ``conditions: [恰好 1 项]``
+    3. 叶子节点——``type = <registry key>`` + 平铺参数（**无 ``conditions``**）
+
+    ``conditions`` 在场时一律不查 registry——判别键是「是否出现 conditions」，
+    故未知 ``type`` 只在叶子形态下才抛 ``ValueError``。
+    """
+    if not tree:
+        return None
+    return _build_stop_condition_node(tree)
+
+
+def _build_stop_condition_node(node: Dict[str, Any]) -> StopCondition:
+    """树分派的单节点构造（递归）。"""
+    if not isinstance(node, dict):
+        raise ValueError(
+            f"停止条件节点须为字典，收到 {type(node).__name__}: {node!r}")
+
+    children = node.get('conditions')
+    if children is not None:
+        # ── 复合 / 否定节点 ──
+        if not isinstance(children, list):
+            raise ValueError(
+                f"conditions 须为数组，收到 {type(children).__name__}: {children!r}")
+        mode = node.get('mode')
+        if mode == 'not':
+            # 否定节点恰带一个子节点：多子节点时直接取 children[0] 会静默丢弃其余，
+            # 而 conditions 在场即不查 registry、不会触发 ValueError，故须显式校验。
+            if len(children) != 1:
+                raise ValueError(
+                    f"否定节点（mode='not'）恰带一个子节点，当前 {len(children)} 个")
+            return NotCondition(_build_stop_condition_node(children[0]))
+        if mode in ('any', 'all'):
+            return CompositeStopCondition(
+                [_build_stop_condition_node(c) for c in children], mode)
+        raise ValueError(
+            f"复合节点的 mode 须为 'any' / 'all' / 'not'，收到 {mode!r}")
+
+    # ── 叶子节点 ──
+    node_type = node.get('type')
+    if node_type is None:
+        raise ValueError(f"叶子节点缺少 'type' 键: {node!r}")
+    entry = STOP_CONDITION_REGISTRY.get(node_type)
     if entry is None:
-        raise ValueError(f"Unknown stop condition: {name!r}. "
+        raise ValueError(f"Unknown stop condition: {node_type!r}. "
                          f"Available: {list(STOP_CONDITION_REGISTRY.keys())}")
-    cls = entry['class']
-    resolved = dict(params) if params else {}
-    # P79 4b2b1：参数元数据由 dict 改为 List[ParamDescriptor]（与
-    # StrategyMeta.params 同形）。漏改任一条目仍是 dict，`for` 迭代出 str 键、
-    # pdesc.key 即抛 AttributeError；渲染侧由 4b3 按同一形状分派。
-    # ⚠ 不调用 ParamDescriptor.validate()——见计划 5.6：预填值 env.end_time
-    # 会撞上 FloatParam 的范围检查，把「静默钳位」换成「显式失败」，两种形态
-    # 都使 5.7 的预填设计不可用。
-    for pdesc in entry.get('params', []):
-        if pdesc.key not in resolved:
-            resolved[pdesc.key] = pdesc.default
-    return cls(**resolved)
+    param_defs = entry.get('params', [])
+    # 叶子键白名单过滤（5.6）：构造参数只取「registry 声明键 ∩ 叶子表键」——
+    # `type`（以及 TOML 表中可能残留的 `mode`）不是构造参数，整体透传会抛
+    # TypeError: __init__() got an unexpected keyword argument 'type'。
+    declared = {pdesc.key for pdesc in param_defs}
+    resolved = {k: v for k, v in node.items() if k in declared}
+    for pdesc in param_defs:
+        resolved.setdefault(pdesc.key, pdesc.default)
+    return entry['class'](**resolved)
 
 
 def stop_condition_type_to_key(display_name: str) -> str:

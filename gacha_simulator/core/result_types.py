@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
-_RESULT_VERSION = 2  # P58（M5-serial）：新增 bonus_events 字段——1→2 反映序列化格式演进
+_RESULT_VERSION = 3  # P79（阶段 3）：新增 iterations / warnings 字段——2→3 反映序列化格式演进
+# （1→2 为 P58 新增 bonus_events）
 
 
 @dataclass
@@ -28,6 +29,15 @@ class CompactResult:
     total_draws: int = 0
     total_waits: int = 0
     pity_triggers: int = 0
+    # P79（阶段 3）：循环实际迭代数。8.1 断言 1 与 8.4 性能闸门的观测载体——
+    # total_draws / total_waits 在 affordability 空转轮完全不增长，不能替代。
+    # ⚠ 写入点须在 run_simulation 的 `if _is_compact:` 分支内（非紧凑路径返回
+    # List[InfoVector]，向 list 赋属性即 AttributeError）。
+    iterations: int = 0
+    # P79（阶段 3）：运行期告警（零进度兜底触发、迭代预算耗尽）。取「结果字段」
+    # 而非日志：_run_single 是 Pool worker 入口，子进程 logging 无回传机制；
+    # GUI / pythonw 下 stderr 可能为 None。
+    warnings: List[str] = field(default_factory=list)
     final_resources: Dict[str, float] = field(default_factory=dict)
     final_time: float = 0.0
     final_pity_state: Dict[str, Any] = field(default_factory=dict)

@@ -12,7 +12,7 @@
          逐字段相等。
     UT4  collector 序列化闭环——CompactCollector on_draw 制造 draw_resources_gained
          长度 ≥1 → on_bonus → to_dict → from_dict → bonus_events 字段完整 +
-         result_version == 2。
+         result_version == 3。
 
   B. 集成测试（§1.1a 各场景期望输出表 + S1 + 空抽 + 溢出 + 流式 + 方案 A/B +
      run_batch_parallel 兜底）
@@ -285,7 +285,7 @@ class TestUT3TomlRoundTrip:
 
 
 class TestUT4CollectorSerialization:
-    """collector on_bonus → to_dict → from_dict 闭环（result_version == 2）。"""
+    """collector on_bonus → to_dict → from_dict 闭环（result_version == 3）。"""
 
     def test_bonus_events_round_trip(self):
         class FakePool:
@@ -313,8 +313,8 @@ class TestUT4CollectorSerialization:
         # 方案 A 源头合并：milestone 卡并入 card_counts / pool_card_counts
         assert result.card_counts['a'] == 1 and result.card_counts['b'] == 1
         assert result.pool_card_counts['pool_1']['a'] == 1
-        # 序列化版本号反映格式演进（ISSUE-106）
-        assert result.result_version == 2
+        # 序列化版本号反映格式演进（ISSUE-106；P79 阶段 3 起为 3）
+        assert result.result_version == 3
 
 
 # ══════════════════════════════════════════════════════════════════

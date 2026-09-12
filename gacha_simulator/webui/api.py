@@ -143,6 +143,16 @@ class GachaApi:
                     errors.append(f'Banner「{bid}」Pool「{pid or "?"}」缺少成本(cost)')
         if store.banner.banners and not has_finite_end:
             errors.append('所有 Banner 均为永久（无结束时间），至少需要一个有结束时间的 Banner')
+
+        # P79：停止条件树的引用完整性与结构校验。调用 core 层纯函数——与
+        # gui/config_panel.validate_banners() 同源，不得各自复刻。本入口收的是
+        # TOML 原文（save_config_text），只有落盘形态的条件树可用，故走 tree 分支；
+        # 改造前本复刻完全不碰 stop_condition，形态是「静默落盘悬空引用配置」。
+        from gacha_simulator.core.stop_condition_expr import (
+            validate_stop_condition_config,
+        )
+        errors.extend(validate_stop_condition_config(
+            tree=getattr(store, 'stop_condition', None)))
         return errors
 
     def save_config_text(self, text: str) -> dict:

@@ -156,3 +156,65 @@ def test_ast_to_text_adds_only_necessary_parentheses():
         '(a or b) and c'
     assert expr_ast_to_text(parse_stop_condition_expr('not (a or b)')) == \
         'not (a or b)'
+
+
+# ── 4d3：引用完整性纯函数（8.2「引用完整性」core 部分）──────────────
+
+def test_validate_config_expr_side():
+    from gacha_simulator.core.stop_condition_expr import (
+        validate_stop_condition_config as V,
+    )
+
+    conds = [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+             {'id': 'b', 'type': 'time_limit', 'max_time': 2.0}]
+    assert V(expr='a or not b', conditions=conds) == []
+    assert V(expr='', conditions=conds) == []
+
+    syntax = V(expr='a and (', conditions=conds)
+    assert len(syntax) == 1 and '括号' in syntax[0]
+
+    dangling = V(expr='a or zz', conditions=conds)
+    assert len(dangling) == 1 and "'zz'" in dangling[0] and '已被删除' in dangling[0]
+
+
+@pytest.mark.parametrize('tree,frag', [
+    ({'type': 'no_such_type'}, '未知的停止条件类型'),
+    ({'foo': 1}, '缺少 type 键'),
+    ({'mode': 'not', 'conditions': [
+        {'type': 'time_limit'}, {'type': 'time_limit'}]}, '恰带一个子节点'),
+    ({'mode': 'any', 'conditions': []}, '不得为空'),
+    ({'mode': 'xor', 'conditions': [{'type': 'time_limit'}]}, "mode 须为"),
+    ({'mode': 'any', 'conditions': {'a': 1}}, '必须是数组'),
+])
+def test_validate_config_tree_side_rejects(tree, frag):
+    from gacha_simulator.core.stop_condition_expr import (
+        validate_stop_condition_config as V,
+    )
+
+    errors = V(tree=tree)
+    assert errors and any(frag in e for e in errors)
+
+
+def test_validate_config_tree_side_accepts_nested():
+    from gacha_simulator.core.stop_condition_expr import (
+        validate_stop_condition_config as V,
+    )
+
+    tree = {'mode': 'any', 'conditions': [
+        {'type': 'time_limit', 'max_time': 1.0},
+        {'mode': 'not', 'conditions': [
+            {'type': 'target_acquired', 'target_id': 'x', 'quantity': 1}]},
+    ]}
+    assert V(tree=tree) == []
+    assert V(tree=None) == []
+
+
+def test_validate_config_is_total():
+    """全函数：任何输入都返回错误列表，不抛异常。"""
+    from gacha_simulator.core.stop_condition_expr import (
+        validate_stop_condition_config as V,
+    )
+
+    for bad in ('not a dict', 123, [], [1, 2]):
+        assert isinstance(V(tree=bad), list)
+    assert isinstance(V(expr=None, conditions=None), list)

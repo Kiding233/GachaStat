@@ -492,3 +492,66 @@ def test_apply_succeeds_on_valid(panel):
     panel._on_stop_condition_apply()
     assert panel._store.stop_condition is not None
     assert '已应用' in panel.stop_condition_error_label.text()
+
+
+# ── 4d3：引用完整性的 GUI 侧与保存闸门 ───────────────────────────
+
+def _make_dangling(panel):
+    """构造「条件被删但表达式仍引用」的错误态（正常 UI 路径会被规则 3 阻断）。"""
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 2.0}], 'a or b')
+    panel._stop_condition_conditions.pop()
+    panel._refresh_stop_condition_expr_widget()
+    return panel
+
+
+def test_validate_banners_reports_dangling_reference(panel):
+    _make_dangling(panel)
+    errors = panel.validate_banners()
+    assert any('已被删除' in e and "'b'" in e for e in errors), errors
+
+
+def test_validate_banners_clean_when_consistent(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0}], 'a')
+    assert panel.validate_banners() == []
+
+
+def test_validate_banners_safe_on_bare_panel(qapp):
+    """裸构造（无 _store、无条件树内存态）仍安全返回 List[str]。
+
+    这是 tests/gui/test_config_panel_p61.py 三处既有断言的隐式契约。
+    """
+    from gacha_simulator.gui.config_panel import ConfigPanel
+
+    bare = ConfigPanel()
+    errors = bare.validate_banners()
+    assert isinstance(errors, list)
+    bare.deleteLater()
+
+
+def test_export_config_gate_blocks_dangling_state(qapp, monkeypatch, tmp_path):
+    """保存闸门被触发：非法停止条件不得落盘。"""
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+    from gacha_simulator.gui.main_window import MainWindow
+
+    window = MainWindow()
+    try:
+        target = tmp_path / 'p79_out.toml'
+        monkeypatch.setattr(QFileDialog, 'getSaveFileName',
+                            lambda *a, **k: (str(target), ''))
+        calls = []
+        monkeypatch.setattr(QMessageBox, 'warning',
+                            lambda *a, **k: calls.append(a))
+
+        _make_dangling(window.config_panel)
+        window.export_config()
+
+        assert calls, '保存闸门未触发'
+        assert not target.exists(), '非法状态不得写出配置文件'
+    finally:
+        # 不调 close()：closeEvent 会因未保存变更弹 QMessageBox.question（模态，
+        # 测试环境无人应答即挂起）。直接释放即可。
+        window.deleteLater()

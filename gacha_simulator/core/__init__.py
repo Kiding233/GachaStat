@@ -37,6 +37,7 @@ from .param_descriptor import (
 from .stop_condition_expr import (
     StopConditionExprError, parse_stop_condition_expr,
     expr_ast_to_text, tree_to_conditions_and_expr, expr_to_tree,
+    validate_stop_condition_config,
 )
 from .strategy_loader import load_plugin_strategies
 from .strategy_context_builder import build_strategy_context
@@ -140,6 +141,7 @@ __all__ = [
     'FloatParam', 'IntParam', 'BoolParam', 'StrParam', 'StringListParam', 'PoolIntMapParam',
     'StopConditionExprError', 'parse_stop_condition_expr',
     'expr_ast_to_text', 'tree_to_conditions_and_expr', 'expr_to_tree',
+    'validate_stop_condition_config',
     'load_plugin_strategies', 'build_strategy_context',
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',

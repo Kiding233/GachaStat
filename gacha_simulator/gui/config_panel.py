@@ -7006,6 +7006,16 @@ class ConfigPanel(QWidget):
         # ConfigError，此处提前拦截给出明确提示（复审查发现）
         if self._banner_defs and not has_finite_end:
             errors.append("所有 Banner 均为永久（无结束时间），至少需要一个有结束时间的 Banner")
+
+        # P79：停止条件引用完整性。调用 core 层纯函数（与 WebUI 的 _validate_store
+        # 同源，不得各自复刻）；返回体仍是 List[str]，且对裸构造（无条件树内存态）
+        # 安全——getattr 给出缺省。新增该类目会一并阻断「开始模拟」与「重启并保存」
+        # 两条路径，这是期望行为（带非法表达式不应能启动模拟）。
+        from ..core.stop_condition_expr import validate_stop_condition_config
+        errors.extend(validate_stop_condition_config(
+            expr=getattr(self, '_stop_condition_expr', '') or '',
+            conditions=getattr(self, '_stop_condition_conditions', None) or [],
+        ))
         return errors
 
     def apply_to_store(self):

@@ -27,6 +27,7 @@ __all__ = [
     'expr_ast_to_text',
     'tree_to_conditions_and_expr',
     'expr_to_tree',
+    'validate_stop_condition_config',
 ]
 
 # 条件 id 的合法形态：ASCII 标识符（GUI 侧自动分配 a/b/c…）
@@ -143,7 +144,14 @@ class _Parser:
             return ('id', self._check_id(value))
         if kind == 'paren':
             if value == '(':
-                node = self._parse_or()
+                try:
+                    node = self._parse_or()
+                except StopConditionExprError:
+                    # 输入已到末尾 → 真正的问题是括号没闭合，报这个更贴近用户意图
+                    # （否则会落到内层「运算符缺少操作数」上，指错了地方）
+                    if self._peek() is None:
+                        raise StopConditionExprError("括号不匹配：缺少 ')'")
+                    raise
                 closing = self._next()
                 if closing is None or closing[:2] != ('paren', ')'):
                     raise StopConditionExprError("括号不匹配：缺少 ')'")
@@ -287,3 +295,118 @@ def expr_to_tree(text: str,
     by_id = {c['id']: c for c in conditions}
     ast = parse_stop_condition_expr(text, known_ids=set(by_id))
     return _ast_to_tree(ast, by_id)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 引用完整性纯函数（4d3）
+# ══════════════════════════════════════════════════════════════════
+
+
+def _validate_expr(expr: str, conditions: List[Dict[str, Any]]) -> List[str]:
+    """表达式侧：语法 + 引用的 id 是否都在条件列表中。"""
+    text = (expr or '').strip()
+    if not text:
+        return []
+    known = {c['id'] for c in conditions}
+    try:
+        referenced = _collect_ids(text)
+    except StopConditionExprError as exc:
+        return [str(exc)]
+    dangling = [rid for rid in referenced if rid not in known]
+    if dangling:
+        return ["以下条件已被删除，但仍被表达式引用："
+                + '、'.join(f"'{d}'" for d in dangling)]
+    return []
+
+
+def _collect_ids(expr: str) -> List[str]:
+    """收集表达式引用的条件 id（去重、保序）。语法非法时抛 StopConditionExprError。"""
+    found: List[str] = []
+
+    def walk(node: ExprNode) -> None:
+        if node[0] == 'id':
+            if node[1] not in found:
+                found.append(node[1])
+        elif node[0] == 'not':
+            walk(node[1])
+        else:
+            walk(node[1])
+            walk(node[2])
+
+    walk(parse_stop_condition_expr(expr))
+    return found
+
+
+def _validate_tree(tree: Optional[Dict[str, Any]]) -> List[str]:
+    """条件树侧：结构合法性（落盘形态，TOML 只存条件树）。
+
+    校三件事：节点形态（有无 conditions / mode 取值）、否定节点的子节点数、
+    叶子节点的 type 是否已注册。
+    """
+    if not tree:
+        return []
+    from .stop_condition import STOP_CONDITION_REGISTRY
+
+    errors: List[str] = []
+
+    def walk(node: Any, path: str) -> None:
+        if not isinstance(node, dict):
+            errors.append(f"{path}：节点必须是表（dict），收到 {type(node).__name__}")
+            return
+        children = node.get('conditions')
+        if children is None:
+            node_type = node.get('type')
+            if node_type is None:
+                errors.append(f"{path}：叶子节点缺少 type 键")
+            elif node_type not in STOP_CONDITION_REGISTRY:
+                errors.append(f"{path}：未知的停止条件类型 '{node_type}'")
+            return
+        if not isinstance(children, list):
+            errors.append(f"{path}：conditions 必须是数组")
+            return
+        mode = node.get('mode')
+        if mode == 'not':
+            if len(children) != 1:
+                errors.append(
+                    f"{path}：否定节点（mode='not'）恰带一个子节点，当前 {len(children)} 个")
+            for i, child in enumerate(children):
+                walk(child, f"{path}.conditions[{i}]")
+            return
+        if mode not in ('any', 'all'):
+            errors.append(f"{path}：复合节点的 mode 须为 'any' / 'all' / 'not'，收到 {mode!r}")
+            return
+        if not children:
+            errors.append(f"{path}：复合节点的 conditions 不得为空")
+            return
+        for i, child in enumerate(children):
+            walk(child, f"{path}.conditions[{i}]")
+
+    walk(tree, 'stop_condition')
+    return errors
+
+
+def validate_stop_condition_config(
+    tree: Optional[Dict[str, Any]] = None,
+    expr: Optional[str] = None,
+    conditions: Optional[List[Dict[str, Any]]] = None,
+) -> List[str]:
+    """停止条件配置的引用完整性与结构校验；返回错误列表（空 = 通过）。
+
+    **本函数是唯一实现点**：``config_panel.validate_banners()`` 与
+    ``webui/api.py:_validate_store`` 必须共同调用它，不得各自复刻
+    （WebUI 的保存校验原本就是 validate_banners 的独立复刻，只有 ``store``，
+    拿不到面板内存态，导致「删除仍被表达式引用的 id → 保存阻断」在 WebUI 侧落空）。
+
+    两类输入对应两种调用形态：
+
+    - GUI（编辑期内存态）：传 ``expr`` + ``conditions``——表达式是组合的真相源
+    - WebUI / 落盘形态：传 ``tree``——TOML 只存条件树，无表达式
+
+    函数是**全函数**（不抛异常）：输入非法时把问题作为错误项返回。
+    """
+    errors: List[str] = []
+    if tree is not None:
+        errors.extend(_validate_tree(tree))
+    if expr is not None:
+        errors.extend(_validate_expr(expr, conditions or []))
+    return errors

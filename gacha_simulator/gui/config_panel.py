@@ -546,6 +546,8 @@ class ConfigPanel(QWidget):
 
     def set_store(self, store):
         self._store = store
+        # P79 4c1a：顶部只读提示读 self._store.end_time（单一实现点），store 变更后刷新
+        self._refresh_stop_condition_hint()
 
     def get_store(self):
         return self._store
@@ -617,6 +619,19 @@ class ConfigPanel(QWidget):
         strategy_tab_layout.addStretch()
         strategy_tab_scroll.setWidget(strategy_tab_content)
         self.left_tabs.addTab(strategy_tab_scroll, "抽卡策略")
+
+        # P79 5.7：停止条件子标签页——必须处于 QScrollArea 内，否则
+        # gui/wheel_blocker.py 的全局事件过滤器在找不到 QAbstractScrollArea 祖先时
+        # 仍 return True，吞掉 QComboBox / QAbstractSpinBox 的滚轮而不转发。
+        stop_condition_tab_scroll = QScrollArea()
+        stop_condition_tab_scroll.verticalScrollBar().setSingleStep(15)
+        stop_condition_tab_scroll.setWidgetResizable(True)
+        stop_condition_tab_content = QWidget()
+        stop_condition_tab_layout = QVBoxLayout(stop_condition_tab_content)
+        self._setup_stop_condition_tab(stop_condition_tab_layout)
+        stop_condition_tab_layout.addStretch()
+        stop_condition_tab_scroll.setWidget(stop_condition_tab_content)
+        self.left_tabs.addTab(stop_condition_tab_scroll, "停止条件")
 
         target_tab_scroll = QScrollArea()
         target_tab_scroll.verticalScrollBar().setSingleStep(15)
@@ -3419,6 +3434,59 @@ class ConfigPanel(QWidget):
         self._on_strategy_type_changed(0)
 
         parent.addWidget(group)
+
+    def _setup_stop_condition_tab(self, parent):
+        """「停止条件」子标签页外壳（P79 5.7）。
+
+        竖直三块 + 顶部只读提示。三个 GroupBox 的**内容**由后续子任务填充：
+        组合方式与条件列表（4c1b / 4d2b*）、条件参数（4c2a / 4c2b）；本项只落外壳
+        与顶部提示。
+
+        条件树走「面板内存态 + apply_to_store 全量重建」的既有模式——面板持
+        ``self._stop_condition_tree`` 作为编辑期真相源。
+        """
+        # 编辑期真相源（条件树）。落盘形态由 apply_to_store 从它重建。
+        self._stop_condition_tree = None
+        self._stop_condition_selected_id = None
+
+        # ── 顶部只读提示（5.5 校验项 1：显式化「模拟将在 X 天后强制结束」）──
+        self.stop_condition_hint = QLabel()
+        self.stop_condition_hint.setWordWrap(True)
+        parent.addWidget(self.stop_condition_hint)
+        self._refresh_stop_condition_hint()
+
+        # ── 组合方式（4d2b* 填充）──
+        self._stop_condition_compose_group = QGroupBox("组合方式")
+        self._stop_condition_compose_layout = QVBoxLayout(self._stop_condition_compose_group)
+        parent.addWidget(self._stop_condition_compose_group)
+
+        # ── 条件列表（4c1b 填充）──
+        self._stop_condition_list_group = QGroupBox("条件列表")
+        self._stop_condition_list_layout = QVBoxLayout(self._stop_condition_list_group)
+        parent.addWidget(self._stop_condition_list_group)
+
+        # ── 条件参数（4c2a / 4c2b 填充）──
+        self._stop_condition_params_group = QGroupBox("条件参数")
+        self._stop_condition_params_layout = QFormLayout(self._stop_condition_params_group)
+        parent.addWidget(self._stop_condition_params_group)
+
+    def _refresh_stop_condition_hint(self):
+        """顶部只读提示：模拟将在 end_time（所有卡池关闭时刻）后强制结束。
+
+        读 ``self._store.end_time``（5.5 的单一实现点），面板内不重算；``_store``
+        未就绪或 end_time 为 0 时显示「—」。
+        """
+        label = getattr(self, 'stop_condition_hint', None)
+        if label is None:
+            return
+        store = getattr(self, '_store', None)
+        end_time = getattr(store, 'end_time', None) if store is not None else None
+        if not end_time:
+            label.setText("ℹ 模拟终点：—（配置载入后显示）")
+        else:
+            label.setText(
+                f"ℹ 模拟将在 {end_time / 86400:.1f} 天后强制结束（所有卡池关闭时刻）"
+                f"——用户停止条件与之取「任一满足」，不可满足的条件不会让模拟越界")
 
     def _setup_target_tab(self, parent):
         """目标卡编辑标签页。"""

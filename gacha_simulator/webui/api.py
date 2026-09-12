@@ -383,21 +383,28 @@ class GachaApi:
 
     def _dataset_from_bundle(self, bundle, store, seed):
         """result_bundle → StoredDataset dict（可持久化 + 前端 meta）。"""
-        from gacha_simulator.core.result_store import compute_config_hash
+        from gacha_simulator.core.result_store import (
+            canonical_stop_condition_summary, compute_config_hash,
+        )
         agg = bundle['aggregate_data']
         initial_resources = dict(store.initial_resources) if isinstance(store.initial_resources, dict) else {}
         pool_ids = tuple(p.pool_id for p in store.pools)
+        # P79：停止条件的规范化摘要（含参数值；空树产出哨兵 ''）
+        _stop_summary = canonical_stop_condition_summary(
+            getattr(store, 'stop_condition', None))
         config_hash = compute_config_hash(
             store.banner.banners, getattr(store, 'pity', None),
             getattr(store, 'schedules', []),
             milestone_config=getattr(store, 'milestone', None),
+            stop_condition_summary=_stop_summary,   # P79：停止条件纳入可比性指纹
         )
         strategy_name = getattr(store, 'strategy_key', '') or 'unknown'
         now = datetime.now().isoformat()
         fingerprint = ComparabilityFingerprint(
             config_hash=config_hash, strategy_name=strategy_name, strategy_key=strategy_name,
             target_cards=dict(bundle['target_specs']), initial_resources=initial_resources,
-            stop_condition='all_pools_end', seed_start=seed,
+            stop_condition=_stop_summary,   # P79：条件树渲染的规范化摘要（原为硬编码）
+            seed_start=seed,
             seed_end=seed + len(agg) - 1 if agg else seed,
             num_simulations=len(agg), pool_ids=pool_ids, created_at=now,
         )

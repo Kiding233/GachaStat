@@ -22,6 +22,7 @@ from .process_analysis_panel import ProcessAnalysisPanel
 from .comparison_analysis_panel import ComparisonAnalysisPanel
 from ..core.result_store import (
     ResultStore, StoredDataset, ComparabilityFingerprint, compute_config_hash,
+    canonical_stop_condition_summary,
 )
 from .data_manager_panel import DataManagerPanel
 from ..core.config_store import ConfigStore, derive_pool_type_from_distribution
@@ -443,10 +444,15 @@ class MainWindow(QMainWindow):
         # P61（Ph7 / ISSUE-013）：config_hash 纳入 Banner 级配置——改传
         # store.banner.banners（含 lifecycle/时间窗口/featured），展平视图
         # 仅含 pool_id/cost 会漏掉 Banner 级差异致指纹误判可比
+        # P79：停止条件的规范化摘要（含参数值；空树产出哨兵 ''）。
+        # 原实现把指纹的 stop_condition 硬编码为 'all_pools_end'，与用户实际配置无关。
+        _stop_summary = canonical_stop_condition_summary(
+            getattr(self._store, 'stop_condition', None))
         config_hash = compute_config_hash(
             self._store.banner.banners, getattr(self._store, 'pity', None),
             getattr(self._store, 'schedules', []),
             milestone_config=getattr(self._store, 'milestone', None),   # P58（ISSUE-008）：里程碑配置纳入可比性指纹
+            stop_condition_summary=_stop_summary,   # P79：停止条件纳入可比性指纹
         )
 
         aggregate_count = len(aggregate_data) if isinstance(aggregate_data, list) else 0
@@ -456,7 +462,7 @@ class MainWindow(QMainWindow):
             strategy_key=strategy_name,
             target_cards=target_specs_for_fp,
             initial_resources=initial_resources,
-            stop_condition='all_pools_end',
+            stop_condition=_stop_summary,   # P79：条件树渲染的规范化摘要（原为硬编码）
             seed_start=seed_start,
             seed_end=seed_start + aggregate_count - 1 if aggregate_count > 0 else seed_start,
             num_simulations=aggregate_count,

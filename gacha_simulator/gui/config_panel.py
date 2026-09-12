@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget,
     QLabel, QCheckBox, QScrollArea, QSplitter,
     QListWidget, QListWidgetItem, QDialog, QDialogButtonBox, QMessageBox, QAbstractItemView,
-    QDateEdit, QCalendarWidget, QInputDialog, QCompleter,
+    QDateEdit, QCalendarWidget, QInputDialog, QCompleter, QRadioButton,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -29,6 +29,47 @@ from ..core.resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig
 
 # P79 4d2b1：表达式保留字——条件 id 不得与运算符同名，否则表达式无法解析
 _EXPR_RESERVED_WORDS = ('and', 'or', 'not')
+
+
+def _expr_flat_operands(node, op: str):
+    """把同运算符的链拉平为操作数列表（结合律等价）；顶层不是该运算符时返回 None。
+
+    `a or (b or c)` 与 `a or b or c` 的 AST 分别是右嵌套与左嵌套——按结构比对会被
+    结合律打败，故单选识别必须按「拉平后的操作数集合」判定。
+    """
+    if node[0] != op:
+        return None
+    out = []
+
+    def collect(n):
+        if n[0] == op:
+            collect(n[1])
+            collect(n[2])
+        else:
+            out.append(n)
+
+    collect(node)
+    return out
+
+
+def _collect_expr_ids(expr: str):
+    """收集表达式引用的全部条件 id（去重、保序）。表达式非法时抛出."""
+    from gacha_simulator.core.stop_condition_expr import parse_stop_condition_expr
+
+    found = []
+
+    def walk(node):
+        if node[0] == 'id':
+            if node[1] not in found:
+                found.append(node[1])
+        elif node[0] == 'not':
+            walk(node[1])
+        else:
+            walk(node[1])
+            walk(node[2])
+
+    walk(parse_stop_condition_expr(expr))
+    return found
 
 
 class PoolDistributionDialog(QDialog):
@@ -3462,9 +3503,10 @@ class ConfigPanel(QWidget):
         parent.addWidget(self.stop_condition_hint)
         self._refresh_stop_condition_hint()
 
-        # ── 组合方式（4d2b* 填充）──
+        # ── 组合方式（4d2b2）──
         self._stop_condition_compose_group = QGroupBox("组合方式")
         self._stop_condition_compose_layout = QVBoxLayout(self._stop_condition_compose_group)
+        self._setup_stop_condition_compose()
         parent.addWidget(self._stop_condition_compose_group)
 
         # ── 条件列表（4c1b）──
@@ -3754,8 +3796,18 @@ class ConfigPanel(QWidget):
         row = table.currentRow()
         if not (0 <= row < len(self._stop_condition_conditions)):
             return
+        cond_id = self._stop_condition_conditions[row]['id']
+        # 规则 3：删除仍被表达式引用的 id → 阻断提示。不做自动摘除——
+        # `a and b` 中删掉 `b` 会自动变成 `a`，语义已变却不报错。
+        if self._expr_references_id(cond_id):
+            QMessageBox.warning(
+                self, "条件仍被表达式引用",
+                f"条件 '{cond_id}' 仍被表达式引用：\n    {self._stop_condition_expr}\n\n"
+                f"请先在表达式中去掉对它的引用，再删除该条件。")
+            return
         self._stop_condition_conditions.pop(row)
         self._refresh_stop_condition_table()
+        self._refresh_stop_condition_expr_widget()
 
     def _move_stop_condition(self, delta: int):
         """上移 / 下移选中条件（列表顺序即表达式追加顺序）。"""
@@ -3878,6 +3930,137 @@ class ConfigPanel(QWidget):
         self._stop_condition_tree = tree
         conditions, expr = tree_to_conditions_and_expr(tree)
         self.set_stop_condition_conditions(conditions, expr)
+
+    # ── 停止条件：组合区（4d2b2）────────────────────────────────
+
+    def _setup_stop_condition_compose(self):
+        """组合方式单选 + 表达式行（同屏、单向同步，5.7 交互规则 1 与 ⑨）。"""
+        row = QHBoxLayout()
+        self._stop_condition_mode_buttons = {}
+        for mode, label in (('any', '任一满足'), ('all', '全部满足'),
+                            ('custom', '自定义')):
+            button = QRadioButton(label)
+            button.toggled.connect(
+                lambda checked, m=mode: self._on_stop_condition_mode_toggled(m, checked))
+            self._stop_condition_mode_buttons[mode] = button
+            row.addWidget(button)
+        row.addStretch()
+        self._stop_condition_compose_layout.addLayout(row)
+
+        expr_row = QHBoxLayout()
+        expr_row.addWidget(QLabel("表达式:"))
+        self.stop_condition_expr_edit = QLineEdit()
+        self.stop_condition_expr_edit.setPlaceholderText("例：a or (b and not c)")
+        self.stop_condition_expr_edit.textChanged.connect(
+            self._on_stop_condition_expr_edited)
+        expr_row.addWidget(self.stop_condition_expr_edit, 1)
+        self._stop_condition_compose_layout.addLayout(expr_row)
+
+        self._refresh_stop_condition_expr_widget()
+
+    def _detect_stop_condition_mode(self) -> str:
+        """按当前表达式判定单选项：'any' / 'all' / 'custom'。
+
+        判据是「表达式 AST 与 a or b or c（或 a and b and c）等价」——按文本比对
+        会被空格与括号写法差异打败。
+        """
+        from gacha_simulator.core.stop_condition_expr import (
+            StopConditionExprError, parse_stop_condition_expr,
+        )
+
+        ids = [c['id'] for c in self._stop_condition_conditions]
+        expr = (self._stop_condition_expr or '').strip()
+        if not ids or not expr:
+            return 'custom'
+        try:
+            current = parse_stop_condition_expr(expr)
+        except StopConditionExprError:
+            return 'custom'
+        for mode, op in (('any', 'or'), ('all', 'and')):
+            operands = _expr_flat_operands(current, op)
+            if operands is None or len(operands) != len(ids):
+                continue
+            # 全部操作数须是裸 id 且正好覆盖条件列表（顺序无关——a or b 与 b or a
+            # 同属「任一满足」）
+            names = [n[1] for n in operands if n[0] == 'id']
+            if len(names) != len(operands):
+                continue
+            if sorted(names) == sorted(ids):
+                return mode
+        return 'custom'
+
+    def _refresh_stop_condition_expr_widget(self):
+        """表达式行与单选从内存态刷新（阻塞信号，保证单向流动不成环）。"""
+        edit = getattr(self, 'stop_condition_expr_edit', None)
+        if edit is None:
+            return
+        edit.blockSignals(True)
+        edit.setText(self._stop_condition_expr)
+        edit.blockSignals(False)
+
+        mode = self._detect_stop_condition_mode()
+        buttons = getattr(self, '_stop_condition_mode_buttons', {})
+        for key, button in buttons.items():
+            button.blockSignals(True)
+            button.setChecked(key == mode)
+            button.blockSignals(False)
+
+        # 条件列表为空：表达式行禁用并提示由硬边界收口（5.7「选项为空时的表现」）
+        empty = not self._stop_condition_conditions
+        edit.setEnabled(not empty)
+        if empty:
+            edit.setPlaceholderText("未配置停止条件，模拟将由硬边界收口")
+        else:
+            edit.setPlaceholderText("例：a or (b and not c)")
+
+    def _on_stop_condition_mode_toggled(self, mode: str, checked: bool):
+        """单选 → 表达式重写（规则 1）。「自定义」不重写，它只标记手改后的状态。"""
+        if not checked or mode == 'custom':
+            return
+        ids = [c['id'] for c in self._stop_condition_conditions]
+        op = 'or' if mode == 'any' else 'and'
+        self._stop_condition_expr = f' {op} '.join(ids) if ids else ''
+        self._refresh_stop_condition_expr_widget()
+
+    def _on_stop_condition_expr_edited(self, text: str):
+        """表达式手改 → 更新内存态 + 单选自动落到「自定义」（规则 1 / ⑨）。
+
+        单向流动：本回调只更新内存态与单选外观，**不回写表达式行**，故不成环。
+        """
+        self._stop_condition_expr = text
+        mode = self._detect_stop_condition_mode()
+        buttons = getattr(self, '_stop_condition_mode_buttons', {})
+        for key, button in buttons.items():
+            button.blockSignals(True)
+            button.setChecked(key == mode)
+            button.blockSignals(False)
+        refresh = getattr(self, '_refresh_stop_condition_error_hint', None)
+        if refresh is not None:
+            refresh()
+
+    def _expr_references_id(self, cond_id: str) -> bool:
+        """表达式是否引用了该 id（AST 判定；表达式非法时按标识符边界退让）。"""
+        import re as _re
+
+        from gacha_simulator.core.stop_condition_expr import StopConditionExprError
+
+        expr = self._stop_condition_expr or ''
+        if not expr.strip():
+            return False
+        try:
+            return cond_id in _collect_expr_ids(expr)
+        except StopConditionExprError:
+            return bool(_re.search(rf'\b{_re.escape(cond_id)}\b', expr))
+
+    def _on_stop_condition_added(self, node_id: str):
+        """新增条件自动追加到表达式末尾（规则 2，覆写 4c1b 的空钩子）。
+
+        「保持既有结构」：追加 `or <id>` 时既有部分作为一个整体参与（如
+        `a and b` + `or c` 解析为 `(a and b) or c`）。
+        """
+        expr = (self._stop_condition_expr or '').strip()
+        self._stop_condition_expr = f'{expr} or {node_id}' if expr else node_id
+        self._refresh_stop_condition_expr_widget()
 
     def _refresh_stop_condition_hint(self):
         """顶部只读提示：模拟将在 end_time（所有卡池关闭时刻）后强制结束。

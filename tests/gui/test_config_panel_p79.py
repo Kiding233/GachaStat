@@ -127,8 +127,9 @@ def test_add_remove_move_conditions(panel):
     panel._move_stop_condition(1)
     assert [c['id'] for c in panel._stop_condition_conditions] == ['a', 'b']
 
-    # 移除选中
+    # 移除选中（4d2b2 起：被表达式引用的 id 须先解除引用才能删除，否则阻断）
     panel.stop_condition_table.selectRow(0)
+    panel.stop_condition_expr_edit.setText('b')
     panel._on_stop_condition_remove()
     assert [c['id'] for c in panel._stop_condition_conditions] == ['b']
     assert panel.stop_condition_table.rowCount() == 1
@@ -336,3 +337,103 @@ def test_item_changed_applies_rename_and_reverts_on_error(panel, monkeypatch):
     assert calls, '非法 id 必须给出可读提示'
     assert panel._stop_condition_conditions[0]['id'] == 'a'
     assert panel.stop_condition_table.item(0, 0).text() == 'a'
+
+
+# ── 4d2b2：组合区交互规则 1-3 与单选同屏同步 ──────────────────────
+
+def _set_three(panel):
+    panel.set_stop_condition_conditions(
+        [{'id': 'a', 'type': 'time_limit', 'max_time': 1.0},
+         {'id': 'b', 'type': 'time_limit', 'max_time': 2.0},
+         {'id': 'c', 'type': 'time_limit', 'max_time': 3.0}], '')
+    panel._refresh_stop_condition_expr_widget()
+
+
+def test_radio_rewrites_expression(panel):
+    _set_three(panel)
+    panel._stop_condition_mode_buttons['any'].setChecked(True)
+    assert panel._stop_condition_expr == 'a or b or c'
+    panel._stop_condition_mode_buttons['all'].setChecked(True)
+    assert panel._stop_condition_expr == 'a and b and c'
+
+
+def test_manual_edit_falls_to_custom(panel):
+    _set_three(panel)
+    panel._stop_condition_mode_buttons['any'].setChecked(True)
+    assert panel._stop_condition_mode_buttons['any'].isChecked()
+
+    panel.stop_condition_expr_edit.setText('a and (b or c)')
+    assert panel._stop_condition_expr == 'a and (b or c)'
+    buttons = panel._stop_condition_mode_buttons
+    assert buttons['custom'].isChecked()
+    assert not buttons['any'].isChecked() and not buttons['all'].isChecked()
+
+
+def test_sync_is_one_way_and_does_not_loop(panel):
+    """单选 ↔ 表达式单向同步：表达式行内容不被回写，勾选态稳定。"""
+    _set_three(panel)
+    panel._stop_condition_mode_buttons['any'].setChecked(True)
+    assert panel.stop_condition_expr_edit.text() == 'a or b or c'
+    # 反复刷新不改变状态
+    for _ in range(3):
+        panel._refresh_stop_condition_expr_widget()
+    assert panel._stop_condition_expr == 'a or b or c'
+    assert panel._stop_condition_mode_buttons['any'].isChecked()
+
+
+def test_mode_detected_from_equivalent_text(panel):
+    """按 AST 等价判定，不按文本比对（空格与多余括号不影响识别）。"""
+    _set_three(panel)
+    panel.stop_condition_expr_edit.setText('a  or  (b or c)')
+    assert panel._stop_condition_mode_buttons['any'].isChecked()
+
+
+def test_add_condition_appends_to_expression(panel):
+    _set_three(panel)
+    panel._stop_condition_mode_buttons['any'].setChecked(True)
+    panel.stop_condition_type_combo.setCurrentIndex(0)
+    panel._on_stop_condition_add()
+    assert panel._stop_condition_conditions[-1]['id'] == 'd'
+    assert panel._stop_condition_expr == 'a or b or c or d'
+
+
+def test_add_condition_when_expression_empty(panel):
+    panel.set_stop_condition_conditions([], '')
+    panel.stop_condition_type_combo.setCurrentIndex(0)
+    panel._on_stop_condition_add()
+    assert panel._stop_condition_expr == 'a'
+
+
+def test_remove_referenced_condition_is_blocked(panel, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    _set_three(panel)
+    panel._stop_condition_mode_buttons['any'].setChecked(True)
+    calls = []
+    monkeypatch.setattr(QMessageBox, 'warning', lambda *a, **k: calls.append(a))
+
+    panel.stop_condition_table.selectRow(1)          # 选中 b（被引用）
+    panel._on_stop_condition_remove()
+    assert calls, '删除被引用的 id 必须给出阻断提示'
+    assert [c['id'] for c in panel._stop_condition_conditions] == ['a', 'b', 'c']
+    assert panel._stop_condition_expr == 'a or b or c'
+
+
+def test_remove_unreferenced_condition_succeeds(panel):
+    _set_three(panel)
+    panel._stop_condition_mode_buttons['any'].setChecked(True)
+    # 手改表达式去掉对 b 的引用
+    panel.stop_condition_expr_edit.setText('a or c')
+    panel.stop_condition_table.selectRow(1)
+    panel._on_stop_condition_remove()
+    assert [c['id'] for c in panel._stop_condition_conditions] == ['a', 'c']
+
+
+def test_empty_condition_list_disables_expression_row(panel):
+    panel.set_stop_condition_conditions([], '')
+    panel._refresh_stop_condition_expr_widget()
+    assert not panel.stop_condition_expr_edit.isEnabled()
+    assert '硬边界' in panel.stop_condition_expr_edit.placeholderText()
+
+    _set_three(panel)
+    assert panel.stop_condition_expr_edit.isEnabled()

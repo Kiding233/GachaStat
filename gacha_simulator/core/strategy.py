@@ -192,6 +192,44 @@ class Strategy(ABC):
         pass
 
 
+# ── 策略枯竭态契约（P79 5.3）────────────────────────────────────
+# 策略在「不再有任何想做的事」时必须返回一个**推进时间**的等待，不得返回
+# WaitAction(duration=0)：后者让 real_time 原地不动，时间型停止条件
+# （all_pools_end / time_limit）永远够不着，循环只能烧满 max_iterations。
+# 下面的 helper 是「下一个事件时刻」的统一口径，抽自 5 份重复实现
+# （smart / stop_on_target / pity_reserve / pool_quota / draw_target 的末段
+# 等待块）。插件策略要实现同一契约，故公开在本模块而非 strategies/builtin
+# 的私有路径。
+
+EVENT_WAIT_CAP = 86400  # 等待粒度硬上限（一天）
+
+
+def next_event_wait(ctx: StrategyContext) -> float:
+    """返回推进到下一事件所需的等待秒数。
+
+    **返回 float 时长（秒），不是 Action。** 调用点一律写作
+    ``return WaitAction(duration=next_event_wait(ctx))``——「helper 产数值 /
+    调用点包 WaitAction」两层显式分离。直接 ``return next_event_wait(ctx)``
+    会让 GachaService 的动作分发（isinstance 三路 DrawAction / NonDrawAction /
+    WaitAction）全部落空，末尾抛 ValueError。
+
+    契约（86400 为硬上限）：
+
+    - 有可用 banner 且其 ``available_until`` 早于一天后 → 取该差值
+    - 最近的关闭时刻晚于一天后 → 86400
+    - 无可用 banner，或所有 ``available_until`` 为 None → 86400
+    """
+    wait_time: float = EVENT_WAIT_CAP
+    for banner in ctx.banners:
+        if banner.available_until and banner.available_until > ctx.state.real_time:
+            wait_time = min(wait_time, banner.available_until - ctx.state.real_time)
+    if wait_time <= 0:
+        # 防御性保留：上面的循环只用「已确保为正」的差值取 min、初值为 86400，
+        # 故本分支不可达（5 份原实现中的同款防线原样搬运）。
+        wait_time = 3600
+    return float(wait_time)
+
+
 # ── 内置策略——通过 import 触发 @register_strategy 装饰器副作用 ──
 # 策略类定义拆分至 strategies/builtin/*.py，与插件策略统一目录结构。
 # 框架核心（Strategy / StrategyContext / register_strategy / create_strategy）保留在本文件。

@@ -29,6 +29,7 @@ from .strategy import (
     FixedCountStrategy, TargetHuntingStrategy, NoDrawStrategy, DrawTargetStrategy,
     CompositeStrategy, DrawSegmentStrategy, PriorityChainStrategy, ConditionalStrategy,
     STRATEGY_REGISTRY, create_strategy, strategy_type_to_key, strategy_key_to_type,
+    next_event_wait,
 )
 from .param_descriptor import (
     FloatParam, IntParam, BoolParam, StrParam, StringListParam, PoolIntMapParam,
@@ -132,6 +133,7 @@ __all__ = [
     'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',
     'CompositeStrategy', 'DrawSegmentStrategy', 'PriorityChainStrategy', 'ConditionalStrategy',
     'STRATEGY_REGISTRY', 'create_strategy', 'strategy_type_to_key', 'strategy_key_to_type',
+    'next_event_wait',
     'FloatParam', 'IntParam', 'BoolParam', 'StrParam', 'StringListParam', 'PoolIntMapParam',
     'load_plugin_strategies', 'build_strategy_context',
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',

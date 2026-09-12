@@ -409,8 +409,15 @@ class TestTomlEndToEnd:
                 + result.total_gained.get('tof_token_a', 0)
                 - result.total_consumed.get('tof_token_a', 0)) == 0.0
 
-    def test_g6_toml_no_wait_strategy_never_triggers(self, tmp_path):
-        """无等待动作的策略不推进 real_time，到期永不触发（模拟边界，非缺陷）。"""
+    def test_g6_toml_exhausted_strategy_wait_reaches_expiry(self, tmp_path):
+        """P79 1c 之后：抽满次数后策略转为推进时间的等待，到期转换随之触发。
+
+        改动前 fixed_count 抽满后返回 WaitAction(duration=0)，real_time 冻结在 0、
+        永远够不到 banner 下架时刻，到期规则永不触发——本用例原记为「模拟边界，
+        非缺陷」（原名 test_g6_toml_no_wait_strategy_never_triggers）。P79 5.3 消除
+        该失效形态后，枯竭态一律返回 next_event_wait()，时间推进到 env.end_time，
+        转换正常生效。本断言固化新值，防止将来被误判为回归而「修回去」。
+        """
         import os
 
         from gacha_simulator.core.config_toml import load_toml
@@ -429,6 +436,11 @@ class TestTomlEndToEnd:
             strategy_key='fixed_count', strategy_params={'count': 5})
         result = batch.results[0]
 
-        # 抽 5 次即停（real_time 未推进到 banner 下架时刻），限时币原样保留
-        assert result.final_resources['tof_token_a'] == 100
-        assert result.final_resources.get('tof_token_black', 0) == 0
+        # 抽 5 次后不再冻结时间：等待推进到卡池下架时刻（= env.end_time）
+        assert result.total_draws == 5
+        assert result.final_time == env.end_time
+        # 到期转换随之触发，限时币等额换为黑市铸金
+        assert result.final_resources['tof_token_a'] == 0
+        assert result.final_resources['tof_token_black'] == 100
+        assert result.total_consumed.get('tof_token_a') == 100.0
+        assert result.total_gained.get('tof_token_black') == 100

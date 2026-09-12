@@ -18,7 +18,7 @@ from multiprocessing import Pool as MPPool
 from dataclasses import dataclass, field as dc_field
 
 from gacha_simulator.core.config_store import ConfigError   # P77：from_dict 类型守卫异常通道
-from gacha_simulator.core.stop_condition import AllPoolsEndCondition
+from gacha_simulator.core.stop_condition import AllPoolsEndCondition, create_stop_condition
 from gacha_simulator.core.strategy import (
     create_strategy,
 )
@@ -797,6 +797,16 @@ class SimulationEnvBuilder:
         _lc_cfg = getattr(config_store, 'resource_lifecycle', ResourceLifecycleConfig())
         _lifecycle_rules = _copy.deepcopy(list(_lc_cfg.rules)) if _lc_cfg.enabled else []
 
+        # P79（缺陷 A 的另一半）：用户停止条件树 → 对象。字段 stop_condition 由
+        # 子任务 4a1 引入、TOML 填充由 4a3 引入，二者均晚于本项，故以 getattr
+        # 容忍字段缺失——硬取属性会使本项落地即对旧 ConfigStore 抛
+        # AttributeError。树为 None / 空树时 env.stop_condition 为 None，
+        # 由 _run_single 退化为单一硬边界（与接线前等价）。
+        # 注意：只改 _run_single 不生效——生产路径（CLI / GUI / WebUI）的
+        # env.stop_condition 恒为 None 的根因就在此处。
+        _stop_tree = getattr(config_store, 'stop_condition', None)
+        _stop_condition = create_stop_condition(_stop_tree) if _stop_tree else None
+
         return SimulationEnv(
             pools=banners,
             schedule_mgr=schedule_mgr,
@@ -822,6 +832,8 @@ class SimulationEnvBuilder:
             milestone_engine=None,
             # P77：资源生命周期规则（enabled 门控后）
             resource_lifecycle_rules=_lifecycle_rules,
+            # P79：用户停止条件（条件树 → 对象；None 时由 _run_single 退化为硬边界）
+            stop_condition=_stop_condition,
         )
 
     @staticmethod

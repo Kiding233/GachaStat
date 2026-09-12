@@ -3515,10 +3515,15 @@ class ConfigPanel(QWidget):
             return
 
         self._strategy_params_group.setVisible(True)
-        render_param_widgets(
+        skipped = render_param_widgets(
             entry.params, self._strategy_params_layout,
             self._strategy_param_widgets, parent=self,
         )
+        # P79 4b3：未能渲染的参数不得静默消失（原实现静默 continue）——在参数区显式提示
+        if skipped:
+            self._strategy_params_layout.addRow(QLabel(
+                "以下参数无可用控件，本界面不支持配置："
+                + "、".join(p.display_name for p in skipped)))
 
         if hasattr(self, 'preview_text'):
             self._update_preview()

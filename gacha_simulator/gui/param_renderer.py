@@ -6,6 +6,8 @@ P69 §1.5：替代 config_panel._on_strategy_type_changed() 中的 6 分支 if-e
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any, Callable, Dict, List, Optional, Type
 
 from PyQt6.QtWidgets import (
@@ -14,13 +16,17 @@ from PyQt6.QtWidgets import (
 
 from ..core.param_descriptor import (
     BoolParam,
+    DictParam,
     FloatParam,
     IntParam,
+    ListParam,
     ParamDescriptor,
     PoolIntMapParam,
     StringListParam,
     StrParam,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ── 类型 → 控件工厂 ──────────────────────────────────────────────
@@ -49,9 +55,15 @@ def _make_checkbox(pdesc: BoolParam, parent: Optional[QWidget] = None) -> QCheck
 
 
 def _make_line_edit(pdesc: ParamDescriptor, parent: Optional[QWidget] = None) -> QLineEdit:
-    """StrParam / StringListParam / PoolIntMapParam 共用 QLineEdit。"""
+    """StrParam / StringListParam / PoolIntMapParam / ListParam / DictParam 共用 QLineEdit。"""
     widget = QLineEdit(parent)
-    if isinstance(pdesc, StringListParam):
+    if isinstance(pdesc, (ListParam, DictParam)):
+        # P79 4b3：通用容器以 JSON 文本录入——ListParam 的元素可能是嵌套结构
+        # （如 pool_schedules 的 [pool_id, start, end] 三元组），逗号分隔表达不了
+        default = pdesc.default
+        widget.setText(json.dumps(default, ensure_ascii=False) if default else '')
+        widget.setPlaceholderText('JSON')
+    elif isinstance(pdesc, StringListParam):
         default = pdesc.default or []
         widget.setText(','.join(str(v) for v in default))
         widget.setPlaceholderText("逗号分隔")
@@ -71,6 +83,8 @@ _WIDGET_FACTORY: Dict[Type[ParamDescriptor], Callable] = {
     StrParam: _make_line_edit,
     StringListParam: _make_line_edit,
     PoolIntMapParam: _make_line_edit,
+    ListParam: _make_line_edit,
+    DictParam: _make_line_edit,
 }
 
 
@@ -82,7 +96,7 @@ def render_param_widgets(
     form_layout: QFormLayout,
     widget_map: Dict[str, tuple],
     parent: Optional[QWidget] = None,
-) -> None:
+) -> List[ParamDescriptor]:
     """根据 ParamDescriptor 列表创建 Qt 控件并添加到表单布局。
 
     Args:
@@ -90,10 +104,20 @@ def render_param_widgets(
         form_layout: 目标 QFormLayout。
         widget_map: 输出——{param_key: (ptype_str, widget)} 映射。
         parent: 控件的父 widget。
+
+    Returns:
+        **未能渲染的描述符列表**（``_WIDGET_FACTORY`` 未命中的跳过项）。
+        P79 4b3：原实现对未命中项静默 ``continue``——参数无声消失、不报错；
+        调用侧应据此在参数区提示「参数 X 无可用控件」。
     """
+    skipped: List[ParamDescriptor] = []
     for pdesc in params:
         factory = _WIDGET_FACTORY.get(type(pdesc))
         if factory is None:
+            logger.warning("参数 '%s'（%s）无可用控件工厂，已跳过渲染——"
+                           "该参数不会出现在界面，也不会被回写",
+                           pdesc.key, pdesc.display_name)
+            skipped.append(pdesc)
             continue
 
         widget = factory(pdesc, parent)
@@ -110,10 +134,16 @@ def render_param_widgets(
             ptype = 'string_list'
         elif isinstance(pdesc, PoolIntMapParam):
             ptype = 'pool_int_map'
+        elif isinstance(pdesc, ListParam):
+            ptype = 'list'
+        elif isinstance(pdesc, DictParam):
+            ptype = 'dict'
         else:
             ptype = 'str'
 
         widget_map[pdesc.key] = (ptype, widget)
+
+    return skipped
 
 
 def collect_params_from_widgets(widget_map: Dict[str, tuple]) -> Dict[str, Any]:
@@ -149,6 +179,19 @@ def collect_params_from_widgets(widget_map: Dict[str, tuple]) -> Dict[str, Any]:
                         except ValueError:
                             pass
             params[param_key] = result
+        elif ptype in ('list', 'dict'):
+            # P79 4b3：新增的 list / dict 若不进入本分派，读取时会静默变成裸字符串
+            # （容器语义丢失且不报错）。空输入按容器空值处理；JSON 解析失败时原样
+            # 返回文本串——ListParam / DictParam 的 validate() 本身接受 JSON 字符串，
+            # 故错误会在校验层显式暴露，不静默退化。
+            text = widget.text().strip()
+            if not text:
+                params[param_key] = [] if ptype == 'list' else {}
+            else:
+                try:
+                    params[param_key] = json.loads(text)
+                except json.JSONDecodeError:
+                    params[param_key] = text
         else:
             params[param_key] = widget.text().strip()
     return params
@@ -187,5 +230,12 @@ def set_params_to_widgets(
                 widget.setText(','.join(f'{k}:{v}' for k, v in val.items()))
             else:
                 widget.setText(str(val) if val else '')
+        elif ptype in ('list', 'dict'):
+            if isinstance(val, (list, dict)):
+                widget.setText(json.dumps(val, ensure_ascii=False) if val else '')
+            elif val is None:
+                widget.setText('')
+            else:
+                widget.setText(str(val))
         else:
             widget.setText(str(val) if val is not None else '')

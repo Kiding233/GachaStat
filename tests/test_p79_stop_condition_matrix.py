@@ -234,3 +234,93 @@ def test_matrix_warning_expectations(env_and_targets):
     assert 'fixed_count' in stalled.warnings[0]
     assert 'DrawAction' in stalled.warnings[0]
     assert stalled.iterations < COARSE_ITERATION_CAP
+
+
+# ══════════════════════════════════════════════════════════════════
+# 5e：8.4 性能闸门
+# ══════════════════════════════════════════════════════════════════
+
+PERF_UNIVERSAL_CAP = 1000       # 通用「失控」判据
+PERF_WALL_CLOCK_SECONDS = 0.5   # 单次模拟耗时阈值（修复前 1.04s / 1.78s；修复后约 0.02s）
+
+
+def _hunting_cap(end_time, step=3600.0, slack=10):
+    """粗粒度等待策略的单列上界：ceil(end_time / 步长) + 常数。"""
+    import math
+    return int(math.ceil(end_time / step)) + slack
+
+
+@pytest.mark.parametrize('strategy_key,params', [
+    ('fixed_count', {'count': 100}),
+    ('stop_on_target', {'stop_on_featured': True}),
+])
+def test_perf_within_universal_cap(env_and_targets, strategy_key, params):
+    """断言：迭代数不超过 1000 且耗时不超过阈值。
+
+    这是防止 10 万轮空转复现的直接闸门——修复前两者均为 100000 轮、
+    耗时 1.04s / 1.78s；修复后约 100 量级、约 0.02s。
+    """
+    import time
+
+    from gacha_simulator.service.batch_simulator import _run_single
+
+    env, target_set = env_and_targets
+    env.strategy_key = strategy_key
+    env.strategy_params = dict(params)
+    env.stop_condition = None
+
+    started = time.time()
+    result = _run_single(env, target_set, SEED, env.initial_resources)
+    elapsed = time.time() - started
+
+    assert result.iterations <= PERF_UNIVERSAL_CAP, (
+        f'{strategy_key}: iterations={result.iterations} 超过通用上界')
+    assert elapsed < PERF_WALL_CLOCK_SECONDS, (
+        f'{strategy_key}: 耗时 {elapsed:.2f}s 超过阈值 {PERF_WALL_CLOCK_SECONDS}s')
+
+
+def test_perf_target_hunting_single_column_cap(env_and_targets):
+    """粗粒度等待策略单列上界——不能用 1000 一把尺子量它。
+
+    target_hunting 在全部目标池不可负担时固定返回 WaitAction(duration=3600)，
+    跨越默认 168 天需 4032 轮，是**合法的多轮**而非失控。
+    """
+    from gacha_simulator.service.batch_simulator import _run_single
+
+    env, target_set = env_and_targets
+    env.strategy_key = 'target_hunting'
+    env.strategy_params = {}
+    env.stop_condition = None
+    result = _run_single(env, target_set, SEED, env.initial_resources)
+
+    cap = _hunting_cap(env.end_time)
+    assert result.iterations <= cap, f'iterations={result.iterations} 超过单列上界 {cap}'
+    # 该值由 §2.1 的原始实测固化（4032 轮）
+    assert result.iterations == 4032
+
+
+def test_perf_criterion_distinguishes_legit_multiround_from_spin(env_and_targets):
+    """判据须能区分「粒度导致的合法多轮」与「10 万轮空转」。
+
+    同一份配置下：
+    - target_hunting 的 4032 轮**超过**通用上界 1000，但合法（步长 3600）
+    - fixed_count(50000) 的资源耗尽空转被兜底截断，远低于 100000，且带告警
+    故闸门必须按策略分别设界 + 用告警区分「兜底收口」与「正常结束」。
+    """
+    from gacha_simulator.service.batch_simulator import _run_single
+
+    env, target_set = env_and_targets
+
+    env.strategy_key = 'target_hunting'
+    env.strategy_params = {}
+    env.stop_condition = None
+    hunting = _run_single(env, target_set, SEED, env.initial_resources)
+    assert hunting.iterations > PERF_UNIVERSAL_CAP          # 合法的多轮
+    assert hunting.warnings == []                           # 且不是靠兜底收口的
+
+    env.strategy_key = 'fixed_count'
+    env.strategy_params = {'count': 50000}
+    env.stop_condition = None
+    spin = _run_single(env, target_set, SEED, env.initial_resources)
+    assert spin.iterations < 100000                         # 不再烧满预算
+    assert spin.warnings and '零进度兜底' in spin.warnings[0]  # 由兜底收口

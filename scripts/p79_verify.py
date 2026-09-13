@@ -10,6 +10,9 @@
    / ``banner_end_*`` 均按 8.3「有意变更」表变化），但须显式核对新值——
    ``final_time`` 必须收敛到 ``env.end_time``
 4. 其余 7 组（含插件策略）**逐字段严格一致**
+5. 两侧固定 ``sim_start_date`` 为 golden 的生成日：``config.toml`` 含 ``monthly_day``
+   收入规则，其日程锚定该字段，不固定则 ``draw_resources_gained`` 的归属抽次随墙上
+   时钟差 1，对照在非生成日恒红（P79 R19 审计定位）
 
 用法：python scripts/p79_verify.py
 """
@@ -39,6 +42,21 @@ BUILTIN_KEYS = [
 ]
 PLUGIN_KEYS = ['plugin/example_phased']
 
+# golden 生成时的模拟起始日。快照 meta 自 P79 R19 起记录该字段（旧快照无，回退此值）。
+# 不固定它，对照结果随墙上时钟变化（见模块 docstring 第 5 条）。
+GOLDEN_SIM_START_DATE = '2026-09-12'
+
+
+def golden_sim_start_date(golden_dir: Path) -> str:
+    """从任一快照 meta 读生成日；meta 无该字段（R19 之前的快照）时回退常量。"""
+    for key in BUILTIN_KEYS + PLUGIN_KEYS:
+        path = golden_dir / snapshot_name(key)
+        if path.exists():
+            meta = json.loads(path.read_text(encoding='utf-8')).get('meta', {})
+            if meta.get('sim_start_date'):
+                return meta['sim_start_date']
+    return GOLDEN_SIM_START_DATE
+
 # 全局允许变化的字段（8.3「有意变更」白名单——阶段 3 的产物）
 GLOBAL_ALLOWED = {'iterations', 'warnings', 'result_version'}
 # 不参与对比（时间戳）
@@ -59,6 +77,8 @@ def main():
 
     load_plugin_strategies()
     store = load_toml(CONFIG)
+    # 与 golden 生成时同一起始日，否则对照随墙上时钟变红
+    store.sim_start_date = golden_sim_start_date(golden_dir)
     env = SimulationEnvBuilder.from_config_store(store)
     specs = {tc.card_id: tc.quantity for tc in store.target_cards}
     target_set = _build_target_set(env.card_defs, specs)

@@ -3826,6 +3826,36 @@ class ConfigPanel(QWidget):
 
     # ── 停止条件：条件参数区（4c2a）──────────────────────────────
 
+    def _widen_coaxial_range(self, params, widget_map) -> None:
+        """按 ``store.end_time`` 放宽同轴阈值控件的范围（5.7 第二道防线）。
+
+        静态范围由 4b2a 的 ``MAX_SIM_TIME`` 承担，本函数承担「配置的 ``end_time``
+        反超静态上界」时的动态放宽。
+
+        **调用时机是硬约束：必须在 ``set_params_to_widgets`` 之前。** Qt 对超范围
+        ``setValue`` 不报错、直接钳到上限并回显为合法值。顺序颠倒（先回填、后放宽）
+        时，模型里已有的超界 ``end_time`` 会在回填阶段被钳位，随后
+        ``_sync_stop_condition_params`` 把钳位值写回模型；此时预填的早退判据
+        「模型值 != 注册表默认值」已成立，预填不再介入，钳位值就此固化。
+        第二次渲染起即复现（P79 R19 审计定位：原实现只在预填内部放宽，晚于回填，
+        故对「模型已有超界值」这条路径无效）。
+        """
+        from gacha_simulator.core.stop_condition import COAXIAL_THRESHOLD_KEYS
+
+        store = getattr(self, '_store', None)
+        end_time = getattr(store, 'end_time', None) if store is not None else None
+        if not end_time:
+            return
+        for pkey in COAXIAL_THRESHOLD_KEYS.values():
+            entry = widget_map.get(pkey)
+            if entry is None:
+                continue
+            _ptype, widget = entry
+            if not hasattr(widget, 'setRange') or not hasattr(widget, 'maximum'):
+                continue
+            widget.setRange(float(widget.minimum()),
+                            max(float(widget.maximum()), float(end_time)))
+
     def _prefill_coaxial_threshold(self, cond, params, widget_map):
         """与硬边界同轴条件（all_pools_end / time_limit）的阈值预填（P79 5.7）。
 
@@ -3836,8 +3866,9 @@ class ConfigPanel(QWidget):
 
         ⚠ **必须先放宽控件范围再 setValue**：Qt 对超范围 setValue 不报错、不回显真实
         值，直接钳到上限并显示为合法值（FloatParam 类默认 max_val=99999.0 ≈ 1.16 天），
-        预填会静默变成「1.16 天收口」。静态范围（4b2a 的 MAX_SIM_TIME）与这里的
-        动态放宽**二者须同时满足**。
+        预填会静默变成「1.16 天收口」。静态范围（4b2a 的 MAX_SIM_TIME）与
+        `_widen_coaxial_range` 的动态放宽**二者须同时满足**，且放宽须发生在回填
+        模型值之前（调用点已如此排布，理由见该 helper 的注释）。
         """
         from gacha_simulator.core.stop_condition import COAXIAL_THRESHOLD_KEYS
 
@@ -3863,8 +3894,7 @@ class ConfigPanel(QWidget):
         if not end_time:
             return
 
-        widget.setRange(float(getattr(pdesc, 'min_val', 0.0)),
-                        max(float(widget.maximum()), float(end_time)))
+        self._widen_coaxial_range(params, widget_map)
         widget.setValue(float(end_time))
         # 同步模型：apply 落盘的应是预填值（否则界面显示 end_time、落盘仍是旧默认）
         cond[pkey] = float(end_time)
@@ -3925,6 +3955,8 @@ class ConfigPanel(QWidget):
             self._stop_condition_param_containers[cid] = container
             self._stop_condition_param_widgets[cid] = widget_map
 
+            # 顺序不可颠倒：先放宽范围，再回填模型值（见 _widen_coaxial_range）
+            self._widen_coaxial_range(params, widget_map)
             node = {k: v for k, v in cond.items() if k != 'id'}
             set_params_to_widgets(params, widget_map, node)
             self._prefill_coaxial_threshold(cond, params, widget_map)

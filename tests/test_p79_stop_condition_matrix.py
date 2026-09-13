@@ -26,8 +26,9 @@ from gacha_simulator.core.stop_condition import (
 
 CONFIG = 'gacha_simulator/config/config.toml'
 SEED = 42
-# 粗上界：足以拦住「烧满 max_iterations = 100000」这一类失控；
-# 按策略的精确上界（1000 通用 / target_hunting 约 4100）由 5d / 5e 固化
+# 最粗一层的兜底：拦住「烧满 max_iterations = 100000」这类失控。按策略的精确上界
+# （通用 1000 / target_hunting = ceil(end_time/3600)+10）见下方 ITERATION_CAP_BY_STRATEGY，
+# 由 8.4 的性能闸门承担；本常量仅供零进度检测那一组用例作粗判
 COARSE_ITERATION_CAP = 10000
 
 STRATEGY_KEYS = [

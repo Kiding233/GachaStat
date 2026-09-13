@@ -514,8 +514,10 @@ def canonical_stop_condition_summary(tree: Optional[Dict[str, Any]]) -> str:
 
     - ``sort_keys`` 消除同一棵树经 TOML 解析与 GUI 重建两条路径的键序差异
     - ``separators`` 去空白，保证跨 Python 版本一致
-    - ``tree is None``（空树 = 仅引擎硬边界收口）产出固定哨兵 ``''``，
-      与任何真实树都不同
+    - ``tree`` 为 ``None`` 或空表 ``{}``（空树 = 仅引擎硬边界收口）产出固定哨兵
+      ``''``，与任何真实树都不同。解析层已把空树规范化为 ``None``，此处再收一道：
+      ``store.stop_condition`` 可被程序化赋值为 ``{}``（GUI 编辑期中间态），两者
+      运行时行为一致，指纹不应分叉
 
     只做确定性序列化，**不做语义归一**（不排序条件数组、不去重）——输入树的规范化
     由解析期的空树规范化承担。
@@ -528,6 +530,6 @@ def canonical_stop_condition_summary(tree: Optional[Dict[str, Any]]) -> str:
     模块已 import json（:4），零新增 import 边，且摘要正是指纹的 ``stop_condition``
     维度。函数体置于 ``compute_config_hash`` 之后，避免上移其行号锚点。
     """
-    if tree is None:
+    if not tree:
         return ''
     return json.dumps(tree, sort_keys=True, separators=(',', ':'), ensure_ascii=False)

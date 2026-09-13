@@ -1397,6 +1397,15 @@ def _normalize_stop_condition_node(node):
         raise ConfigError(
             f"stop_condition 的节点必须是表（dict），收到 {type(node).__name__}")
 
+    if not node:
+        # 空表 = 无节点。顶层命中「裸表头」（[stop_condition] 下无任何键，TOML 解析
+        # 为 {}）；子节点命中 conditions 里的空表项。**必须在此收口**：否则 {} 会被
+        # 下方当作「叶子节点」原样返回，store.stop_condition 变成 {}——运行时行为与
+        # None 相同（create_stop_condition 对 falsy 返回 None），但规范化摘要不同
+        # （'{}' vs ''），两个行为一致的配置因而得到不同 config_hash，可比性分析
+        # 误判为「配置不同」（计划 5.6「空树规范化」三形态之二）。
+        return None
+
     children = node.get('conditions')
     if children is None:
         return dict(node)          # 叶子节点：type + 平铺参数

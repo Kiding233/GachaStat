@@ -713,6 +713,23 @@ conditions = []
     assert store.stop_condition is None
 
 
+def test_p79_stop_condition_bare_table_normalizes_to_none(tmp_path):
+    """裸表头（`[stop_condition]` 下无任何键）同样规范化 None。
+
+    计划 5.6「空树规范化」把三形态并列：**段缺失 / 顶层节点缺失 / conditions 为空
+    数组**。TOML 的裸表头解析为 `{}`，若不收口，`store.stop_condition == {}`——
+    运行时行为与 None 相同（`create_stop_condition` 对 falsy 返回 None），但规范化
+    摘要不同（`'{}'` vs `''`），`config_hash` 随之不同，两个**行为一致**的配置被
+    可比性分析判为「配置不同」。
+    """
+    store = load_toml(_p79_config_with(tmp_path, '\n[stop_condition]\n'))
+    assert store.stop_condition is None
+    # 空树不写出该段（round-trip 方向）
+    out = tmp_path / 'out_bare.toml'
+    save_toml(store, str(out))
+    assert '[stop_condition]' not in out.read_text(encoding='utf-8')
+
+
 def test_p79_load_validation_dead_rules(tmp_path):
     """8.2「加载期校验」：死规则两条（资源生命周期 + banner 生命周期）。"""
     store = load_toml(_p79_config_with(tmp_path, """

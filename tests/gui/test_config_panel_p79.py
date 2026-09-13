@@ -600,6 +600,43 @@ def test_coaxial_condition_prefill_not_clamped(panel, type_key, pkey,
     assert panel._stop_condition_conditions[0][pkey] == end
 
 
+def test_coaxial_prefill_widens_beyond_static_max(qapp):
+    """断言 6 的**第二道防线**：`end_time` 反超静态上界时，预填仍不被钳位。
+
+    计划 5.6/5.7 定死两道防线「二者须同时满足」：静态范围（4b2a 的
+    `MAX_SIM_TIME`）与 `_prefill_coaxial_threshold` 内的 `setRange` 动态放宽。
+    原用例（`test_coaxial_condition_prefill_not_clamped`）的 `end_time` 远小于静态
+    上界，动态放宽是 no-op，**删掉它该用例依然全绿**（R19 变异实验 M9 实测）——
+    即第二道防线此前无任何承重断言。本用例构造超过静态上界的 `end_time`，使
+    动态放宽成为唯一保票。
+    """
+    from gacha_simulator.core.config_toml import load_toml
+    from gacha_simulator.core.stop_condition import MAX_SIM_TIME
+    from gacha_simulator.gui.config_panel import ConfigPanel
+
+    store = load_toml(CONFIG)
+    big = float(MAX_SIM_TIME) * 1.3
+    for banner in store.banner.banners:
+        banner.available_until = big
+
+    p = ConfigPanel()
+    try:
+        p.set_store(store)
+        end = p._store.end_time
+        assert end > MAX_SIM_TIME, f'前提：end_time({end}) 须超过静态上界'
+
+        p.set_stop_condition_conditions(
+            [{'id': 'a', 'type': 'all_pools_end'}], 'a')
+        p._rebuild_stop_condition_params()
+        widget = p._stop_condition_param_widgets['a']['end_time'][1]
+
+        assert widget.value() == end, '预填被静态上界钳位：动态放宽失效'
+        assert widget.maximum() >= end, '控件范围未按 end_time 放宽'
+        assert p._stop_condition_conditions[0]['end_time'] == end
+    finally:
+        p.deleteLater()
+
+
 def test_user_customized_coaxial_threshold_is_not_overwritten(panel):
     """用户已自定义阈值时不得被预填覆盖。"""
     panel.set_stop_condition_conditions(

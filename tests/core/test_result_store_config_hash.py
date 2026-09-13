@@ -102,8 +102,14 @@ def _summary(tree):
 
 
 def test_summary_empty_tree_sentinel():
-    """空树（None）产出固定哨兵 ''，与任何真实树都不同。"""
+    """空树产出固定哨兵 ''，与任何真实树都不同。
+
+    空树的两种写法（`None` = 段缺失/规范化结果，`{}` = 裸表头或 GUI 编辑期中间态）
+    运行时行为一致，故须产出同一哨兵——否则同一行为的两种写法会得到不同
+    `config_hash`，可比性分析误判为「配置不同」（P79 R19 审计定位）。
+    """
     assert _summary(None) == ''
+    assert _summary({}) == ''
     assert _summary({'type': 'time_limit', 'max_time': 1.0}) != ''
 
 

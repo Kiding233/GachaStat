@@ -40,6 +40,15 @@ BUILTIN_KEYS = [
 # 插件策略（由 load_plugin_strategies 注册）
 PLUGIN_KEYS = ['plugin/example_phased']
 
+# 快照的模拟起始日（P79 R19 审计定位）。
+#
+# config.toml 含 monthly_day 收入规则（每月 1 日发 50 交换币），其日程锚定
+# store.sim_start_date，而该字段默认 date.today()（core/config_store.py）。不固定它，
+# 同一份配置在不同日期跑出的 draw_resources_gained 归属抽次会差 1，
+# pool_quota / draw_target 两组的等价对照随墙上时钟变红。本值写入快照 meta，
+# 由 scripts/p79_verify.py 读回复现。
+SIM_START_DATE = '2026-09-12'
+
 
 def snapshot_name(strategy_key: str) -> str:
     """策略 key → 快照文件名（"/" 转义为 "__"）。"""
@@ -64,6 +73,8 @@ def main():
         sys.exit(1)
 
     store = load_toml(args.config)
+    # 固定模拟起始日，使产物可复现（见 SIM_START_DATE）
+    store.sim_start_date = SIM_START_DATE
     env = SimulationEnvBuilder.from_config_store(store)
     target_specs = {tc.card_id: getattr(tc, 'quantity', 1) for tc in store.target_cards}
     # 复用生产构造：_build_target_set 把 card_defs.pools 的全限定键
@@ -97,6 +108,7 @@ def main():
                 'strategy_key': key,
                 'config_path': str(args.config),
                 'seed': args.seed,
+                'sim_start_date': SIM_START_DATE,
                 'end_time': env.end_time,
                 'num_pools': len(env.pools),
                 'generated_at': time.time(),

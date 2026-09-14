@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Literal, Dict
+from typing import Literal, Dict, Optional
 
 
 class Action(ABC):
@@ -13,11 +13,20 @@ class Action(ABC):
 
 @dataclass
 class DrawAction(Action):
-    pool_id: str
+    """抽卡动作。
+
+    P61（§3.5 要点 5 / ISSUE-004）：banner_id 优先；banner_id=None 时按 pool_id 反查
+    唯一 Banner（旧单池兼容路径）；pool_id=None 时服务层经 banner.active_pool 路由。
+    pool_id 对池选择无功能角色（单活跃池模型，派发恒取 banner.active_pool），
+    仅用于 banner_id=None 时的反查歧义规避（ISSUE-316）。
+    """
+
+    banner_id: Optional[str] = None
+    pool_id: Optional[str] = None
     type: Literal['draw'] = 'draw'
 
     def __repr__(self) -> str:
-        return f"DrawAction(pool_id='{self.pool_id}')"
+        return f"DrawAction(banner_id='{self.banner_id}', pool_id='{self.pool_id}')"
 
 
 @dataclass

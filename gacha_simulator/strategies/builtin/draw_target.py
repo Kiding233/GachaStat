@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import List, Optional, Set
 
 from gacha_simulator.core.strategy import (
-    Strategy, StrategyContext, register_strategy,
+    Strategy, StrategyContext, register_strategy, next_event_wait,
 )
 from gacha_simulator.core.param_descriptor import StringListParam, StrParam
 from gacha_simulator.core.action import DrawAction, WaitAction
@@ -30,15 +30,10 @@ class DrawTargetStrategy(Strategy):
         return "最差影响分析：从目标池抽卡"
 
     def select_action(self, ctx: StrategyContext):
-        for pool in ctx.current_pools:
-            if (not self.pool_id or pool.id == self.pool_id) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
-                return DrawAction(pool_id=pool.id)
+        # P61（ISSUE-303/315）：pool_id 匹配口径为 banner.id
+        for banner in ctx.banners:
+            pool = banner.active_pool
+            if (not self.pool_id or banner.id == self.pool_id) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
+                return DrawAction(banner_id=banner.id)
 
-        wait_time = 86400
-        for pool in ctx.current_pools:
-            if (pool.available_until is not None
-                    and pool.available_until > ctx.state.real_time):
-                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
-        if wait_time <= 0:
-            wait_time = 3600
-        return WaitAction(duration=wait_time)
+        return WaitAction(duration=next_event_wait(ctx))

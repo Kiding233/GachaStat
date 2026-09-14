@@ -423,21 +423,113 @@ def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dic
 
 
 def compute_config_hash(pools_config: List[Any], pity_config: Any,
-                        schedules_config: List[Any]) -> str:
-    """计算配置的确定性 hash（用于可比性判断）"""
+                        schedules_config: List[Any],
+                        milestone_config: Any = None,
+                        stop_condition_summary: Any = None) -> str:
+    """计算配置的确定性 hash（用于可比性判断）。
+
+    P61（Ph7 / ISSUE-013）：纳入 Banner 级配置。pools_config 现为
+    store.banner.banners（List[BannerEntry]）——hash 覆盖 Banner 的
+    available_from/until（秒）、enabled、max_draws、lifecycle 规则、内层池
+    rewards 分布（featured/rarity/probability）；对旧 List[PoolEntry] 展平
+    视图保留兼容分支（仅 hash pool_id/cost，不覆盖 Banner 级字段——时间
+    窗口/lifecycle 差异时指纹会误判可比，主路径不得再走该分支）。
+
+    P58（REVIEW-R1-FIX: ISSUE-008）：milestone_config（store.milestone）纳入
+    hash——仅 milestone 不同的数据集判「配置: 不同」（否则 only_strategy_differs()
+    / mode_label() 误判纯策略比较）。None（调用方未传）→ 不纳入，兼容旧调用方。
+
+    P79：stop_condition_summary（``canonical_stop_condition_summary`` 的产物）纳入
+    hash。不纳入时「仅停止条件不同」的两组数据会被判为 same 维度，可比性结论与真实
+    情况相反，且 hash 与指纹同时失明。沿用 milestone_config 式的关键字默认 None，
+    既有三参 / 四参位置调用保持不变。
+    """
     h = hashlib.sha256()
+
+    def _update(seg: str):
+        h.update(seg.encode())
+
     # 池子配置
-    for p in sorted(pools_config, key=lambda x: getattr(x, 'pool_id', '')):
-        h.update(getattr(p, 'pool_id', '').encode())
-        h.update(str(getattr(p, 'cost', '')).encode())
+    for p in sorted(pools_config, key=lambda x: getattr(x, 'id', getattr(x, 'pool_id', ''))):
+        if hasattr(p, 'lifecycle'):
+            # BannerEntry——Banner 级全字段
+            _update(str(getattr(p, 'id', '')))
+            _update(str(getattr(p, 'name', '')))
+            _update(str(getattr(p, 'enabled', True)))
+            _update(str(getattr(p, 'max_draws', None)))
+            _update(str(getattr(p, 'available_from', None)))
+            _update(str(getattr(p, 'available_until', None)))
+            for lp in getattr(p, 'lifecycle', []) or []:
+                _update(str(lp))
+            for bp in getattr(p, 'pools', []) or []:
+                _update(getattr(bp, 'id', ''))
+                _update(str(getattr(bp, 'cost', '')))
+                _update(str(getattr(bp, 'batch_size', 1)))
+                _update(str(getattr(bp, 'max_draws', None)))
+                _update(str(getattr(bp, 'excludes_all_pity', False)))
+                _update(str(getattr(bp, 'exchange_card_id', None)))
+                _update(str(getattr(bp, 'epitomizable_cards', [])))
+                for r in getattr(bp, 'rewards', []) or []:
+                    _update(str(r))
+        else:
+            # 旧 PoolEntry 展平视图兼容分支（仅 pool_id/cost）
+            _update(getattr(p, 'pool_id', ''))
+            _update(str(getattr(p, 'cost', '')))
     # 保底配置
     if pity_config and hasattr(pity_config, 'pities'):
         for pd in sorted(pity_config.pities, key=lambda x: x.name):
             h.update(pd.name.encode())
             h.update(str(getattr(pd, 'params', {})).encode())
-    # 排期
+    # 排期（P61 Ph6 后 pool_id 为 banner 级）
     for s in sorted(schedules_config, key=lambda x: getattr(x, 'pool_id', '')):
         h.update(getattr(s, 'pool_id', '').encode())
         h.update(str(getattr(s, 'available_from', 0)).encode())
         h.update(str(getattr(s, 'available_until', 0)).encode())
+    # 里程碑配置（P58 ISSUE-008——仅 milestone 不同的数据集判「配置: 不同」）
+    if milestone_config is not None and hasattr(milestone_config, 'milestones'):
+        _update(str(getattr(milestone_config, 'enabled', True)))
+        for md in sorted(milestone_config.milestones, key=lambda x: getattr(x, 'name', '')):
+            _update(md.name)
+            _update(str(md.threshold))
+            _update(str(md.repeat))
+            _update(str(md.max_triggers))
+            _update(str(md.banner))
+            _update(str(md.bonus_reward))
+            # P78（ISSUE-108）：alternate_rewards/offset 纳入 hash——仅新字段不同的
+            # 数据集判「配置: 不同」（否则交替/偏移里程碑与旧形态 hash 相同、误判可比）
+            _update(str(md.alternate_rewards))
+            _update(str(md.offset))
+    # 停止条件（P79）——摘要须含参数值，故由调用方经 canonical_stop_condition_summary
+    # 传入（表达式渲染只含 id，不足以承担指纹维度）
+    if stop_condition_summary is not None:
+        _update(str(stop_condition_summary))
     return h.hexdigest()[:16]
+
+
+def canonical_stop_condition_summary(tree: Optional[Dict[str, Any]]) -> str:
+    """条件树 → 可比性指纹用的**规范化摘要**（P79 阶段 4「可比性指纹」段）。
+
+    规范形态定死为 ``json.dumps(tree, sort_keys=True, separators=(',', ':'),
+    ensure_ascii=False)``：
+
+    - ``sort_keys`` 消除同一棵树经 TOML 解析与 GUI 重建两条路径的键序差异
+    - ``separators`` 去空白，保证跨 Python 版本一致
+    - ``tree`` 为 ``None`` 或空表 ``{}``（空树 = 仅引擎硬边界收口）产出固定哨兵
+      ``''``，与任何真实树都不同。解析层已把空树规范化为 ``None``，此处再收一道：
+      ``store.stop_condition`` 可被程序化赋值为 ``{}``（GUI 编辑期中间态），两者
+      运行时行为一致，指纹不应分叉
+
+    只做确定性序列化，**不做语义归一**（不排序条件数组、不去重）——输入树的规范化
+    由解析期的空树规范化承担。
+
+    **本函数必须含全部参数值，不能只渲染条件 id**：表达式渲染（stop_condition_expr
+    的树 → 表达式方向）只含 id，两组仅阈值不同的停止条件会产出同一表达式串，使
+    「可比性指纹」的断言不成立，故摘要不落 ``stop_condition_expr.py``。
+
+    落本模块（与 ``ComparabilityFingerprint`` / ``compute_config_hash`` 同文件）：
+    模块已 import json（:4），零新增 import 边，且摘要正是指纹的 ``stop_condition``
+    维度。函数体置于 ``compute_config_hash`` 之后，避免上移其行号锚点。
+    """
+    if not tree:
+        return ''
+    return json.dumps(tree, sort_keys=True, separators=(',', ':'), ensure_ascii=False)

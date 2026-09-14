@@ -7,6 +7,8 @@
 动态参数（target_specs, initial_resources）通过任务参数传入。
 """
 
+from __future__ import annotations   # P58（ISSUE-303）：dataclass 字段注解延迟求值——milestone_defs: List[MilestoneDef] 免模块导入即 NameError
+
 import fnmatch
 import logging
 import random
@@ -15,7 +17,10 @@ from typing import Dict, Any, Optional, Callable
 from multiprocessing import Pool as MPPool
 from dataclasses import dataclass, field as dc_field
 
-from gacha_simulator.core.stop_condition import AllPoolsEndCondition
+from gacha_simulator.core.config_store import ConfigError   # P77：from_dict 类型守卫异常通道
+from gacha_simulator.core.stop_condition import (
+    AllPoolsEndCondition, CompositeStopCondition, create_stop_condition,
+)
 from gacha_simulator.core.strategy import (
     create_strategy,
 )
@@ -26,11 +31,15 @@ logger = logging.getLogger(__name__)
 class BatchResult:
     """批量模拟结果容器——向后兼容 list 接口，同时携带 worker 提取数据。"""
 
-    __slots__ = ('results', 'extraction')
+    __slots__ = ('results', 'extraction', 'warnings')
 
-    def __init__(self, results, extraction=None):
+    def __init__(self, results, extraction=None, warnings=None):
         self.results = results if results is not None else []
         self.extraction = extraction
+        # P79（阶段 3）：零进度 / 迭代预算耗尽告警的父进程载体。槽与构造签名必须
+        # 同批改——只加槽不改 __init__ 则新槽永不被赋值、__slots__ 下访问即
+        # AttributeError。
+        self.warnings = warnings if warnings is not None else []
 
     def __getitem__(self, i):
         return self.results[i]
@@ -69,6 +78,24 @@ class SimulationEnv:
     stop_condition: Any = None
     return_compact: bool = True
     card_overflow_map: Dict[str, list] = dc_field(default_factory=dict)  # ← P63
+    # P61（Ph6，ISSUE-011）：Banner 构造定义——from_config_store 填充 List[Banner]
+    # （与 pools 同对象）。_run_single 每次从它（或 pools）深拷贝重建，隔离 Banner
+    # 运行时状态跨模拟泄漏（ISSUE-312）。带默认值保证跨进程 pickle 兼容。
+    banner_defs: list = dc_field(default_factory=list)
+    # P58（M4b，P61 落点 #1 纠正——2026-08-05）：里程碑配置定义（List[MilestoneDef]），
+    # 非 MilestoneEngine 实例——_run_single 内按 per-simulation seed 延迟构造，保证
+    # 计数器/RNG 状态每次模拟独立、固定种子可复现。P61 落地的 milestone_engine 字段
+    # （传实例）保留 None 兜底不激活（见下方 milestone_engine 字段）。
+    milestone_defs: list = dc_field(default_factory=list)
+    # P61（Ph0 / ISSUE-329）：P58 里程碑 engine 跨进程来源契约——装配层（_run_single）
+    # 构造 GachaService 前从本字段取出注入 register_milestone_engine（priority=0 订阅）。
+    # ⚠ P58 纠正（P61 落点 #1）：本字段保留 None 兜底【不激活】——配置由 milestone_defs 承接。
+    # 装配块条件由 `env.milestone_engine is not None` 改写为 `env.milestone_defs`（M4b）。
+    milestone_engine: Any = None
+    # P77：资源生命周期规则（List[ResourceLifecycle]），from_config_store 按 enabled
+    # 门控填充（关闭时为空列表，GachaService 不建到期索引）；_run_single 透传至
+    # GachaService。带默认值保证跨进程 pickle 兼容。
+    resource_lifecycle_rules: list = dc_field(default_factory=list)
 
 
 def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None, rarity_rank=None):
@@ -134,28 +161,35 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
         if rarity_rank is None:
             rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
 
-        # 构建 PoolPitySpec
+        # P61（Ph6 / ISSUE-332）：遍历对象重写——pools 承载 List[Banner]，
+        # for b in pools: for pool_key, p in b.pools.items(): 双重展开。
+        # pool_specs 键全限定 {banner_id}.{pool_key}（多池展开自然承接 {pid}.main 键，
+        # 与 PityDef.pools 全限定 fnmatch 同口径，ISSUE-005/010/011）。
         pool_specs = {}
-        for pool in pools:
-            spec_pity_names = []
-            for pdef in pity_defs_list:
-                pools_ptn = pdef.pools
-                if pools_ptn == ('*',) or any(fnmatch.fnmatch(pool.id, ptn) for ptn in pools_ptn):
-                    spec_pity_names.append(pdef.name)
+        for b in pools:
+            for pool_key, p in b.pools.items():
+                qualified_key = f"{b.id}.{pool_key}"
+                spec_pity_names = []
+                for pdef in pity_defs_list:
+                    pools_ptn = pdef.pools
+                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
+                        spec_pity_names.append(pdef.name)
 
-            featured = pool_featured_map.get(pool.id, set()) if pool_featured_map else set()
-            ssr = pool_ssr_map.get(pool.id, set()) if pool_ssr_map else set()
-            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(pool)
-            pool_specs[pool.id] = PoolPitySpec(
-                pity_names=spec_pity_names,
-                featured_ids=featured,
-                ssr_ids=ssr,
-                scope_cards=scope_cards,
-                featured_cards=featured_cards,
-                scope_slots=scope_slots,
-                featured_slots=featured_slots,
-                card_to_slot=card_to_slot,
-            )
+                featured = (pool_featured_map.get(qualified_key) or pool_featured_map.get(pool_key, set())
+                            if pool_featured_map else set())
+                ssr = (pool_ssr_map.get(qualified_key) or pool_ssr_map.get(pool_key, set())
+                       if pool_ssr_map else set())
+                scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(p)
+                pool_specs[qualified_key] = PoolPitySpec(
+                    pity_names=spec_pity_names,
+                    featured_ids=featured,
+                    ssr_ids=ssr,
+                    scope_cards=scope_cards,
+                    featured_cards=featured_cards,
+                    scope_slots=scope_slots,
+                    featured_slots=featured_slots,
+                    card_to_slot=card_to_slot,
+                )
 
         return PityEngine(pool_specs, pity_defs_list, state=state, rarity_rank=rarity_rank)
 
@@ -165,6 +199,26 @@ _wk_env: Optional[SimulationEnv] = None
 _wk_target_set = None
 _wk_extractor = None
 _wk_return_compact = True
+
+
+def _build_target_set(card_defs, target_specs):
+    """构建 TargetCardSet（单/多进程共用）。
+
+    P61（Ph6 / ISSUE-315 / BLOCK-1 修复）：TargetCard.pool_ids 一律取 banner 级段——
+    card_defs.pools 是全限定键 {banner_id}.{pool_id}（无段则原样保留），与 4 策略
+    _pool_needs_target 的 banner.id 匹配口径恒同。此前主进程路径与 _wk_init 各自内联
+    构建导致口径漂移（单进程 vs 多进程策略 miss），统一收敛到此公共函数。
+    """
+    from gacha_simulator.core import TargetCard, TargetCardSet
+    if not target_specs:
+        return TargetCardSet([])
+    card_def_map = {c['card_id']: c for c in card_defs} if card_defs else {}
+    targets = []
+    for card_id, qty in target_specs.items():
+        raw_pools = card_def_map.get(card_id, {}).get('pools', [])
+        pools = [k.split('.')[0] if '.' in k else k for k in raw_pools]
+        targets.append(TargetCard(card_id=card_id, pool_ids=pools, quantity_needed=qty))
+    return TargetCardSet(targets)
 
 
 def _wk_init(env: SimulationEnv, target_specs: Dict[str, int] = None):
@@ -180,17 +234,9 @@ def _wk_init(env: SimulationEnv, target_specs: Dict[str, int] = None):
     # failed: 页面文件太小)。懒加载在 _run_single 首次调用时触发，
     # 各 worker 错峰加载，内存峰值更低。
 
-    if target_specs:
-        from gacha_simulator.core import TargetCard, TargetCardSet
-        card_def_map = {c['card_id']: c for c in env.card_defs} if env.card_defs else {}
-        targets = []
-        for card_id, qty in target_specs.items():
-            pools = card_def_map.get(card_id, {}).get('pools', [])
-            targets.append(TargetCard(card_id=card_id, pool_ids=pools, quantity_needed=qty))
-        _wk_target_set = TargetCardSet(targets)
-    else:
-        from gacha_simulator.core import TargetCardSet
-        _wk_target_set = TargetCardSet([])
+    # P61（Ph6 / ISSUE-315）：TargetCard.pool_ids 一律为 banner 级键，与
+    # run_batch_parallel 主进程共用 _build_target_set，避免口径漂移（BLOCK-1）
+    _wk_target_set = _build_target_set(env.card_defs, target_specs)
 
     # 预构建 WorkerLocalExtractor（每个 worker 一份，并行提取）
     from gacha_simulator.core.streaming import WorkerLocalExtractor
@@ -210,12 +256,20 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
     """执行一次模拟。env 和 target_set 通过参数显式传入，不依赖全局变量。"""
     from gacha_simulator.core import GachaState
     from gacha_simulator.service import GachaService
+    from gacha_simulator.core.notifier import Notifier
 
     random.seed(seed)
 
     strategy = create_strategy(env.strategy_key, env.strategy_params)
+    # P79 引擎硬边界（5.2）：用户条件恒与硬边界取 any——用户条件可满足时按其收口；
+    # 不可满足时（时间冻结 / 时间越界 / 目标不可达）由硬边界在 env.end_time 兜底，
+    # 保证任何「策略 × 停止条件」组合都在时间线终点结束。
+    # env.stop_condition 为 None 时退化为单一硬边界，与接线前逐字段等价。
+    # 注意 from_dict 路径（worst_impact.py）自建条件并传同值 end_time，硬边界与
+    # 之一致，冗余但无害。
     if env.stop_condition is not None:
-        stop_cond = env.stop_condition
+        stop_cond = CompositeStopCondition(
+            [env.stop_condition, AllPoolsEndCondition(env.end_time)], mode='any')
     else:
         stop_cond = AllPoolsEndCondition(env.end_time)
 
@@ -225,8 +279,41 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
         # P60：from_dict 已内置旧格式自动升级（检测 'counters' 键自动迁移）
         pity_state = PityState.from_dict(env.pity_state_init)
 
+    # P61 Ph0：装配层创建共享 Notifier 实例，与模拟循环 emit 同一实例（§3.5「Notifier 装配位置」）
+    notifier = Notifier()
+    # P58（M4b，P61 落点 #1/#2/#3 纠正——2026-08-05）：装配优先——priority=0 订阅先于
+    # GachaService 的 P61 priority=1 转换订阅注册（§5.2 装配顺序）。
+    # - 落点 #1：配置经 env.milestone_defs（非 P61 的 milestone_engine 实例字段）——
+    #   per-simulation seed 延迟构造，计数器/RNG 状态每次模拟独立、固定种子可复现；
+    # - 落点 #2：register_milestone_engine 定义于 core/milestone.py，装配块 import 顺手指向它；
+    # - 落点 #3：闭包捕获（非模块级全局——Windows spawn 下 worker 模块全局重置为 None）。
+    # - 独立审查发现 2（2026-08-05）：engine 须【两处接线】——注册订阅 + 传入 GachaService
+    #   （M4a 策略查询用），否则 build_strategy_context 传 self.milestone_engine 恒为 None、
+    #   策略层里程碑查询静默退化（结算仍走订阅路径，不崩溃）。
+    _milestone_engine = None
+    if env.milestone_defs:
+        from gacha_simulator.core.milestone import MilestoneEngine, register_milestone_engine
+        _milestone_engine = MilestoneEngine(env.milestone_defs, seed=seed)
+        # initial_counts 由 env.card_defs 推导（与 GachaService.run_simulation 内同源）
+        _ms_initial = {}
+        for _cd in env.card_defs:
+            _ic = _cd.get('initial_count', 0) if isinstance(_cd, dict) else getattr(_cd, 'initial_count', 0)
+            if _ic > 0:
+                _cid = _cd['card_id'] if isinstance(_cd, dict) else _cd.card_id
+                _ms_initial[_cid] = _ic
+        register_milestone_engine(
+            notifier, _milestone_engine,
+            card_overflow_map=env.card_overflow_map,
+            initial_counts=_ms_initial,
+        )
+    # P61（Ph6 / ISSUE-312，阻塞）：Banner 运行时状态跨模拟隔离——env.pools 承载
+    # List[Banner]，直接传入则 draw/_check_transitions 修改的 _pool_draws/_exhausted/
+    # _active_pool_id 等泄漏到下次模拟（固定种子不可复现）。每次构造 GachaService 前
+    # 深拷贝（或从 banner_defs 重建），Pool 纯数据可安全 deepcopy。
+    import copy
+    banners = copy.deepcopy(env.banner_defs or env.pools)
     service = GachaService(
-        env.pools, strategy, stop_cond, target_set,
+        banners, strategy, stop_cond, target_set,
         schedule_manager=env.schedule_mgr,
         pity_engine=env.pity_engine,
         resource_gain=env.resource_gain,
@@ -234,6 +321,10 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
         ssr_ids=env.ssr_ids,
         card_defs=env.card_defs,
         card_overflow_map=env.card_overflow_map,
+        notifier=notifier,
+        milestone_engine=_milestone_engine,   # P58（M4b）：策略层查询 + M4a 传参（None 时无里程碑行为）
+        # P77：资源生命周期规则（env 侧已按 enabled 门控；规则为纯数据，浅拷贝列表隔离）
+        resource_lifecycle_rules=list(env.resource_lifecycle_rules or []),
     )
     state = GachaState(resources=dict(initial_resources))
     return service.run_simulation_compact(state)
@@ -242,18 +333,26 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
 def _wk_run_single(args):
     """子进程 worker 入口——模拟 + 本地提取。
 
-    return_compact=True（默认）时返回 (compact, extraction) 元组以兼容 on_result 回调。
-    return_compact=False 时只返回 extraction，节省 pickle 传输开销。
+    统一返回 **三元组** ``(compact_or_None, extraction, warnings)``：``return_compact``
+    只决定 compact 位是否为 None，**不再决定是否携带告警**。P79（阶段 3）：GUI 抽卡
+    面板与 WebUI 在跑主模拟前置 ``env.return_compact = False`` 且默认 ``max_workers=4``，
+    若告警随 compact 一并丢弃（原实现 False 分支只 ``return extraction``），子进程写进
+    ``CompactResult.warnings`` 的告警从未跨进程回传，而测试以 ``max_workers=1`` 走进程内
+    路径恰好全绿。
+
+    ⚠ 四条 return 的 arity 必须一致为 3：只改末条时两条早退返回的 ``None`` / 2 元组会在
+    父进程的新守卫（``len(result) == 3``）下全部落入 else 分支被整体当作 ext_pkt，
+    compact 与 warnings 双丢且无告警。
     """
     seed, initial_resources = args
     try:
         compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
     except Exception:
         traceback.print_exc()
-        return (None, None) if _wk_return_compact else None
+        return (None, None, [])
 
     if compact is None:
-        return (None, None) if _wk_return_compact else None
+        return (None, None, [])
 
     extraction = None
     if _wk_extractor is not None:
@@ -262,9 +361,10 @@ def _wk_run_single(args):
         except Exception:
             traceback.print_exc()
 
+    warnings = list(getattr(compact, 'warnings', []) or [])
     if _wk_return_compact:
-        return (compact, extraction)
-    return extraction
+        return (compact, extraction, warnings)
+    return (None, extraction, warnings)
 
 
 # --- 公共批量模拟接口 ---
@@ -292,17 +392,12 @@ def run_batch_parallel(
         env.strategy_params = strategy_params
 
     # 构建 TargetCardSet（单/多进程共用）
-    if target_specs:
-        from gacha_simulator.core import TargetCard, TargetCardSet
-        card_def_map = {c['card_id']: c for c in env.card_defs} if env.card_defs else {}
-        targets = []
-        for card_id, qty in target_specs.items():
-            pools = card_def_map.get(card_id, {}).get('pools', [])
-            targets.append(TargetCard(card_id=card_id, pool_ids=pools, quantity_needed=qty))
-        target_set = TargetCardSet(targets)
-    else:
-        from gacha_simulator.core import TargetCardSet
-        target_set = TargetCardSet([])
+    target_set = _build_target_set(env.card_defs, target_specs)
+
+    # P79（阶段 3）：三条执行路径（进程内 / MPPool / mp_failed 兜底）各自的告警
+    # 统一累加到此，在各自的终点写入 BatchResult.warnings——兜底路径正是 MPPool
+    # 异常时 GUI / WebUI 主模拟实际走的路径，漏汇总即静默丢失告警。
+    warnings_acc: list = []
 
     if max_workers <= 1:
         # 单进程路径：直接调用 _run_single，同时本地提取
@@ -334,6 +429,7 @@ def run_batch_parallel(
                     pass
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
+                warnings_acc.extend(getattr(result, 'warnings', []) or [])
             if on_result is not None:
                 if result is not None:
                     on_result(result)
@@ -352,7 +448,8 @@ def run_batch_parallel(
             extraction_packets,
             heatmap_config={'n_heatmap_bins': getattr(env, 'n_heatmap_bins', 50), 'max_keep': 200},
         ) if extraction_packets else None
-        return BatchResult(results if on_result is None else [], merged_ext)
+        return BatchResult(results if on_result is None else [], merged_ext,
+                           warnings=warnings_acc)
 
     seeds = [seed + i if seed >= 0 else random.randint(0, 999999) for i in range(num_simulations)]
     tasks = [(s, initial_resources) for s in seeds]
@@ -377,14 +474,17 @@ def run_batch_parallel(
                 extraction_packets = []
                 n_failed = 0
                 for i, result in enumerate(mp_pool.imap_unordered(_wk_run_single, tasks, chunksize=chunksize)):
-                    # 解包 worker 返回值：
-                    # - tuple (compact, extraction)：return_compact=True 路径（兼容 on_result 回调）
-                    # - 非 tuple：return_compact=False 路径，直接是 extraction_packet
-                    if isinstance(result, tuple) and len(result) == 2:
-                        compact, ext_pkt = result
+                    # 解包 worker 返回值：统一为三元组
+                    # (compact_or_None, extraction, warnings)——return_compact 只决定
+                    # compact 位是否为 None。守卫长度须随三元组由 2 改为 3。
+                    if isinstance(result, tuple) and len(result) == 3:
+                        compact, ext_pkt, warns = result
                     else:
                         compact = None
                         ext_pkt = result
+                        warns = []
+                    if warns:
+                        warnings_acc.extend(warns)
 
                     if on_result is not None:
                         if compact is not None:
@@ -455,6 +555,7 @@ def run_batch_parallel(
                     results.append(compact)
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
+                warnings_acc.extend(getattr(compact, 'warnings', []) or [])
             else:
                 n_failed += 1
             if progress_callback:
@@ -473,99 +574,108 @@ def run_batch_parallel(
         )
 
     raw_results = results if on_result is None else []
-    return BatchResult(raw_results, merged_extraction)
+    # 统一终点：兼作 MPPool 与 mp_failed 兜底的汇合点
+    return BatchResult(raw_results, merged_extraction, warnings=warnings_acc)
 
 
 class SimulationEnvBuilder:
-    @staticmethod
-    def _infer_pool_type(pool_id: str, pool_type: str = '') -> str:
-        """根据 pool_id 推断池子类型：角色/武器/兑换/资源。"""
-        if pool_type and pool_type in ('角色', '武器', '兑换', '资源'):
-            return pool_type
-        pid = pool_id.lower()
-        if '武器' in pid or 'weapon' in pid or pid.startswith('pool_w'):
-            return '武器'
-        if '兑换' in pid or 'exchange' in pid or pid.startswith('pool_e'):
-            return '兑换'
-        if '资源' in pid or 'resource' in pid:
-            return '资源'
-        return pool_type or '角色'
-
     @staticmethod
     def from_config_store(config_store) -> SimulationEnv:
         from gacha_simulator.core.pool import Pool, Reward, parse_cost_string
         from gacha_simulator.core.schedule import PoolScheduleManager, PoolSchedule
 
-        DAY = 86400
-        pool_entries = config_store.pools
+        # P79 4a2：原局部 DAY = 86400 随内联 end_time 表达式一并移除——
+        # 终点公式已提为 core 层 resolve_banner_end_time（其内自带 DAY）
+        banner_entries = config_store.banner.banners
         schedules = []
-        pools = []
+        banners = []
         pool_featured_map = {}
         pool_ssr_map = {}
 
-        for pe in pool_entries:
-            pid = pe.pool_id
-            start_day = pe.start_day or 0
-            end_day = (pe.end_day if pe.end_day is not None and pe.end_day > start_day
-                       else (start_day + 21))
-            if pe.end_day is None:
-                logger.warning("Pool '%s' end_day is None, defaulting to start_day+21=%d",
-                               pid, start_day + 21)
+        # P61（Ph6）：from_config_store 改从 store.banner 解析（ISSUE-001/011）。
+        # 每个 BannerEntry → 运行时 Banner（Pool.id 为 pools 字典键 'main'/'free_10pull'）；
+        # 全限定键 {banner_id}.{pool_id} 供保底绑定/统计/卡池回填消费（ISSUE-010/011）。
+        for be in banner_entries:
+            inner_pools = {}
+            for bp in be.pools:
+                rewards = []
+                # P61（Ph6 / ISSUE-006）：featured_ids 由 rewards 的 featured=True 标志聚合
+                featured_ids = {r['card_id'] for r in bp.rewards if r.get('featured')}
+                ssr_ids = set()
+                for r in bp.rewards:
+                    cid = r.get('card_id', '')
+                    # P61（Ph6 / ISSUE-007）：Reward.extra_info['rarity'] 小写回填——
+                    # match='rarity' 的 _check_transitions 唯一数据源（漏注入则 KeyError/恒空）
+                    rwd = Reward(
+                        id=cid, name=cid,
+                        resources_gained=dict(r.get('resources_gained', {}) or {}),
+                        extra_info={'rarity': str(r.get('rarity', 'r')).lower(),
+                                    'featured': r.get('featured', False)},
+                    )
+                    rewards.append((rwd, r.get('probability', 0) / 100.0))
+                    if str(r.get('rarity', '')).upper() == 'SSR' and cid != '_no_card':
+                        ssr_ids.add(cid)
 
-            rewards = []
-            # P60：featured_ids 直接从 PoolEntry.featured_card_ids 读取——覆盖全部 featured 卡
-            featured_ids = set(pe.featured_card_ids)
-            ssr_ids = set()
-            for de in getattr(pe, 'distribution', []):
-                rg = dict(getattr(de, 'resources_gained', {}) or {})
-                rwd = Reward(id=de.card_id, name=getattr(de, 'card_id', ''),
-                             resources_gained=rg,
-                             extra_info={'rarity': de.rarity.lower(),
-                                        'featured': de.featured})
-                rewards.append((rwd, de.probability / 100.0))
-                if de.rarity.upper() == 'SSR' and de.card_id != '_no_card':
-                    ssr_ids.add(de.card_id)
+                if not featured_ids and ssr_ids:
+                    featured_ids = set(ssr_ids)
 
-            if not ssr_ids:
-                logger.warning(
-                    "Pool '%s' has no SSR rewards — "
-                    "SSR pity reset will never trigger for this pool",
-                    pid,
+                qualified_key = f"{be.id}.{bp.id}"
+                pool_featured_map[qualified_key] = featured_ids
+                pool_ssr_map[qualified_key] = ssr_ids
+
+                cost_str = bp.cost or 'draw_resource:160'
+                parsed_cost = parse_cost_string(cost_str) if cost_str else [{'draw_resource': 160}]
+                pool = Pool(
+                    id=bp.id,
+                    name=bp.id,
+                    cost=parsed_cost,
+                    rewards=rewards,
+                    excludes_all_pity=bp.excludes_all_pity,
+                    max_draws=bp.max_draws,
+                    # P61（Ph6 / ISSUE-313）：exchange_card_id 从 BannerPoolEntry 透传——
+                    # smart/pity_reserve/pool_quota/stop_on_target 4 策略以
+                    # pool.is_exchange and pool.exchange_card_id == t.card_id 定位兑换池，
+                    # 漏透传则 banner 模式兑换池匹配静默失效
+                    exchange_card_id=bp.exchange_card_id,
+                    batch_size=bp.batch_size,
+                    epitomizable_cards=list(bp.epitomizable_cards),
                 )
-                # 不注入假 ID——让 ssr_ids 保持空集合
-                # featured_ids 也保持空，无 featured 可回退时不应假装有
-            if not featured_ids and ssr_ids:
-                featured_ids = set(ssr_ids)
+                inner_pools[bp.id] = pool
 
-            pool_featured_map[pid] = featured_ids
-            pool_ssr_map[pid] = ssr_ids
-
-            cost_str = getattr(pe, 'cost', 'draw_resource:160')
-            parsed_cost = parse_cost_string(cost_str) if cost_str else [{'draw_resource': 160}]
-            exchange_cid = getattr(pe, 'exchange_card_id', None)
-            ptype = getattr(pe, 'pool_type', '') or SimulationEnvBuilder._infer_pool_type(pid, '')
-            pool = Pool(
-                id=pid,
-                name=getattr(pe, 'name', pid),
-                cost=parsed_cost,
-                rewards=rewards,
-                available_from=start_day * DAY,
-                available_until=end_day * DAY,
-                is_exchange=bool(exchange_cid),
-                exchange_card_id=exchange_cid,
-                pool_type=ptype,
-                batch_size=getattr(pe, 'batch_size', 1),
-                epitomizable_cards=getattr(pe, 'epitomizable_cards', []),
+            # P61（Ph6）：Banner 级时间窗口直接透传（TOML 解析边界已 *DAY 为秒）；
+            # lifecycle 规则经 TransitionRule 承载；max_draws 透传
+            from gacha_simulator.core.banner import Banner, TransitionRule
+            banner = Banner(
+                id=be.id,
+                name=be.name,
+                pools=inner_pools,
+                lifecycle=[
+                    TransitionRule(
+                        condition=lc.condition,
+                        pool=lc.pool,
+                        at_value=lc.at,
+                        match=lc.match,
+                        action=lc.action,
+                        target=lc.target,
+                    )
+                    for lc in be.lifecycle
+                ],
+                max_draws=be.max_draws,
+                available_from=be.available_from,
+                available_until=be.available_until,
             )
-            pools.append(pool)
+            banners.append(banner)
             schedules.append(PoolSchedule(
-                pool_id=pid,
-                available_from=start_day * DAY,
-                available_until=end_day * DAY,
+                pool_id=be.id,
+                available_from=be.available_from,
+                available_until=be.available_until,
             ))
 
         schedule_mgr = PoolScheduleManager(schedules)
-        end_time = max(s.available_until for s in schedules) if schedules else 0
+        # P79 5.5：时间线终点改由 core 层单一实现点供给（原为内嵌局部表达式）。
+        # 该公式同时服务 GUI 只读提示与解析期校验，复制到别处即形成第二真相源。
+        from gacha_simulator.core.config_store import resolve_banner_end_time
+        end_time = resolve_banner_end_time(schedules)
 
         pity_cfg_dict = {'enabled': True, 'pities': [], 'counter_init': {}}
         pc = config_store.pity
@@ -607,7 +717,7 @@ class SimulationEnvBuilder:
 
         rarity_rank = {k.lower(): v for k, v in config_store.rarity_rank.items()}
         pity_engine = _build_pity_engine_from_gui(
-            pity_cfg_dict, pools, pool_featured_map, pool_ssr_map, {},
+            pity_cfg_dict, banners, pool_featured_map, pool_ssr_map, {},
             rarity_rank=rarity_rank)
 
         initial_resources = {}
@@ -623,23 +733,16 @@ class SimulationEnvBuilder:
 
         resource_gain = SimulationEnvBuilder._build_resource_gain(config_store, end_time)
 
-        counter_init_cfg = pity_cfg_dict.get('counter_init', 0)
+        # P75（阶段 3）：无条件产出完整初始状态快照——engine 构造完成后立即取快照，
+        # 此时 _state 为 _build_pity_state_init 结果（含 counter_init / guaranteed_init /
+        # fate_points_init / selected_card_init + behaviors 构造期写入的 _active=True）。
+        # 纯重定向后每模拟 from_dict 重建的 B 需含全部初始态（ISSUE-106），
+        # 否则 _active 读默认 False、计数型保底永不触发。
         pity_state_init = None
-        init_counters = {}
-        if isinstance(counter_init_cfg, int) and counter_init_cfg > 0 and pity_engine:
-            for cname in pity_engine.pity_defs:
-                init_counters[cname] = counter_init_cfg
-        elif isinstance(counter_init_cfg, dict) and pity_engine:
-            for k, v in counter_init_cfg.items():
-                if v > 0 and k in pity_engine.pity_defs:
-                    init_counters[k] = v
-        if init_counters:
-            # P60 方案 A——构造初始 PityState 后序列化，与消费方 from_dict 对称
-            from gacha_simulator.core.pity import PityState as _PS
-            ps_init = _PS()
-            for cname, cval in init_counters.items():
-                ps_init.set(cname, 'counter', cval)
-            pity_state_init = ps_init.to_dict()
+        if pity_engine is not None:
+            _ps_snapshot = getattr(pity_engine, '_state', None)
+            if _ps_snapshot is not None:
+                pity_state_init = _ps_snapshot.to_dict()
 
         # 构建卡牌列表，pools 从池子分布实时推导（非从 store.card_defs 复制）
         # —— 这样用户在 GUI 中修改池子绑定后，pools 自动反映最新状态
@@ -653,13 +756,16 @@ class SimulationEnvBuilder:
                 'initial_count': getattr(cd, 'initial_count', 0),
             })
         card_index = {cd['card_id']: i for i, cd in enumerate(card_defs)}
-        for pe in pool_entries:
-            for de in getattr(pe, 'distribution', []):
-                cid = de.card_id
-                if cid in card_index and cid != '_no_card':
-                    idx = card_index[cid]
-                    if pe.pool_id not in card_defs[idx]['pools']:
-                        card_defs[idx]['pools'].append(pe.pool_id)
+        # P61（Ph6）：pools 从 banner 池实时推导（全限定键 {banner_id}.{pool_id} 入 card_defs.pools）
+        for be in banner_entries:
+            for bp in be.pools:
+                qkey = f"{be.id}.{bp.id}"
+                for r in bp.rewards:
+                    cid = r.get('card_id', '')
+                    if cid in card_index and cid != '_no_card':
+                        idx = card_index[cid]
+                        if qkey not in card_defs[idx]['pools']:
+                            card_defs[idx]['pools'].append(qkey)
 
         target_ids = set()
         for tc in getattr(config_store, 'target_cards', []):
@@ -673,7 +779,9 @@ class SimulationEnvBuilder:
             for pid, ssr_set in pool_ssr_map.items():
                 ssr_ids.update(ssr_set)
 
-        all_drawable_ids = [r.id for p in pools for r, _ in p.rewards]
+        # P61（Ph6 / AUDIT-BREAK-5 ①）：all_drawable_ids 遍历 banner 池展开
+        all_drawable_ids = [r.id for b in banners for p in b.pools.values()
+                            for r, _ in p.rewards]
         pool_end_times = {s.pool_id: s.available_until for s in schedules}
 
         from gacha_simulator.core.gdr import GDRContext
@@ -707,8 +815,32 @@ class SimulationEnvBuilder:
         strategy_key = getattr(config_store, 'strategy_key', 'smart') or 'smart'
         strategy_params = dict(getattr(config_store, 'strategy_params', {}) or {})
 
+        # P58（M4b）：里程碑配置提取——enabled 总闸门控（REVIEW-R1-FIX: ISSUE-302）。
+        # enabled=False 时 milestone_defs 为空列表——与 pity 路径 _build_pity_engine_from_gui 的
+        # enabled 语义对齐（『禁用=无效+保存即删除』闭环的 runtime 侧修复）。
+        from gacha_simulator.core.config_store import MilestoneConfig
+        _ms_cfg = getattr(config_store, 'milestone', MilestoneConfig())
+        _milestone_defs = list(_ms_cfg.milestones) if _ms_cfg.enabled else []
+
+        # P77：资源生命周期规则提取：enabled 总闸门控（关闭时透传空列表，GachaService
+        # 构造期不建到期索引、跳过到期检查）。深拷贝隔离跨模拟状态。
+        import copy as _copy
+        from gacha_simulator.core.resource_lifecycle import ResourceLifecycleConfig
+        _lc_cfg = getattr(config_store, 'resource_lifecycle', ResourceLifecycleConfig())
+        _lifecycle_rules = _copy.deepcopy(list(_lc_cfg.rules)) if _lc_cfg.enabled else []
+
+        # P79（缺陷 A 的另一半）：用户停止条件树 → 对象。字段 stop_condition 由
+        # 子任务 4a1 引入、TOML 填充由 4a3 引入，二者均晚于本项，故以 getattr
+        # 容忍字段缺失——硬取属性会使本项落地即对旧 ConfigStore 抛
+        # AttributeError。树为 None / 空树时 env.stop_condition 为 None，
+        # 由 _run_single 退化为单一硬边界（与接线前等价）。
+        # 注意：只改 _run_single 不生效——生产路径（CLI / GUI / WebUI）的
+        # env.stop_condition 恒为 None 的根因就在此处。
+        _stop_tree = getattr(config_store, 'stop_condition', None)
+        _stop_condition = create_stop_condition(_stop_tree) if _stop_tree else None
+
         return SimulationEnv(
-            pools=pools,
+            pools=banners,
             schedule_mgr=schedule_mgr,
             end_time=end_time,
             pity_engine=pity_engine,
@@ -724,11 +856,29 @@ class SimulationEnvBuilder:
             strategy_key=strategy_key,
             strategy_params=strategy_params,
             card_overflow_map=dict(getattr(config_store, 'card_overflow_map', {})),
+            # P61（Ph6 / ISSUE-011）：Banner 构造定义（与 pools 同对象，_run_single 深拷贝用）
+            banner_defs=banners,
+            # P58：里程碑配置——_run_single 内延迟构造 MilestoneEngine（enabled=False 时为空列表）
+            milestone_defs=_milestone_defs,
+            # P61 已落地的 milestone_engine 字段传 None（不激活）——由 milestone_defs 承接
+            milestone_engine=None,
+            # P77：资源生命周期规则（enabled 门控后）
+            resource_lifecycle_rules=_lifecycle_rules,
+            # P79：用户停止条件（条件树 → 对象；None 时由 _run_single 退化为硬边界）
+            stop_condition=_stop_condition,
         )
 
     @staticmethod
     def from_dict(config: dict) -> 'SimulationEnv':
         """从字典构造 SimulationEnv（供 worst_impact.py 等不使用 ConfigStore 的调用方使用）。"""
+        # P77：仅接受单一规范键 resource_lifecycle_rules（不回退顶层 resource_lifecycle，
+        # 该名与 ConfigStore.resource_lifecycle: ResourceLifecycleConfig 同名，回退分支可能
+        # 取到配置对象而非 List[ResourceLifecycle]，遍历期类型错误且与 TOML 嵌套路径混淆）
+        _lc = config.get('resource_lifecycle_rules', [])
+        if not isinstance(_lc, list):
+            raise ConfigError(
+                'resource_lifecycle_rules 须为 List[ResourceLifecycle]，'
+                f'当前为 {type(_lc).__name__}')
         return SimulationEnv(
             pools=config['pools'],
             schedule_mgr=config['schedule_mgr'],
@@ -743,6 +893,8 @@ class SimulationEnvBuilder:
             strategy_params=config.get('strategy_params', {}),
             stop_condition=config.get('stop_condition'),
             card_overflow_map=config.get('card_overflow_map', {}),
+            milestone_defs=config.get('milestone_defs', []),   # ← P58：worst_impact 等非 ConfigStore 调用方不丢失
+            resource_lifecycle_rules=_lc,                       # ← P77
         )
 
     @staticmethod

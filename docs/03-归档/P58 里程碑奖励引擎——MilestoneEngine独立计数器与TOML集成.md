@@ -1,11 +1,11 @@
-<!-- META: P58 | module:模拟服务层 | status:designing | last:2026-08-01 | depends:P60✅,P63✅,P61-Ph0(待) -->
+<!-- META: P58 | module:模拟服务层 | status:archived | last:2026-08-05 | depends:P60✅,P63✅,P61✅ -->
 <!-- ⚠ R2 审查编号冲突已按预见处理：本次 R2 审查问题列表实际编号为 ISSUE-310..314（全局唯一，与既有 R1 的
      REVIEW-R1-FIX: ISSUE-301..309 指代内容不重叠），修复标注统一用 REVIEW-R1-FIX: ISSUE-310..314 并附内容描述；
      如需彻底全局唯一前缀命名空间，仍须人工裁决 R2 前缀（如 REVIEW-R2-FIX）后全局替换。 -->
 
 # P58 累抽奖励引擎——独立 MilestoneEngine 实现
 
-> 日期：2026-06-19 | 更新：2026-07-29 | 状态：设计中（P63 已实施，接口已收敛）
+> 日期：2026-06-19 | 更新：2026-08-05 | 状态：**已实施（M1-M9 全部落地 + 2 轮核查闭环，964 passed）**——见「九、实施记录」
 > **2026-06-20 架构决策：** milestone 不作为保底 type 实现——独立 `MilestoneEngine` + `[[milestone]]` TOML 段。理由：milestone 不操作概率、不参与 PityEngine 管道、语义与「保底」（运气保护）正交。独立方案代码量不增反减（~97 vs ~110 行），且零侵入 PityEngine / BEHAVIOR_REGISTRY。
 > **2026-07-29 UI 审查修正：** ConfigPanel 右侧仅为全局 `preview_text` QLabel——无独立 TOML 预览区。Tab 命名「累抽奖励」（玩家社区有机术语，NGA/贴吧通用，语义精准：累计抽取→赠送）。P58 信号连接复用已有 `_update_preview()` 全局方法，仅在 `_do_update_preview()` 追加累抽摘要段。UI 整体方案确认：与保底编辑器统一模式（总闸→左列表右详情→底部按钮），随机卡采用摘要行+弹窗编辑（`RandomCardPoolDialog`，四列勾选/卡/稀有度/权重），权重为每卡独立列。
 
@@ -172,8 +172,9 @@ class MilestoneEngine:
           - collector.on_bonus(...)
 
         banner_id 用于 MilestoneDef.banner 级过滤（P61 后裸 pool_id 非全局唯一）：
-        P61 前（M4 inline）调用方传 ""（banner="" 匹配全部，M1-M8 行为）；
-        P61 后经 after_draw 事件传入真实 banner_id（M9）。
+        P61 前（M4 inline 过渡形态）调用方传 ""（banner="" 匹配全部）；
+        P61 后（已落地，2026-08-04 归档）经 after_draw 事件传入真实 banner_id（M9 装配）。
+        实施最终态以 M9 订阅装配为准——M4 inline 传 "" 只是实施过程中的过渡路径。
 
         _NO_CARD_ID（空抽）行为：计数器无条件递增——只要 gacha_service 调用了
         after_draw() 即视为一次有效抽数。空抽（交换池/概率归零场景下 pool.draw()
@@ -270,15 +271,24 @@ class MilestoneEngine:
 
 #### 3.2a SimulationEnvBuilder 构造点——完整返回语句修改 <!-- REVIEW-FIX-PREV: ISSUE-029 -->
 
-在 `SimulationEnvBuilder.from_config_store()` 的 `return SimulationEnv(...)` 语句（`batch_simulator.py` L710-727）中标明新增的 `milestone_defs` 参数位置。插入于现有 `card_overflow_map` 行之后、右括号之前：
+在 `SimulationEnvBuilder.from_config_store()` 的 `return SimulationEnv(...)` 语句（`batch_simulator.py` L763-783）中标明新增的 `milestone_defs` 参数位置。插入于现有 `card_overflow_map` 行之后、右括号之前：
 
 ```python
-# batch_simulator.py L710-727 —— SimulationEnvBuilder.from_config_store() 返回语句
+# batch_simulator.py L763-783 —— SimulationEnvBuilder.from_config_store() 返回语句
 # REVIEW-R1-FIX: ISSUE-302 —— 里程碑配置在 return 之前提取（避免在实参列表内赋值）：
 #   必须加 enabled 总闸门控——否则用户取消「启用累抽奖励」（apply_to_store 写 enabled=False、
 #   milestones 仍保留）后直接运行模拟，MilestoneEngine 仍被构造、里程碑照常触发，总闸运行时无任何效果。
 #   与 pity 路径 _build_pity_engine_from_gui（batch_simulator.py L87 `if not pity_config.get('enabled', True):
 #   return None`）的 enabled 语义对齐（两者组合成『禁用=无效+保存即删除』闭环时，此处为 runtime 侧修复）。
+# ⚠ 2026-08-05 P61 落地对齐：P61 已在 SimulationEnv 落地 `milestone_engine: Any = None` 字段
+#   （batch_simulator.py L79，传实例）。P58 纠正为「传 defs + _run_single 延迟构造」：
+#   from_config_store 提取 `milestone_defs`（enabled 门控），_run_single 内延迟构造。
+#   P61 的 `milestone_engine` 字段保留为 None 兜底（不激活），由 P58 M4b 的 `milestone_defs` 字段承接。
+# ⚠ 独立审查补（2026-08-05）：P61 已在 return 语句中 `card_overflow_map` 之后插入了 `banner_defs=banners`
+#   （实际 L780-781）——本伪代码按实际顺序排列，banner_defs 在前、P58 新增的 milestone_defs/milestone_engine 在后。
+#   同时注明 import：函数内需 `from gacha_simulator.core.config_store import MilestoneConfig`（MilestoneDef 见
+#   ISSUE-303 的 import 修正）——否则 `MilestoneConfig()` 兜底引用 NameError。
+from gacha_simulator.core.config_store import MilestoneConfig
 _ms_cfg = getattr(config_store, 'milestone', MilestoneConfig())
 _milestone_defs = list(_ms_cfg.milestones) if _ms_cfg.enabled else []
 return SimulationEnv(
@@ -298,8 +308,11 @@ return SimulationEnv(
     strategy_key=strategy_key,
     strategy_params=strategy_params,
     card_overflow_map=dict(getattr(config_store, 'card_overflow_map', {})),
+    banner_defs=banners,                 # P61 已落地（实际顺序：card_overflow_map → banner_defs）
     # 【P58 新增】里程碑配置——MilestoneEngine 在 _run_single 中延迟构造；enabled=False 时为空列表
     milestone_defs=_milestone_defs,
+    # ⚠ P61 已落地的 milestone_engine 字段传 None（不激活）——由 milestone_defs 承接
+    milestone_engine=None,
 )
 ```
 
@@ -431,7 +444,11 @@ bonus_reward = { resources = { endfield_next_voucher = 10 } }
 
 ```python
 # gacha_service.py —— 在 PityEngine.after_draw 之后、资源结算之前
-# 插入位置：正常溢出合并 (gacha_service.py L340) 之后、rg → resources (L341) 之前<!-- REVIEW-FIX-PREV: ISSUE-001 -->
+# 插入位置：正常溢出合并 (gacha_service.py L303，`rg[k] = rg.get(k, 0) + v`) 之后、
+#   rg → resources (L305-306) 之前<!-- REVIEW-FIX-PREV: ISSUE-001 -->
+# ⚠ 2026-08-05 P61 落地对齐：原注释引用的 L340/L341 为 P61 前行号，P61 落地后实际为
+#   L303（正常溢出合并）与 L305-306（rg → resources）——P61 重写了模拟循环结构（逐抽 emit、
+#   banner 路由等），行号整体前移。
 
 # ── 保底状态更新 ──
 if _pity_engine:
@@ -460,7 +477,7 @@ if reward.id != _NO_CARD_ID:
 # M4/M9 统一此形态，迁移行为等价。
 bonus_pending: list = []   # 暂存待 on_bonus 的 bonus（on_bonus 延迟至 on_draw 后）
 if _milestone_engine:
-    for entry in _milestone_engine.after_draw("", pool.id):   # P61 前 banner=""（全部生效）；M9 后传真实 banner_id
+    for entry in _milestone_engine.after_draw("", pool.id):   # M4 inline 过渡形态：P61 已落地（2026-08-04），M9 最终态经订阅传真实 banner_id（§3.5「P61 协作」）
         bonus = entry['bonus']
         milestone_res: dict = {}   # 归因资源累计（直接 + 溢出），随 bonus_events 记录
         # 直接资源——注入 resources（当抽末可用，不进 combined_gained）
@@ -495,7 +512,10 @@ for mname, cids, mres in bonus_pending:
         milestone_name=mname,
         card_ids=cids,
         resources=mres,               # 归因数据（直接 + 溢出）
-        pool_id=pool.id,              # ← per-pool 归因；M4（P61 前）裸 pool.id 与 draw_pool_ids 同键空间；M9 须换全限定 draw_pool_key（见 M9 段键空间约定）<!-- REVIEW-FIX-PREV: ISSUE-011 -->
+        pool_id=pool.id,              # ← per-pool 归因；M4 inline 过渡形态；M9 须换全限定 draw_pool_key（见 M9 段键空间约定）<!-- REVIEW-FIX-PREV: ISSUE-011 -->
+        # ⚠ 2026-08-05 P61 落地对齐：P61 落地后 draw_pool_ids 已是全限定 {banner_id}.{pool_id} 键，
+        #   M4 inline 的 `pool.id`（Banner 内裸池 id，如 'main'）与其键空间分裂——M9 最终态经 emit 契约
+        #   pool_id（全限定 draw_pool_key）归因，与 draw_pool_ids 同键空间；M4 inline 仅是过渡形态、M9 删除
         real_time=real_time,          # 审计时间戳（不用于归因——抽卡不推进 real_time）
         draw_index=stats.total_draws - 1,   # 0-based 本抽索引（归因钥匙，唯一单调）
     )
@@ -524,50 +544,91 @@ before_draw → PityEngine.before_draw (不含 milestone)
   → collector.on_bonus(..., draw_index=stats.total_draws - 1)   # 源头合并资源（on_draw 后）
 ```
 
-M9 时代同时序但触发点变为 `notifier.emit("after_draw")` 订阅（结算后），资源注入语义「下一抽起可用」、统计经 bonus_events 事后归因——见下方「P61 协作（Notifier 集成）」段。
+M9 最终态（**P61 已落地，2026-08-04 归档**）同时序但触发点变为 `notifier.emit("after_draw")` 订阅（结算后，emit 已在 gacha_service.py L343-349 落地），资源注入语义「下一抽起可用」、统计经 bonus_events 事后归因——见下方「P61 协作（Notifier 集成）」段。
 
-**P61 协作（Notifier 集成）—— 2026-08-01 新增 / 2026-08-03 方案 C 修订：**
+**P61 协作（Notifier 集成）—— 2026-08-01 新增 / 2026-08-03 方案 C 修订 / 2026-08-05 P61 落地对齐：**
 
-P61 引入 Banner 抽象后，抽卡事件经 `core/notifier.py`（P61 Ph0 交付）分发。P58 通过订阅 `after_draw` 事件集成，替代 M4 的 inline 调用（资源注入逻辑与 M4 完全一致，约 15 行迁移）：
+**P61 已归档完成（2026-08-04，920 passed）——M9 依赖解除。** 以下是 P61 落地现状与 P58 计划的对账：
+
+- ✅ `core/notifier.py`（P61 Ph0）已交付：`subscribe(event_type, handler, priority)` / `emit(event_type, **data)`，priority 升序同步分发。notifier 由装配层（`batch_simulator._run_single`）创建并经 `GachaService.__init__(notifier=...)` 注入（None 时服务内 fallback 自建）。
+- ✅ `after_draw` emit 契约已在 `gacha_service.py` 落地（`gacha_service.py` L343-349）：`banner_id=banner.id` / `pool_id=draw_pool_key`（全限定 `{banner_id}.{pool_id}`，与 `draw_pool_ids` 同键空间）/ `card_id=reward.id` / `pity_triggered` / `draw_index=stats.total_draws`（1-based 当前抽数）/ `state` / `collector`——与 P58 方案 C 假设**完全一致**，无需扩展。
+- ✅ `build_strategy_context` 已有 `banners`/`all_banners` 参数（P61 Ph5）——P58 M4a 追加 `_milestone_engine` 参数时两者可共存，无冲突。
+- ⚠ **P61 落地的 P58 装配点需按 P58 设计纠正**（2026-08-05 人工裁决，P58 为准）：
+
+**P61 落点 #1（`SimulationEnv.milestone_engine: Any = None` 传实例）——纠正为 P58 的「传 defs + 延迟构造」：**
+
+P61 在 `SimulationEnv` 新增 `milestone_engine: Any = None` 字段（batch_simulator.py L79），并在 `_run_single` 装配点回调 `register_milestone_engine(notifier, env.milestone_engine)`（L261-269）。但此设计**传实例**——engine 在父进程构造一次、所有子进程共享同一实例的计数器/`_active`/`_rng` 状态，破坏 P58 §3.2「per-simulation seed 延迟构造」的可复现性（固定种子跨模拟不可复现、随机卡 RNG 跨模拟串扰）。**P58 以自身设计为准纠正：**
 
 ```python
-# gacha_service.py —— 模拟循环中（P61 已 emit，契约见 P61 §3.5）
-# P61 侧新增 draw_index=stats.total_draws（1-based 当前抽数）——方案 C 归因钥匙来源
-# REVIEW-R1-FIX: ISSUE-006 —— pool_id 必须用全限定 draw_pool_key（{banner_id}.{pool_id}），
-#   与 draw_pool_ids 同键空间（§3.5 键空间约定）——禁止用裸 pool.id/banner.active_pool_id
-notifier.emit("after_draw",
-              banner_id=banner.id, pool_id=draw_pool_key,   # ← 全限定 draw_pool_key
-              card_id=reward.id, pity_triggered=triggered,
-              draw_index=stats.total_draws,     # 方案 C 新增（P61 契约扩展点）
-              state=state, collector=collector)
-
-# P58 模块中 —— 订阅函数（资源注入逻辑与上方 M4 inline 完全一致）
-# REVIEW-R1-FIX: ISSUE-006 —— 不依赖模块级 _milestone_engine（Windows spawn 下重置为 None），
-#   从装配注入点读取；装配契约见下方「M9 装配契约」
-def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, draw_index, state, collector):
-    engine = _resolve_milestone_engine(state)   # ← 装配点注入（见下方）
-    if engine:
-        for entry in engine.after_draw(banner_id, pool_id):
-            # ... 消费 bonus（与 M4 代码相同：资源注入 state.resources + on_bonus）
-            # on_bonus 的 draw_index 参数 = draw_index - 1（0-based 本抽索引）...
-
-notifier.subscribe("after_draw", _on_after_draw, priority=0)   # P58 资源注入先于 P61 生命周期检查
+# batch_simulator.py `_run_single` 装配块（L261-269 现状，P58 落地时改写）
+# ⚠ P58 纠正 P61 落点 #1：装配对象由「实例」改为「defs 列表」——per-simulation 延迟构造
+#   （MilestoneEngine(defs, seed=seed)），保证计数器/RNG 状态每次模拟独立、固定种子可复现。
+#   P61 落地的 `env.milestone_engine` 字段（传实例）废弃，改由 P58 M4b 的 `env.milestone_defs` 字段承接；
+#   P61 落地的防御跳过块（`if env.milestone_engine is not None:`）同步改写为 `if env.milestone_defs:`。
+# ⚠ P58 纠正 P61 落点 #2（2026-08-05 用户裁决）：装配块本就要改写（落点 #1），import 行
+#   顺手改为指向 core/milestone.py——不新建 service/milestone.py 薄模块（register_milestone_engine
+#   放 core/milestone.py，notifier 作参数传入、core 无需 import 它，无循环依赖）。
+# ⚠ 独立审查补（2026-08-05）：engine 必须【两处接线】——既注册订阅（下方 register_milestone_engine），
+#   又传入 GachaService（`milestone_engine=_milestone_engine`），否则 M4a 的 build_strategy_context 传
+#   self.milestone_engine 恒为 None、策略层里程碑查询静默退化（结算仍走订阅路径，不崩溃）。
+from gacha_simulator.core.milestone import MilestoneEngine, register_milestone_engine
+_milestone_engine = MilestoneEngine(env.milestone_defs, seed=seed)        # per-simulation 延迟构造
+register_milestone_engine(notifier, _milestone_engine)                    # ① 订阅装配（闭包捕获，非模块级全局）
+# service = GachaService(..., milestone_engine=_milestone_engine, ...)    # ② 传入服务（M4a 策略查询用，见 M4 阶段）
 ```
 
-**REVIEW-R1-FIX: ISSUE-006——M9 装配契约（P61 协作）：**
-- **notifier 来源**：`core/notifier.py` 的 `notifier` 实例由 P61 装配层创建并经 `GachaService.__init__(notifier=...)` 注入（P61 §5.4 装配函数 `register_milestone_engine(gacha_service)`）。P58 **不自行创建** notifier 实例；M9 阶段在 P61 装配层注册订阅（`register_milestone_engine` 内调 `notifier.subscribe`），而非在 `_run_single` 循环内直接引用未定义的 `notifier` 变量。
-- **milestone_engine 来源**：**禁止模块级全局 `_milestone_engine`**——Windows spawn 模式下子进程模块级全局重置为 `None`（P61 ISSUE-329 同款问题）。装配点 = `_run_single` 内构造的 `MilestoneEngine(env.milestone_defs, seed=seed)` 实例，经闭包捕获传入 `_on_after_draw`（`functools.partial` 或工厂函数绑定），或存入 per-simulation 局部作用域。
-- **键空间**：emit 侧 `pool_id` 传全限定 `draw_pool_key`（`{banner_id}.{pool_id}`）——与 `draw_pool_ids` 同键空间（§3.5 键空间约定）。禁止 M9 迁移时漏换为裸 `pool.id`/`banner.active_pool_id`。
-- **M4 删除**：M9 落地时必须**显式删除 M4 inline 里程碑消费块**（`bonus_pending`/`_milestone_engine.after_draw("", pool.id)` 那一段）——否则同一抽双次 `after_draw`（inline + 事件订阅双触发）、计数器双递增、资源双重注入。M9 阶段表已列为显式子任务。
+**P61 落点 #2（装配块 import `gacha_simulator.service.milestone`）——P58 落地时直接改 import 路径（2026-08-05 用户裁决）：**
+
+P61 落地的装配块 import `gacha_simulator.service.milestone.register_milestone_engine`（service 目录，batch_simulator.py L263）——该模块不存在、import 失败被 try/except 兜住。**裁决（不新建 `service/milestone.py` 薄模块）：** P58 落点 #1 本就要求改写装配块（L261-269），import 行顺手改为 `from gacha_simulator.core.milestone import register_milestone_engine`——`register_milestone_engine` 直接放在 `core/milestone.py`（M3 核心模块）内。notifier 是作为参数传入的、core 模块不需要 import `Notifier`，无循环依赖；架构分层不受影响（milestone 引擎本就在 core 层）。P61 已提交的装配块改动量与原「补薄模块」方案相同（都改 L261-269），只是省了一个文件。
+
+**P61 落点 #3（P61 §5.4 伪代码 `global _milestone_engine`）——纠正为闭包捕获：**
+
+P61 归档 §5.4 的 `_on_after_draw`/`register_milestone_engine` 伪代码用模块级全局 `_milestone_engine`（`global _milestone_engine` 赋值 + handler 内读取）。这与 P58 §3.5 ISSUE-006 的「**禁止模块级全局**——Windows spawn 模式下子进程模块级全局重置为 None」裁决冲突。**以 P58 为准：** `register_milestone_engine` 内部用闭包捕获 engine（`functools.partial` 或工厂函数绑定），handler 通过闭包读 engine，不依赖任何模块级全局。
+
+```python
+# core/milestone.py —— P58 核心模块（M3）内同时定义 register_milestone_engine（P61 落点 #2/#3 纠正）
+"""里程碑引擎核心模块：MilestoneEngine + register_milestone_engine。
+
+（MilestoneDef / MilestoneConfig 定义于 config_store.py【M1】，本模块经
+`from .config_store import MilestoneDef, MilestoneConfig` 引用，不重复定义；
+`core/__init__.py`【M3】统一 re-export 三者——独立审查发现 3 措辞澄清，2026-08-05。）
+
+register_milestone_engine 直接放在本模块（不新建 service/milestone.py——2026-08-05 用户裁决，
+装配块本就要改写，import 行顺手指向本模块即可）。notifier 作参数传入，本模块无需 import Notifier，
+无循环依赖。本函数不做任何模块级全局赋值——Windows spawn 下 worker 模块全局重置为 None 的坑
+（P61 ISSUE-329 / P58 ISSUE-006）由此消除。
+"""
+
+def register_milestone_engine(notifier, engine):
+    """P61 Ph0 装配点回调——装配层在构造 GachaService 前调用（batch_simulator.py L261-269）。
+
+    engine 来源（P58 M4b）：`_run_single` 内 `MilestoneEngine(env.milestone_defs, seed=seed)`
+    延迟构造后传入。订阅落在与模拟循环 emit 相同的 Notifier 实例上。
+    """
+    def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, draw_index, state, collector):
+        for entry in engine.after_draw(banner_id, pool_id):
+            # ... 消费 bonus（与 §3.5 M4 inline 代码相同：资源注入 state.resources + on_bonus）
+            # on_bonus 的 draw_index 参数 = draw_index - 1（0-based 本抽索引）
+            ...
+    notifier.subscribe("after_draw", _on_after_draw, priority=0)
+```
+
+**P58 模块中 —— 订阅函数（资源注入逻辑与上方 M4 inline 完全一致）**
+
+**REVIEW-R1-FIX: ISSUE-006——M9 装配契约（P61 协作，2026-08-05 P61 落地对齐）：**
+- **notifier 来源**：`core/notifier.py` 的 notifier 实例由 P61 装配层创建并经 `GachaService.__init__(notifier=...)` 注入——**已落地**（batch_simulator.py `_run_single` L257 `notifier = Notifier()` 创建、L284 `notifier=notifier` 注入）。P58 的 `register_milestone_engine` 在 `_run_single` 装配点注册订阅（`_run_single` L261-269 现状回调——P58 落地时改写为传 `milestone_defs` + 延迟构造，见上方「P61 落点 #1」），而非在 `_run_single` 循环内直接引用未定义的 `notifier` 变量。
+- **milestone_engine 来源**：**禁止模块级全局 `_milestone_engine`**——Windows spawn 模式下子进程模块级全局重置为 `None`（P61 ISSUE-329 同款问题）。装配点 = `_run_single` 内构造的 `MilestoneEngine(env.milestone_defs, seed=seed)` 实例（per-simulation 延迟构造，P58 §3.2 设计），经闭包捕获传入 `register_milestone_engine`（`core/milestone.py` 的 `_on_after_draw` 闭包，见上方「P61 落点 #3」）。
+- **键空间**：emit 侧 `pool_id` 传全限定 `draw_pool_key`（`{banner_id}.{pool_id}`）——与 `draw_pool_ids` 同键空间（§3.5 键空间约定）。**已落地**（gacha_service.py L343-349 emit 契约）。
+- **M4 删除**：M9 落地时必须**显式删除 M4 inline 里程碑消费块**（`bonus_pending`/`_milestone_engine.after_draw("", pool.id)` 那一段）——否则同一抽双次 `after_draw`（inline + 事件订阅双触发）、计数器双递增、资源双重注入。M9 阶段表已列为显式子任务。**2026-08-05 P61 落地后注：** M4 inline 与 M9 订阅的「双路径」只在实施时并存——P58 实施落地后 M9 即到位（P61 已就绪），实施顺序上 M4→M4b→M9 的 inline 路径只是过渡形态，最终态以 M9 订阅装配为准。
 
 **关键变更：**
 - `after_draw` 事件契约：`banner_id / pool_id / card_id / pity_triggered + draw_index + state / collector`（P61 §3.5 定义；`draw_index` 为方案 C 扩展字段，2026-08-03）
-- **方案 C 归因钥匙**：`bonus_events` 存 `draw_index = 契约 draw_index - 1`（0-based 本抽索引），合并时直接索引 `draw_resources_gained`。**不用 real_time**——抽卡不推进 real_time（仅 WaitAction 推进，gacha_service L372-374），连续无等待抽卡共享同一 real_time 值，无法唯一定位一抽；`stats.total_draws` 每抽 +1（L37）单调唯一，`total_draws - 1` 即本抽在 `draw_resources_gained` 的索引（L107 每抽 append）
-- **`pool_id` 键空间约定（2026-08-03 语义审查）**：`on_bonus` 的 `pool_id` 恒与 `draw_pool_ids` **同键空间**——M4（P61 前）传裸 `pool.id`（此时 `draw_pool_ids` 亦裸键）；M9（P61 后）须传 emit 契约的 `draw_pool_key`（全限定 `{banner_id}.{pool_id}`，此时 `draw_pool_ids` 亦全限定，ISSUE-006）。禁止 M9 迁移时漏换为裸 `pool.id`——否则 `bonus_events['pool_id']`/`pool_card_counts` 与 `draw_pool_ids` 键空间分裂、per-pool GDR 错配
-- `MilestoneEngine.after_draw(banner_id, pool_id)` 签名含 banner_id：P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），用 banner_id 做 banner 级过滤（`MilestoneDef.banner`，精确匹配，空 = 全部）；P61 前调用方传 `""`
-- 订阅 priority=0：P58（资源注入）先于 P61（生命周期检查），避免「P61 切换池时 P58 资源未注入」的竞态
+- **方案 C 归因钥匙**：`bonus_events` 存 `draw_index = 契约 draw_index - 1`（0-based 本抽索引），合并时直接索引 `draw_resources_gained`。**不用 real_time**——抽卡不推进 real_time（仅 WaitAction 推进），连续无等待抽卡共享同一 real_time 值，无法唯一定位一抽；`stats.total_draws` 每抽 +1（gacha_service.py L38）单调唯一，`total_draws - 1` 即本抽在 `draw_resources_gained` 的索引（collector.py L109 每抽 append）<!-- REVIEW-R1-FIX: ISSUE-105 + 2026-08-05 P61 落地行号对齐：原引用的 gacha_service L372-374/L37/L107 为 P61 前行号，P61 落地后实际为 L357（real_time += action.duration）/L38（total_draws += 1）/collector.py L109（draw_resources_gained.append） -->
+- **`pool_id` 键空间约定（2026-08-03 语义审查 + 2026-08-05 P61 落地对齐）**：`on_bonus` 的 `pool_id` 恒与 `draw_pool_ids` **同键空间**——**P61 已落地后 `draw_pool_ids` 恒为全限定 `{banner_id}.{pool_id}` 键**（gacha_service.py L290 `stats.on_draw(reward.id, draw_pool_key, ...)`），M4 inline 过渡形态传裸 `pool.id`（Banner 内裸池 id）与其键空间**分裂**、仅作过渡；**M9 最终态须传 emit 契约的 `draw_pool_key`（全限定）**，与 `draw_pool_ids` 同键空间（ISSUE-006）。禁止 M9 迁移时漏换为裸 `pool.id`——否则 `bonus_events['pool_id']`/`pool_card_counts` 与 `draw_pool_ids` 键空间分裂、per-pool GDR 错配
+- `MilestoneEngine.after_draw(banner_id, pool_id)` 签名含 banner_id：P61 后 pool_id 是 Banner 内部 id（跨 banner 重复），用 banner_id 做 banner 级过滤（`MilestoneDef.banner`，精确匹配，空 = 全部）；M4 inline 过渡形态调用方传 `""`（P61 已落地，最终态经订阅传真实 banner_id）
+- 订阅 priority=0：P58（资源注入）先于 P61（生命周期检查），避免「P61 切换池时 P58 资源未注入」的竞态——**P61 已按此优先级落地**（`GachaService.__init__` L115 注册 P61 priority=1 订阅；P58 的 priority=0 订阅在 `_run_single` 装配点先注册，见「P61 落点」段。**独立审查行号修正：原写 L116，实际 L115，2026-08-05**）
 - `[[milestone]]` 用 `banner` 字段（精确指向一个 Banner）；原 `pools` 字段已删除（2026-08-02 无历史包袱迁移，见 §3.3 修订）——不再有「pools 保留兼容旧 pool_id 过滤」的双路径
-- 依赖 P61-Ph0（core/notifier.py）+ **P61 emit 契约含 `draw_index` 字段**。Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61（此时 banner 过滤用 `banner=""`，全部生效），M9 依赖 Ph0 与契约字段
+- **依赖 P61 已解除（2026-08-05）：** P61 已完整归档（920 passed），`core/notifier.py` 与 emit 契约（含 `draw_index`）均已落地。P58 落地即走 M9 订阅装配形态（`core/milestone.py` 的 `register_milestone_engine` + `_run_single` 装配点改写），M4 inline 仅是实施过渡形态。原「M1-M8 零依赖 P61、M9 依赖 Ph0」的依赖划分不再成立——P61 依赖已全部就绪，P58 实施全程可依赖 notifier 装配点。
 
 ### 3.5a 策略层查询接口
 
@@ -621,7 +682,8 @@ class GachaService:
 # ⚠ 必须修改 strategy_context_builder.py 的函数签名——不绕过此函数，避免丢失派生字段
 # (future_resource_gains / inter_pool_pity_links)<!-- REVIEW-FIX-PREV: ISSUE-004 -->
 # 【阶段边界（REVIEW-R2-FIX: GATE-依赖顺序）】`__init__` 的 milestone_engine 参数属于 M4；
-#   下方 build_strategy_context 传参 + 签名变更统一属于 M4a（gacha_service L228 唯一接线点，
+#   下方 build_strategy_context 传参 + 签名变更统一属于 M4a（gacha_service L231 唯一接线点——
+#   2026-08-05 P61 落地对齐：原 L228 因 P61 Ph5 新增 `banners`/`all_banners` 参数后移 3 行，
 #   M4 不碰此处）——两阶段以函数/文件边界分隔、各自验收，M4a 依赖 M4 的 self.milestone_engine 属性。
 ctx = build_strategy_context(
     # ... 现有参数 ...
@@ -711,7 +773,8 @@ def on_bonus(self, ...):
         dpg[k] = dpg.get(k, 0) + v
         r.total_gained[k] = r.total_gained.get(k, 0) + v
 
-# ⚠ gacha_service 循环结束组装 CompactResult 时（现状 gacha_service L419 `result.total_gained = total_gained`）
+# ⚠ gacha_service 循环结束组装 CompactResult 时（现状 gacha_service L416 `result.total_gained = total_gained`——
+#   2026-08-05 P61 落地对齐：原 L419 因 P61 重写模拟循环结构前移 3 行）
 # 必须改为【合并】而非覆盖：on_bonus 已把 milestone 资源并入 result.total_gained（对象字段），
 # 局部 total_gained（仅正常产出 + 等待收益）直接赋值会整体覆盖、丢失 milestone 资源。
 # 改为：
@@ -802,7 +865,7 @@ milestone 赠卡不经过 `pool.draw()` 管线——不会出现在 `draw_card_i
 
 **波及（2026-07-30 修正 + 2026-08-03 R1 裁决 + R2 ISSUE-102 终裁决）：** 方案 A 生效时，`compute_gdr_from_compact()` / `compute_gdr_from_cumulative()` **无需在入口调用任何合并函数**——`card_counts`/`pool_card_counts` 已在 `on_bonus` 源头合并、`cumulative_card_counts` 由方案 B（§3.6 六路径表）按 `draw_index` 插入赠卡，GDR 计算读取的已是含 bonus 的计数（REVIEW-R1-FIX: ISSUE-001——merged 时序映射无消费方，入口调用是死代码）。**REVIEW-R1-FIX: ISSUE-102（措辞修正 REVIEW-R2-FIX: GATE-变更粒度）——`_merge_milestone_cards()` 从未存在、不新增该函数**：时序合并（kept 序列/轨迹图，ISSUE-009）统一在 M5-stream streaming 提取处按 `draw_index` 构建按抽序 `merged_card_ids` 平行数组完成（与 ISSUE-001 早期「仅保留为时序型路径可选辅助」表述不一致处，以本终裁决为准——gdr.py 不保留任何合并函数，避免死代码与产出格式错配）。两个入口均在 `gdr.py`，函数签名零改动。若历史路径（`compute_gdr_from_history()`，通过 `generalized_drop_rate.py` 中的 `GeneralizedDropRate` 子类计算）也需反映 milestone 产出，需在历史路径中单独适配（见风险表 ISSUE-008）。
 
-**归因钥匙（2026-08-03 方案 C 修订，废弃 real_time 映射）：** `bonus_events` 直接存 `draw_index`（0-based 本抽索引），来源 `stats.total_draws - 1`（M4 inline）或 P61 emit 契约 `draw_index - 1`（M9 订阅）。**不用 real_time 映射**——抽卡不推进 real_time（仅 WaitAction 推进，gacha_service L372-374），连续无等待抽卡共享同一 real_time 值，`{draw_times[i]: i}` 字典退化为「时间点 → 该段最后一抽」，milestone 资源会错位到段末。`draw_index` 由 `stats.total_draws`（每抽 +1，唯一单调）推导，无映射、无碰撞。
+**归因钥匙（2026-08-03 方案 C 修订，废弃 real_time 映射；2026-08-05 P61 落地行号对齐）：** `bonus_events` 直接存 `draw_index`（0-based 本抽索引），来源 `stats.total_draws - 1`（M4 inline）或 P61 emit 契约 `draw_index - 1`（M9 订阅）。**不用 real_time 映射**——抽卡不推进 real_time（仅 WaitAction 推进，gacha_service L357 `real_time += action.duration`），连续无等待抽卡共享同一 real_time 值，`{draw_times[i]: i}` 字典退化为「时间点 → 该段最后一抽」，milestone 资源会错位到段末。`draw_index` 由 `stats.total_draws`（每抽 +1，gacha_service L38，唯一单调）推导，无映射、无碰撞。
 
 ### 3.6b 分析口径——赠卡与池成败/事件分类（REVIEW-R1-FIX: ISSUE-007）
 
@@ -859,7 +922,7 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
             raise ConfigError(f"里程碑 '{name}' bonus_reward.cards 必须是数组，当前为 {type(cards).__name__}")
         # REVIEW-R1-FIX: ISSUE-012 + ISSUE-101 —— card_id 引用存在性校验（对照 _build_pools 对
         #   epitomizable_cards 的 ConfigError 先例 config_toml.py L1081：先构建 id 集合再判断）。
-        # ⚠ 禁止 `cid not in store.card_defs`——store.card_defs 是 List[CardDefEntry]（config_store.py L129），
+        # ⚠ 禁止 `cid not in store.card_defs`——store.card_defs 是 List[CardDefEntry]（config_store.py L203 字段），
         #   str 与 CardDefEntry 对象比较恒 False，任何带 cards/random_cards 的里程碑配置必然抛 ConfigError、
         #   load_toml 全失败（ISSUE-101 阻塞）。拼写错误的 card_id 会经 state.add_card 产生幽灵持有并污染 GDR
         known_card_ids = {c.card_id for c in store.card_defs}
@@ -946,7 +1009,7 @@ def _build_milestone(data: dict, store: ConfigStore) -> None:
         # ── banner 过滤解析（空字符串 = 全部；无字符串兼容，2026-08-02 无历史包袱迁移）──
         # REVIEW-R1-FIX: ISSUE-012 —— 此处仅做类型检查（isinstance str）。「banner 值存在或为空」的
         #   存在性校验在 M1-M8 阶段不可做——P61 前不存在 [[banner]] 定义可供对齐；该存在性校验推迟到
-        #   M9（P61 集成后传真实 banner_id 时，对照 [[banner]] 段校验）。
+        #   M9（P61 已落地【2026-08-04 归档】——M9 阶段传真实 banner_id 时，对照 [[banner]] 段校验）。
         raw_banner = m.get('banner', '')
         if not isinstance(raw_banner, str):
             raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
@@ -1265,7 +1328,7 @@ def _populate_milestone_cards_list(self):
     self.ml_cards_list.clear()
     if not self._store:
         return
-    # REVIEW-R1-FIX: ISSUE-301 —— store.card_defs 是 List[CardDefEntry]（config_store.py L129），无 .items()，
+    # REVIEW-R1-FIX: ISSUE-301 —— store.card_defs 是 List[CardDefEntry]（config_store.py L203 字段），无 .items()，
     #   原先 `for cid, entry in self._store.card_defs.items()` 会抛 AttributeError，任何含 [[milestone]] 配置的
     #   加载/导入/重载都会在 M7c 回填段崩溃。改为列表迭代 + entry.card_id（对照 _sync_weight_cards/
     #   _build_pity 的列表访问模式——config_panel 中 self._store.card_defs 恒按 cd.card_id 列表访问）
@@ -1682,11 +1745,11 @@ self.left_tabs.addTab(milestone_tab_scroll, "累抽奖励")
 |:---:|------|------|:---:|
 | M1 | `MilestoneDef` + `MilestoneConfig` dataclass + `ConfigStore` 新增 `milestone` 字段（import `OverflowBand` from P63）+ `ConfigStore.clear()` 追加 `self.milestone = MilestoneConfig()` 重置 <!-- REVIEW-FIX-PREV: ISSUE-007 --> | `config_store.py` | ~26 |
 | M2 | `_build_milestone()` 解析 + `save_toml()` 写出 `[[milestone]]` 段。**验收含 shipped config.toml 示例段加载断言（REVIEW-R1-FIX: ISSUE-002）**——config.toml 更新任务须补全 §3.4 示例被引用卡/资源定义（或改用现有卡），否则 ISSUE-101 校验下 `load_toml()` 抛 ConfigError。**校验扩展（REVIEW-R1-FIX: ISSUE-301/302/303）：random_cards.count 整数校验且 ≥1、weights 逐项 float 数值校验、resources 值数值类型校验——均转 ConfigError** | `config_toml.py` | ~40 |
-| M3 | `MilestoneEngine` 实现——计数器自管 + 触发判定 + `_resolve_bonus()`（使用 `self._rng`）。**同时 `core/__init__.py` 补导出 `MilestoneEngine`/`MilestoneDef`/`MilestoneConfig`**（REVIEW-R1-FIX: ISSUE-013——新核心模块纳入显式 re-export + `__all__` 清单，`get_milestone_defs()` 返回类型已成 `StrategyContext` 公共接口一部分） | `core/milestone.py` + `core/__init__.py` | ~58 |
-| M4 | `gacha_service` 集成——`__init__` 新增 `milestone_engine` 参数 + 模拟循环中 bonus 消费（§3.5 内联消费块：`_milestone_engine.after_draw` 判定 → 资源注入 `state.resources` + 卡走 `state.add_card(path="milestone_gift")` → `bonus_pending` 暂存 → `collector.on_bonus` 源头归因）。**`SimulationCollector` 新增 `on_bonus` 具体 no-op 默认（M4 前置，REVIEW-R2-FIX: GATE-依赖顺序）**——否则 M4 先于 M5-serial、调用 `collector.on_bonus(...)` 带里程碑配置跑模拟即 AttributeError（当前 collector.py 无此方法）；ABC 基类先提供具体 no-op（InfoVectorCollector 继承空实现 → 历史路径静默丢弃 milestone 产出，已知限制），M5-serial 再实现 `CompactCollector.on_bonus`。**M4 验收需含里程碑配置路径**（带 `[[milestone]]` 配置跑模拟不崩溃，产出静默丢弃属预期、M5-serial 后可见）。**「StrategyContext 传入」归 M4a**（`build_strategy_context` 签名与 gacha_service L228 调用处传参统一由 M4a 完成——本阶段不碰 L228，REVIEW-R2-FIX: GATE-依赖顺序 接线边界） | `gacha_service.py` + `core/collector.py` | ~22 |
-| M4b | `SimulationEnv` 新增 `milestone_defs` 字段；`SimulationEnvBuilder.from_config_store()` 提取配置；`_run_single` 中 `MilestoneEngine(defs, seed=seed)` 延迟构造 | `batch_simulator.py` | ~15 |
-| M4a | `StrategyContext` 新增 `_milestone_engine` 字段 + 3 个查询方法；`build_strategy_context()` (`strategy_context_builder.py`) 签名新增 `_milestone_engine` 参数并透传；**gacha_service.py L228 调用处传入 `self.milestone_engine`（StrategyContext 传入的唯一接线点，REVIEW-R2-FIX: GATE-依赖顺序——M4 不碰 L228，两阶段以函数/文件边界分隔：M4 做 `__init__` 参数与循环内 bonus 消费、M4a 做 build_strategy_context 签名变更与调用处传参，各自验收；依赖 M4 的 `__init__` 新增 `milestone_engine` 属性）** <!-- REVIEW-FIX-PREV: ISSUE-004 --> | `strategy.py` + `strategy_context_builder.py` + `gacha_service.py` | ~25 |
-| M5-serial | `collector.on_bonus()`（**含 `draw_index` 参数 + 卡/资源源头合并**，方案 C 2026-08-03）+ `CompactResult.bonus_events`（**含 `pool_id`/`draw_index` 字段**）+ `to_dict()`/`from_dict()` 序列化 + **`_RESULT_VERSION` 1 → 2（REVIEW-R1-FIX: ISSUE-106）** + **`to_dict()` 产物新增 `bonus_events` 键形状变化需验证既有全量比对/golden 落盘路径（REVIEW-R1-FIX: ISSUE-108）** + **gacha_service.py L419 `result.total_gained = total_gained` 改合并修复（REVIEW-R2-FIX: GATE-变更粒度——原仅 §3.6 散文描述未映射到任何 M 阶段；on_bonus 已把 milestone 资源并入 `result.total_gained` 对象字段，覆盖赋值会整体丢失，改为 `merged = dict(total_gained); for k, v in result.total_gained.items(): merged[k] = merged.get(k, 0) + v; result.total_gained = merged`，最终 `final_resources`/`total_gained`/`draw_resources_gained` 三处一致）** + **`SharedResultCollector` 同步验证（方案 A 源头合并自动覆盖——`extract_aggregate` 读取的 `card_counts`/`pool_card_counts` 已含 milestone，无需新增 on_bonus 方法；仅验证，无代码改动。**`extract_aggregate` 输出新增 `bonus_events` 键透传归 M5-stream，ISSUE-315/316**）**。**前置：M4 已提供 `SimulationCollector.on_bonus` 具体 no-op 默认，本阶段实现 `CompactCollector.on_bonus`（REVIEW-R2-FIX: GATE-依赖顺序）**<!-- REVIEW-FIX-PREV: ISSUE-005 --><!-- REVIEW-R2-FIX: GATE-变更粒度 —— 原 M5 拆为 M5-serial（collector/result_types/序列化/L419，~22 行）+ M5-stream（streaming 六路径，~30 行）；原可选拆分建议命名为 M5a/M5b（历史命名），与既有 M5a（GDR 层）直接撞名、无法直接执行，已删除该建议并改为正式拆分命名 M5-serial/M5-stream（不撞名） --> | `collector.py` + `result_types.py` + `gacha_service.py` | ~22 |
+| M3 | `MilestoneEngine` 实现——计数器自管 + 触发判定 + `_resolve_bonus()`（使用 `self._rng`）。**同时 `core/__init__.py` 补导出 `MilestoneEngine`/`MilestoneDef`/`MilestoneConfig`**（REVIEW-R1-FIX: ISSUE-013——新核心模块纳入显式 re-export + `__all__` 清单，`get_milestone_defs()` 返回类型已成 `StrategyContext` 公共接口一部分）。**同文件定义 `register_milestone_engine(notifier, engine)` + 闭包捕获的 `_on_after_draw`（P61 落点 #2/#3 纠正——2026-08-05 用户裁决：不新建 `service/milestone.py` 薄模块，装配块 import 行落地时顺手指向本模块；闭包捕获禁模块级全局）** | `core/milestone.py` + `core/__init__.py` | ~58+15 |
+| M4 | `gacha_service` 集成——`__init__` 新增 `milestone_engine` 参数（**最终态保留**——供 M4a 的 `build_strategy_context` 传入 `StrategyContext._milestone_engine`，与 M9 订阅装配并存：`_run_single` 构造 engine 后同时传入服务与 `register_milestone_engine`） + 模拟循环中 bonus 消费（§3.5 内联消费块：`_milestone_engine.after_draw` 判定 → 资源注入 `state.resources` + 卡走 `state.add_card(path="milestone_gift")` → `bonus_pending` 暂存 → `collector.on_bonus` 源头归因）。**`SimulationCollector` 新增 `on_bonus` 具体 no-op 默认（M4 前置，REVIEW-R2-FIX: GATE-依赖顺序）**——否则 M4 先于 M5-serial、调用 `collector.on_bonus(...)` 带里程碑配置跑模拟即 AttributeError（当前 collector.py 无此方法）；ABC 基类先提供具体 no-op（InfoVectorCollector 继承空实现 → 历史路径静默丢弃 milestone 产出，已知限制），M5-serial 再实现 `CompactCollector.on_bonus`。**M4 验收需含里程碑配置路径**（带 `[[milestone]]` 配置跑模拟不崩溃，产出静默丢弃属预期、M5-serial 后可见）。**「StrategyContext 传入」归 M4a**（`build_strategy_context` 签名与 gacha_service 调用处传参统一由 M4a 完成——本阶段不碰调用处，REVIEW-R2-FIX: GATE-依赖顺序 接线边界）。**P61 已落地（2026-08-04 归档）注：** 模拟循环中 `after_draw` emit 已存在（gacha_service.py L343-349），M4 inline 消费块是过渡形态、M9 删除（见 M9 阶段） | `gacha_service.py` + `core/collector.py` | ~22 |
+| M4b | **P61 落点 #1 纠正（2026-08-05）：** P61 已在 `SimulationEnv` 落地 `milestone_engine: Any = None` 字段（batch_simulator.py L79，传实例——父进程构造一次、所有子进程共享计数器/RNG 状态，破坏 P58 per-simulation seed 可复现性）。**P58 纠正为传 defs + 延迟构造：** `SimulationEnv` 新增 `milestone_defs: List[MilestoneDef]` 字段（替代 P61 的 `milestone_engine`，后者保留 None 兜底不激活）；`SimulationEnvBuilder.from_config_store()` 提取 `store.milestone.milestones`（**含 enabled 门控，REVIEW-R1-FIX: ISSUE-302**）；`_run_single` 中 `MilestoneEngine(env.milestone_defs, seed=seed)` 延迟构造并经 `register_milestone_engine(notifier, engine)` 装配（改造 P61 已落地的 L261-269 装配块——条件由 `env.milestone_engine is not None` 改为 `env.milestone_defs`） | `batch_simulator.py` | ~20 |
+| M4a | `StrategyContext` 新增 `_milestone_engine` 字段 + 3 个查询方法；`build_strategy_context()` (`strategy_context_builder.py`) 签名新增 `_milestone_engine` 参数并透传；**gacha_service.py 调用处传入 `self.milestone_engine`（StrategyContext 传入的唯一接线点，REVIEW-R2-FIX: GATE-依赖顺序——M4 不碰调用处，两阶段以函数/文件边界分隔：M4 做 `__init__` 参数与循环内 bonus 消费、M4a 做 build_strategy_context 签名变更与调用处传参，各自验收；依赖 M4 的 `__init__` 新增 `milestone_engine` 属性。**2026-08-05 P61 落地对齐：调用点 = gacha_service.py L231，因 P61 Ph5 新增 `banners`/`all_banners` 参数使原 L228 后移 3 行**）** <!-- REVIEW-FIX-PREV: ISSUE-004 --> | `strategy.py` + `strategy_context_builder.py` + `gacha_service.py` | ~25 |
+| M5-serial | `collector.on_bonus()`（**含 `draw_index` 参数 + 卡/资源源头合并**，方案 C 2026-08-03）+ `CompactResult.bonus_events`（**含 `pool_id`/`draw_index` 字段**）+ `to_dict()`/`from_dict()` 序列化 + **`_RESULT_VERSION` 1 → 2（REVIEW-R1-FIX: ISSUE-106）** + **`to_dict()` 产物新增 `bonus_events` 键形状变化需验证既有全量比对/golden 落盘路径（REVIEW-R1-FIX: ISSUE-108）** + **gacha_service.py L416 `result.total_gained = total_gained` 改合并修复（REVIEW-R2-FIX: GATE-变更粒度——原仅 §3.6 散文描述未映射到任何 M 阶段；on_bonus 已把 milestone 资源并入 `result.total_gained` 对象字段，覆盖赋值会整体丢失，改为 `merged = dict(total_gained); for k, v in result.total_gained.items(): merged[k] = merged.get(k, 0) + v; result.total_gained = merged`，最终 `final_resources`/`total_gained`/`draw_resources_gained` 三处一致。**2026-08-05 P61 落地对齐：原 L419 因 P61 重写模拟循环结构前移 3 行→L416**）** + **`SharedResultCollector` 同步验证（方案 A 源头合并自动覆盖——`extract_aggregate` 读取的 `card_counts`/`pool_card_counts` 已含 milestone，无需新增 on_bonus 方法；仅验证，无代码改动。**`extract_aggregate` 输出新增 `bonus_events` 键透传归 M5-stream，ISSUE-315/316**）**。**前置：M4 已提供 `SimulationCollector.on_bonus` 具体 no-op 默认，本阶段实现 `CompactCollector.on_bonus`（REVIEW-R2-FIX: GATE-依赖顺序）**<!-- REVIEW-FIX-PREV: ISSUE-005 --><!-- REVIEW-R2-FIX: GATE-变更粒度 —— 原 M5 拆为 M5-serial（collector/result_types/序列化/L419，~22 行）+ M5-stream（streaming 六路径，~30 行）；原可选拆分建议命名为 M5a/M5b（历史命名），与既有 M5a（GDR 层）直接撞名、无法直接执行，已删除该建议并改为正式拆分命名 M5-serial/M5-stream（不撞名） --> | `collector.py` + `result_types.py` + `gacha_service.py` | ~22 |
 | M5-stream | **流式六条路径适配（方案 B 为唯一实施路径，REVIEW-R1-FIX: ISSUE-002/004/009；原「M5b」命名已弃用——历史命名与 M5a GDR 层撞名，REVIEW-R2-FIX: GATE-变更粒度）**：`_update_cumulative` / `WorkerLocalExtractor.process`（热力图 + 转变标记 + **累积快照段 L218-304**）/ `_update_heatmap` / `_update_transition` + **kept_sequences 提取处**按 `bonus_events[].draw_index` 插入赠卡构建 `merged_card_ids`，平行对齐**全部逐抽数组** `draw_times`/`draw_pool_ids`/`draw_resources_gained`/`draw_pity`（占位 False）/`draw_resources_consumed`（占位 {}）/`draw_pity_names`（占位 None）/`draw_pity_counter_max`（占位 0）——六条流式路径循环同下标读取 pity 标志与消耗量（REVIEW-R1-FIX: ISSUE-304，漏插则插入点后每行行错位）<!-- REVIEW-FIX-PREV: ISSUE-005 -->（赠卡时间值继承 `draw_times[draw_index]`；**插入位置 = `draw_index + 1`（触发抽之后），`draw_resources_gained` 占位值 = `{}`——milestone 资源已在 on_bonus 归因到原 draw_index 行，REVIEW-R1-FIX: ISSUE-103**）<!-- REVIEW-FIX-PREV: ISSUE-005 -->**赠卡行不计入 `cum_draws`/`cumulative_draws` 分母（REVIEW-R1-FIX: ISSUE-306——streaming.py L257/L512，保证 cumulative GDR 分母与 compact/单池一致）**；**`transition_flags` 预计算判定（L277/L296）按 `bonus_events[].card_ids` 减赠卡恢复 draw-only 口径（REVIEW-R1-FIX: ISSUE-307，与 infer_events 池成败一致）；`_update_transition`（L536-564）转变标记 success 判定同样减赠卡恢复 draw-only（REVIEW-R1-FIX: ISSUE-313，DrawSequenceExtractor 无调用方、统一口径消除六路径表与验收矛盾）**。**`extract_aggregate`（streaming.py L76-120）输出新增 `'bonus_events': list(compact.get('bonus_events', []))` 键——GUI 面板数据源（`analysis_panel.self.results` / `process_analysis_panel._aggregate_data` = `aggregate_data` = `extract_aggregate` 产物）减赠卡数据通道，REVIEW-R1-FIX: ISSUE-315/316（AUDIT-BREAK-1/2 修复）**。**依赖 M5-serial（`bonus_events` 字段与 `draw_index` 归因钥匙在此引入）；与 M5a（GDR 验证）并行**<!-- REVIEW-FIX-PREV: GATE-1-变更粒度 --> | `streaming.py` | ~30 |
 | M5a | GDR 层——**验证性改动，无删除对象（REVIEW-R2-FIX: GATE-变更粒度）**：grep 确认 `_merge_milestone_cards()` 在 gdr.py 及全仓**从未存在**（P58 未实施故从未实现过），原「删除 `_merge_milestone_cards()`（原 ~15 行删除）」叙述误导执行者、已删除该叙述。**本阶段净效果 = `gdr.py` 零代码改动**：方案 A 生效时 compact/cumulative 入口**不调用**任何合并函数（`card_counts`/`pool_card_counts` 已在 on_bonus 源头合并，REVIEW-R1-FIX: ISSUE-001）；时序合并（kept 序列/轨迹图，ISSUE-009）统一在 M5-stream streaming 提取处按 `draw_index` 构建按抽序 `merged_card_ids` 平行数组（不新增、不删除任何函数）。**验收 = M8 集成测试验证合并正确性**（GDR 读到的计数已含 milestone，无需函数调用、无签名改动）。`draw_index` 直接索引（无 real_time→draw_index 映射）语义由 M5-stream 插入时使用；若历史路径也需合并，`generalized_drop_rate.py` 也需改动 <!-- REVIEW-FIX-PREV: ISSUE-009 --><!-- REVIEW-FIX-PREV: ISSUE-011 --> | `gdr.py` | ~0（验证性，无代码改动） |
 | M7a | 配置面板 Tab 骨架——`_setup_milestone_config` 基础布局：总闸开关 + QListWidget 左列表 + QGroupBox 右详情 + 基础字段控件（名称/阈值/repeat/max_triggers/banner）+ `_on_milestone_selected`（**回填段 `blockSignals(True)` 阻断级联 flush，回填完成恢复后主动 flush 一次——REVIEW-R1-FIX: ISSUE-310**）+ `_add_milestone` + `_remove_milestone` + 信号连接骨架（不含奖励区域）<!-- REVIEW-FIX-PREV: GATE-1-变更粒度 --> | `config_panel.py` | ~60 |
@@ -1694,10 +1757,11 @@ self.left_tabs.addTab(milestone_tab_scroll, "累抽奖励")
 | M7b2 | 奖励编辑器 CRUD + 回写逻辑——固定卡牌 QListWidget（含 `_populate_milestone_cards_list`）+ 资源 QTableWidget（含 `_add/_remove_milestone_resource`；**资源列改为可编辑 `QComboBox` 从 `store.resource_defs` 填充，`_flush_milestone_current_detail` 兼容下拉/item 双形态读取——REVIEW-R1-FIX: ISSUE-104**；**金额读取 try/except 防异常 + 过滤 0 金额行——REVIEW-R1-FIX: ISSUE-004**）+ 随机卡池列表（`_update_milestone_random_summary` + **可点击行选中 `_on_random_pool_selected` 维护 `_selected_random_pool_idx`——REVIEW-R1-FIX: ISSUE-003**）+ 随机卡池 CRUD（`_add/_remove/_edit_milestone_random_pool`，依赖 M7b1 的 `RandomCardPoolDialog`）+ `_flush_milestone_current_detail` 全量回写逻辑（**行追踪改为 `_current_milestone_row`——REVIEW-R1-FIX: ISSUE-001**；**空名回退复用 `_add_milestone` 查重循环生成不冲突名称（查重排除当前行自身）——REVIEW-R1-FIX: ISSUE-314**）。M7b1 提供 Dialog 后串行集成。**REVIEW-R1-FIX: ISSUE-010——`_populate_milestone_cards_list` 调用点 = `_refresh_from_store_impl()` store 就绪后，验收项补固定卡列表非空断言**<!-- REVIEW-FIX-PREV: GATE-1-变更粒度 --> | `config_panel.py` | ~45 |
 | M7c | 现有方法适配——`apply_to_store()` 里程碑写入（~10行，**含未定义资源 ID 警告校验 + 一次性去重集合 `self._warned_milestone_resource_ids`——REVIEW-R1-FIX: ISSUE-104 + ISSUE-311**，预览链路仅首次弹窗、后续静默）<!-- REVIEW-FIX-PREV: ISSUE-001 --> + **`_refresh_from_store_impl()` 里程碑回填**（~10行，REVIEW-R1-FIX: ISSUE-003——挂载点从无调用方的 `set_config()` 迁移至实际加载路径 `refresh_from_store()`）<!-- REVIEW-FIX-PREV: ISSUE-002 --> + `get_config()` 追加 `milestone` 键（~8行）<!-- REVIEW-FIX-PREV: ISSUE-003 --> + Tab 注册到 `_setup_ui()`（~7行）<!-- REVIEW-FIX-PREV: GATE-1-变更粒度 --> | `config_panel.py` | ~35 |
 | M8 | 集成测试（7 个 G20 场景的 TOML 配置 → 模拟 → 验证期望输出）+ 单元测试（MilestoneEngine._resolve_bonus、_build_milestone 解析器、TOML round-trip、collector 序列化闭环）<!-- REVIEW-FIX-PREV: GATE-6-测试策略 --> + **「清空里程碑名称后保存→加载成功」round-trip 用例（REVIEW-R1-FIX: ISSUE-314）** | `tests/` | ~130 |
-| M9 | P61 协作——订阅 `after_draw` 事件（notifier priority=0，P61 Ph0 交付）→ `_on_after_draw` 调用 `MilestoneEngine.after_draw(banner_id, pool_id)` 传真实 banner_id（P61 前 M4 inline 传 `""`）。`banner` 字段解析与过滤已在 M1-M8（`_build_milestone` / `after_draw` 双参）落地，M9 仅接事件。依赖 P61-Ph0（notifier.py）。**REVIEW-R1-FIX: ISSUE-006 三子任务——（1）装配契约：notifier 实例由 P61 装配层经 `GachaService.__init__(notifier=)` 注入，`_on_after_draw` 经 P61 §5.4 `register_milestone_engine` 注册，milestone_engine 由 `_run_single` 内构造实例闭包捕获（禁止模块级全局——Windows spawn 重置为 None）；（2）emit 侧 pool_id 传全限定 `draw_pool_key`（与 draw_pool_ids 同键空间）；（3）**显式删除 M4 inline 里程碑消费块**（bonus_pending 段）——否则同抽双次 after_draw、计数器双递增、资源双重注入** | `milestone.py` + `gacha_service.py` | ~20 |
-| **总计** | | | **~657** |
+| M9 | P61 协作（**2026-08-05 更新——P61 已归档完成，依赖解除，本阶段从「待 P61-Ph0」变为「直接落地」**）——订阅 `after_draw` 事件（notifier priority=0，P61 Ph0 **已交付**）→ `_on_after_draw` 调用 `MilestoneEngine.after_draw(banner_id, pool_id)` 传真实 banner_id（P61 已落地的 emit 契约 `gacha_service.py` L343-349 传 `banner.id`；§3.5 内联消费块传 `""` 的 M4 inline 是过渡形态）。**M9 职责收窄为：** 确认 M4b 装配块（改写 P61 已落地装配点）与 M3 的 `core/milestone.py#register_milestone_engine` 已正确接线（P61 落点 #1/#2/#3 三项纠正落地）。**⚠ 独立审查补（2026-08-05）：本阶段【不再新增订阅】——订阅装配的唯一执行点是 M4b，M9 只做删除 inline 块与验收，避免同 handler 重复订阅导致 emit 时 double after_draw。** **REVIEW-R1-FIX: ISSUE-006 三子任务——（1）装配契约：notifier 实例由 P61 装配层经 `GachaService.__init__(notifier=)` 注入（已落地），`_on_after_draw` 经 `_run_single` 装配点 `register_milestone_engine` 注册，milestone_engine 由 `_run_single` 内延迟构造实例闭包捕获（禁模块级全局——P61 落点 #3）；（2）emit 侧 pool_id 传全限定 `draw_pool_key`（已落地，与 draw_pool_ids 同键空间）；（3）**显式删除 M4 inline 里程碑消费块**（bonus_pending 段）——否则同抽双次 after_draw、计数器双递增、资源双重注入**。**验收：** 带 `banner` 限定里程碑配置跑模拟，确认仅目标 banner 内触发（M1-M8 阶段 `banner=""` 全部生效的过渡路径由 M9 切换为真实 banner 过滤） | `core/milestone.py` + `batch_simulator.py` | ~10 |
+| **总计** | | | **~667** |
 
-> ~~M6（`resources_gained` 解析遗漏修复）已删除——P63 已修复 TOML 管道。~~ M4b 新增——`batch_simulator.py` 的 `SimulationEnv`/`SimulationEnvBuilder` 需传递 `milestone_config`。**M5 拆分为 M5-serial（collector.py + result_types.py + gacha_service.py L419 合并修复，~22 行）+ M5-stream（streaming.py 六路径，~30 行）——REVIEW-R2-FIX: GATE-变更粒度**：原 M5 把 collector/result_types 序列化与 streaming 六路径方案 B 两类高协调度工作捆在一起（>1 小时）；原「可选拆分 M5a/M5b」建议命名（历史命名）与既有 M5a（GDR 层）撞名、无法直接执行，已删除该建议并改为正式拆分命名 M5-serial/M5-stream（不撞名）。**依赖链：M4（含 on_bonus ABC no-op 前置）→ M5-serial → M5-stream（bonus_events 字段先引入）+ M5a（GDR 验证，与 M5-stream 并行）；M4a 依赖 M4（`__init__` 新增 `milestone_engine` 属性），统一完成 build_strategy_context 传参（REVIEW-R2-FIX: GATE-依赖顺序）**。**M7 拆分为 M7a / M7b1 / M7b2 / M7c 四个 ≤1 小时子阶段**（分别 ~60/~35/~45/~35 行，保守估计各 20-50 分钟）。M7b1（`RandomCardPoolDialog` 独立 QDialog）先于 M7b2（奖励编辑器 CRUD + 回写）串行执行——M7b2 的 `_edit_milestone_random_pool` 依赖 M7b1 提供的 Dialog。M8 行数上调至 ~130 以覆盖 GATE-6 单元测试（~50 行）与集成测试（~80 行）。<!-- REVIEW-FIX-PREV: GATE-1-变更粒度 / GATE-6-测试策略 / UPDATED TOTALS -->
+> ~~M6（`resources_gained` 解析遗漏修复）已删除——P63 已修复 TOML 管道。~~ M4b 新增——`batch_simulator.py` 的 `SimulationEnv`/`SimulationEnvBuilder` 需传递 `milestone_config`。**M5 拆分为 M5-serial（collector.py + result_types.py + gacha_service.py L416 合并修复，~22 行）+ M5-stream（streaming.py 六路径，~30 行）——REVIEW-R2-FIX: GATE-变更粒度**：原 M5 把 collector/result_types 序列化与 streaming 六路径方案 B 两类高协调度工作捆在一起（>1 小时）；原「可选拆分 M5a/M5b」建议命名（历史命名）与既有 M5a（GDR 层）撞名、无法直接执行，已删除该建议并改为正式拆分命名 M5-serial/M5-stream（不撞名）。**依赖链：M4（含 on_bonus ABC no-op 前置）→ M5-serial → M5-stream（bonus_events 字段先引入）+ M5a（GDR 验证，与 M5-stream 并行）；M4a 依赖 M4（`__init__` 新增 `milestone_engine` 属性），统一完成 build_strategy_context 传参（REVIEW-R2-FIX: GATE-依赖顺序）**。**M7 拆分为 M7a / M7b1 / M7b2 / M7c 四个 ≤1 小时子阶段**（分别 ~60/~35/~45/~35 行，保守估计各 20-50 分钟）。M7b1（`RandomCardPoolDialog` 独立 QDialog）先于 M7b2（奖励编辑器 CRUD + 回写）串行执行——M7b2 的 `_edit_milestone_random_pool` 依赖 M7b1 提供的 Dialog。M8 行数上调至 ~130 以覆盖 GATE-6 单元测试（~50 行）与集成测试（~80 行）。<!-- REVIEW-FIX-PREV: GATE-1-变更粒度 / GATE-6-测试策略 / UPDATED TOTALS -->
+> **2026-08-05 P61 落地调整：** M3 同文件定义 `register_milestone_engine`（+15 行，P61 落点 #2/#3 纠正——用户裁决不新建 `service/milestone.py` 薄模块，装配块 import 行落地时顺手指向 `core/milestone.py`）、M4b 上调至 ~20 行（P61 落点 #1 纠正——改造 P61 已落地的装配块）、M9 下调至 ~10 行（P61 已归档、依赖解除，职责收窄为确认接线 + 删 M4 inline）；总计 ~657 → ~667。M4a 的 `build_strategy_context` 接线点从「gacha_service L228」对齐到 P61 落地后的实际调用处（gacha_service.py L231，因 P61 新增 `banners`/`all_banners` 参数使调用点后移 3 行）。
 
 <!-- REVIEW-FIX-PREV: GATE-6-测试策略 -->
 ### 四、附：M8 单元测试范围声明
@@ -1731,7 +1795,7 @@ M8 测试分为两层——**单元测试（~50 行）**覆盖核心引擎逻辑
 | repeat=false 触发后永久停用 | IT（场景 3：150 抽仅 1 次 bonus_events） |
 | repeat=true 触发后归零继续 | IT（场景 1：25 抽触发 2 次） |
 | max_triggers 正确限制 | IT（需追加专用场景：repeat=true, max_triggers=2 → 3 次触发后 is_active=False） |
-| banner 正确过滤 | UT2（空→全部；非空→仅该 banner 触发——该路径 M1-M8 无 banner 概念、M4 传 `""` 时非空 banner 的 milestone 永不触发，**过滤验证移至 M9**（P61 集成后传真实 banner_id））+ IT（M9 后补场景 4/5 限定单 banner） |
+| banner 正确过滤 | UT2（空→全部；非空→仅该 banner 触发——该路径 M1-M8 无 banner 概念、M4 传 `""` 时非空 banner 的 milestone 永不触发，**过滤验证移至 M9**）+ IT（M9 后补场景 4/5 限定单 banner）。**2026-08-05 P61 落地对齐：** P61 已归档、emit 契约已落地（`gacha_service.py` L343-349 传真实 `banner.id`），M9 不再是「待 P61」而是「直接落地」——banner 过滤验证随 M9 执行（见阶段表 M9 验收） |
 | bonus 不触发常规保底重置 | IT（含保底配置的 milestone 场景→验证保底计数器不受影响） |
 | milestone 卡溢出（P63 管道） | IT（里程碑卡溢出场景：满突后赠送→溢出资源注入 state.resources + on_bonus 归因，方案 C 2026-08-03） |
 | milestone 溢出资源+直接资源注入 state.resources + on_bonus 归因（方案 C，2026-08-03） | IT（同溢出场景） |
@@ -1789,23 +1853,35 @@ P63（已完成 ✅ —— 2026-07-29）
    —— P63 核心代码（OverflowBand、state.add_card()、card_overflow_map）已落地。
    2026-07-30 plan-review R2 修正：不再依赖 C1 cron，已在本次审查中直接修正矩阵状态。
 
-P61-Ph0（待实施 —— 2026-08-01 新增）
-├── core/notifier.py（subscribe/emit/priority）                      ← M9 使用
-├── after_draw 事件契约（banner_id / **pool_id=全限定 draw_pool_key** / card_id / pity_triggered + **draw_index** + state/collector；`draw_index` 为 P58 方案 C 扩展字段、`draw_pool_key` 与 `draw_pool_ids` 同键空间，REVIEW-R1-FIX: ISSUE-006） ← M9 订阅
-└── Ph0 交付后 P58 与 P61 完全并行；M1-M8 零依赖 P61，仅 M9 依赖 Ph0
+P61（已归档完成 ✅ —— 2026-08-04，920 passed）
+├── core/notifier.py（subscribe/emit/priority）                       ← M3/M9 使用——**已落地**
+├── after_draw 事件契约（banner_id / **pool_id=全限定 draw_pool_key** / card_id / pity_triggered +
+│   **draw_index** + state/collector）——**已落地**（gacha_service.py L343-349 emit，含方案 C
+│   `draw_index=stats.total_draws` 扩展字段；`draw_pool_key` 与 `draw_pool_ids` 同键空间，
+│   REVIEW-R1-FIX: ISSUE-006）
+├── `GachaService.__init__(notifier=...)` 注入 + `build_strategy_context` 的 `banners`/`all_banners`
+│   参数（P61 Ph5）——**已落地**，P58 M4a 追加 `_milestone_engine` 参数可共存
+├── ⚠ **P61 落地的 P58 装配点需按 P58 设计纠正（2026-08-05 人工裁决，见 §3.5「P61 协作」）：**
+│   （1）`SimulationEnv.milestone_engine: Any = None`（batch_simulator.py L79，传实例）→ 纠正为
+│   P58 M4b 的 `milestone_defs`（传 defs + `_run_single` 延迟构造，per-simulation seed 可复现）；
+│   （2）装配块 import `gacha_simulator.service.milestone`（L263）→ **P58 用户裁决：不新建
+│   `service/milestone.py` 薄模块，`register_milestone_engine` 直接定义在 `core/milestone.py`，
+│   装配块落地时 import 行顺手指向 `gacha_simulator.core.milestone`**；
+│   （3）P61 §5.4 伪代码 `global _milestone_engine` → 纠正为闭包捕获（禁模块级全局，Windows spawn 重置）
+└── 依赖已全部就绪——P58 实施全程可依赖 notifier 装配点，M9 从「待 P61-Ph0」变为「直接落地」
 
 本计划（P58——独立 MilestoneEngine）
 ├── 零依赖 PityEngine / BEHAVIOR_REGISTRY
 ├── 零依赖 CounterBasedBehavior / PityState
 ├── 零依赖 P55 / P56
-└── 与 P55 / P56 / P63 / P61(M1-M8) 完全并行——改不同文件、不同 TOML 段、不同 UI Tab
+└── 与 P55 / P56 / P63 完全并行——改不同文件、不同 TOML 段、不同 UI Tab
 ```
 
 **P58 内部阶段依赖（REVIEW-R2-FIX: GATE-依赖顺序）：**
 ```
-M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_engine` 属性）→ M5-serial → M5-stream（依赖 M5-serial 引入 `bonus_events` 字段与 `draw_index` 归因钥匙）+ M5a（GDR 验证，与 M5-stream 并行）→ M7a → M7b1 → M7b2 → M7c → M8；M9 依赖 P61-Ph0
+M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_engine` 属性）→ M5-serial → M5-stream（依赖 M5-serial 引入 `bonus_events` 字段与 `draw_index` 归因钥匙）+ M5a（GDR 验证，与 M5-stream 并行）→ M7a → M7b1 → M7b2 → M7c → M8；M9 依赖 P61-Ph0（**已就绪**——2026-08-04 P61 归档完成，M9 无需等待）
 ```
-- **M4/M4a 接线边界**：M4 只做 `__init__` 参数 + `_run_single` 循环内 milestone 消费块（§3.5）；M4a 统一完成 `build_strategy_context` 签名变更（strategy_context_builder.py）+ gacha_service L228 调用处传参——两阶段以函数/文件边界分隔、各自验收，L228 是 StrategyContext 传入的唯一接线点。
+- **M4/M4a 接线边界**：M4 只做 `__init__` 参数 + `_run_single` 循环内 milestone 消费块（§3.5）；M4a 统一完成 `build_strategy_context` 签名变更（strategy_context_builder.py）+ gacha_service 调用处传参——两阶段以函数/文件边界分隔、各自验收。**2026-08-05 P61 落地对齐：** 接线点从「gacha_service L228」对齐到实际调用处 gacha_service.py L231（P61 新增 `banners`/`all_banners` 参数使调用点后移 3 行）。
 - **on_bonus 前置**：`SimulationCollector.on_bonus` 具体 no-op 默认由 M4 提供（先于 M5-serial 的调用点，避免 M4 带里程碑配置跑模拟 AttributeError）；M5-serial 实现 `CompactCollector.on_bonus` 具体合并逻辑。
 
 **关键识别：独立方案消除了「milestone 与 P55 共享平台层」的伪依赖。** P55 的 `CounterBasedBehavior` 是为保底计数器（未出目标稀有度）设计的——milestone 不需要它。里程碑计数器是纯粹的 `int` 自增，极简到不需要继承任何东西。
@@ -1823,12 +1899,12 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 |------|---------|------|
 | `core/config_store.py` | **修改** | 新增 `MilestoneDef` + `MilestoneConfig` dataclass；`ConfigStore` 新增 `milestone` 字段；`ConfigStore.clear()` 追加 `self.milestone = MilestoneConfig()` 重置行 <!-- REVIEW-FIX-PREV: ISSUE-007 -->；import `OverflowBand`（P63） |
 | `core/config_toml.py` | **修改** | 新增 `_build_milestone()` + `save_toml()` 新段（**cards/random_cards 引用做 `known_card_ids` 存在性校验，REVIEW-R1-FIX: ISSUE-002**；**resources 键存在性不校验但值做数值类型校验——REVIEW-R1-FIX: ISSUE-303**；**random_cards 权重逐项 float 数值校验（含非数字值 ConfigError）+ count 整数校验且 ≥1——REVIEW-R1-FIX: ISSUE-302/301**；resources 键存在性不校验仍为已知不对称，由 UI 侧 ISSUE-104 警告覆盖） |
-| `core/milestone.py` | **新建** | `MilestoneEngine` 独立调度器——import `OverflowBand` / `match_overflow_bands`（P63） |
+| `core/milestone.py` | **新建** | `MilestoneEngine` 独立调度器——import `OverflowBand` / `match_overflow_bands`（P63）。**同文件定义 `register_milestone_engine(notifier, engine)` + 闭包捕获的 `_on_after_draw`（P61 落点 #2/#3 纠正——2026-08-05 用户裁决：不新建 `service/milestone.py` 薄模块，notifier 作参数传入、core 无需 import 它，无循环依赖；闭包捕获禁模块级全局）** |
 | `core/collector.py` | **修改** | **M4 前置（REVIEW-R2-FIX: GATE-依赖顺序）：** `SimulationCollector` 新增 `on_bonus` 具体 no-op 默认（【不可】标 @abstractmethod——`InfoVectorCollector` 不重写则无法实例化）；**M5-serial：** `CompactCollector.on_bonus` 实现（含 `draw_index` 参数 + 卡/资源源头合并，方案 C 2026-08-03） |
 | `core/result_types.py` | **小改** | **M5-serial：** `CompactResult` 新增 `bonus_events` 字段 + `to_dict()`/`from_dict()` 序列化 + **`_RESULT_VERSION` 1 → 2（REVIEW-R1-FIX: ISSUE-106——新增字段反映序列化格式演进，供下游 pickle/golden 识别）+ `to_dict()` 产物新增 `bonus_events` 键（无 milestone 时为空列表）——精确比对/golden 落盘的既有路径需在 M5-serial 验证（REVIEW-R1-FIX: ISSUE-108）** |
 | `core/gdr.py` | **修改（行数收敛）** | **REVIEW-R1-FIX: ISSUE-001 + ISSUE-102 裁决——方案 A 生效时 compact/cumulative 入口不调用任何合并函数**（`card_counts` 源头已合并）；**`_merge_milestone_cards()` 在代码库从未存在（P58 未实施、grep 全仓无此函数，REVIEW-R2-FIX: GATE-变更粒度 已核实）——原「删除该函数」叙述误导执行者、已修正为「零代码改动、无删除对象」**；时序合并统一在 M5-stream streaming kept 提取处构建按抽序数组。compact 入口 `compute_gdr_from_compact()`(L935) + cumulative 入口 `compute_gdr_from_cumulative()`(L1104) 均在此文件，**签名零改动**。若历史路径也需要合并，`generalized_drop_rate.py` 也需修改——波及表明确两份文件各自改动 <!-- REVIEW-FIX-PREV: ISSUE-009 --> |
-| `service/gacha_service.py` | **修改** | **M4：** `__init__` 新增 `milestone_engine` 参数 + 模拟循环中 bonus 消费（§3.5 内联消费块）；**M4a：** L228 `build_strategy_context` 调用处传入 `_milestone_engine`（唯一传参点，REVIEW-R2-FIX: GATE-依赖顺序——两阶段以函数边界分隔）；**M5-serial：** L419 `result.total_gained = total_gained` 改合并修复（REVIEW-R2-FIX: GATE-变更粒度） |
-| `service/batch_simulator.py` | **修改** | `SimulationEnv` 新增 `milestone_defs: List[MilestoneDef]` 字段（非 `MilestoneEngine`——延迟构造）；`SimulationEnvBuilder.from_config_store()` 提取 `store.milestone.milestones`（**含 enabled 门控，REVIEW-R1-FIX: ISSUE-302**）；`_run_single` 中 `MilestoneEngine(env.milestone_defs, seed=seed)` 构造并传入 `GachaService`。**`SimulationEnv.from_dict()` 同步追加 `milestone_defs=config.get('milestone_defs', [])`** ——确保 `worst_impact.py` 等非 ConfigStore 调用方不丢失 milestone 配置（~1行）<!-- REVIEW-FIX-PREV: ISSUE-006 -->。**文件头部 import 修正（REVIEW-R1-FIX: ISSUE-303）：** batch_simulator.py 当前**没有** `from __future__ import annotations`（L1-16 为 `from typing import Dict, Any, Optional, Callable`）——dataclass 字段注解在类定义时求值，`milestone_defs: List[MilestoneDef]` 若仅走 `TYPE_CHECKING` 块会模块导入即 NameError。正确做法：**顶部追加 `from __future__ import annotations`**（config_store 无循环 import 风险，亦可再模块级 `from gacha_simulator.core.config_store import MilestoneDef` 直接导入）；原「已启用延迟求值」陈述与事实相反，已删除 <!-- REVIEW-FIX-PREV: ISSUE-002 -->（~15行总计） |
+| `service/gacha_service.py` | **修改** | **M4：** `__init__` 新增 `milestone_engine` 参数 + 模拟循环中 bonus 消费（§3.5 内联消费块）；**M4a：** L231 `build_strategy_context` 调用处传入 `_milestone_engine`（唯一传参点，REVIEW-R2-FIX: GATE-依赖顺序——两阶段以函数边界分隔；**2026-08-05 P61 落地对齐：调用点从 L228 后移至 L231，因 P61 Ph5 新增 `banners`/`all_banners` 参数**）；**M5-serial：** L416 `result.total_gained = total_gained` 改合并修复（REVIEW-R2-FIX: GATE-变更粒度；**2026-08-05 P61 落地对齐：原 L419 因 P61 重写模拟循环结构前移 3 行→L416**） |
+| `service/batch_simulator.py` | **修改** | **P61 落点 #1 纠正（2026-08-05）：** P61 已在 `SimulationEnv` 落地 `milestone_engine: Any = None` 字段（L79，传实例——父进程构造一次、所有子进程共享计数器/RNG 状态，破坏 P58 per-simulation seed 可复现性）。**P58 纠正为传 defs + 延迟构造：** 新增 `milestone_defs: List[MilestoneDef]` 字段（非 `MilestoneEngine`）；`SimulationEnvBuilder.from_config_store()` 提取 `store.milestone.milestones`（**含 enabled 门控，REVIEW-R1-FIX: ISSUE-302**）；`_run_single` 中 `MilestoneEngine(env.milestone_defs, seed=seed)` 延迟构造并经 `register_milestone_engine(notifier, engine)` 装配（改造 P61 已落地的 L261-269 装配块——条件由 `env.milestone_engine is not None` 改为 `env.milestone_defs`）。P61 的 `milestone_engine` 字段保留为 None 兜底（不激活）。**`SimulationEnv.from_dict()` 同步追加 `milestone_defs=config.get('milestone_defs', [])`** ——确保 `worst_impact.py` 等非 ConfigStore 调用方不丢失 milestone 配置（~1行）<!-- REVIEW-FIX-PREV: ISSUE-006 -->。**文件头部 import 修正（REVIEW-R1-FIX: ISSUE-303）：** batch_simulator.py 当前**没有** `from __future__ import annotations`（L1-16 为 `from typing import Dict, Any, Optional, Callable`）——dataclass 字段注解在类定义时求值，`milestone_defs: List[MilestoneDef]` 若仅走 `TYPE_CHECKING` 块会模块导入即 NameError。正确做法：**顶部追加 `from __future__ import annotations`**（config_store 无循环 import 风险，亦可再模块级 `from gacha_simulator.core.config_store import MilestoneDef` 直接导入）；原「已启用延迟求值」陈述与事实相反，已删除 <!-- REVIEW-FIX-PREV: ISSUE-002 -->（~20行总计） |
 | `core/strategy.py` | **修改** | `StrategyContext` 新增 `_milestone_engine` + 3 个查询方法（~20 行） |
 | `core/strategy_context_builder.py` | **修改** | `build_strategy_context()` 签名新增 `_milestone_engine` 参数，透传到 `StrategyContext`——确保 `future_resource_gains` / `inter_pool_pity_links` 派生字段不丢失（~5行） <!-- REVIEW-FIX-PREV: ISSUE-004 --> |
 | `gui/config_panel.py` | **修改** | 新增 `_setup_milestone_config()` + 联动方法 + Tab 注册（~100行，M7a）。`RandomCardPoolDialog` 独立 QDialog 类（~35行，M7b1）。奖励编辑器 CRUD 方法（`_populate_milestone_cards_list` / `_add/_remove_milestone_resource` / `_add/_remove/_edit_milestone_random_pool` / `_update_milestone_random_summary` + **`_on_random_pool_selected`，REVIEW-R1-FIX: ISSUE-003**）+ `_flush_milestone_current_detail` 全量回写逻辑（~45行，M7b2，依赖 M7b1；**`_populate_milestone_cards_list` 调用点 = `_refresh_from_store_impl()` store 就绪后，REVIEW-R1-FIX: ISSUE-010**；**行追踪 `_current_milestone_row`（仿 `_current_pity_row`）修复切换列表行时旧行控件覆写新行数据，REVIEW-R1-FIX: ISSUE-001**；**空名回退复用 `_add_milestone` 查重循环生成不冲突名称（查重排除当前行自身），REVIEW-R1-FIX: ISSUE-314**；**资源金额 try/except + 0 值行过滤，REVIEW-R1-FIX: ISSUE-004**；**`_on_milestone_selected` 回填段 `blockSignals(True)` 阻断级联 flush + 回填完成主动 flush 一次，REVIEW-R1-FIX: ISSUE-310**）。**同时适配 3 个现有方法：** `apply_to_store()` 追加 `store.milestone.milestones` 写入（~10行，**含未定义资源 ID 一次性去重警告 `self._warned_milestone_resource_ids`——REVIEW-R1-FIX: ISSUE-311**）<!-- REVIEW-FIX-PREV: ISSUE-001 -->、**`_refresh_from_store_impl()` 追加里程碑回填**（~10行，REVIEW-R1-FIX: ISSUE-003——挂载点从无调用方的 `set_config()` 迁移至实际加载路径）<!-- REVIEW-FIX-PREV: ISSUE-002 -->、`get_config()` 追加 `'milestone'` 键（~8行）<!-- REVIEW-FIX-PREV: ISSUE-003 --> + Tab 注册（~7行，M7c）<!-- REVIEW-FIX-PREV: GATE-1-变更粒度 --> |
@@ -1848,6 +1924,8 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 
 **2026-07-29 修订：** M6（`resources_gained` 解析遗漏修复）已删除——P63 已修复 TOML 管道。`batch_simulator.py` 新增入波及范围——`SimulationEnv` + `SimulationEnvBuilder` 需传递 `milestone_config`。
 
+**2026-08-05 修订（P61 落地对齐 + P61 落点纠正）：** P61 已归档完成（920 passed）——`core/notifier.py`、`after_draw` emit 契约（含 `draw_index`）、`GachaService.__init__(notifier=)`、`build_strategy_context` 的 `banners`/`all_banners` 参数均已落地。`register_milestone_engine` 定义在 `core/milestone.py`（M3，P61 落点 #2 纠正——用户裁决不新建 `service/milestone.py` 薄模块，装配块 import 行落地时顺手指向 core 模块）；`batch_simulator.py` 的 P61 落地 `milestone_engine` 字段纠正为 P58 的 `milestone_defs`（P61 落点 #1）；`gacha_service.py` M4a 接线点 L228 → L231。**P61 落点 #3（P61 §5.4 伪代码 `global _milestone_engine`）按 P58 §3.5 ISSUE-006「禁模块级全局」纠正为闭包捕获。** 行号漂移说明：`streaming.py`（`cum_draws` L260 / `cumulative_draws += 1` L515 / `transition_flags` L280/L299 / `_update_cumulative` L491 / `_update_heatmap` L449）、`process_trace.py`（`infer_events` L24 / `_resolve_skip_ignore` L56）、`per_pool_analysis.py`（`compute_transition_flags_from_gdr` L285）在 P61 落地后有 ±3 行左右漂移——计划中引用的这些行号为定位辅助性质，实施时以实际代码为准（§3.6 六路径表与 M5-stream 的定位引用不受影响）。
+
 ---
 
 ## 七、风险
@@ -1857,13 +1935,16 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 | ~~`SimulationStats.acquired_counts` 移除后外部引用遗漏~~ | ~~P60 已处理~~ —— 已消除 |
 | ~~旧序列化快照（无 `acquired`）反序列化失败~~ | ~~P60 已处理~~ —— 已消除 |
 | ~~TOML 中 `resources_gained`/bonus 字段从未被解析~~ | ~~P63 已修复 TOML 管道~~ —— 已消除 |
+| **P61 落地 `SimulationEnv.milestone_engine` 传实例——所有子进程共享计数器/RNG 状态，per-simulation seed 不可复现（P61 落点 #1，2026-08-05）** | **P58 纠正为传 defs + `_run_single` 延迟构造：** `MilestoneEngine(env.milestone_defs, seed=seed)` 每次模拟独立构造（§3.2），P61 的 `milestone_engine` 字段保留 None 兜底不激活；M4b 改造 P61 已落地的装配块 |
+| **P61 装配块 import `gacha_simulator.service.milestone` 无实现目标——P58 落地时若漏改装配块 import 行，ImportError 被 P61 的 try/except 静默吞掉、里程碑永不触发（P61 落点 #2，2026-08-05）** | **P58 M3 将 `register_milestone_engine` 定义在 `core/milestone.py`（2026-08-05 用户裁决：不新建 `service/milestone.py` 薄模块）**，M4b 装配块改写时 import 行改为 `from gacha_simulator.core.milestone import register_milestone_engine`；核心逻辑（`MilestoneEngine`）与装配函数同文件 |
+| **P61 §5.4 伪代码 `global _milestone_engine` 模块级全局——Windows spawn 下 worker 模块全局重置为 None，里程碑结算永不触发（P61 落点 #3，2026-08-05）** | **P58 纠正为闭包捕获：** `register_milestone_engine` 内 handler 经闭包读 engine（`functools.partial` 或工厂函数绑定），不依赖任何模块级全局（§3.5 ISSUE-006 裁决） |
 | `milestone` 计数器生命周期（`repeat`=true 重置 vs false 停用）自管 bug | 极简逻辑——`int` 自增 + `if c >= threshold`，M8 集成测试覆盖 |
 | bonus 注入时序不当（早于/晚于保底重置导致状态不一致） | 时序固定（方案 C，2026-08-03）：`PityEngine.after_draw` → `state.add_card(path="draw")`（正常溢出，P63）→ `MilestoneEngine.after_draw` → 直接资源 + `state.add_card(path="milestone_gift")`（milestone 溢出）注入 `resources`（不进 combined_gained）→ 资源结算 → `collector.on_draw` → `collector.on_bonus`（源头归因，draw_index） |
 | `bonus_events` 序列化遗漏导致并行模拟数据丢失 | `CompactResult.to_dict()`/`from_dict()` 必须同步更新——M5-serial 追加此项 |
 | `SharedResultCollector` 未实现 `on_bonus`——流式分析中里程碑不可见 | M5-serial 同步验证（方案 A 源头合并自动覆盖——`extract_aggregate` 读取的计数已含 milestone，无需新增 on_bonus 方法） |
 | GDR `_merge_milestone_cards()` 依赖 `real_time→draw_index` 映射 | **已消除（方案 C，2026-08-03）**：`bonus_events` 直接存 `draw_index`（0-based 本抽索引，来源 `stats.total_draws - 1`），无映射；资源归因移到 `on_bonus` 源头合并。**REVIEW-R1-FIX: ISSUE-102（措辞修正 REVIEW-R2-FIX: GATE-变更粒度）——该函数在代码库从未存在、gdr.py 不新增**（时序合并由 M5-stream streaming 方案 B 完成，`draw_index` 语义仍由 streaming 插入时使用） |
 |（已删除）原 `pools` 字符串 `"*"` 兼容 | 2026-08-02 无历史包袱迁移删除 `pools` 字段（§3.3 修订）——不再有字符串检测；`banner` 解析校验字符串类型（§3.7） |
-| banner 拼写错误/引用不存在 Banner id → 里程碑永不触发 | REVIEW-R1-FIX: ISSUE-012——`_build_milestone()` 仅对 banner 做类型检查（isinstance str，§3.7）；**「banner 值存在或为空」的存在性校验在 M1-M8 阶段不可做**（P61 前不存在 `[[banner]]` 定义可供对齐），推迟到 M9（P61 集成后对照 `[[banner]]` 段校验）。banner 精确匹配（非 fnmatch），配置错误由用户自查 banner id 与 `[[banner]]` 定义对齐 |
+| banner 拼写错误/引用不存在 Banner id → 里程碑永不触发 | REVIEW-R1-FIX: ISSUE-012——`_build_milestone()` 仅对 banner 做类型检查（isinstance str，§3.7）；**「banner 值存在或为空」的存在性校验在 M1-M8 阶段不可做**（P61 前不存在 `[[banner]]` 定义可供对齐），推迟到 M9（**P61 已落地【2026-08-04 归档】，M9 阶段可对照 `[[banner]]` 段校验**）。banner 精确匹配（非 fnmatch），配置错误由用户自查 banner id 与 `[[banner]]` 定义对齐 |
 | 配置面板 UI 与 P55/P56 保底 UI 改造潜在冲突 | 独立 Tab——不碰 `_setup_pity_config()` |
 | `apply_to_store()` 缺少里程碑写入逻辑——GUI 编辑无法持久化到 TOML | **M7c 追加：** 在 `apply_to_store()` 中遍历 `self._milestone_defs` 转换为 `MilestoneDef` 实例写入 `store.milestone.milestones`（~10行）。模式与 `store.pity.pities` 写入一致 <!-- REVIEW-FIX-PREV: ISSUE-001 / GATE-1-变更粒度 --> |
 | `set_config()` 全包无调用方——按原挂载点回填永不执行、「累抽奖励」Tab 恒空，且 UI 交互会以空 `_milestone_defs` 静默覆写已加载配置（REVIEW-R1-FIX: ISSUE-003） | **M7c 追加：** 回填挂载到 `_refresh_from_store_impl()`（config_panel L4045——实际加载路径 `refresh_from_store()` 调用，main_window L229/L257），从 `store.milestone.milestones` 反序列化到 `self._milestone_defs` + 刷新 `milestone_list` + 调用 `_populate_milestone_cards_list()`（~10行+调用）。模式仿照 `_pity_defs` 回填逻辑（L4074-4111） <!-- REVIEW-FIX-PREV: ISSUE-002 / GATE-1-变更粒度 --> |
@@ -1886,7 +1967,7 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 | `_build_milestone` 裸异常（`m['name']` KeyError / `int()` ValueError）绕过 ConfigError 通道 + card_id 引用未校验（REVIEW-R1-FIX: ISSUE-012）+ **校验对象抄错导致任何带 cards 配置恒抛 ConfigError（REVIEW-R1-FIX: ISSUE-101）** | §3.7 修订：name 用 `m.get('name','').strip()` + ConfigError；threshold/max_triggers 用 try/except 转 ConfigError；`bonus_reward.cards`/`random_cards[].candidates` 引用 card_id 解析期校验存在性（对照 `_build_pools` 对 `epitomizable_cards` 的 ConfigError 先例 config_toml.py L1081）。**ISSUE-101 修正：先 `known_card_ids = {c.card_id for c in store.card_defs}` 构建 id 集合再判断——禁止 `cid not in store.card_defs`（store.card_defs 是 List[CardDefEntry]，str in 列表恒 False，任何带 cards 的配置必然抛 ConfigError、load_toml 全失败）**；UT2 补「cards 引用有效卡加载成功」正例 |
 | 新核心模块未纳入 `core/__init__.py` 显式 re-export + `__all__` 清单（REVIEW-R1-FIX: ISSUE-013） | M3：补导出 `MilestoneEngine`/`MilestoneDef`/`MilestoneConfig`——`get_milestone_defs()` 返回类型已成 `StrategyContext` 公共接口一部分 |
 | 资源表手输空行与「从 store.resource_defs 填充」声明脱节，UI 无资源 ID 校验——用户可输入未定义资源 ID，TOML 层 `_build_milestone` 同样不校验 resources 键存在性，幽灵资源键污染模拟（REVIEW-R1-FIX: ISSUE-104） | **M7b2 追加：** 资源列（列0）改为可编辑 `QComboBox`（候选 = `store.resource_defs` 键）；`_add_milestone_resource` 插入下拉行、`_flush_milestone_current_detail` 兼容下拉/item 两种形态读取；**`apply_to_store()` 校验资源 ID 未定义给出警告**（不阻塞保存，用户自查，与场景 6「先定义 `endfield_next_voucher`」流程呼应）。**REVIEW-R1-FIX: ISSUE-311——警告带一次性去重（`self._warned_milestone_resource_ids` 集合），预览链路仅首次弹窗、后续静默，避免模态框阻塞编辑与模拟启动** |
-| `_populate_milestone_cards_list` 用 `for cid, entry in self._store.card_defs.items()` 迭代——`ConfigStore.card_defs` 是 `List[CardDefEntry]`（config_store.py L129）无 `.items()`，任何含 [[milestone]] 配置的加载/导入/重载在 M7c 回填段即 AttributeError（REVIEW-R1-FIX: ISSUE-301） | **M7b2 修正：** 改为列表迭代 `for entry in self._store.card_defs: cid = entry.card_id; rarity = (entry.rarity or '?').upper()`（对照 `_sync_weight_cards`/`_build_pity` 列表访问模式）；`_on_milestone_selected` 的 setSelected 依赖此列表填充，修复后固定卡多选可正常回填 |
+| `_populate_milestone_cards_list` 用 `for cid, entry in self._store.card_defs.items()` 迭代——`ConfigStore.card_defs` 是 `List[CardDefEntry]`（config_store.py L203 字段，类定义 L183）无 `.items()`，任何含 [[milestone]] 配置的加载/导入/重载在 M7c 回填段即 AttributeError（REVIEW-R1-FIX: ISSUE-301） | **M7b2 修正：** 改为列表迭代 `for entry in self._store.card_defs: cid = entry.card_id; rarity = (entry.rarity or '?').upper()`（对照 `_sync_weight_cards`/`_build_pity` 列表访问模式）；`_on_milestone_selected` 的 setSelected 依赖此列表填充，修复后固定卡多选可正常回填 |
 | `from_config_store()` 提取 `milestone_defs` 忽略 `enabled` 总闸——用户取消「启用累抽奖励」（apply_to_store 写 enabled=False、milestones 仍保留）后直接运行模拟，MilestoneEngine 仍被构造、里程碑照常触发，总闸运行时无任何效果（REVIEW-R1-FIX: ISSUE-302） | **M4b 修正：** 提取时加入 enabled 门控 `_ms_cfg = getattr(config_store, 'milestone', MilestoneConfig()); _milestone_defs = list(_ms_cfg.milestones) if _ms_cfg.enabled else []`（§3.2a），与 pity 路径 `_build_pity_engine_from_gui`（batch_simulator.py L87）的 enabled 语义对齐——两处组合成「禁用=无效+保存即删除」闭环，本修正封堵 runtime 侧 |
 | `_flush_milestone_current_detail` 用 `currentRow()` 定位——currentRowChanged 触发时 currentRow() 已是新行，flush 用旧行控件值覆写新行数据，且 flush 末尾 `item(row).setText` 用旧行名称重命名新行列表项（REVIEW-R1-FIX: ISSUE-001） | **M7b2 修正：** 新增 `self._current_milestone_row` 属性（仿 `_flush_pity_current_detail` 的 `_current_pity_row`）——`_on_milestone_selected` 先 flush 到该旧行、再赋值为新 row、最后回填控件；`_flush_milestone_current_detail` 读该属性而非 `currentRow()`；回填时重置为 -1 |
 | 多个随机卡池共存时 `_selected_random_pool_idx` 无用户选择机制——「编辑」恒作用于池 0（REVIEW-R1-FIX: ISSUE-003） | **M7b2 修正：** `ml_random_summary` 纯文本 QLabel 换为可点击 `QListWidget`（`ml_random_pool_list`），`currentRowChanged` → `_on_random_pool_selected` 实时维护 `_selected_random_pool_idx`；切换里程碑时池选中重置为 0；`_update_milestone_random_summary` 重绘后 clamp 恢复选中 |
@@ -1917,13 +1998,14 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 - [ ] `repeat = true`（every=N）：触发后计数器归零继续计数，下一轮继续触发
 - [ ] `max_triggers` 正确限制触发次数——达上限后永久停用；默认 0 = 无限触发
 - [ ] `banner` 正确过滤——空字符串 = 全部 Banner，非空 = 仅该 Banner 内触发（2026-08-02 起无 `"*"` 字符串兼容，原 pools 已删除）
+- [ ] **P61 落地装配纠正（2026-08-05）**——（1）`SimulationEnv` 以 `milestone_defs` 承接里程碑配置（P61 落地的 `milestone_engine` 实例字段保留 None 兜底不激活），`_run_single` 内 `MilestoneEngine(env.milestone_defs, seed=seed)` per-simulation 延迟构造、固定种子跨模拟可复现；（2）`register_milestone_engine` 定义于 `core/milestone.py`（用户裁决不新建 `service/milestone.py`），M4b 装配块改写后 import 指向 `gacha_simulator.core.milestone`、priority=0 订阅生效（M8 集成测试含「带里程碑配置跑模拟」路径验证，不再被 P61 装配块的 try/except ImportError 静默吞掉）；（3）`_on_after_draw` 经闭包捕获 engine、无模块级全局（M8 并行模拟固定 seed 下 milestone 触发结果可复现）
 - [ ] bonus 注入不触发常规保底重置（`hard`/`soft` 计数器不受 milestone 影响）
 - [ ] milestone 注入的卡经 P63 `state.add_card(path="milestone_gift", overflow_bands=card_overflow_map.get(cid), initial_counts=...)` 统一管道正确触发溢出（`match_overflow_bands()` 自动匹配分段表），与正常抽卡一致
 - [ ] milestone 溢出资源 + 直接资源注入 `resources` + `on_bonus` 源头归因（方案 C，2026-08-03；不进 rg/combined_gained，不双重入账）
 - [ ] `collector.on_bonus()` 记录归因元数据（`milestone_name`、时间戳、`pool_id`、`draw_index`、赠送卡 ID、资源金额）——资源走源头归因（方案 C，2026-08-03；不并入当抽 combined_gained）
 - [ ] `SharedResultCollector` 流式聚合包含 milestone——方案 A 源头合并自动覆盖（`extract_aggregate` 读取的 `card_counts`/`pool_card_counts` 已含 milestone，无需新增 `on_bonus` 方法；M5-serial 验证）
 - [ ] `CompactResult.to_dict()`/`from_dict()` 正确序列化/反序列化 `bonus_events`——并行模拟不丢数据
-- [ ] **`result.total_gained` 合并而非覆盖（M5-serial，REVIEW-R2-FIX: GATE-变更粒度）**——gacha_service.py L419 改为合并：`merged = dict(total_gained); for k, v in result.total_gained.items(): merged[k] = merged.get(k, 0) + v; result.total_gained = merged`（on_bonus 已把 milestone 资源并入 `result.total_gained` 对象字段，覆盖赋值会整体丢失）；最终 `final_resources` / `total_gained` / `draw_resources_gained` 三处一致
+- [ ] **`result.total_gained` 合并而非覆盖（M5-serial，REVIEW-R2-FIX: GATE-变更粒度）**——gacha_service.py L416 改为合并：`merged = dict(total_gained); for k, v in result.total_gained.items(): merged[k] = merged.get(k, 0) + v; result.total_gained = merged`（on_bonus 已把 milestone 资源并入 `result.total_gained` 对象字段，覆盖赋值会整体丢失）；最终 `final_resources` / `total_gained` / `draw_resources_gained` 三处一致（**2026-08-05 P61 落地对齐：原 L419 因 P61 重写模拟循环结构前移 3 行→L416**）
 - [ ] **M4 阶段带里程碑配置跑模拟不崩溃（REVIEW-R2-FIX: GATE-依赖顺序）**——`SimulationCollector.on_bonus` 具体 no-op 默认由 M4 提供（先于 M5-serial 的调用点），M4 验收含里程碑配置路径；milestone 产出静默丢弃属预期、M5-serial 后可见
 - [ ] GDR 计算含 milestone（REVIEW-R1-FIX: ISSUE-001 + ISSUE-102 裁决）——方案 A 生效时 `compute_gdr_from_compact`/`compute_gdr_from_cumulative` 入口**不调用**任何合并函数（`card_counts`/`pool_card_counts` 源头已合并）；**`_merge_milestone_cards()` 在代码库从未存在（grep 全仓核实，REVIEW-R2-FIX: GATE-变更粒度——无删除对象、gdr.py 零代码改动）**——时序合并由 M5-stream streaming 提取处（方案 B `merged_card_ids` 按抽序平行数组）统一完成，gdr.py 不保留、也不曾存在任何合并函数
 - [ ] GDR 合并不改函数签名——`compute_gdr_from_compact` / `compute_gdr_from_cumulative` 签名零改动，合并全部由 `on_bonus` 源头（卡计数/资源）与 M5-stream streaming 方案 B（时序数组）完成，**不在 GDR 入口处做任何合并调用**（`compute_gdr_from_history` 不存在；历史路径通过 `GeneralizedDropRate` 子类直接迭代 `InfoVector`，无统一入口函数）<!-- REVIEW-FIX-PREV: ISSUE-005 -->
@@ -1936,7 +2018,7 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 - [ ] 不存在里程碑配置时，`StrategyContext` 查询返回安全默认值（0 / False / 空 dict）
 - [ ] `MilestoneEngine.__init__` 接收 `seed` 参数——`random.Random(seed)` 保证随机卡抽取可复现
 - [ ] `ConfigStore.clear()` 重置 `self.milestone = MilestoneConfig()`——全量清零契约不违反
-- [ ] `SimulationEnv.from_dict()` 支持 `milestone_defs` 参数——`worst_impact.py` 等调用方不丢失配置
+- [ ] `SimulationEnv.from_dict()` 支持 `milestone_defs` 参数——`worst_impact.py` 等调用方不丢失配置（**P61 落点 #1 对齐：P61 落地的 `milestone_engine` 字段保持 None 兜底不激活，`milestone_defs` 为 P58 的配置载体**）
 - [ ] `from_config_store()` 提取 `milestone_defs` 尊重 `enabled` 总闸——`store.milestone.enabled=False` 时模拟运行不构造/不触发 MilestoneEngine（REVIEW-R1-FIX: ISSUE-302，与 pity `enabled` 语义一致，batch_simulator.py L87 对齐）
 - [ ] `build_strategy_context()` (`strategy_context_builder.py`) 签名含 `_milestone_engine` 参数——派生字段（`future_resource_gains` / `inter_pool_pity_links`）不丢失
 - [ ] `apply_to_store()` 将 `self._milestone_defs` 写回 `store.milestone.milestones`——GUI 编辑可持久化到 TOML
@@ -1987,11 +2069,11 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 |:---:|------|------|
 | M1 | 删除 `config_store.py` 中 `MilestoneDef` / `MilestoneConfig` 类定义 + `ConfigStore.milestone` 字段 + `ConfigStore.clear()` 中 `self.milestone = MilestoneConfig()` 行 | dataclass 定义与字段——删除后其他阶段引用此类型的 import 需同步清理 |
 | M2 | 删除 `config_toml.py` 中 `_build_milestone()` 函数定义 + `load_toml()` 中对其的调用 + `save_toml()` 中 `# milestone` 写入段 | TOML 解析/写出——删除后已有 `[[milestone]]` 段被静默忽略（无 crash），不影响其他 TOML 段的读写 |
-| M3 | 删除 `core/milestone.py` 整个文件 | 新文件——零波及。`gacha_service.py` / `batch_simulator.py` 中的 import 需同步移除（或无 import 则无需操作） |
+| M3 | 删除 `core/milestone.py` 整个文件 | 新文件——零波及。`gacha_service.py` / `batch_simulator.py` 中的 import 需同步移除（或无 import 则无需操作）。删除后 P61 装配块（batch_simulator.py L261-269）若仍 import 旧路径 `gacha_simulator.service.milestone` 则 ImportError 被其 try/except 防御跳过——不崩溃、里程碑不触发，符合 P61 未实施期的预期行为 |
 | M4 | 无需操作——`GachaService.__init__` 中 `milestone_engine: Optional[MilestoneEngine] = None` 默认值已保证无里程碑时不执行 bonus 逻辑；若已删除 M3 文件，移除 `milestone_engine` 参数以清理签名亦可 | 无行为变化——`if _milestone_engine:` 守卫在 `None` 时跳过整个 bonus 消费块 |
 | M4a | 无需操作——`StrategyContext._milestone_engine` 默认 `None`，三个查询方法均返回安全默认值（`0` / `False` / `{}`）；若已删除 M3 文件，可移除 `build_strategy_context()` 的 `_milestone_engine` 参数和 `StrategyContext` 中的字段与方法体 | 无行为变化——策略层查询始终返回安全默认值 |
-| M4b | 无需操作——`SimulationEnv.milestone_defs` 默认空列表导致 `MilestoneEngine` 构造时收到空 `_defs`，`after_draw()` 无任何判定；若已删除 M3 文件，移除 `SimulationEnv` 字段 + `SimulationEnvBuilder` 提取行 + `_run_single` 构造调用 | `batch_simulator.py` 中删去 3 处：`SimulationEnv` dataclass 字段 + `from_config_store()` 提取 + `_run_single` 构造 |
-| M5-serial | 删除 `collector.py` 中 `on_bonus` 方法定义 + `CompactCollector.on_bonus` 实现 + `CompactResult.bonus_events` 字段；移除 `to_dict()`/`from_dict()` 中 `bonus_events` 的序列化逻辑；gacha_service.py L419 回退为覆盖赋值 | collector + result_types + gacha_service 三文件回滚——`bonus_events` 列表始终为空时对下游无影响，但需清理代码以防误导 |
+| M4b | 无需操作——`SimulationEnv.milestone_defs` 默认空列表导致 `MilestoneEngine` 构造时收到空 `_defs`，`after_draw()` 无任何判定；**P61 落地的 `milestone_engine` 字段（L79）保留 None 兜底、P58 的 `milestone_defs` 字段删除后装配块条件恒 False，防御跳过**；若已删除 M3 文件，移除 `SimulationEnv` 字段 + `SimulationEnvBuilder` 提取行 + `_run_single` 构造调用 | `batch_simulator.py` 中删去：`milestone_defs` dataclass 字段 + `from_config_store()` 提取 + `_run_single` 装配块改写（恢复 P61 原状）；P61 的 `milestone_engine` 字段可保留或一并清理 |
+| M5-serial | 删除 `collector.py` 中 `on_bonus` 方法定义 + `CompactCollector.on_bonus` 实现 + `CompactResult.bonus_events` 字段；移除 `to_dict()`/`from_dict()` 中 `bonus_events` 的序列化逻辑；gacha_service.py L416 回退为覆盖赋值 | collector + result_types + gacha_service 三文件回滚——`bonus_events` 列表始终为空时对下游无影响，但需清理代码以防误导 |
 | M5-stream | 删除 `streaming.py` 中六路径 `merged_card_ids` 方案 B 插入逻辑 + kept_sequences 插入 + cum_draws/cumulative_draws 分母跳过分支 + transition_flags 减赠卡 draw-only 判定 | streaming.py 单文件回滚——删去赠卡行插入后流式路径回退为不含 milestone 产出的 draw-only 视图 |
 | M5a | 无需操作（M5a 收敛为验证性改动——gdr.py 零代码改动、无删除对象，`_merge_milestone_cards` 在代码库从未存在，REVIEW-R2-FIX: GATE-变更粒度）；若需回退时序合并，删除 M5-stream 在 streaming 提取处的 `merged_card_ids` 插入逻辑 | GDR 计算回退为不含里程碑产出的裸出率——与删除 `[[milestone]]` TOML 段后重跑等效 |
 | M7a | 删除 `config_panel.py` 中 `_setup_milestone_config()` 方法体 + `_setup_ui()` 中「累抽奖励」Tab 注册行 + left_tabs 中的 `addTab` 调用 | 仅 UI 层——`store.milestone` 数据仍存在但 Tab 不显示。调用方 `_setup_ui()` 中仅移除 `addTab` 行 |
@@ -1999,6 +2081,7 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 | M7b2 | 删除 `config_panel.py` 中 `_populate_milestone_cards_list` / `_add_milestone_resource` / `_remove_milestone_resource` / `_add_milestone_random_pool` / `_remove_milestone_random_pool` / `_edit_milestone_random_pool` / `_update_milestone_random_summary` / `_flush_milestone_current_detail` 方法体；移除 `_on_milestone_selected` 中奖励相关控件回填逻辑 | 仅 UI 层——里程碑数据 `self._milestone_defs` 仍存在但编辑入口消失 |
 | M7c | 删除 `apply_to_store()` 中 `store.milestone.milestones` 写入段 + `_refresh_from_store_impl()` 中 `self._milestone_defs` 回填段 + `get_config()` 返回字典中 `'milestone'` 键 | 仅 UI→store 数据流断裂——里程碑 TOML 段仍可手工编辑，但 GUI 无法读写 |
 | M8 | 删除 `tests/` 中里程碑相关测试文件/函数 | 测试套件回退为不含里程碑覆盖——已有测试不受影响 |
+| M9 | 无需操作——恢复 P61 装配块原状（`if env.milestone_engine is not None:` 防御跳过 + import `gacha_simulator.service.milestone`）即回退到「未启用里程碑」语义；装配块 import 改回旧路径后 ImportError 被 try/except 吞掉、里程碑不触发 | 无行为变化——里程碑回退为不触发；若需彻底清理，删除 M3 的 `core/milestone.py` + 恢复 M4b 改造的装配块 |
 
 **回滚验证方法：**
 1. 执行相应阶段的回滚操作
@@ -2042,3 +2125,58 @@ M1 → M2 → M3 → M4 → M4a（依赖 M4 的 `__init__` 新增 `milestone_eng
 - 累计问题: 47 个
 
 </details>
+
+---
+
+## 九、实施记录（2026-08-05）
+
+P58 已实施落地（M1-M9 全部完成）。核心变更文件：
+
+| 阶段 | 文件 | 内容 |
+|------|------|------|
+| M1 | `core/config_store.py` | `MilestoneDef`/`MilestoneConfig` dataclass + `ConfigStore.milestone` 字段 + `clear()` 重置 |
+| M2 | `core/config_toml.py` | `_build_milestone()` 解析（含全部 ConfigError 校验）+ `save_toml()` `[[milestone]]` 段 |
+| M3 | `core/milestone.py`（新建）+ `core/__init__.py` | `MilestoneEngine` + `register_milestone_engine`（闭包捕获）+ re-export |
+| M4 | `service/gacha_service.py` + `core/collector.py` | `__init__` 新增 `milestone_engine` 参数 + `SimulationCollector.on_bonus` no-op |
+| M4b | `service/batch_simulator.py` | `SimulationEnv.milestone_defs` + `from_config_store` enabled 门控提取 + `_run_single` 延迟构造装配（P61 落点 #1/#2/#3 纠正落地） |
+| M4a | `core/strategy.py` + `core/strategy_context_builder.py` | `StrategyContext._milestone_engine` + 3 查询方法 + `build_strategy_context` 参数 |
+| M5-serial | `core/collector.py` + `core/result_types.py` + `service/gacha_service.py` | `CompactCollector.on_bonus` 源头合并（方案 A+C）+ `bonus_events` 字段 + `_RESULT_VERSION` 2 + L416 合并修复 |
+| M5-stream | `core/streaming.py` | 方案 B 六路径 + kept_sequences + `extract_aggregate` 透传 + `_check_success_draw_only` |
+| M7 | `gui/config_panel.py` | 「累抽奖励」Tab + `RandomCardPoolDialog` + 奖励编辑器 CRUD + 回填/写出/预览 |
+| M8 | `tests/test_p58_milestone.py`（新建） | 30 个测试（UT1-4 + 7 G20 场景 + S1/空抽/溢出/流式/方案 AB/单进程兜底） |
+
+**实施决策（2026-08-05，与计划 §3.5「P61 协作」一致）：** M9 的订阅装配作为最终态直接落地（P61 已归档），M4 inline 过渡形态未引入（计划明确「最终态以 M9 订阅装配为准」）。`register_milestone_engine` 扩展接收 `card_overflow_map`/`initial_counts` 参数（M9 订阅 handler 拿不到 GachaService 内部 self，装配点透传——独立审查发现 2 的落地）。
+
+**验证：** 964 passed（920 既有 + 44 新增）、ruff 全部通过、M9 banner 过滤端到端验证通过。
+
+**独立 fidelity 审查（2026-08-05，2 个阻塞级缺陷已修复）：**
+1. **转变标记 draw-only 键空间分裂（ISSUE-307/313 实际未生效）**——`streaming.py` 减赠卡循环用 `bonus_events[].pool_id == pool_id` 直接比较，但 `pool_end_times` 键为 banner_id、`bonus_events[].pool_id` 为全限定 `{banner_id}.{pool_id}`，恒 False。修正为取 banner_id 段（`split('.')[0]`）匹配（`_check_success_draw_only` + `_update_transition`）。
+2. **`infer_events` / `_resolve_skip_ignore` 减赠卡未实施（ISSUE-007）**——新增 `process_trace.py::_subtract_gift_cards()`：`infer_events` 双路径判定前按 `compact['bonus_events']` 从 `pool_card_counts` 减赠卡恢复 draw-only 口径（数据源已由 `extract_aggregate` 透传就绪，旧数据集无键 → 保守回退不减）。
+
+**审计补齐用例（+9）：** banner 过滤集成测试（M9 验收）、shipped config.toml 示例段加载 + round-trip、清空名称 round-trip、StrategyContext 查询 + 安全默认值、ConfigStore.clear() 重置、get_config milestone 键、转变标记 draw-only 回归（含赠卡目标卡场景）。
+
+**第 2 轮独立核查（2026-08-05，计划波及项补齐）：**
+1. **ISSUE-312——`compute_transition_flags_from_gdr` 回退路径 draw-only 口径**：`per_pool_analysis.py` 新增 `bonus_events: List[List[Dict]] = None` 参数（判定前按该 sim 该 pool 赠卡减 `cumulative_card_counts`/`agg['card_counts']` 恢复 draw-only，banner_id 段匹配与 streaming 同口径；`None` 保守回退不减）+ `analysis_panel.py` 两处调用透传 `[r.get('bonus_events', []) for r in self.results]`（数据通道已由 extract_aggregate 透传就绪）。
+2. **ISSUE-005/306——`RetreatConfigBuilder.build` 透传 milestone + 溢出数据**：`retreat_config.py` 透传 `original_store.milestone` + `card_overflow_map` + `rarity_defaults` + `CardDefEntry.overflow_bands`——截断模式（from_pool_id 指定）与完整时间线模式 GDR/最少资源/Pareto 数值一致。
+3. **ISSUE-008——`compute_config_hash` 纳入 milestone**：`result_store.py` 新增 `milestone_config` 参数（hash 覆盖 name/threshold/repeat/max_triggers/banner/bonus_reward/enabled）+ `main_window.py` 调用处透传 `store.milestone`——仅 milestone 不同的数据集判「配置: 不同」。
+4. **CLAUDE.md 同步（§八验收）**：扩展指南表新增「新里程碑」行 + 架构分层注释新增 `core/milestone.py` 条目。
+
+**第 2 轮补齐用例（+5）：** `compute_transition_flags_from_gdr` draw-only（含 None 回退/多赠卡）、`RetreatConfigBuilder` 透传、`compute_config_hash` 纳入 milestone。
+
+**第 3 轮核查（2026-08-05，用户决定 + 独立占位计划）：**
+- **用户决定（UI 偏离）：** `config_panel.py` 中 `RandomCardPoolDialog` 与 `_populate_milestone_cards_list` 的「稀有度着色」（`color_map` + `setForeground`，计划 §3.8.3/3.8.5 描述）**删除**——用户确认保留删除，记为用户决定（配置面板 UI 简化，不影响功能）。
+- **N1/N2/N3 及统计层键层级问题归入独立计划：** 第 3 轮独立核查发现 `compute_transition_flags_from_gdr` 单池回退减赠卡改错字段（N1）、streaming 全累计判池成败的跨 banner 赠卡残留（N2）、`pool_ids_ordered` banner 键查全限定表的键层级错配（N3，P61 迁移既有问题）——连同「截止每池 GDR」「process_analysis 累积模式」同类键层级消费点。**根因是 P61 后「每池」语义未裁决（组合模式 vs 拆分模式）**，归入 **P72 每池分析语义界定——banner 与 pool 双层结构的组合与拆分模式**（占位计划）。
+- **「累抽得」事件分类归入独立计划：** 事件系统只有 pity_hit/early_hit/miss 三路径、无「累抽得」路径，GDR 含送卡但事件分类 draw-only 的矛盾（累抽保底被判 miss）。**主题是事件系统整体重构（类型体系 + 判定条件 + 成败口径）**，归入 **P71 过程事件系统重构——事件类型体系与成败判定口径**（占位计划）。
+
+**第 4 轮独立代码质量审查（2026-08-05，用户决定——不参照计划的实现缺陷审查，与前 3 轮 fidelity 对照区分）：**
+- **F1（重要）已修复**：`_build_milestone` 对非 dict 里程碑项 / 非字符串 name / 非 dict bonus_reward 抛裸 AttributeError 而非 ConfigError（违反 ISSUE-012 校验不变式）——补 `isinstance` 守卫统一走 ConfigError 通道（config_toml.py）。
+- **F2（重要）已修复**：`max_triggers < 0` 未校验，静默变成「触发一次即停用」（`milestone.py` L87 `if md.max_triggers and ...` 对负数 truthy）——补 `max_triggers >= 0` 校验（config_toml.py）。
+- **F3（次要）已修复**：`threshold`/`max_triggers` 拒绝 bool（int 子类陷阱）与 float（`int()` 静默截断）、`repeat` 拒绝字符串 truthy（`'false'` 被当 True）——补类型校验（config_toml.py）。
+- **F4（次要）已修复**：GUI `_milestone_random_pools` 跨配置加载未清空，同名里程碑经 `setdefault` 继承上一配置陈旧随机池——`_refresh_from_store_impl` 补清空 + 重置选中索引（config_panel.py）。
+- **F5（提示）已登记**：流式 draw-only 跨 banner 赠卡泄漏（streaming `_check_success_draw_only` 与 process_trace `_subtract_gift_cards` 两条路径对跨 banner 场景结论不一致，子 agent 实测确认）——本质是 **N2**，P72 已覆盖（跨 banner 赠卡残留），不新增处置。
+- **F6（提示）待确认设计意图**：`random.choices` 有放回抽样，`random_cards[].count` > 候选数时必出重复赠卡（子 agent 实测确认）——需下游阶段确认是否要求「随机 N 张不重复」；若确认，解析器应补 `count <= len(candidates)` 校验。
+- **F7（提示）已知限制**：InfoVectorCollector 路径静默丢弃 milestone 产出归因（`collector.py` on_bonus no-op，注释已标注），不修改。
+- **N1（预存问题）已登记**：两条流式实现（`WorkerLocalExtractor.process` vs `DrawSequenceExtractor._update_cumulative`）对池边界抽的累计快照 off-by-one 分歧（子 agent 实测确认），P58 前已存在、超出 P58 范围，归档后关注。
+- **修复验证**：+7 负例测试（F1×3 / F2×1 / F3×3，UT2 类追加），P58 51 passed，全量 **971 passed** + 1 skipped，ruff 通过。
+
+**归档结论（2026-08-05）：** P58 主体实施 + 3 轮 fidelity 核查 + 第 4 轮独立代码质量审查均闭环，无阻塞级缺陷，达到归档标准（对照 P61：3 轮核查 + 全绿）。遗留项全部登记：P72（N1/N2/N3 + 每池语义）、P71（事件系统重构）、F6（重复赠卡设计意图待确认）、N1（流式快照 off-by-one 预存问题）。

@@ -1,7 +1,9 @@
 from .result_types import CompactResult
 from .collector import SimulationCollector, InfoVectorCollector, CompactCollector
-from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string
+from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, aggregate_probs_by_rarity, infer_rarity_from_spec  # ← P61（Ph1）
+from .notifier import Notifier
 from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
+from .banner import Banner, DrawOutcome, TransitionRule, TransitionPreview  # ← P61（Ph1c）
 from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
 from .info_vector import InfoVector
@@ -18,26 +20,35 @@ from .pity import (
     TargetedBehavior, TargetedSoftBehavior,
     SoftPityMixin, _redistribute_scope,
 )
+from .milestone import MilestoneEngine, MilestoneDef, MilestoneConfig, register_milestone_engine  # P58
+from .config_store import SelectVoucherDef  # P78
+from .resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig, resolve_expire_time  # ← P77
 from .strategy import (
     Strategy, StrategyContext, StrategyMeta, register_strategy,
     SmartStrategy, PoolQuotaStrategy, PityReserveStrategy, StopOnTargetStrategy,
     FixedCountStrategy, TargetHuntingStrategy, NoDrawStrategy, DrawTargetStrategy,
     CompositeStrategy, DrawSegmentStrategy, PriorityChainStrategy, ConditionalStrategy,
     STRATEGY_REGISTRY, create_strategy, strategy_type_to_key, strategy_key_to_type,
+    next_event_wait,
 )
 from .param_descriptor import (
     FloatParam, IntParam, BoolParam, StrParam, StringListParam, PoolIntMapParam,
+)
+from .stop_condition_expr import (
+    StopConditionExprError, parse_stop_condition_expr,
+    expr_ast_to_text, tree_to_conditions_and_expr, expr_to_tree,
+    validate_stop_condition_config,
 )
 from .strategy_loader import load_plugin_strategies
 from .strategy_context_builder import build_strategy_context
 from .stop_condition import (
     StopCondition, FixedActionCountCondition, ResourceThresholdCondition,
     TargetAcquiredCondition, TimeLimitCondition, CompositeStopCondition,
-    AllPoolsEndCondition, LastDrawCardCondition,
-    STOP_CONDITION_REGISTRY, create_stop_condition,
-    stop_condition_type_to_key, stop_condition_key_to_type,
+    AllPoolsEndCondition, LastDrawCardCondition, NotCondition,
+    STOP_CONDITION_REGISTRY, create_stop_condition, MAX_SIM_TIME,
+    stop_condition_shape_issues,
 )
-from .resource_gain import ResourceGainFunction, LinearResourceGain, PeriodicResourceGain, StepResourceGain, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
+from .resource_gain import ResourceGainFunction, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
 from .generalized_drop_rate import (
     GeneralizedDropRate, RarityValueAtT, CumulativeResourceEfficiency, PityProgressAtT,
     DropRateBetweenT1T2, TotalValueAtT, TargetCardCountAtT, TargetCardPercentageAtT, TargetCardEfficiencyAtT
@@ -71,7 +82,8 @@ from .worst_impact import (
     WorstImpactAnalyzer, WorstImpactResult, ConditionalResourceDistribution,
 )
 from .result_store import (
-    ResultStore, StoredDataset, ComparabilityFingerprint, ComparabilityDiff, compute_config_hash,
+    ResultStore, StoredDataset, ComparabilityFingerprint, ComparabilityDiff,
+    compute_config_hash, canonical_stop_condition_summary,
 )
 from .gdr_binning import (
     BinningResult, compute_bins, detect_step_size, compute_aligned_bins,
@@ -101,7 +113,10 @@ __all__ = [
     'CompactResult',
     'SimulationCollector', 'InfoVectorCollector', 'CompactCollector',
     'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
+    'aggregate_probs_by_rarity', 'infer_rarity_from_spec',
+    'Notifier',
     'OverflowBand', 'match_overflow_bands', 'expand_sugar_to_bands',
+    'Banner', 'DrawOutcome', 'TransitionRule', 'TransitionPreview',
     'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
     'InfoVector',
@@ -116,19 +131,26 @@ __all__ = [
     'RotatingCRBehavior', 'RotatingCRSoftBehavior',
     'TargetedBehavior', 'TargetedSoftBehavior',
     'SoftPityMixin', '_redistribute_scope',
+    'MilestoneEngine', 'MilestoneDef', 'MilestoneConfig', 'register_milestone_engine',
+    'SelectVoucherDef',
+    'ResourceLifecycle', 'ResourceLifecycleConfig', 'resolve_expire_time',
     'Strategy', 'StrategyContext', 'StrategyMeta', 'register_strategy',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',
     'CompositeStrategy', 'DrawSegmentStrategy', 'PriorityChainStrategy', 'ConditionalStrategy',
     'STRATEGY_REGISTRY', 'create_strategy', 'strategy_type_to_key', 'strategy_key_to_type',
+    'next_event_wait',
     'FloatParam', 'IntParam', 'BoolParam', 'StrParam', 'StringListParam', 'PoolIntMapParam',
+    'StopConditionExprError', 'parse_stop_condition_expr',
+    'expr_ast_to_text', 'tree_to_conditions_and_expr', 'expr_to_tree',
+    'validate_stop_condition_config',
+    'stop_condition_shape_issues',
     'load_plugin_strategies', 'build_strategy_context',
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',
-    'AllPoolsEndCondition', 'LastDrawCardCondition',
-    'STOP_CONDITION_REGISTRY', 'create_stop_condition',
-    'stop_condition_type_to_key', 'stop_condition_key_to_type',
-    'ResourceGainFunction', 'LinearResourceGain', 'PeriodicResourceGain', 'StepResourceGain', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',
+    'AllPoolsEndCondition', 'LastDrawCardCondition', 'NotCondition',
+    'STOP_CONDITION_REGISTRY', 'create_stop_condition', 'MAX_SIM_TIME',
+    'ResourceGainFunction', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',
     'GeneralizedDropRate', 'RarityValueAtT', 'CumulativeResourceEfficiency', 'PityProgressAtT',
     'DropRateBetweenT1T2', 'TotalValueAtT', 'TargetCardCountAtT', 'TargetCardPercentageAtT', 'TargetCardEfficiencyAtT',
     'PoolSchedule', 'PoolScheduleManager',
@@ -156,6 +178,7 @@ __all__ = [
     'to_success_sequence', 'to_success_set', 'to_success_count', 'to_success_custom',
     'EVENT_MODE_MAP', 'SUCCESS_MODE_MAP',
     'ResultStore', 'StoredDataset', 'ComparabilityFingerprint', 'ComparabilityDiff', 'compute_config_hash',
+    'canonical_stop_condition_summary',
     'BinningResult', 'compute_bins', 'detect_step_size', 'compute_aligned_bins',
     'DescriptiveStats', 'HypothesisTestResult', 'ParetoFrontier',
     'ClassificationResult', 'classify_dominance',

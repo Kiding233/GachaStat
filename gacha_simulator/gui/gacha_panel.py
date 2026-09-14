@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """抽卡面板 - 批量模拟"""
 
+import copy
 import traceback
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QLabel,
@@ -96,8 +97,14 @@ class SimulationThread(QThread):
             no_draw_resources = {}
             no_draw_pool_resources = {}
             try:
+                # P79：基线不继承用户停止条件——no_draw 策略全程只返回等待，
+                # fixed_action_count 一类条件会把基线截断、final_resources 偏低，
+                # 「不抽卡资源基线」这一对比基准失真且无提示。用 env 的副本置空，
+                # 不改 run_batch_parallel 的统一入口签名；基线仍由硬边界收口。
+                _baseline_env = copy.deepcopy(env)
+                _baseline_env.stop_condition = None
                 no_draw_results = run_batch_parallel(
-                    env=env,
+                    env=_baseline_env,
                     target_specs=target_specs,
                     initial_resources=env.initial_resources,
                     num_simulations=1,
@@ -108,7 +115,9 @@ class SimulationThread(QThread):
                 if no_draw_results and no_draw_results[0]:
                     no_draw_resources = no_draw_results[0].get('final_resources', {})
                     no_draw_resource = no_draw_resources.get('draw_resource', None)
-                    no_draw_pool_resources = no_draw_results[0].get('pool_end_resources', {})
+                    # P61（Ph7 / AUDIT-BREAK-6）：字段已改 banner_end_resources（Ph2），
+                    # 键为 banner_id——旧 pool_end_* .get 静默拿空 dict
+                    no_draw_pool_resources = no_draw_results[0].get('banner_end_resources', {})
             except Exception:
                 pass
 
@@ -270,6 +279,17 @@ class GachaPanel(QWidget):
         config_panel = self._config_panel
         if not config_panel:
             self._log("错误: 无法获取配置面板")
+            return
+
+        # P61（2026-08-04 保存校验覆盖模拟启动路径，D-3）：重复 Banner id / Pool id /
+        # 空 cost 会致引擎 PityEngine 全限定键撞车（保底串池）或静默写错，开始模拟前拦截
+        errors = config_panel.validate_banners()
+        if errors:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "配置校验失败",
+                "以下问题需修正后才能开始模拟：\n\n"
+                + '\n'.join(f"  · {e}" for e in errors))
             return
 
         config_panel.apply_to_store()

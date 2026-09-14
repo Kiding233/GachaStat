@@ -143,6 +143,40 @@ def compute_aligned_bins(values: np.ndarray, step: float) -> np.ndarray:
 # 内部函数：各层分箱策略
 # ============================================================
 
+# 离散整数格点的判定阈值——值域/唯一值超过则走连续/步长路径（bin 数爆炸）
+_INT_GRID_MAX_SPAN = 500   # 值域上限（exchange 累抽币 0~几百；draw_resource 55000 远超）
+_INT_GRID_MAX_UNIQ = 200   # 唯一值上限（连续数据唯一值成百上千，自动排除）
+
+
+def _is_discrete_integer(vals: np.ndarray) -> bool:
+    """离散整数检测：全整数 且 值域小 且 唯一值适中。
+
+    识别计数型数据（保底次数、目标卡数、累抽奖励币等）——它们该走整数格点
+    分箱（size=1，每整数一 bin）而非步长对齐/连续分箱。连续大值域数据
+    （如 draw_resource 剩余 0~55000）不满足值域条件，自动排除。
+    """
+    vmin = float(np.min(vals))
+    vmax = float(np.max(vals))
+    if vmax - vmin > _INT_GRID_MAX_SPAN:
+        return False
+    if np.any(vals != np.round(vals)):
+        return False
+    return len(np.unique(vals)) <= _INT_GRID_MAX_UNIQ
+
+
+def _bins_integer_grid(vals: np.ndarray) -> BinningResult:
+    """整数格点分箱：size=1，起点=最小值，终点=最大值+1。
+
+    每个整数独占一 bin——计数型数据的自然格点。空 bin 高度 0（go.Histogram
+    不画柱），仅作 x 轴刻度；断层（如累抽奖励 300 大额造成的跳变）清晰显示。
+    起点=数据最小值，天然无中点外扩的负边界。
+    """
+    lo = int(np.floor(float(np.min(vals))))
+    hi = int(np.ceil(float(np.max(vals))))
+    edges = np.arange(lo, hi + 2, 1.0, dtype=np.float64)
+    return BinningResult(bin_edges=edges, density=False)
+
+
 def _bins_finite_grid(vals: np.ndarray) -> BinningResult:
     """第一层：有限格点柱状图——每个实际取值一根柱子。
 
@@ -289,17 +323,24 @@ def compute_bins(
     if parse_gdr_key(gdr_key)[0] == "resource_per_card" and np.any(~np.isfinite(vals)):
         return _bins_with_inf(vals)
 
-    # 1. 第一层：有限格点检测（全量样本）
+    # 1. 离散整数格点：值域小的全整数数据（计数型——保底次数/目标卡数/累抽奖励币）
+    #    每整数一 bin（size=1），精确真实值，无中点外扩、无步长误对齐。
+    #    必须在有限格点（≤20 唯一值）之前——否则唯一值 ≤20 的离散整数会被
+    #    _bins_finite_grid 中点分箱截胡（0 与下一值中点外扩出负边界）。
+    if _is_discrete_integer(vals):
+        return _bins_integer_grid(vals)
+
+    # 2. 有限格点检测（全量样本）
     uniq = np.unique(vals)
     if len(uniq) <= 20:
         return _bins_finite_grid(vals)
 
-    # 2. 第二层：步长检测（仅对 B₁ 类有意义，但不预设类型——
+    # 3. 步长检测（仅对 B₁ 类有意义，但不预设类型——
     #    对任意 >20 唯一值的数据尝试步长检测，命中则对齐分箱）
     if cost_per_draw is not None or use_draw_units:
         stepped = _bins_stepped(vals, cost_per_draw, use_draw_units)
         if stepped.bin_edges is not None:   # 步长命中
             return stepped
 
-    # 3. 第三层：连续分箱
+    # 4. 连续分箱
     return _bins_continuous(vals)

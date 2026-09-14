@@ -58,6 +58,11 @@ class ResourceSearchWorker(QThread):
     def _build_simulation_env(self):
         from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
         self._sim_env = SimulationEnvBuilder.from_config_store(self.config_store)
+        # P79：搜索模式不继承用户停止条件。
+        # 本面板不经 retreat_search._build_env，自建 env 直供 run_batch_parallel，
+        # 故须在此单独置空——否则用户条件会截断搜索模拟的时间线，使 GDR 成功率与
+        # 「最少资源」结论出错。搜索由硬边界收口。
+        self._sim_env.stop_condition = None
         self._actual_cost_per_draw = self._extract_cost_per_draw(self._sim_env.pools)
         self._display_cost_per_draw = self.cost_per_draw_override if self.cost_per_draw_override else self._actual_cost_per_draw
         self._initial_resources_backup = dict(self._sim_env.initial_resources)
@@ -68,7 +73,10 @@ class ResourceSearchWorker(QThread):
         if not pools:
             return 160
         for p in pools:
-            cost = p.cost
+            # P61（Ph6 / AUDIT-BREAK-5 ③）：env.pools 承载 List[Banner]，读 banner.active_pool.cost
+            cost = getattr(p, 'cost', None)
+            if cost is None and hasattr(p, 'active_pool'):
+                cost = getattr(p.active_pool, 'cost', None)
             if isinstance(cost, list) and cost:
                 for opt in cost:
                     if isinstance(opt, dict):

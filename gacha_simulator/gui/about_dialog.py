@@ -161,47 +161,64 @@ day = 1
 gains = { draw_resource = 500 }</pre>
         <p>规则类型：<code>every_n_days</code>, <code>weekly</code>, <code>monthly_day</code>, <code>monthly_week</code>。</p>
 
-        <h4>[[pools]] — 池子定义</h4>
-        <pre>[[pools]]
+        <h4>[[banner]] — Banner 定义（P61）</h4>
+        <pre>[[banner]]
 id = "pool_0"
 name = "常驻池"
-pool_type = "角色"
-start_day = 0
-end_day = 21
+enabled = true
+start_day = 0        # 开启（天）
+end_day = 21         # 关闭（天）；省略 = 永久开放，延续到最后一个有结束时间的 Banner
+
+[[banner.pool]]
+id = "main"
 cost = "draw_resource:160"
 batch_size = 1
-distribution_template = "standard_character"
-bindings = { ssr = "刻晴,莫娜", sr = "班尼特,行秋", r = "r1,r2" }
-target_cards = ["刻晴"]</pre>
+max_draws = 0        # 0=无限制；一次性池 = batch_size（抽满一个批次即关闭）
+excludes_all_pity = false
+
+[[banner.pool.reward]]
+card_id = "刻晴"
+probability = 0.6
+rarity = "SSR"
+featured = true
+
+[[banner.pool.reward]]
+card_id = "班尼特"
+probability = 5.1
+rarity = "SR"</pre>
         <p><b>费用语法</b>：<code>资源ID:数量</code>。多资源可用 <code>&gt;</code>（大于号）或 <code>,</code>（逗号）分隔，表示按书写顺序的<b>强制优先级</b>——先尝试排在前面的资源，不够再回退到后续资源。</p>
         <p>示例：<code>exchange_currency:5 &gt; draw_resource:160</code> 表示优先消耗兑换货币，不足时再用抽卡资源。</p>
         <p><code>&amp;</code> 表示同时需要多种资源（AND），<code>()</code> 用于分组。完整示例：<code>(draw_resource:160 &gt; exchange_currency:5) &amp; stardust:10</code></p>
-        <p><b>绑定键</b>：ssr, ssr_alt, ssr_alt1, ssr_alt2, featured, offrate, sr, r, rerun_of, exchange_card</p>
-        <p>可选字段：<code>rerun_of</code>（复刻，引用另一池子的分布）、<code>exchange_card_id</code>（兑换池，100% 出指定卡）。</p>
+        <p>可选 Pool 字段：<code>exchange_card_id</code>（兑换池，100% 出指定卡）、<code>epitomizable_cards</code>（定轨候选）、<code>excludes_all_pity</code>（不计保底）。</p>
 
-        <h4>[[pity]] — 保底规则（P55 新格式）</h4>
+        <h4>[[banner.lifecycle]] — 生命周期转换（P61）</h4>
+        <pre>[[banner.lifecycle]]
+condition = "pool_draws"   # pool_draws | banner_draws | card_obtained | pool_exhausted | time_window
+pool = "main"              # 关联池（card_obtained 时为匹配目标）
+at = 30                    # 阈值：pool_draws/banner_draws 为抽数；time_window 为天（*DAY 转秒）
+match = "card_id"          # card_obtained 匹配方式：card_id | rarity
+action = "switch_to"       # switch_to | exhaust_banner
+target = "free_10pull"     # switch_to 目标池</pre>
+        <p>lifecycle 实现「抽满 N 次切换到下一池」等阶段转换；<code>max_draws</code> 由引擎自动执行（抽满即关闭），无需手写规则。</p>
+
+        <h4>[[pity]] — 保底规则</h4>
         <pre>[[pity]]
 name = "ssr_soft"
-type = "soft_interval"   # soft_interval | soft_additive | soft_step | hard
+type = "soft_interval"   # soft_interval | soft_additive | soft_step | hard | rotating | targeted
 scope = "ssr"
 start = 80
 end = 90
 target_featured = true
 reset = "featured"        # featured | ssr | (scope 值)
-pools = ["pool_c*"]       # 支持 fnmatch 通配符
-counter_init = 0
-
-# 生命周期（可选）
-[lifecycle]
-deactivate_on_early_hit = false
-depends_on = ""</pre>
-        <p>软保底 type：<code>soft_interval</code>（区间递增，start→end 线性）/ <code>soft_additive</code>（累加递增，每抽+increment%）/ <code>soft_step</code>（RLE deltas 自定义分段）。硬保底：<code>type="hard"</code> + <code>threshold</code>。事件驱动型（rotating/targeted 等）由 P56 交付。</p>
+pools = ["pool_0.main"]   # 全限定键 {banner_id}.{pool_id}，支持 fnmatch 通配符
+counter_init = 0</pre>
+        <p>绑定池用全限定键 <code>{banner_id}.{pool_id}</code>（如 <code>pool_0.main</code>），GUI 中经「绑定池」勾选表格生成。</p>
 
         <h4>[[targets]] — 目标卡</h4>
         <pre>[[targets]]
 card_id = "刻晴"
 quantity = 2
-pool_ids = ["pool_0", "pool_1"]</pre>
+pool_ids = ["pool_0", "pool_1"]   # Banner 级 id</pre>
 
         <h4>[[weights]] — 权重配置（可选）</h4>
         <pre>[[weights]]
@@ -210,24 +227,6 @@ desire = 2.0
 miss_cost = 1.2
 card_value = 1.5</pre>
         <p>所有卡默认权重 1.0。desire_weight 影响前进法排序，miss_cost_weight 影响后退法排序，card_value 影响出卡价值计算。</p>
-
-        <h4>[[distribution_templates]] — 池子分布模板</h4>
-        <pre>[[distribution_templates]]
-name = "standard_character"
-[[distribution_templates.cards]]
-card_id = "ssr"
-probability = 0.6
-rarity = "ssr"
-featured = true
-[[distribution_templates.cards]]
-card_id = "sr"
-probability = 5.1
-rarity = "sr"
-[[distribution_templates.cards]]
-card_id = "r"
-probability = 94.3
-rarity = "r"</pre>
-        <p>模板中的 <code>card_id</code> 为绑定键时（ssr/sr/r/ssr_alt 等），加载时按池子的 <code>bindings</code> 展开为具体卡牌并均分概率。</p>
         """)
         layout.addWidget(browser)
         return widget

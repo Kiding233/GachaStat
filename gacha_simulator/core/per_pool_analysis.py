@@ -59,6 +59,7 @@ def compute_cumulative_snapshots(
     target_ids: Set[str] = None,
     ssr_ids: Set[str] = None,
 ) -> List[CumulativeSnapshot]:
+    """P72 ISSUE-004 键契约：pool_end_times 键为 banner 级（时间域），返回快照按 banner 分段。"""
     if target_ids is None:
         target_ids = set(ctx.target_specs.keys())
     if ssr_ids is None:
@@ -155,6 +156,7 @@ def per_pool_summary_stats(
 def cumulative_gdr_at_pool_ends(
     batch_cum: Dict[str, List[CumulativeSnapshot]],
 ) -> Dict[str, Dict[str, List[float]]]:
+    """P72 ISSUE-004 键契约：batch_cum 键为 banner 级（pool_end_times 键空间，时间域）。"""
     result = {}
     for pid, snaps in batch_cum.items():
         if not snaps:
@@ -291,9 +293,17 @@ def compute_transition_flags_from_gdr(
     scope: str = 'cumulative',
     aggregates: List[Dict] = None,
     ssr_ids: Set[str] = None,
+    bonus_events: List[List[Dict]] = None,   # P58（ISSUE-312）：per-sim 赠卡清单，None=无赠卡数据保守回退不减
     **gdr_kwargs,
 ) -> List[List[bool]]:
-    """通过 GDR 框架逐池判定成功/失败，替代硬编码的 _compute_transition_flags()。"""
+    """通过 GDR 框架逐池判定成功/失败，替代硬编码的 _compute_transition_flags()。
+
+    P58（REVIEW-R1-FIX: ISSUE-312）——转变分析 draw-only 口径回退路径：
+    方案 B/A 后 cumulative_snapshots/aggregates 含 milestone 赠卡（target 为赠卡时
+    判池成功），与 infer_events 的 draw-only 池成败矛盾。判定前按 bonus_events
+    （per-sim 赠卡清单，data 通道由 extract_aggregate 透传）减去该 sim 该 pool 的
+    赠卡 card_ids，恢复 draw-only 口径。None = 无赠卡数据 → 保守回退不减（当前行为）。
+    """
     from .process_trace import compute_pool_gdr_cumulative, compute_pool_gdr_single_pool
 
     if scope == 'cumulative':
@@ -308,18 +318,58 @@ def compute_transition_flags_from_gdr(
     gdr_defn = resolve_gdr_definition(gdr_key)
     lower_is_better = gdr_defn.lower_is_better if gdr_defn else False
 
+    def _draw_only_card_counts(counts: Dict[str, int], sim_idx: int, pool_id: str) -> Dict[str, int]:
+        """P58（ISSUE-312）：从含赠卡的计数恢复 draw-only 口径。
+
+        bonus_events[sim_idx] 为该 sim 的全部赠卡事件；pool_id 为 pool_ids_ordered
+        键（banner_id 或全限定，与 cumulative_snapshots 同键空间）；bonus_events[].pool_id
+        为全限定 {banner_id}.{pool_id}（emit 契约）——按 banner_id 段匹配（与
+        streaming._check_success_draw_only 同口径）。
+        """
+        if not bonus_events or sim_idx >= len(bonus_events):
+            return dict(counts)
+        draw_only = dict(counts)
+        pid = pool_id or ''
+        pid_banner = pid.split('.')[0] if pid else ''
+        for ev in bonus_events[sim_idx]:
+            ev_pool = ev.get('pool_id', '') or ''
+            ev_banner = ev_pool.split('.')[0] if ev_pool else ''
+            # 匹配：pool_id 全限定 → banner 段相等；pool_id 裸 banner → 相等；空 → 全部
+            if ev_banner and pid_banner and ev_banner != pid_banner:
+                continue
+            if not ev_banner and pid_banner:
+                continue
+            for cid in ev.get('card_ids', []):
+                if cid in draw_only:
+                    draw_only[cid] = max(0, draw_only[cid] - 1)
+        return draw_only
+
     flags_per_sim = [[] for _ in range(n_sims)]
     for pool_id in pool_ids_ordered:
         for sim_idx in range(n_sims):
             if scope == 'cumulative':
                 snaps = cumulative_snapshots.get(pool_id, [])
                 snap = snaps[sim_idx] if sim_idx < len(snaps) else {}
-                val = compute_pool_gdr_cumulative(
-                    snap, pool_id, target_specs, gdr_key,
-                    ssr_ids=ssr_ids, **gdr_kwargs,
-                )
+                if snap:
+                    snap = dict(snap)
+                    snap['cumulative_card_counts'] = _draw_only_card_counts(
+                        snap.get('cumulative_card_counts', {}), sim_idx, pool_id)
+                    val = compute_pool_gdr_cumulative(
+                        snap, pool_id, target_specs, gdr_key,
+                        ssr_ids=ssr_ids, **gdr_kwargs,
+                    )
+                else:
+                    # P72 ISSUE-703 路线(a) 落点1（D4 已裁决）：空快照（数据缺失）→ None，
+                    # 消费侧计失败并注明「数据缺失，非真失败」，避免空快照经
+                    # compute_gdr_from_cumulative({}) 算出 0.0 对 lower_is_better 类指标误判成功。
+                    # compute_pool_gdr_cumulative 对非空快照契约不变（落点 1 不触碰导出函数）。
+                    val = None
             else:
                 agg = aggregates[sim_idx] if aggregates and sim_idx < len(aggregates) else {}
+                if agg:
+                    agg = dict(agg)
+                    agg['card_counts'] = _draw_only_card_counts(
+                        agg.get('card_counts', {}), sim_idx, pool_id)
                 val = compute_pool_gdr_single_pool(
                     agg, pool_id, target_specs, gdr_key,
                     ssr_ids=ssr_ids, **gdr_kwargs,

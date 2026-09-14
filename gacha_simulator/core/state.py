@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 import copy
-from .pool import Pool, CostOption
+from .pool import CostOption
 from .overflow import OverflowBand, match_overflow_bands
 
 
@@ -85,9 +85,6 @@ class GachaState:
     def gain(self, gains: Dict[str, float]) -> None:
         for resource, amount in gains.items():
             self.resources[resource] = self.resources.get(resource, 0) + amount
-
-    def get_available_pools(self, pools: List[Pool]) -> List[Pool]:
-        return [pool for pool in pools if pool.is_available_at(self.real_time)]
 
     def clone(self) -> 'GachaState':
         return GachaState(

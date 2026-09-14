@@ -1,5 +1,5 @@
 from gacha_simulator.core.state import GachaState
-from gacha_simulator.core.pool import Pool, parse_cost_string
+from gacha_simulator.core.pool import parse_cost_string
 
 
 def test_can_afford_dict():
@@ -68,17 +68,6 @@ def test_gain():
     state = GachaState(resources={'draw_resource': 1000})
     state.gain({'draw_resource': 100})
     assert state.resources['draw_resource'] == 1100
-
-
-def test_get_available_pools():
-    pool1 = Pool('p1', 'Pool 1', [], [], available_from=0, available_until=100)
-    pool2 = Pool('p2', 'Pool 2', [], [], available_from=50, available_until=200)
-    pool3 = Pool('p3', 'Pool 3', [], [], available_from=150, available_until=250)
-    state = GachaState(real_time=75)
-    available = state.get_available_pools([pool1, pool2, pool3])
-    assert len(available) == 2
-    assert available[0].id == 'p1'
-    assert available[1].id == 'p2'
 
 
 def test_clone():

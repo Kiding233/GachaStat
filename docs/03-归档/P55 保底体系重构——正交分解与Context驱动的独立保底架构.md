@@ -3500,7 +3500,7 @@ def _apply_cross_checks(self, btype):
 | `PityEngine.after_draw()` — `is_ssr` 判定 + 三级 `reset_condition` | `pity.py:246-264` | **重构**。P55 移除 `reset_condition`（`_should_reset()` 由 `target_featured` 自动推导），`after_draw()` 退化为 `foreach behavior: bh.after_draw(ctx)` |
 | `PityState` — `increment()` / `reset()` / `get()` 基础操作 | `pity.py:165-192` | **保留语义**。P55 扩展为 namespace 容器（`_data: Dict[str, Dict[str, Any]]`），但 `incr` / `set` / `get` 语义不变 |
 | `PityEngine.before_draw()` — 先 `increment` 再 `get_probabilities` 的管道顺序 | `pity.py:227-236` | **保留顺序**。P55 改为 `foreach behavior: bh.before_draw(ctx)`，但「先计数、后算概率」不变 |
-| `PityEngine.get_probabilities()` — 不修改状态的查询 | `pity.py:203-225` | **保留此方法**。策略层已有只读查询入口，P55 扩充为 5 个语义方法 |
+| `PityEngine.get_probabilities()` — 不修改状态的查询 | `pity.py:203-225` | **保留此方法**。策略层已有只读查询入口，P55 扩充为 5 个语义方法。⚠ **P75 修订（2026-08-07，ISSUE-122）**：起首行 rebind 到 per-call state，带重绑副作用，「查询不写计数」仍成立，不再是 P75 前定义的「不修改状态的纯查询」 |
 | `PoolPitySpec.featured_ids` / `ssr_ids` — 区分限定/常驻的基础设施 | `pity.py:158-163` | **保留**。P55 的 `DrawInfo.featured_slots` 由此推导 |
 
 ### P55 新建能力（只建一次，不要叠层）

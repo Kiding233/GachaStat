@@ -5,6 +5,7 @@ from collections import defaultdict
 
 from .distribution import EmpiricalDistribution
 from .pool import Pool, Reward, parse_cost_string
+from .banner import Banner
 from .pity import (
     PityEngine, PoolPitySpec, PityState,
     compute_scope_mappings,
@@ -192,15 +193,23 @@ class WorstImpactAnalyzer:
             start_time = i * self._pool_duration
             end_time = (i + 1) * self._pool_duration
 
+            # P61（Ph1a / ISSUE-302）：from_dict 直构 List[Banner]——99 池错峰时间窗口
+            # 由 Banner 级 available_from/available_until 承载（构造桥对 Banner 直接收纳、窗口保留）；
+            # Pool 已删除 available_from/available_until，窗口不再放池上。
             pool = Pool(
                 id=pid,
                 name=f'新池子#{i}',
                 cost=self._parsed_cost,
                 rewards=new_rewards,
+            )
+            banner = Banner(
+                id=pid,
+                name=f'新池子#{i}',
+                pools={'main': pool},
                 available_from=start_time,
                 available_until=end_time,
             )
-            pools.append(pool)
+            pools.append(banner)
             schedules.append(PoolSchedule(
                 pool_id=pid,
                 available_from=start_time,
@@ -243,14 +252,13 @@ class WorstImpactAnalyzer:
 
         pity_engine = self._build_pity_engine(all_featured_ids, all_ssr_ids, pool_targets)
 
+        # P75（阶段 3）：无条件产出完整初始状态快照——engine 构造后立即取，与 A 同源
+        # （含 counter / guaranteed / fate_points / selected_card + _active=True，ISSUE-106）
         pity_state_init = None
-        init_pity = self._get_initial_pity_state()
-        if init_pity:
-            # P60 方案 A——构造初始 PityState 后序列化
-            ps_init = PityState()
-            for cname, cval in init_pity.items():
-                ps_init.set(cname, 'counter', cval)
-            pity_state_init = ps_init.to_dict()
+        if pity_engine is not None:
+            _ps_snapshot = getattr(pity_engine, '_state', None)
+            if _ps_snapshot is not None:
+                pity_state_init = _ps_snapshot.to_dict()
 
         return {
             'pools': pools,
@@ -267,10 +275,30 @@ class WorstImpactAnalyzer:
             'pool_targets': pool_targets,
         }
 
-    def analyze_batch_results(self, aggregate_data: list, num_simulations: int = 0) -> dict:
-        success_counts = defaultdict(int)
+    def analyze_batch_results(self, aggregate_data: list, num_simulations: int = 0,
+                              condition: str = 'all') -> dict:
+        """按条件过滤后统计连续成功池数分布（worst_dist 消费已有 dataset）。
 
+        condition: 'all' 全部模拟 | 'success' 仅成功模拟 | 'failure' 仅失败模拟
+        （对齐旧 get_conditional_distribution 的条件语义；需成功判据时经 GDR checker）
+        """
+        success_counts = defaultdict(int)
+        checker = None
+        if condition in ('success', 'failure'):
+            checker = self._build_success_checker(
+                target_specs=self.target_specs, ssr_ids=self._ssr_ids)
+
+        filtered = []
         for result in aggregate_data:
+            if checker is not None:
+                is_success = bool(checker.is_success(result))
+                if condition == 'success' and not is_success:
+                    continue
+                if condition == 'failure' and is_success:
+                    continue
+            filtered.append(result)
+
+        for result in filtered:
             card_counts = result.get('card_counts', {})
             consecutive = 0
             for i in range(MAX_POOLS):
@@ -281,10 +309,11 @@ class WorstImpactAnalyzer:
                     break
             success_counts[consecutive] += 1
 
-        n = num_simulations if num_simulations > 0 else (len(aggregate_data) or 1)
-        n_failed = n - len(aggregate_data)
-        if n_failed > 0:
-            success_counts[0] += n_failed
+        n = num_simulations if num_simulations > 0 else (len(filtered) or 1)
+        if condition == 'all':
+            n_failed = n - len(filtered)
+            if n_failed > 0:
+                success_counts[0] += n_failed
 
         distribution = {k: count / n for k, count in sorted(success_counts.items())}
         expected = sum(k * prob for k, prob in distribution.items())
@@ -363,7 +392,10 @@ class WorstImpactAnalyzer:
                     resources_gained=dict(de.resources_gained) if de.resources_gained else {},
                     extra_info={'rarity': de.rarity, 'featured': de.featured},
                 )
-                prob = de.probability
+                # P61（Ph1a / ISSUE-319）：概率归一化——Pool.random 推导假定 0-1
+                # （与 from_config_store de.probability/100.0 同口径），百分制会误判
+                # 单卡 100% 池 is_exchange=True → draw() 恒返回首卡、连续目标判定被绕过
+                prob = de.probability / 100.0
                 rewards.append((r, prob))
 
         self._featured_ids = set()
@@ -387,7 +419,12 @@ class WorstImpactAnalyzer:
 
         self._standard_ssr_ids = self._ssr_ids - self._featured_ids
 
-        pool_duration_days = pe.end_day - pe.start_day
+        # P61（ISSUE-333）：end_day=None（永久 Banner）时展平视图回填 None——
+        # 减法 TypeError；按永久池语义兜底 21 天
+        if pe.end_day is None:
+            pool_duration_days = 21
+        else:
+            pool_duration_days = pe.end_day - pe.start_day
         if pool_duration_days <= 0:
             pool_duration_days = 21
 
@@ -416,7 +453,8 @@ class WorstImpactAnalyzer:
                 resources_gained=d.get('resources_gained', {}),
                 extra_info={'rarity': d.get('rarity', 'R'), 'featured': d.get('featured', False)},
             )
-            rewards.append((r, d.get('probability', 0.0)))
+            # P61（Ph1a / ISSUE-319）：概率归一化（0-1），同 _prepare_pool_info 口径
+            rewards.append((r, d.get('probability', 0.0) / 100.0))
 
         self._featured_ids = set()
         self._ssr_ids = set()
@@ -485,16 +523,20 @@ class WorstImpactAnalyzer:
             pool_specs = {}
             for pool_idx in range(MAX_POOLS):
                 pid = f'_worst_impact_pool_{pool_idx}'
+                # P61（Ph1a / ISSUE-301）：pool_specs 键全限定 {pid}.main（单池包装口径），
+                # pdef.pools 的 fnmatch 按全限定键匹配——否则 gacha_service 查询键
+                # '_worst_impact_pool_0.main' 查裸键引擎为 None、before_draw 保底调整静默跳过
+                qualified_key = f"{pid}.main"
                 matching = []
                 for pdef in pity_defs_list:
                     pools_ptn = getattr(pdef, 'pools', ('*',))
-                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(pid, ptn) for ptn in pools_ptn):
+                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
                         matching.append(pdef.name)
 
                 pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
                 pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
 
-                pool_specs[pid] = PoolPitySpec(
+                pool_specs[qualified_key] = PoolPitySpec(
                     pity_names=matching,
                     featured_ids=pool_featured,
                     ssr_ids=pool_ssr,
@@ -502,20 +544,9 @@ class WorstImpactAnalyzer:
                     featured_cards=featured_cards,
                     scope_slots=scope_slots,
                     featured_slots=featured_slots,
-                card_to_slot=card_to_slot,
+                    card_to_slot=card_to_slot,
                 )
 
             rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
             return PityEngine(pool_specs, pity_defs_list,
                             state=state, rarity_rank=rr)
-
-    def _get_initial_pity_state(self):
-        if not self.store.pity.enabled:
-            return {}
-        state = {}
-        # P55：counter_init 已从 PityConfig 移至每个 PityDef
-        for pdef in self.store.pity.pities:
-            ci = getattr(pdef, 'counter_init', 0)
-            if ci > 0:
-                state[pdef.name] = ci
-        return state

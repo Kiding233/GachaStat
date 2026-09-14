@@ -1,0 +1,4887 @@
+{
+  "meta": {
+    "plan": "P79",
+    "strategy_key": "smart",
+    "config_path": "gacha_simulator/config/config.toml",
+    "seed": 42,
+    "end_time": 14515200.0,
+    "num_pools": 8,
+    "generated_at": 1789211304.7086942,
+    "note": "P79 改动前基线（阶段 1-3 之前）；本快照无 iterations / warnings 字段"
+  },
+  "compact": {
+    "draw_card_ids": [
+      "r_4",
+      "sr_3",
+      "r_2",
+      "r_2",
+      "r_5",
+      "r_4",
+      "r_6",
+      "r_1",
+      "r_3",
+      "sr_4",
+      "r_2",
+      "r_3",
+      "sr_3",
+      "r_1",
+      "r_4",
+      "r_4",
+      "r_2",
+      "r_4",
+      "r_5",
+      "sr_1",
+      "r_5",
+      "r_5",
+      "r_2",
+      "r_1",
+      "r_6",
+      "r_2",
+      "r_1",
+      "r_1",
+      "r_6",
+      "r_4",
+      "r_5",
+      "r_5",
+      "r_4",
+      "r_6",
+      "r_3",
+      "r_4",
+      "r_5",
+      "r_4",
+      "r_6",
+      "r_4",
+      "r_5",
+      "sr_5",
+      "r_2",
+      "r_2",
+      "r_1",
+      "r_2",
+      "r_1",
+      "r_2",
+      "r_4",
+      "r_2",
+      "r_3",
+      "r_1",
+      "r_2",
+      "r_6",
+      "r_4",
+      "r_4",
+      "r_1",
+      "r_5",
+      "r_1",
+      "r_3",
+      "r_6",
+      "r_4",
+      "r_4",
+      "r_4",
+      "r_6",
+      "r_5",
+      "r_2",
+      "sr_4",
+      "r_2",
+      "r_2",
+      "r_1",
+      "r_6",
+      "r_6",
+      "r_2",
+      "r_4",
+      "r_3",
+      "r_6",
+      "r_3",
+      "r_2",
+      "r_2",
+      "r_3",
+      "r_1",
+      "r_3",
+      "r_6",
+      "r_1",
+      "limited_ssr_1",
+      "r_6",
+      "r_3",
+      "r_1",
+      "sr_6",
+      "r_1",
+      "r_4",
+      "r_5",
+      "r_3",
+      "r_1",
+      "r_3",
+      "r_6",
+      "r_4",
+      "r_6",
+      "r_6",
+      "sr_1",
+      "r_5",
+      "r_4",
+      "r_4",
+      "r_2",
+      "r_4",
+      "r_1",
+      "r_3",
+      "r_3",
+      "r_6",
+      "r_6",
+      "r_2",
+      "r_3",
+      "r_1",
+      "r_6",
+      "r_6",
+      "r_2",
+      "r_4",
+      "r_4",
+      "r_1",
+      "r_5",
+      "r_4",
+      "r_5",
+      "r_4",
+      "limited_ssr_2",
+      "r_2",
+      "sr_2",
+      "r_6",
+      "r_6",
+      "r_5",
+      "r_2",
+      "r_1",
+      "r_6",
+      "r_6",
+      "r_1",
+      "r_3",
+      "r_1",
+      "r_5",
+      "r_5",
+      "r_1",
+      "r_3",
+      "r_4",
+      "r_2",
+      "r_6",
+      "r_3",
+      "r_1",
+      "r_4",
+      "r_5",
+      "r_1",
+      "r_2",
+      "r_6",
+      "r_4",
+      "r_3",
+      "r_3",
+      "r_1",
+      "r_2",
+      "r_2",
+      "r_4",
+      "r_2",
+      "r_2",
+      "r_1",
+      "r_4",
+      "r_2",
+      "r_6",
+      "r_6",
+      "r_1",
+      "r_2",
+      "r_4",
+      "r_2",
+      "r_1",
+      "r_6",
+      "r_4",
+      "r_3",
+      "r_5",
+      "r_5",
+      "r_1",
+      "r_1",
+      "r_3",
+      "r_3",
+      "r_3",
+      "r_5",
+      "r_4",
+      "r_6",
+      "r_1",
+      "r_3",
+      "r_2",
+      "r_6",
+      "r_2",
+      "r_1",
+      "r_3",
+      "r_3",
+      "r_2",
+      "r_2",
+      "r_6",
+      "r_3",
+      "r_6",
+      "r_4",
+      "sr_6",
+      "r_6",
+      "r_5",
+      "r_6",
+      "r_6",
+      "r_6",
+      "r_1",
+      "r_3",
+      "r_1",
+      "r_2",
+      "limited_ssr_3",
+      "r_3",
+      "r_6",
+      "r_2",
+      "r_5",
+      "r_3",
+      "r_3",
+      "r_6",
+      "r_6",
+      "r_4",
+      "r_5",
+      "r_1",
+      "r_2",
+      "r_6",
+      "r_4",
+      "r_4",
+      "r_5",
+      "r_1",
+      "r_4",
+      "r_3",
+      "r_6",
+      "r_1",
+      "r_6",
+      "r_1",
+      "r_1",
+      "r_4",
+      "r_4",
+      "r_2",
+      "r_1",
+      "r_6",
+      "r_2",
+      "r_4",
+      "r_4",
+      "r_3",
+      "r_4",
+      "r_3",
+      "r_6",
+      "r_1",
+      "r_5",
+      "r_2",
+      "r_3",
+      "r_4",
+      "r_2",
+      "r_2",
+      "r_5",
+      "r_1",
+      "r_3",
+      "r_6",
+      "r_6",
+      "r_1",
+      "r_2",
+      "r_2",
+      "r_6",
+      "r_6",
+      "r_6",
+      "r_2",
+      "r_1",
+      "r_5",
+      "r_5",
+      "r_4",
+      "r_6",
+      "r_4",
+      "sr_1",
+      "r_5",
+      "r_2",
+      "r_4",
+      "r_6",
+      "r_1",
+      "r_1",
+      "r_1",
+      "r_4",
+      "r_2",
+      "r_4",
+      "r_5",
+      "r_1",
+      "r_4",
+      "r_2",
+      "r_3",
+      "r_6",
+      "r_6",
+      "r_1",
+      "r_2",
+      "r_1",
+      "limited_ssr_4",
+      "r_5",
+      "r_4",
+      "r_2",
+      "r_5",
+      "r_4",
+      "r_3",
+      "sr_1",
+      "r_1",
+      "r_6",
+      "r_6",
+      "r_4",
+      "r_5",
+      "r_4",
+      "r_1",
+      "r_1",
+      "r_2",
+      "r_6",
+      "r_5",
+      "r_6",
+      "r_6",
+      "r_1",
+      "r_2",
+      "r_1",
+      "r_5",
+      "r_6",
+      "r_3",
+      "r_4",
+      "r_1",
+      "r_6",
+      "r_6",
+      "r_6",
+      "r_5",
+      "r_6",
+      "sr_3",
+      "r_5",
+      "r_2",
+      "r_6",
+      "r_5",
+      "r_6",
+      "r_5",
+      "r_2",
+      "r_5",
+      "r_1",
+      "r_6",
+      "r_6",
+      "r_2",
+      "r_5",
+      "r_3",
+      "r_2",
+      "r_5",
+      "r_2",
+      "sr_3",
+      "r_1",
+      "r_2",
+      "r_6",
+      "r_6",
+      "r_2",
+      "r_4",
+      "r_3",
+      "r_6",
+      "r_4",
+      "r_6",
+      "r_1",
+      "r_6",
+      "r_1",
+      "r_6",
+      "r_2",
+      "r_1",
+      "r_3",
+      "r_5",
+      "r_2",
+      "r_4",
+      "r_3",
+      "r_3",
+      "r_4",
+      "r_2",
+      "r_5",
+      "limited_ssr_5",
+      "r_6",
+      "r_4",
+      "r_5",
+      "r_5",
+      "r_4",
+      "r_2",
+      "r_1",
+      "r_4",
+      "r_2",
+      "r_2",
+      "r_6",
+      "r_5",
+      "r_2",
+      "r_2",
+      "r_3",
+      "r_3",
+      "r_2",
+      "r_1",
+      "r_3",
+      "r_6",
+      "r_4",
+      "r_6",
+      "r_4",
+      "r_2",
+      "r_4",
+      "limited_ssr_6"
+    ],
+    "draw_pool_ids": [
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c2.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c3.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c4.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c5.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main",
+      "pool_c6.main"
+    ],
+    "draw_times": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      1814400.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      3628800.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      5443200.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      7257600.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9072000.0,
+      9244800.0,
+      9504000.0,
+      9676800.0,
+      9936000.0,
+      10195200.0,
+      10368000.0
+    ],
+    "draw_pity": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ],
+    "draw_pity_names": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "ssr_soft",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "ssr_soft",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "ssr_soft",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "ssr_soft",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "ssr_soft",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "ssr_soft"
+    ],
+    "draw_pity_counter_max": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26
+    ],
+    "draw_resources_consumed": [
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      }
+    ],
+    "draw_resources_gained": [
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "draw_resource": 1460.0,
+        "exchange_currency": 50.0
+      },
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "draw_resource": 1460.0
+      },
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "draw_resource": 1460.0,
+        "exchange_currency": 50.0
+      },
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {
+        "draw_resource": 1460.0,
+        "exchange_currency": 50.0
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 301
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "draw_resource": 1460.0,
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "exchange_currency": 1
+      },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        "draw_resource": 120.0,
+        "exchange_currency": 1
+      },
+      {
+        "draw_resource": 180.0,
+        "exchange_currency": 50.0
+      },
+      {
+        "draw_resource": 120.0
+      },
+      {
+        "draw_resource": 180.0
+      },
+      {
+        "draw_resource": 180.0
+      },
+      {
+        "draw_resource": 120.0
+      }
+    ],
+    "wait_durations": [
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400,
+      86400
+    ],
+    "total_consumed": {
+      "draw_resource": 63200.0
+    },
+    "total_gained": {
+      "draw_resource": 11420.0,
+      "exchange_currency": 589.0
+    },
+    "card_counts": {
+      "r_4": 66,
+      "sr_3": 4,
+      "r_2": 71,
+      "r_5": 48,
+      "r_6": 78,
+      "r_1": 64,
+      "r_3": 48,
+      "sr_4": 2,
+      "sr_1": 4,
+      "sr_5": 1,
+      "limited_ssr_1": 1,
+      "sr_6": 2,
+      "limited_ssr_2": 1,
+      "sr_2": 1,
+      "limited_ssr_3": 1,
+      "limited_ssr_4": 1,
+      "limited_ssr_5": 1,
+      "limited_ssr_6": 1
+    },
+    "pool_draw_counts": {
+      "pool_c1.main": 86,
+      "pool_c2.main": 39,
+      "pool_c3.main": 83,
+      "pool_c4.main": 83,
+      "pool_c5.main": 78,
+      "pool_c6.main": 26
+    },
+    "pool_card_counts": {
+      "pool_c1.main": {
+        "r_4": 17,
+        "sr_3": 2,
+        "r_2": 18,
+        "r_5": 10,
+        "r_6": 12,
+        "r_1": 13,
+        "r_3": 9,
+        "sr_4": 2,
+        "sr_1": 1,
+        "sr_5": 1,
+        "limited_ssr_1": 1
+      },
+      "pool_c2.main": {
+        "r_6": 8,
+        "r_3": 6,
+        "r_1": 6,
+        "sr_6": 1,
+        "r_4": 9,
+        "r_5": 4,
+        "sr_1": 1,
+        "r_2": 3,
+        "limited_ssr_2": 1
+      },
+      "pool_c3.main": {
+        "r_2": 16,
+        "sr_2": 1,
+        "r_6": 17,
+        "r_5": 8,
+        "r_1": 16,
+        "r_3": 14,
+        "r_4": 9,
+        "sr_6": 1,
+        "limited_ssr_3": 1
+      },
+      "pool_c4.main": {
+        "r_3": 9,
+        "r_6": 17,
+        "r_2": 14,
+        "r_5": 9,
+        "r_4": 16,
+        "r_1": 16,
+        "sr_1": 1,
+        "limited_ssr_4": 1
+      },
+      "pool_c5.main": {
+        "r_5": 14,
+        "r_4": 9,
+        "r_2": 13,
+        "r_3": 7,
+        "sr_1": 1,
+        "r_1": 11,
+        "r_6": 20,
+        "sr_3": 2,
+        "limited_ssr_5": 1
+      },
+      "pool_c6.main": {
+        "r_6": 4,
+        "r_4": 6,
+        "r_5": 3,
+        "r_2": 7,
+        "r_1": 2,
+        "r_3": 3,
+        "limited_ssr_6": 1
+      }
+    },
+    "pool_pity_counts": {
+      "pool_c1.main": 1,
+      "pool_c2.main": 1,
+      "pool_c3.main": 1,
+      "pool_c4.main": 1,
+      "pool_c5.main": 1,
+      "pool_c6.main": 1
+    },
+    "total_draws": 395,
+    "total_waits": 168,
+    "pity_triggers": 6,
+    "final_resources": {
+      "draw_resource": 3220.0,
+      "exchange_currency": 589.0
+    },
+    "final_time": 14515200.0,
+    "final_pity_state": {},
+    "banner_end_resources": {
+      "pool_c1": {
+        "draw_resource": 42700.0,
+        "exchange_currency": 58.0
+      },
+      "pool_c2": {
+        "draw_resource": 37920.0,
+        "exchange_currency": 62.0
+      },
+      "pool_c3": {
+        "draw_resource": 26100.0,
+        "exchange_currency": 120.0
+      },
+      "pool_c4": {
+        "draw_resource": 14280.0,
+        "exchange_currency": 179.0
+      },
+      "pool_c5": {
+        "draw_resource": 3260.0,
+        "exchange_currency": 486.0
+      },
+      "pool_c6": {
+        "draw_resource": 560.0,
+        "exchange_currency": 539.0
+      },
+      "pool_c7": {
+        "draw_resource": 2020.0,
+        "exchange_currency": 589.0
+      },
+      "pool_c8": {
+        "draw_resource": 3220.0,
+        "exchange_currency": 589.0
+      }
+    },
+    "banner_end_pity_states": {
+      "pool_c1": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      },
+      "pool_c2": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      },
+      "pool_c3": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      },
+      "pool_c4": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      },
+      "pool_c5": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      },
+      "pool_c6": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      },
+      "pool_c7": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      },
+      "pool_c8": {
+        "data": {
+          "ssr_soft": {
+            "_active": true,
+            "counter": 0
+          }
+        }
+      }
+    },
+    "bonus_events": [
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 9
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 19
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 29
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 39
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 49
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 59
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 69
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c1.main",
+        "real_time": 0.0,
+        "draw_index": 79
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c2.main",
+        "real_time": 1814400.0,
+        "draw_index": 89
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c2.main",
+        "real_time": 1814400.0,
+        "draw_index": 99
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c2.main",
+        "real_time": 1814400.0,
+        "draw_index": 109
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c2.main",
+        "real_time": 1814400.0,
+        "draw_index": 119
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 129
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 139
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 149
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 159
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 169
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 179
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 189
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c3.main",
+        "real_time": 3628800.0,
+        "draw_index": 199
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 209
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 219
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 229
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 239
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 249
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 259
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 269
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 279
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c4.main",
+        "real_time": 5443200.0,
+        "draw_index": 289
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 299
+      },
+      {
+        "milestone_name": "milestone_example_at",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 300
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 299
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 309
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 319
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 329
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 339
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 349
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c5.main",
+        "real_time": 7257600.0,
+        "draw_index": 359
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c6.main",
+        "real_time": 9072000.0,
+        "draw_index": 369
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c6.main",
+        "real_time": 9072000.0,
+        "draw_index": 379
+      },
+      {
+        "milestone_name": "milestone_example_every",
+        "card_ids": [],
+        "resources": {
+          "exchange_currency": 1
+        },
+        "pool_id": "pool_c6.main",
+        "real_time": 9244800.0,
+        "draw_index": 389
+      }
+    ],
+    "pool_types": {
+      "pool_c1.main": "角色",
+      "pool_c2.main": "角色",
+      "pool_c3.main": "角色",
+      "pool_c4.main": "角色",
+      "pool_c5.main": "角色",
+      "pool_c6.main": "角色",
+      "pool_c7.main": "角色",
+      "pool_c8.main": "角色"
+    },
+    "strategy_name": "SmartStrategy",
+    "strategy_key": "smart",
+    "result_version": 2,
+    "generated_at": 1789211304.7086942
+  }
+}

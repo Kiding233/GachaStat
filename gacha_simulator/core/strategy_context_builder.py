@@ -8,9 +8,12 @@ Builder 类的链式灵活性。
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from .strategy import StrategyContext
+from .banner import DAY
+from .resource_lifecycle import resolve_expire_time
+from .strategy import StrategyContext, ResourceExpiryPreview
 
 if TYPE_CHECKING:
     from .state import GachaState
@@ -20,9 +23,9 @@ if TYPE_CHECKING:
     from .resource_gain import ResourceGainFunction
     from .stop_condition import StopCondition
     from .target_card import TargetCardSet
+    from .milestone import MilestoneEngine   # P58（M4a）：策略层里程碑查询
 
 # 秒/天换算常量（与 resource_gain.py ScheduleResourceGain.DAY 一致）
-DAY = 86400
 
 
 def build_strategy_context(
@@ -43,6 +46,10 @@ def build_strategy_context(
     lookahead: Optional[float] = None,
     resource_gain: Optional['ResourceGainFunction'] = None,
     time_discount: float = 1.0,
+    banners: Optional[List] = None,         # P61（Ph5）：active banners（策略迁移主接口）
+    all_banners: Optional[List] = None,     # P61（Ph5）：全部 banners
+    _milestone_engine: Optional['MilestoneEngine'] = None,   # P58（M4a）：里程碑引擎（策略查询）
+    resource_lifecycle_rules: Optional[List] = None,         # P77：资源生命周期规则（到期预览数据源）
 ) -> StrategyContext:
     """构建完整的 StrategyContext，含派生字段。
 
@@ -52,7 +59,7 @@ def build_strategy_context(
         all_pools: 全部池子列表。
         real_time: 当前模拟日历时间。
         target_cards: 目标卡集合。
-        stop_condition: 停止条件。
+        stop_condition: 停止条件。**P79 起装配层传入的是含引擎硬边界的 CompositeStopCondition**（用户条件与硬边界取 any），非用户配置的条件本身。
         pity_engine: 保底引擎。
         pity_state: 保底状态。
         pool_draw_counts: 各池已抽次数。
@@ -99,6 +106,34 @@ def build_strategy_context(
         except Exception:
             pass  # 提取失败不影响模拟——保守回退为空
 
+    # ── P77：resource_expiry 预览，含到期资源的余额 / 剩余天数 / 到期行为 ──
+    # remaining 契约：ceil 向上取整（到期当天仍计 1 天，int() 向下取整会少 1 天，
+    # 令「剩余 N 天内清仓」阈值提前误判）+ 负值钳 0，与 GachaService 三处
+    # `real_time >= expire_at` 的 >= 边界语义对齐（ISSUE-036）。未传规则时恒为 []（向后兼容）。
+    resource_expiry: List[ResourceExpiryPreview] = []
+    if resource_lifecycle_rules:
+        _banner_until = {b.id: getattr(b, 'available_until', None)
+                         for b in (all_banners or [])}
+        for _rule in resource_lifecycle_rules:
+            _et = resolve_expire_time(_rule, _banner_until)
+            if _et is None:
+                continue    # 无法映射到期时刻（构造期已发 warning），不进预览
+            _remaining = max(0, math.ceil((_et - real_time) / DAY - 1e-9))
+            _oe = _rule.on_expire or {}
+            if 'convert_to' in _oe:
+                _desc = (f"{_rule.resource_id} 剩余 {_remaining} 天到期，"
+                         f"每 {_oe['from']} 个换 {_oe['to']} 个 {_oe['convert_to']}")
+            else:
+                _desc = f"{_rule.resource_id} 剩余 {_remaining} 天到期，到期清零"
+            resource_expiry.append(ResourceExpiryPreview(
+                resource_id=_rule.resource_id,
+                balance=state.resources.get(_rule.resource_id, 0),
+                remaining=_remaining,
+                expire_at=_et,
+                on_expire=_rule.on_expire,
+                description=_desc,
+            ))
+
     return StrategyContext(
         state=state,
         current_pools=current_pools,
@@ -115,4 +150,8 @@ def build_strategy_context(
         time_discount=time_discount,
         last_draw_pity_triggered=last_draw_pity_triggered,
         ssr_ids=ssr_ids,
+        banners=banners if banners is not None else [],
+        all_banners=all_banners if all_banners is not None else [],
+        _milestone_engine=_milestone_engine,
+        resource_expiry=resource_expiry,
     )

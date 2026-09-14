@@ -94,7 +94,7 @@ class TestDependsOnIntegration:
         state = PityState()
 
         pool = Pool(
-            id='test_pool', name='测试池', pool_type='角色',
+            id='test_pool', name='测试池',
             cost={'gem': 1},
             rewards=[
                 (Reward(id='f1', name='F1', extra_info={'rarity': 'SSR', 'featured': True}), 0.005),
@@ -147,7 +147,7 @@ class TestMultiPityCoordination:
         state = PityState()
 
         pool = Pool(
-            id='test_pool', name='测试池', pool_type='角色',
+            id='test_pool', name='测试池',
             cost={'gem': 1},
             rewards=[
                 (Reward(id='f1', name='F1', extra_info={'rarity': 'SSR', 'featured': True}), 0.005),

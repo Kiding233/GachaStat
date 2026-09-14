@@ -85,6 +85,40 @@ class TestRidge:
         fig = renderer.to_figure(spec)
         assert len(fig.data) == 1
 
+    def test_hover_shows_real_value_not_bin_center(self, renderer):
+        """悬停显示样本真实值，而非共享分箱的箱中心。
+
+        场景：一个池的取值高度集中（格点间距远小于箱宽），另一个池值域很宽。
+        山脊图的箱宽由全部池的样本跨度共同决定，故窄值域池的真实值会落在宽箱内，
+        此前的 %{x}（箱中心）与真实值相差可达半个箱宽。改为 customdata 携带真实值后，
+        悬停报的就是该箱内样本的实际取值。
+        """
+        series = {
+            "narrow": np.array([180.0] * 50 + [500.0] * 30),   # 只两个取值，间距 320
+            "wide": np.linspace(0.0, 50000.0, 200),            # 撑开共享分箱
+        }
+        spec = ChartSpec("ridge", RidgeData(series), "R")
+        fig = renderer.to_figure(spec)
+
+        tr = fig.data[0]
+        assert tr.customdata is not None, "应携带 customdata（真实样本值）"
+        assert len(tr.customdata) == len(series["narrow"]), "customdata 须与样本一一对应"
+        assert "%{customdata" in tr.hovertemplate, "悬停模板应取 customdata"
+        assert "%{x" not in tr.hovertemplate, "不应再取箱中心 %{x}"
+        assert set(np.unique(np.asarray(tr.customdata))) == {180.0, 500.0}
+
+    def test_hover_customdata_all_series(self, renderer):
+        """每个池的 trace 都各自携带 customdata（不只第一行）。"""
+        series = {
+            "A": np.array([10.0, 20.0, 20.0]),
+            "B": np.array([1000.0, 2000.0]),
+        }
+        spec = ChartSpec("ridge", RidgeData(series), "R")
+        fig = renderer.to_figure(spec)
+        for tr, key in zip(fig.data, ["A", "B"]):
+            assert tr.customdata is not None
+            assert len(tr.customdata) == len(series[key])
+
 
 class TestBoxplot:
     def test_basic(self, renderer):

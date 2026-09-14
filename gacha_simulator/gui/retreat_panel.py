@@ -258,10 +258,17 @@ class RetreatPanel(QWidget):
         return specs
 
     def _get_pool_names(self):
+        """池ID → 显示名映射（P72 ISSUE-001：banner 级）。
+
+        脆弱性结果 pr.pool_id 为 banner 键（时间域，PoolVulnerabilityResult 键契约），
+        store.pools 展平后 pe.name 即 banner 级名、pe.pool_id 为全限定键——按 banner 段
+        映射，使消费端 pool_names.get(pr.pool_id) 命中（原全限定键表恒 miss、退化裸 banner id）。
+        """
         pool_names = {}
         for pe in getattr(self._store, 'pools', []):
             if pe.enabled:
-                pool_names[pe.pool_id] = getattr(pe, 'name', pe.pool_id)
+                banner_id = pe.pool_id.split('.')[0] if '.' in pe.pool_id else pe.pool_id
+                pool_names.setdefault(banner_id, getattr(pe, 'name', pe.pool_id) or pe.pool_id)
         return pool_names
 
     def _extract_cost_per_draw(self):
@@ -331,7 +338,6 @@ class RetreatPanel(QWidget):
             analysis = result["analysis"]
             pool_specs = result["pool_specs"]
             ridge_fig = result.get("ridge_fig")
-            pool_names = result["pool_names"]
 
             summary = f"总体失败率: {analysis.overall_failure_rate:.1%}"
             # P51: 单调性/回退状态栏警告（合并计数，避免多池撑大状态栏）
@@ -357,12 +363,14 @@ class RetreatPanel(QWidget):
                 charts["总览"] = ridge_fig
 
             for pr in analysis.pool_results:
-                pname = pool_names.get(pr.pool_id, pr.pool_id)
+                # P72 ISSUE-121：charts 存储键用 banner_id（pr.pool_id）保证唯一——
+                # 显示名（pool_names）仅供单池图标题（L103）；若以显示名作键，
+                # 两个同名 banner（如两个「角色UP」）会互相覆盖、一个图静默丢失
                 spec_data = pool_specs.get(pr.pool_id, {})
 
                 combined_fig = spec_data.get("combined_figure") if isinstance(spec_data, dict) else None
                 if combined_fig is not None:
-                    charts[pname] = combined_fig
+                    charts[pr.pool_id] = combined_fig
 
             if charts:
                 self.chart_webview.set_charts(charts)

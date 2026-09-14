@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 from .chart_webview import ChartWebView
+from .utils import banner_of  # P72 项 5：全限定→banner 键转换（累积模式取 banner 段）
 
 from ..core.process_trace import SampleTrace, infer_events, compute_pool_gdr_cumulative, compute_pool_gdr_single_pool
 from ..core.process_analysis import (
@@ -97,7 +98,7 @@ class ProcessAnalysisPanel(QWidget):
 
         gdr_layout.addWidget(QLabel("池子GDR方式"))
         self.pool_gdr_mode = QComboBox()
-        self.pool_gdr_mode.addItem("截止到该池（累积）", "cumulative")
+        self.pool_gdr_mode.addItem("截止到该 banner（累积）", "cumulative")  # P72 ISSUE-005：累积语义为 banner 段
         self.pool_gdr_mode.addItem("仅该池（单池）", "single_pool")
         gdr_layout.addWidget(self.pool_gdr_mode)
 
@@ -300,7 +301,14 @@ class ProcessAnalysisPanel(QWidget):
         self._initial_resources = initial_resources or {}
         self._cumulative_snapshots = cumulative_snapshots or {}
         self._pool_types = pool_types or {}
-        self.status_label.setText(f"已加载 {len(self._aggregate_data)} 条模拟数据")
+        # P72 ISSUE-006：旧数据集（result_store 加载，无 cumulative_snapshots 字段）累积模式空态提示，
+        # 避免切「截止到该 banner（累积）」时静默显示 0.0/全失败误导用户
+        if self._pool_end_times and not self._cumulative_snapshots:
+            self.status_label.setText(
+                f"已加载 {len(self._aggregate_data)} 条模拟数据；提示：数据集缺少累积快照"
+                "（旧数据），累积模式将无数据")
+        else:
+            self.status_label.setText(f"已加载 {len(self._aggregate_data)} 条模拟数据")
 
     def _on_event_mode_changed(self, index):
         mode = self.event_mode_combo.itemData(index)
@@ -510,7 +518,10 @@ class ProcessAnalysisPanel(QWidget):
                           weapon_character_map, initial_resources,
                           **gdr_kwargs):
         if mode == 'cumulative':
-            pool_snaps = self._cumulative_snapshots.get(pool_id, [])
+            # P72 ISSUE-005：累积快照键为 banner（时间域），pool_id 为全限定（pool_events 键）——
+            # 取 banner 段；同 banner 多 pool 共享同一快照（活动级累积语义，见列头口径标注）
+            banner_id = banner_of(pool_id)
+            pool_snaps = self._cumulative_snapshots.get(banner_id, []) if banner_id else []
             if sample_idx < len(pool_snaps):
                 return compute_pool_gdr_cumulative(
                     pool_snaps[sample_idx], pool_id, target_specs, gdr_key,
@@ -612,6 +623,9 @@ class ProcessAnalysisPanel(QWidget):
 
             detail_text = (
                 f"总样本: {total}\n"
+                f"口径：各池 GDR/成败按截止该 banner 段（活动级累积，同 banner 多池显示相同）；\n"
+                f"未触达 banner 段（banner 开放前模拟已结束）显示为模拟终点继承态（P72 语义 A）；\n"
+                f"未达到该 banner 段的 sim 池成败计为失败（数据缺失，非真失败，P72 ISSUE-103）\n"
                 f"全部池失败概率: {all_fail_prob:.4f}\n"
                 f"全部池成功概率: {all_success_prob:.4f}\n\n"
                 f"各池成功率:\n"
@@ -894,7 +908,8 @@ class ProcessAnalysisPanel(QWidget):
         )
 
         self.trace_detail_table.clear()
-        headers = ['池子ID', '事件类型', '保底名', '抽卡数', '计数器最大值', '池GDR值', '池成败']
+        # P72 ISSUE-005：累积模式下同 banner 多 pool 显示相同（活动级累积）——列头注明口径
+        headers = ['池子ID', '事件类型', '保底名', '抽卡数', '计数器最大值', '池GDR值(截止该banner段)', '池成败(截止该banner段)']
         self.trace_detail_table.setColumnCount(len(headers))
         self.trace_detail_table.setHorizontalHeaderLabels(headers)
         self.trace_detail_table.setRowCount(len(trace.events))

@@ -14,9 +14,23 @@ logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(mess
 sys.path.insert(0, str(Path(__file__).parent))
 
 from gacha_simulator._version import __version__  # noqa: E402
-from gacha_simulator.core.config_toml import load_toml, save_toml  # noqa: E402
+from gacha_simulator.core.config_toml import load_toml  # noqa: E402
 from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
 from gacha_simulator.paths import get_config_dir  # noqa: E402
+
+
+def _fallback_target_ids(store) -> list:
+    """CLI 无 [[targets]] 时的兜底目标 id（ISSUE-003）。
+
+    展平视图 pool_id 为全限定键 {banner_id}.{pool_id}——直接拼接会生成
+    {banner_id}.main_ssr 与真实卡 id 失配、ssr 计数恒 0。取 banner 段拼 _ssr。
+    """
+    actual = [t.card_id for t in store.target_cards]
+    if actual:
+        return actual
+    if store.pools:
+        return [f"{store.pools[0].pool_id.split('.')[0]}_ssr"]
+    return []
 
 
 def main():
@@ -57,13 +71,15 @@ def main():
         default_toml = os.path.join(get_config_dir(), 'config.toml')
         store = load_toml(default_toml)
 
-    # P55：--migrate——检测旧格式迁移标记 → save_toml 覆盖
+    # P61（Ph4 / ISSUE-004）：--migrate 依赖已移除的 _build_pools/_migrated_from_legacy
+    # （旧 [[pools]] 格式自动迁移随 P61 一次性迁移完成，不再支持）。
+    # 空 banner（旧格式残留被解析忽略）→ 显式报错提示手工迁移；非空 → 提示已为新格式。
     if args.migrate:
-        if store._migrated_from_legacy:
-            config_path = args.config if args.config else default_toml
-            save_toml(store, config_path)
-            print(f"TOML 已从旧格式迁移并保存至: {config_path}")
-            sys.exit(0)
+        if not store.banner.banners:
+            print("错误：当前配置不含任何 Banner（旧 [[pools]] 格式已不支持自动迁移）。\n"
+                  "请按 P61 迁移规则手工改写为 [[banner]] 格式（见 P61 计划 §3.4 迁移规则）。",
+                  file=sys.stderr)
+            sys.exit(1)
         else:
             print("TOML 已为新格式，无需迁移。")
             sys.exit(0)
@@ -72,9 +88,12 @@ def main():
         store.pity.enabled = False
 
     # 为 output_data 构造 config 元数据 dict（替代旧 JSON config）
+    # P61（ISSUE-325）：num_pools 为跨 Banner 内层池总数（展平视图口径），
+    # 补 banner_count 反映 Banner 层数量，CLI 输出语义不静默改变。
     config_meta = {
         'path': str(args.config) if args.config else default_toml,
         'num_pools': len(store.pools),
+        'banner_count': len(store.banner.banners),
         'num_cards': len(store.card_defs),
         'pity_enabled': store.pity.enabled,
         'num_targets': len(store.target_cards),
@@ -145,9 +164,8 @@ def main():
 
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
 
-    actual_target_ids = [t.card_id for t in store.target_cards]
-    if not actual_target_ids and store.pools:
-        actual_target_ids = [f"{store.pools[0].pool_id}_ssr"]
+    # P61（ISSUE-003）：无 [[targets]] 时兜底目标取 banner 段拼 _ssr（模块级函数，可测）
+    actual_target_ids = _fallback_target_ids(store)
     total_targets = len(actual_target_ids)
 
     total_draws = []
@@ -209,6 +227,8 @@ def main():
                 batch_result.extraction.get('aggregates', [])),
             'kept_sequences_count': len(
                 batch_result.extraction.get('kept_sequences', [])),
+            # P61（Ph7 / ISSUE-325）：cumulative_snapshots 键为 banner_id（Ph6
+            # pool_end_times 已改 banner 级），非内层 pool_id——展示口径登记
             'cumulative_snapshots_pools': list(
                 batch_result.extraction.get('cumulative_snapshots', {}).keys()),
             'transition_flags_count': len(

@@ -3,6 +3,7 @@ import pytest
 from gacha_simulator.core.param_descriptor import (
     FloatParam, IntParam, BoolParam, StrParam,
     StringListParam, PoolIntMapParam,
+    ListParam, DictParam, PARAM_TYPE_MAP,
 )
 
 
@@ -128,3 +129,73 @@ class TestPoolIntMapParam:
     def test_validate_accepts_valid_dict(self):
         p = PoolIntMapParam('q', '配额')
         assert p.validate({'pool_a': 10}) == {'pool_a': 10}
+
+
+class TestListParam:
+    """P79 4b1：通用列表描述符（承载 consecutive_pool_target 的 pool_schedules）。"""
+
+    def test_default_is_empty_list(self):
+        assert ListParam('s', '调度表').validate([]) == []
+
+    def test_accepts_list_tuple_set(self):
+        p = ListParam('s', '调度表')
+        assert p.validate([1, 2]) == [1, 2]
+        assert p.validate((1, 2)) == [1, 2]
+        assert sorted(p.validate({1, 2})) == [1, 2]
+
+    def test_parses_json_string(self):
+        p = ListParam('s', '调度表')
+        assert p.validate('[1, 2]') == [1, 2]
+
+    def test_rejects_non_list(self):
+        with pytest.raises(ValueError):
+            ListParam('s', '调度表').validate({'a': 1})
+
+    def test_rejects_unparsable_string(self):
+        with pytest.raises(ValueError):
+            ListParam('s', '调度表').validate('not json')
+
+    def test_element_type_checked_when_declared(self):
+        p = ListParam('s', '调度表', element_type=str)
+        assert p.validate(['a']) == ['a']
+        with pytest.raises(ValueError):
+            p.validate([1])
+
+    def test_element_type_not_checked_when_absent(self):
+        # 元素为任意结构（如 pool_schedules 的 [pool_id, start, end] 三元组）
+        p = ListParam('s', '调度表')
+        assert p.validate([['pool_a', 0, 10]]) == [['pool_a', 0, 10]]
+
+
+class TestDictParam:
+    """P79 4b1：通用字典描述符（承载 consecutive_pool_target 的 pool_targets）。"""
+
+    def test_default_is_empty_dict(self):
+        assert DictParam('t', '目标表').validate({}) == {}
+
+    def test_accepts_dict_and_parses_json_string(self):
+        p = DictParam('t', '目标表')
+        assert p.validate({'a': 'b'}) == {'a': 'b'}
+        assert p.validate('{"a": "b"}') == {'a': 'b'}
+
+    def test_rejects_non_dict(self):
+        with pytest.raises(ValueError):
+            DictParam('t', '目标表').validate([1])
+
+    def test_rejects_non_string_key(self):
+        with pytest.raises(ValueError):
+            DictParam('t', '目标表').validate({1: 'b'})
+
+    def test_value_type_checked_when_declared(self):
+        p = DictParam('t', '目标表', value_type=str)
+        assert p.validate({'a': 'b'}) == {'a': 'b'}
+        with pytest.raises(ValueError):
+            p.validate({'a': 1})
+
+
+class TestParamTypeMap:
+    """P79 4b1：两个新描述符必须进入 PARAM_TYPE_MAP，否则渲染分派取不到类。"""
+
+    def test_list_and_dict_registered(self):
+        assert PARAM_TYPE_MAP['list'] is ListParam
+        assert PARAM_TYPE_MAP['dict'] is DictParam

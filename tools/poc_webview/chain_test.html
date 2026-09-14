@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>链路穿透测试</title>
+<script src="echarts.min.js"></script>
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6fa; color: #2d3436; }
+  .header { padding: 14px 20px; background: #fff; border-bottom: 1px solid #dfe6e9; }
+  h1 { font-size: 18px; margin: 0 0 4px 0; }
+  .sub { font-size: 13px; color: #636e72; }
+  .toolbar { padding: 14px 20px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  label { font-size: 14px; }
+  input { padding: 6px 10px; border: 1px solid #dfe6e9; border-radius: 6px; width: 90px; font-size: 14px; }
+  button { padding: 9px 20px; border: none; border-radius: 6px; background: #0984e3; color: #fff; font-size: 14px; cursor: pointer; }
+  button:hover { background: #0870c0; }
+  button:disabled { background: #b2bec3; cursor: not-allowed; }
+  #status { font-size: 13px; color: #0984e3; padding: 0 20px; }
+  .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 14px 20px; }
+  .stat { background: #fff; border: 1px solid #dfe6e9; border-radius: 8px; padding: 12px 16px; }
+  .stat .k { font-size: 12px; color: #636e72; }
+  .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .chart-box { background: #fff; border: 1px solid #dfe6e9; border-radius: 8px; margin: 0 20px; padding: 12px; }
+  .note { font-size: 12px; color: #636e72; padding: 10px 20px 16px 20px; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>链路穿透：前端触发真实并行模拟</h1>
+    <div class="sub">非演示数据。点击按钮后，Python 从 config.toml 加载配置，调用 run_batch_parallel() 真实并行模拟，完整结果跨桥返回前端渲染。</div>
+  </div>
+
+  <div class="toolbar">
+    <label>模拟次数</label>
+    <input id="n" type="number" value="200" min="10" step="10">
+    <label>Worker</label>
+    <input id="w" type="number" value="4" min="1" max="32">
+    <button id="run" onclick="runBatch()">▶ 运行真实模拟</button>
+  </div>
+  <div id="status">就绪</div>
+
+  <div class="result-grid">
+    <div class="stat"><div class="k">耗时</div><div class="v" id="st-elapsed">-</div></div>
+    <div class="stat"><div class="k">结果数</div><div class="v" id="st-n">-</div></div>
+    <div class="stat"><div class="k">跨桥数据量</div><div class="v" id="st-payload">-</div></div>
+    <div class="stat"><div class="k">平均出货抽数</div><div class="v" id="st-mean">-</div></div>
+  </div>
+
+  <div class="chart-box"><div id="chart" style="height:360px"></div></div>
+
+  <div class="note" id="note">尚未运行。</div>
+
+  <script>
+    let chart = null;
+
+    function init() {
+      chart = echarts.init(document.getElementById('chart'));
+      window.addEventListener('resize', () => chart && chart.resize());
+      setStatus('Python 就绪');
+    }
+
+    window.setStatus = function (text) {
+      const el = document.getElementById('status');
+      if (el) el.textContent = text;
+    };
+
+    async function runBatch() {
+      const n = parseInt(document.getElementById('n').value, 10) || 200;
+      const w = parseInt(document.getElementById('w').value, 10) || 4;
+      const btn = document.getElementById('run');
+      btn.disabled = true;
+      setStatus('Python 正在运行 run_batch_parallel(' + n + ' 次, ' + w + ' worker)…');
+      const t0 = performance.now();
+
+      try {
+        const r = await pywebview.api.run_batch(n, w);
+        const receiveMs = Math.round(performance.now() - t0 - r.elapsed_s * 1000);
+
+        document.getElementById('st-elapsed').textContent = r.elapsed_s + ' s';
+        document.getElementById('st-n').textContent = r.n_results + ' / ' + r.n_requested;
+        document.getElementById('st-payload').textContent = r.payload_kb + ' KB';
+        document.getElementById('st-mean').textContent = r.mean_draws;
+
+        const draws = r.total_draws;
+        // 简单分箱（ECharts 无自动分箱）
+        const nbins = 30;
+        const lo = Math.min(...draws), hi = Math.max(...draws);
+        const wbin = (hi - lo) / nbins || 1;
+        const counts = new Array(nbins).fill(0);
+        const centers = [];
+        for (let i = 0; i < nbins; i++) centers.push(lo + (i + 0.5) * wbin);
+        for (const v of draws) counts[Math.min(Math.floor((v - lo) / wbin), nbins - 1)]++;
+
+        chart.setOption({
+          title: { text: '出货所需抽数分布（真实模拟结果）', left: 'center' },
+          tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+          toolbox: { right: 10, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {}, saveAsImage: { name: 'chain' } } },
+          dataZoom: [{ type: 'inside', xAxisIndex: 0 }],
+          grid: { left: 60, right: 40, top: 50, bottom: 45 },
+          xAxis: { type: 'value', name: '出货所需抽数' },
+          yAxis: { type: 'value', name: '频数' },
+          series: [{
+            type: 'bar',
+            data: centers.map((c, i) => [c, counts[i]]),
+            barWidth: wbin * 0.85,
+            itemStyle: { color: '#0984e3', opacity: 0.8 },
+            markLine: {
+              silent: true, symbol: 'none',
+              lineStyle: { color: '#ff4444', type: 'dashed' },
+              label: { color: '#ff4444' },
+              data: [{ xAxis: r.mean_draws, label: { formatter: '均值 ' + r.mean_draws } }],
+            },
+          }],
+        });
+
+        const sample = r.aggregate_sample;
+        document.getElementById('note').textContent =
+          '✅ 真实链路打通：耗时 ' + r.elapsed_s + 's，其中前端接收/解析 ' + receiveMs + 'ms。' +
+          '聚合结果每条字段：' + Object.keys(sample).slice(0, 8).join(' / ') +
+          '。数据源 config.toml，策略 ' + sample.strategy_name + '。';
+        setStatus('模拟完成，前端接收耗时 ' + receiveMs + 'ms');
+      } catch (e) {
+        setStatus('失败: ' + e);
+        console.error(e);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    if (window.pywebview && window.pywebview.api) { init(); }
+    else { window.addEventListener('pywebviewready', init); }
+  </script>
+</body>
+</html>

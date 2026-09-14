@@ -5,7 +5,9 @@ from gacha_simulator.core.gdr import (
     GDRDefinition, GDRCalculator, compute_success_probability,
     UNIFIED_GDR_REGISTRY, compute_gdr_from_compact, populate_gdr_combo,
 )
-from gacha_simulator.core.config_store import ConfigStore, CardDefEntry, PoolEntry
+from gacha_simulator.core.config_store import (
+    ConfigStore, CardDefEntry, BannerEntry, BannerPoolEntry, DAY,
+)
 
 
 # ─── P11: target_card_draws GDR ────────────────────────────────────────
@@ -609,16 +611,24 @@ def _make_store_for_p62():
     - pool_disabled: enabled=False，不应使 card_d 变为可达
     """
     store = ConfigStore()
+    # P61（§3.9/§3.12 Ph3）：写入侧为 store.banner.banners；card_defs.pools 为全限定键
+    # （与 _backfill_card_pools 运行时口径一致——Ph3 展平后 pool_id = {banner_id}.main）
     store.card_defs = [
-        CardDefEntry(card_id='card_a', pools=['pool_early']),
-        CardDefEntry(card_id='card_b', pools=['pool_late']),
-        CardDefEntry(card_id='card_c', pools=['pool_early', 'pool_late']),
-        CardDefEntry(card_id='card_d', pools=['pool_disabled']),
+        CardDefEntry(card_id='card_a', pools=['pool_early.main']),
+        CardDefEntry(card_id='card_b', pools=['pool_late.main']),
+        CardDefEntry(card_id='card_c', pools=['pool_early.main', 'pool_late.main']),
+        CardDefEntry(card_id='card_d', pools=['pool_disabled.main']),
     ]
-    store.pools = [
-        PoolEntry(pool_id='pool_early', start_day=0, end_day=10, enabled=True),
-        PoolEntry(pool_id='pool_late', start_day=100, end_day=120, enabled=True),
-        PoolEntry(pool_id='pool_disabled', start_day=0, end_day=10, enabled=False),
+    store.banner.banners = [
+        BannerEntry(id='pool_early', name='早池',
+                    enabled=True, available_from=0 * DAY, available_until=10 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='pool_late', name='晚池',
+                    enabled=True, available_from=100 * DAY, available_until=120 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
+        BannerEntry(id='pool_disabled', name='禁用池',
+                    enabled=False, available_from=0 * DAY, available_until=10 * DAY,
+                    pools=[BannerPoolEntry(id='main', cost='draw_resource:160')]),
     ]
     return store
 
@@ -638,14 +648,26 @@ class TestFilterTargetSpecsByObtainable:
         assert 'card_b' not in result
 
     def test_all_obtainable_when_long_run(self):
-        """final_time=110: 两个池子均开放 → 全部可达"""
+        """final_time 越过晚池开放时刻（秒）→ 全部可达"""
         from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
         store = _make_store_for_p62()
         result = filter_target_specs_by_obtainable(
             {'card_a': 1, 'card_b': 1, 'card_c': 2},
-            store, final_time=110.0,
+            store, final_time=120 * DAY,  # ISSUE-307：final_time 为秒，晚池 100 天=8640000s 后开放
         )
         assert result == {'card_a': 1, 'card_b': 1, 'card_c': 2}
+
+    def test_late_pool_not_obtainable_early_stop(self):
+        """ISSUE-307：晚开池（available_from 秒）在早停/截断时间线（final_time < 其开放时刻）判不可达。"""
+        from gacha_simulator.core.gdr import filter_target_specs_by_obtainable
+        store = _make_store_for_p62()
+        # final_time = 第 50 天秒值：晚池（100 天=8640000s）未开 → card_b 不可达
+        result = filter_target_specs_by_obtainable(
+            {'card_a': 1, 'card_b': 1, 'card_c': 2},
+            store, final_time=50 * DAY,
+        )
+        assert result == {'card_a': 1, 'card_c': 2}
+        assert 'card_b' not in result
 
     def test_none_obtainable(self):
         """final_time=-1: 无任何池子开放 → 返回空 dict"""

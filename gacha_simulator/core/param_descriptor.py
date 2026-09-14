@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class ParamDescriptor(ABC):
@@ -200,6 +200,90 @@ class PoolIntMapParam(ParamDescriptor):
         return result
 
 
+@dataclass
+class ListParam(ParamDescriptor):
+    """通用列表参数（如 consecutive_pool_target 的 pool_schedules）。
+
+    只做**容器类型与元素类型**校验——元素语义由消费方（条件类）自身负责。
+    与 StringListParam 的分工：后者是「字符串列表」的便捷形态（支持逗号/空格
+    分隔的文本输入），本类承载元素为任意结构的列表。
+    """
+
+    key: str
+    display_name: str
+    default: list = field(default_factory=list)
+    element_type: Optional[type] = None   # None = 不校验元素类型
+
+    def validate(self, value: Any) -> list:
+        if isinstance(value, str):
+            # 支持 JSON 格式字符串输入（与 PoolIntMapParam 同口径）
+            import json
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise ValueError(
+                    f"参数 '{self.key}' ({self.display_name}) 无法解析为 JSON: {value!r}"
+                )
+        if isinstance(value, (tuple, set)):
+            value = list(value)
+        if not isinstance(value, list):
+            raise ValueError(
+                f"参数 '{self.key}' ({self.display_name}) 需要列表，"
+                f"收到: {type(value).__name__} = {value!r}"
+            )
+        if self.element_type is not None:
+            for item in value:
+                if not isinstance(item, self.element_type):
+                    raise ValueError(
+                        f"参数 '{self.key}' ({self.display_name}) 列表元素需为 "
+                        f"{self.element_type.__name__}，收到: {item!r}"
+                    )
+        return list(value)
+
+
+@dataclass
+class DictParam(ParamDescriptor):
+    """通用字典参数（如 consecutive_pool_target 的 pool_targets）。
+
+    只做**容器类型与元素类型**校验——元素语义由消费方（条件类）自身负责。
+    键类型定死为 str（TOML 表 / JSON 对象的键恒为字符串）。
+    """
+
+    key: str
+    display_name: str
+    default: dict = field(default_factory=dict)
+    value_type: Optional[type] = None     # None = 不校验值类型
+
+    def validate(self, value: Any) -> dict:
+        if isinstance(value, str):
+            import json
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise ValueError(
+                    f"参数 '{self.key}' ({self.display_name}) 无法解析为 JSON: {value!r}"
+                )
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"参数 '{self.key}' ({self.display_name}) 需要字典，"
+                f"收到: {type(value).__name__} = {value!r}"
+            )
+        result: dict = {}
+        for k, v in value.items():
+            if not isinstance(k, str):
+                raise ValueError(
+                    f"参数 '{self.key}' ({self.display_name}) 键需为字符串，"
+                    f"收到: {k!r}"
+                )
+            if self.value_type is not None and not isinstance(v, self.value_type):
+                raise ValueError(
+                    f"参数 '{self.key}' ({self.display_name}) 值需为 "
+                    f"{self.value_type.__name__}，键 '{k}' 的值: {v!r}"
+                )
+            result[k] = v
+        return result
+
+
 # 类型→类映射，供 param_renderer.py 分派表使用
 PARAM_TYPE_MAP: Dict[str, type] = {
     'float': FloatParam,
@@ -208,4 +292,6 @@ PARAM_TYPE_MAP: Dict[str, type] = {
     'str': StrParam,
     'string_list': StringListParam,
     'pool_int_map': PoolIntMapParam,
+    'list': ListParam,
+    'dict': DictParam,
 }

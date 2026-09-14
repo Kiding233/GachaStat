@@ -49,7 +49,7 @@ class TestCompactResultRoundtrip:
         original = CompactResult(
             pool_draw_counts={'pool_a': 50, 'pool_b': 30},
             pool_card_counts={'pool_a': {'card_x': 2}, 'pool_b': {}},
-            pool_end_resources={'pool_a': {'draw': 100.0}},
+            banner_end_resources={'pool_a': {'draw': 100.0}},
         )
         d = original.to_dict()
         restored = CompactResult.from_dict(d)
@@ -71,7 +71,31 @@ class TestCompactResultRoundtrip:
         original = CompactResult()
         d = original.to_dict()
         assert 'result_version' in d
-        assert d['result_version'] == 1
+        # P79（阶段 3）：新增 iterations / warnings 字段——序列化格式演进 2 → 3
+        # （1 → 2 为 P58 新增 bonus_events）
+        assert d['result_version'] == 3
+
+    def test_iterations_and_warnings_round_trip(self):
+        """P79（阶段 3）：新增字段的序列化闭环。"""
+        original = CompactResult(iterations=7, warnings=['零进度：连续 3 轮上下文无变化'])
+        d = original.to_dict()
+        assert d['iterations'] == 7
+        assert d['warnings'] == ['零进度：连续 3 轮上下文无变化']
+
+        restored = CompactResult.from_dict(d)
+        assert restored.iterations == 7
+        assert restored.warnings == ['零进度：连续 3 轮上下文无变化']
+
+    def test_old_snapshot_without_new_fields_uses_defaults(self):
+        """旧快照（版本 2）无 iterations / warnings → 键过滤后取默认 0 / []。
+
+        这是 result_version 2→3 的向后兼容方向：from_dict 以 dataclasses.fields
+        过滤键、不做版本比对，故旧快照可被新代码直接读入。
+        """
+        restored = CompactResult.from_dict({'total_draws': 42, 'result_version': 2})
+        assert restored.total_draws == 42
+        assert restored.iterations == 0
+        assert restored.warnings == []
 
 
 class TestCompactResultAccess:

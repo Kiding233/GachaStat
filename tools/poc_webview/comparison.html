@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>垂直切片：ChartSpec 双库渲染对比</title>
+<script src="plotly.min.js"></script>
+<script src="echarts.min.js"></script>
+<script src="spec_renderers.js"></script>
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6fa; color: #2d3436; }
+  .header { padding: 14px 20px; background: #fff; border-bottom: 1px solid #dfe6e9; }
+  h1 { font-size: 18px; margin: 0 0 4px 0; }
+  .sub { font-size: 13px; color: #636e72; }
+  .row { display: flex; gap: 14px; margin: 14px 20px; }
+  .panel { flex: 1; background: #fff; border: 1px solid #dfe6e9; border-radius: 8px; overflow: hidden; }
+  .panel-title { padding: 8px 14px; font-size: 13px; font-weight: 600; background: #f8f9fa; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; }
+  .panel-title .lib { color: #0984e3; font-weight: 700; }
+  .panel-title .note { color: #636e72; font-weight: 400; font-size: 12px; }
+  .chart { width: 100%; }
+  #status { font-size: 13px; color: #0984e3; padding: 4px 20px 0 20px; }
+  .legend-note { font-size: 12px; color: #636e72; padding: 4px 20px 14px 20px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>垂直切片：同一份 ChartSpec，双库独立渲染</h1>
+    <div class="sub">数据从 Python 侧经 ChartSpec 序列化（JSON）跨桥传输，未经过 PlotlyRenderer。左 Plotly.js，右 ECharts。</div>
+  </div>
+  <div id="status">加载中…</div>
+
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title"><span>柱状图 <span class="lib">Plotly.js</span></span><span class="note">go.Bar 分类柱状</span></div>
+      <div class="chart" id="plotly-bar" style="height:260px"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><span>柱状图 <span class="lib">ECharts</span></span><span class="note">category xAxis + bar</span></div>
+      <div class="chart" id="echarts-bar" style="height:260px"></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title"><span>概率质量分布 <span class="lib">Plotly.js</span></span><span class="note">go.Histogram 自动分箱 + 均值线</span></div>
+      <div class="chart" id="plotly-histogram" style="height:260px"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><span>概率质量分布 <span class="lib">ECharts</span></span><span class="note">前端手动分箱 + markLine 均值线</span></div>
+      <div class="chart" id="echarts-histogram" style="height:260px"></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title"><span>累积分布 <span class="lib">Plotly.js</span></span><span class="note">sort + cumcount/n 折线</span></div>
+      <div class="chart" id="plotly-cdf" style="height:260px"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><span>累积分布 <span class="lib">ECharts</span></span><span class="note">手算 CDF 折线 + 面积渐变</span></div>
+      <div class="chart" id="echarts-cdf" style="height:260px"></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title"><span>山脊线图 <span class="lib">Plotly.js</span></span><span class="note">多行共享 x（yaxis domain 堆叠）</span></div>
+      <div class="chart" id="plotly-ridge" style="height:430px"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><span>山脊线图 <span class="lib">ECharts</span></span><span class="note">多 grid 堆叠（每行独立坐标）</span></div>
+      <div class="chart" id="echarts-ridge" style="height:430px"></div>
+    </div>
+  </div>
+
+  <div class="legend-note">实现差异说明：Plotly.js 的直方图由库自动分箱（nbinsx）；ECharts 无自动分箱，需前端实现 binCounts。CDF 两库均在前端手算。山脊线 Plotly 用 yaxis domain 手动堆叠共享 x，ECharts 用多 grid。这 8 张图的输入是同一份 charts.json。</div>
+
+  <script>
+    // Python → JS 主动推送的接收端（main.py 通过 evaluate_js 调用）
+    window.setStatus = function (text) {
+      const el = document.getElementById('status');
+      if (el) el.textContent = text;
+    };
+
+    async function init() {
+      const status = document.getElementById('status');
+      try {
+        // JS → Python：一次拉取 4 张 ChartSpec（336KB 跨桥，顺带验证中量数据）
+        const charts = await pywebview.api.get_charts();
+        status.textContent = '已从 Python 拿到 ' + Object.keys(charts).length + ' 张 ChartSpec（' +
+          Math.round(JSON.stringify(charts).length / 1024) + ' KB JSON 跨桥）';
+
+        // 逐图双库渲染
+        const config = {
+          bar:      { plotly: 'plotly-bar',      echarts: 'echarts-bar' },
+          histogram:{ plotly: 'plotly-histogram',echarts: 'echarts-histogram' },
+          cdf:      { plotly: 'plotly-cdf',      echarts: 'echarts-cdf' },
+          ridge:    { plotly: 'plotly-ridge',    echarts: 'echarts-ridge' },
+        };
+        const echartsInstances = [];
+        for (const key of Object.keys(config)) {
+          const spec = charts[key];
+          // Plotly
+          const p = specToPlotly(spec);
+          Plotly.newPlot(config[key].plotly, p.data, p.layout, { responsive: true, displayModeBar: true });
+          // ECharts
+          const el = document.getElementById(config[key].echarts);
+          const instance = echarts.init(el);
+          instance.setOption(specToECharts(spec));
+          echartsInstances.push(instance);
+        }
+        window.addEventListener('resize', () => {
+          echartsInstances.forEach(inst => inst.resize());
+          Plotly.Plots.resize(document.getElementById('plotly-bar'));
+          Plotly.Plots.resize(document.getElementById('plotly-histogram'));
+          Plotly.Plots.resize(document.getElementById('plotly-cdf'));
+          Plotly.Plots.resize(document.getElementById('plotly-ridge'));
+        });
+      } catch (e) {
+        status.textContent = '加载失败: ' + e;
+        console.error(e);
+      }
+    }
+
+    if (window.pywebview && window.pywebview.api) { init(); }
+    else { window.addEventListener('pywebviewready', init); }
+  </script>
+</body>
+</html>

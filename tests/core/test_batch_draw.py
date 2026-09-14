@@ -20,8 +20,9 @@ from gacha_simulator.core.state import GachaState
 
 def test_pool_entry_batch_size_default():
     """PoolEntry.batch_size 默认值为 1。"""
+    # P61（§3.13.1）：pool_type 已退役（推导化），扁平视图不再接收该参数
     pe = PoolEntry(
-        pool_id='test', name='test', pool_type='角色',
+        pool_id='test', name='test',
         start_day=0, end_day=21, cost='draw_resource:160',
         distribution=[], distribution_template='',
     )
@@ -107,7 +108,9 @@ def test_strategy_can_afford_batch_uses_pool_batch_size():
     pool = Pool(
         id='test_b10', name='十连池', cost=[{'coin': 10}],
         rewards=[(Reward(id='card_a', name='A'), 1.0)],
-        batch_size=10
+        batch_size=10,
+        # P61（Ph1a/ISSUE-319）：100% 单卡池推导为兑换池——exchange_card_id 对齐目标卡
+        exchange_card_id='card_a',
     )
     state = GachaState(resources={'coin': 100})
     original_can_afford_batch = state.can_afford_batch
@@ -119,12 +122,16 @@ def test_strategy_can_afford_batch_uses_pool_batch_size():
 
     # SmartStrategy 需要 target card 才会触发 pool 遍历中的 can_afford 检查
     tc = TargetCard(card_id='card_a', quantity_needed=1, pool_ids=['test_b10'])
+    # P61（Ph1a）：策略消费 ctx.banners——裸 Pool 经单池包装为 Banner 传入
+    from gacha_simulator.core.banner import Banner
+    banner = Banner(id=pool.id, name=pool.name, pools={'main': pool})
     ctx = StrategyContext(
         state=state, current_pools=[pool], all_pools=[pool],
         future_schedules=[], stop_condition=NoopStop(),
         target_cards=TargetCardSet([tc]),
         pool_draw_counts={'test_b10': 0}, total_draws=0,
         ssr_ids=set(),
+        banners=[banner], all_banners=[banner],
     )
     strategy = SmartStrategy()
     strategy.select_action(ctx)

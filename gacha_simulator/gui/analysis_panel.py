@@ -40,13 +40,13 @@ ANALYSIS_CATEGORIES = {
         ('per_pool_draws', '每池抽卡数统计'),
         ('per_pool_target_rate', '每池目标卡数'),
         ('per_pool_pity_rate', '每池保底数'),
-        ('cumulative_by_pool', '截止每池的GDR分布'),
+        ('cumulative_by_banner', '截止每 banner 的GDR分布'),
         ('transition_analysis', '转变分析'),
     ],
 }
 
 
-_EXPANDABLE_KEYS = {'gdr_dist', 'risk_worst_case', 'risk_best_case', 'conditional_dist', 'transition_analysis', 'cumulative_by_pool', 'success_rate'}
+_EXPANDABLE_KEYS = {'gdr_dist', 'risk_worst_case', 'risk_best_case', 'conditional_dist', 'transition_analysis', 'cumulative_by_banner', 'success_rate'}
 
 # 渲染顺序：按 ANALYSIS_CATEGORIES 中定义的出现顺序排列图表
 _CHART_DISPLAY_ORDER: dict[str, int] = {}
@@ -234,7 +234,7 @@ class AnalysisWorker(QThread):
             ('waterfall_3d', '3D瀑布图'),
             ('waterfall_2d', '2D压缩瀑布图'),
             ('per_pool_draws', '每池分析'),
-            ('cumulative_by_pool', '截止每池的GDR分布'),
+            ('cumulative_by_banner', '截止每 banner 的GDR分布'),
             ('transition_analysis', '转变分析'),
             ('correlation', '相关性分析'),
             ('success_rate', '成功率分析'),
@@ -1086,10 +1086,10 @@ class AnalysisWorker(QThread):
 
             step_done('每池分析')
 
-        if 'cumulative_by_pool' in self.selected and self.cumulative_by_pool_selections and self.pool_end_times:
-            self._emit('生成截止每池的GDR分布...', int(completed / total_steps * 100))
+        if 'cumulative_by_banner' in self.selected and self.cumulative_by_pool_selections and self.pool_end_times:
+            self._emit('生成截止每 banner 的GDR分布...', int(completed / total_steps * 100))
             if not self.cumulative_snapshots:
-                step_done('截止每池的GDR分布')
+                step_done('截止每 banner 的GDR分布')
             else:
                 pool_ids = sorted(self.cumulative_snapshots.keys())
                 short_ids = [_strip_pid(pid) for pid in pool_ids]
@@ -1129,7 +1129,13 @@ class AnalysisWorker(QThread):
                     if parse_gdr_key(metric_key)[0] == 'resource_remaining' and self.no_draw_pool_resources:
                         _, _rid = parse_gdr_key(metric_key)
                         for pid in pool_ids:
-                            pool_res = self.no_draw_pool_resources.get(pid, {})
+                            # P61（Ph7 / ISSUE-323）：no_draw 基线键为 banner 级
+                            #（banner_end_resources，gacha_panel 读点修复后非空）；
+                            # pool_ids 为累积快照键（banner id）。取段为防御性
+                            #（当前数据为裸 banner id、无 '.'），与全限定消费端
+                            # 口径兼容，不恒 miss
+                            pid_banner = pid.split('.')[0] if '.' in pid else pid
+                            pool_res = self.no_draw_pool_resources.get(pid_banner, {})
                             if _rid in pool_res:
                                 baseline = float(pool_res[_rid])
                                 if self.use_draw_units and self.cost_per_draw > 0:
@@ -1162,16 +1168,16 @@ class AnalysisWorker(QThread):
                     _xlabel = metric_name
                     if is_resource_gdr(metric_key) and self.use_draw_units:
                         _xlabel = f'{metric_name} (抽)'
-                    _cum_title = f'{metric_name} (截止每池)'
+                    _cum_title = f'{metric_name} (截止每 banner)'  # P72 ISSUE-111：累积语义为 banner 段
                     if is_resource_gdr(metric_key) and self.use_draw_units:
-                        _cum_title = f'{metric_name} (抽, 截止每池)'
+                        _cum_title = f'{metric_name} (抽, 截止每 banner)'
                     if ridge_series:
                         _ridge_hints = {}
                         if _ridge_bins.bin_edges is not None:
                             _ridge_hints["bin_edges"] = _ridge_bins.bin_edges
                         elif _ridge_bins._extra.get("nbins"):
                             _ridge_hints["nbins"] = _ridge_bins._extra["nbins"]
-                        charts[f'cumulative_by_pool_{metric_name}'] = ChartSpec(
+                        charts[f'cumulative_by_banner_{metric_name}'] = ChartSpec(
                             chart_type="ridge",
                             data=RidgeData(series=ridge_series, baselines=ridge_baselines,
                                            labels=ridge_labels),
@@ -1180,7 +1186,7 @@ class AnalysisWorker(QThread):
                             ylabel='池子',
                             layout_hints=_ridge_hints,
                         )
-                step_done('截止每池的GDR分布')
+                step_done('截止每 banner 的GDR分布')  # P72 ISSUE-124：文案随语义更正
 
         if 'draws_vs_gdr' in self.selected:
             self._emit('生成抽卡数-目标达成率散点图...', int(completed / total_steps * 100))
@@ -1292,6 +1298,7 @@ class AnalysisWorker(QThread):
                         desire_weights=self._store.desire_weights if self._store else None,
                         miss_cost_weights=self._store.miss_cost_weights if self._store else None,
                         card_value_weights=self._store.card_value_weights if self._store else None,
+                        bonus_events=[r.get('bonus_events', []) for r in self.results],   # P58（ISSUE-312）：per-sim 赠卡透传，draw-only 口径
                     )
                     success_flags = [flags[pool_idx] for flags in all_flags]
                     ok = True
@@ -1366,6 +1373,7 @@ class AnalysisWorker(QThread):
                         desire_weights=self._store.desire_weights if self._store else None,
                         miss_cost_weights=self._store.miss_cost_weights if self._store else None,
                         card_value_weights=self._store.card_value_weights if self._store else None,
+                        bonus_events=[r.get('bonus_events', []) for r in self.results],   # P58（ISSUE-312）：per-sim 赠卡透传，draw-only 口径
                     )
                 else:
                     self._emit('警告: 转变分析缺少数据——transition_flags 和 cumulative_snapshots 均为空',
@@ -1603,11 +1611,33 @@ class AnalysisPanel(QWidget):
             self._rebuild_checkbox_group(self._cum_widget, self._cumulative_by_pool_checks, '分析')
 
     def _get_pool_names(self):
-        """构建 {pool_id: pool_name} 映射。"""
+        """构建 {pool_id: pool_name} 映射。
+
+        P61（2026-08-04 修复 D5 / ISSUE-324）：多池 Banner 时 label 按 banner_id.pool_id
+        拆分区分——同一 Banner 的 main/free_10pull 若共用相同中文名则图表标签歧义，
+        多池场景 label 用「banner 中文名.裸池 id」。
+        P72 ISSUE-701：额外补一层 banner_id → banner.name 映射——时间域消费点
+        （cumulative_by_banner 山脊图 ridge_labels、转变矩阵标题 _pool_label）用 banner 键
+        查此层，不再退化裸 banner id（原全限定键表对 banner 键恒 miss）。
+        """
         names = {}
         if self._store and hasattr(self._store, 'pools'):
+            banner_pool_count = {}
+            pool_ids = []
             for pe in self._store.pools:
-                names[pe.pool_id] = getattr(pe, 'name', pe.pool_id)
+                banner_id = pe.pool_id.split('.')[0] if '.' in pe.pool_id else pe.pool_id
+                banner_pool_count[banner_id] = banner_pool_count.get(banner_id, 0) + 1
+                pool_ids.append((pe, banner_id))
+            for pe, banner_id in pool_ids:
+                name = getattr(pe, 'name', pe.pool_id) or pe.pool_id
+                if banner_pool_count.get(banner_id, 0) > 1:
+                    pool_part = pe.pool_id.split('.', 1)[1] if '.' in pe.pool_id else pe.pool_id
+                    names[pe.pool_id] = f"{name}.{pool_part}"
+                else:
+                    names[pe.pool_id] = name
+                # P72 ISSUE-701：banner 级映射（banner_id → banner.name），时间域消费点经此查询；
+                # setdefault 保证同 banner 多 pe 取同一 banner 名（banner 级名一致，无取首分歧）
+                names.setdefault(banner_id, name)
         return names
 
     def _extract_cost_per_draw(self):
@@ -1904,7 +1934,7 @@ class AnalysisPanel(QWidget):
 
                         self._on_success_rate_gdr_changed(0)
 
-                    if key == 'cumulative_by_pool':
+                    if key == 'cumulative_by_banner':
                         cum_widget = QWidget()
                         cum_layout = QVBoxLayout(cum_widget)
                         cum_layout.setContentsMargins(0, 0, 0, 0)
@@ -2111,7 +2141,7 @@ class AnalysisPanel(QWidget):
         if key.startswith('gdr_dist_') or key == 'gdr_dist':
             sel = self._get_gdr_dist_selections()
             cond['gdr_dist_selections'] = frozenset((k, frozenset(v)) for k, v in sel.items())
-        if key.startswith('cumulative_by_pool_') or key == 'cumulative_by_pool':
+        if key.startswith('cumulative_by_banner_') or key == 'cumulative_by_banner':
             cond['cumulative_by_pool_selections'] = frozenset(self._get_cumulative_by_pool_selections())
         cond['use_draw_units'] = self.draw_unit_cb.isChecked()
         cond['cost_per_draw'] = self.cost_per_draw_spin.value()
@@ -2248,8 +2278,8 @@ class AnalysisPanel(QWidget):
 
             if any(k.startswith('gdr_dist_') for k in charts):
                 self._computed_conditions['gdr_dist'] = self._get_conditions_for_key('gdr_dist')
-            if any(k.startswith('cumulative_by_pool_') for k in charts):
-                self._computed_conditions['cumulative_by_pool'] = self._get_conditions_for_key('cumulative_by_pool')
+            if any(k.startswith('cumulative_by_banner_') for k in charts):
+                self._computed_conditions['cumulative_by_banner'] = self._get_conditions_for_key('cumulative_by_banner')
             if any(k.startswith('risk_worst_case_') for k in charts):
                 self._computed_conditions['risk_worst_case'] = self._get_conditions_for_key('risk_worst_case')
             if any(k.startswith('risk_best_case_') for k in charts):
@@ -2391,6 +2421,9 @@ class AnalysisPanel(QWidget):
         扩展键（如 gdr_dist_xxx）排在父键（如 gdr_dist）附近。
         未在 CATEGORIES 中出现的键排在末尾。
         """
+        # P72 ISSUE-105：重命名 cumulative_by_pool_ → cumulative_by_banner_ 后清理旧前缀缓存键，
+        # 防止旧键经下方「未匹配键」段排在尾部呈无名图表（消费侧重建不等价于产键侧清理）
+        self._prune_legacy_cumulative_keys()
         cache = self._chart_specs_cache
         if not cache:
             return {}
@@ -2409,6 +2442,16 @@ class AnalysisPanel(QWidget):
             if k not in seen:
                 ordered[k] = cache[k]
         return ordered
+
+    def _prune_legacy_cumulative_keys(self):
+        """P72 ISSUE-105：清理旧前缀缓存键（cumulative_by_pool_ → cumulative_by_banner_）。
+
+        改名后若同进程残留旧前缀键（长驻会话/热更新），_get_ordered_charts 会将其当
+        「未匹配键」排在尾部呈无名图表；此处从产键侧缓存删除（幂等）。
+        """
+        legacy = [k for k in self._chart_specs_cache if k.startswith('cumulative_by_pool_')]
+        for k in legacy:
+            del self._chart_specs_cache[k]
 
 
     # -- P43: 成功率分析槽函数 --

@@ -1,34 +1,43 @@
 """TOML 配置文件读写——替代旧 config_io.py + pool_config.py 的 txt 解析器。
 
-S2a: load_toml + 基础 _build_* helper + _expand_binding 迁移
-S2b-1: save_toml 骨架 + _build_weights / _build_distribution_templates / _build_pools
-S2b-2: _save_templates_and_pools + _distribution_matches_template
-S2c: _expand_template_with_bindings
+P61（Ph4）：池子配置段已从旧 [[pools]]（含 distribution_template/bindings 模板引用）
+一次性迁移为 [[banner]]（D3/D4 裁决，无兼容双路径）。分布模板系统已移除
+（§3.10.6）——模板在迁移时展开为内联 [[banner.pool.reward]]。
 """
 
-import math
 import warnings
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib
 
+from .stop_condition import (   # P79：同轴条件的阈值参数键 + 形态问题检查（单一真相源）
+    COAXIAL_THRESHOLD_KEYS,
+    stop_condition_shape_issues,
+)
 from .config_store import (
+    BannerEntry,
+    BannerPoolEntry,
     CardDefEntry,
     CardWeightEntry,
     ConfigError,
     ConfigStore,
     DayOverride,
     GainRule,
+    LifecycleRuleEntry,
+    MilestoneConfig,
+    MilestoneDef,
     PityConfig,
     PityDef,
-    PoolDistEntry,
-    PoolEntry,
+    SelectVoucherDef,   # ← P78
     TargetCardEntry,
 )
 from .overflow import OverflowBand, expand_sugar_to_bands
+
+# P61：秒/天换算——Banner 时间窗口（秒）与 TOML start_day/end_day（天）在解析/保存边界换算
+DAY = 86400
 
 # ══════════════════════════════════════════════════════════════════
 # 公开接口
@@ -60,19 +69,27 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     # 各段构建
     _build_resources(data, store)
     _build_cards(data, store)
+    _build_select_voucher(data, store)   # P78：[[select_voucher]] 自选券候选集段（ISSUE-129——须在 _build_resources L65 之后、_build_cards L66 之后：voucher id setdefault 补全需 resource_defs 就绪、候选卡校验需 card_defs 就绪）
     _build_gain_rules(data, store)
     _build_day_overrides(data, store)
     _build_pity(data, store)        # 依赖 rarity_rank 完成 scope 校验
+    _build_milestone(data, store)   # P58：[[milestone]] 累抽奖励段（依赖 card_defs 做引用校验）
     _build_targets(data, store)
     _build_weights(data, store)
 
     # P69：策略段
     _build_strategy(data, store)
 
-    # 分布模板 → 池子（需先构建模板索引，再展开池子）
-    templates = _build_distribution_templates(data)
-    store._distribution_templates = templates
-    _build_pools(data, store, templates)
+    # Banner 段（[[banner]] + [[banner.pool]] + [[banner.lifecycle]]）
+    _build_banners(data, store)
+
+    # P61（ISSUE-004）：旧 [[pools]] 段残留检测——解析器只认 [[banner]]，
+    # 残留段不解析。banner 为空且检测到残留时显式警告，避免静默 end_time=0/模拟 0 抽。
+    if data.get('pools') and not store.banner.banners:
+        warnings.warn(
+            "检测到旧 [[pools]] 段（已弃用）——当前解析出 0 个 Banner。"
+            "请将配置一次性迁移为 [[banner]] 格式（P61），否则模拟将无池可抽。"
+        )
 
     # 回填 card_defs.pools：从池子分布逆向推导每张卡属于哪些池子
     _backfill_card_pools(store)
@@ -83,14 +100,23 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     # P63：构建 card_overflow_map（必须在 _build_cards 和 _build_rarity_defaults 之后）
     _build_card_overflow_map(store)
 
+    # P77：资源生命周期段（须在 _build_banners/_normalize_permanent_banners 之后，依赖永久池标记）
+    _build_resource_lifecycle(data, store)
+
+    # P79：[stop_condition] 段（须在 _build_banners/_normalize_permanent_banners 之后，依赖永久池标记）
+    # ——解析期校验（死规则 / 语义陷阱 / 同轴阈值 / 非白名单值）同样依赖归一化后的
+    # end_time，故一并落在本调用点之后，不得按 TOML 段序前移。
+    _build_stop_condition(data, store)
+    _validate_stop_condition_config(data, store)
+
     return store
 
 
 def save_toml(store: ConfigStore, path: str) -> None:
     """将 ConfigStore 保存为 TOML 文件。
 
-    分布模板匹配策略：对于每个池子，若 distribution_template 非空且
-    当前分布与模板展开结果一致，则写出模板引用；否则写出内联 distribution。
+    P61（Ph4）：池子段以 [[banner]] 格式写出（见 _save_banners）。分布模板系统
+    已移除（§3.10.6）——rewards 一律内联，不写 [[distribution_templates]]。
     """
     import tomli_w
 
@@ -144,12 +170,47 @@ def save_toml(store: ConfigStore, path: str) -> None:
             ]
         data['card'].append(entry)
 
-    # templates + pools
-    _save_templates_and_pools(store, data)
+    # P61：Banner 段（[[banner]] + [[banner.pool]] + [[banner.pool.reward]] + [[banner.lifecycle]]）
+    _save_banners(store, data)
+
+    # P77：资源生命周期段（两档条件写键）
+    _save_resource_lifecycle(store, data)
+
+    # P79：[stop_condition] 段（空树省略段）
+    _save_stop_condition(store, data)
 
     # pity（P55 扁平化格式）
     if store.pity.enabled and store.pity.pities:
         data['pity'] = [_pitydef_to_toml(p) for p in store.pity.pities]
+
+    # milestone（P58：[[milestone]] 累抽奖励段——独立于保底体系）
+    if store.milestone.enabled and store.milestone.milestones:
+        data['milestone'] = []
+        for m in store.milestone.milestones:
+            entry = {
+                'name': m.name,
+                'threshold': m.threshold,
+                'repeat': m.repeat,
+                'max_triggers': m.max_triggers,
+                'banner': m.banner,
+                'bonus_reward': m.bonus_reward,
+            }
+            # P78 条件写键纪律（ISSUE-113）——空列表/零偏移省略键：
+            # 显式空 alternate_rewards=[]/offset=0 写出会在下次 load_toml 命中
+            # ISSUE-112 规则 1/ISSUE-007 抛 ConfigError（GUI 保存→重载断裂）。
+            if m.alternate_rewards:
+                entry['alternate_rewards'] = m.alternate_rewards
+            if m.offset:
+                entry['offset'] = m.offset
+            data['milestone'].append(entry)
+
+    # select_voucher（P78：[[select_voucher]] 自选券候选集段——独立 gate，ISSUE-118：
+    # 与 milestone 的 enabled-and-milestones gate 无关，防 milestone 禁用/为空时段被整体跳过）
+    if store.select_vouchers:
+        data['select_voucher'] = [
+            {'voucher': v.voucher, 'cards': list(v.cards)}
+            for v in store.select_vouchers
+        ]
 
     # strategy（P69：key + params 格式）
     if store.strategy_key:
@@ -241,187 +302,79 @@ def save_toml(store: ConfigStore, path: str) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 分布模板保存辅助
+# Banner 保存辅助
 # ══════════════════════════════════════════════════════════════════
 
 
-def _save_templates_and_pools(store: ConfigStore, data: dict) -> None:
-    """将池子分布反向写入 TOML 结构。
+def _save_banners(store: ConfigStore, data: dict) -> None:
+    """从 store.banner.banners 写 [[banner]] 段（D3/D4 一次性迁移，无双路径分支）。
 
-    基准模板从 store._distribution_templates 读取（load_toml 时缓存）。
+    - start_day/end_day（天）由 available_from/until（秒）// DAY 换算（与展平视图同口径）
+    - max_draws None 不写；0 保存边界同样归一化为 None（ISSUE-331）
+    - rewards 统一内联写 [[banner.pool.reward]]（BannerPoolEntry 无 distribution_template 字段，
+      一次性迁移后模板已展开为内联，保存不写 [[distribution_templates]]）
+    - lifecycle time_window.at（秒）保存回天（/ DAY，ISSUE-001）
     """
-    original_templates = store._distribution_templates
-    data['pools'] = []
-    used_templates: set = set()
+    banners = []
+    for b in store.banner.banners:
+        b_dict: dict = {'id': b.id, 'name': b.name}
+        if not b.enabled:
+            b_dict['enabled'] = False
+        if b.max_draws is not None:
+            b_dict['max_draws'] = b.max_draws
+        if b.available_from is not None:
+            b_dict['start_day'] = int(b.available_from // DAY)
+        if b.available_until is not None:
+            b_dict['end_day'] = int(b.available_until // DAY)
 
-    for pool in store.pools:
-        pool_dict: dict = {
-            'id': pool.pool_id, 'name': pool.name,
-            'pool_type': pool.pool_type or '角色',
-            'start_day': pool.start_day, 'end_day': pool.end_day,
-            'cost': pool.cost,
-            'batch_size': pool.batch_size,
-            'bindings': {k: v for k, v in pool.bindings.items() if k != 'type'},
-            'target_cards': [cid for cid, _ in pool.target_specs],
-        }
+        if b.pools:
+            pools = []
+            for bp in b.pools:
+                bp_dict: dict = {'id': bp.id, 'cost': bp.cost}
+                if bp.batch_size != 1:
+                    bp_dict['batch_size'] = bp.batch_size
+                if bp.excludes_all_pity:
+                    bp_dict['excludes_all_pity'] = True
+                if bp.max_draws is not None:
+                    bp_dict['max_draws'] = bp.max_draws
+                if bp.exchange_card_id:
+                    bp_dict['exchange_card_id'] = bp.exchange_card_id
+                if bp.epitomizable_cards:
+                    bp_dict['epitomizable_cards'] = list(bp.epitomizable_cards)
+                if bp.rewards:
+                    bp_dict['reward'] = [
+                        {
+                            'card_id': r['card_id'],
+                            'probability': r['probability'],
+                            'rarity': r.get('rarity', 'r'),
+                            'featured': r.get('featured', False),
+                            **({'resources_gained': dict(r['resources_gained'])}
+                               if r.get('resources_gained') else {}),
+                        }
+                        for r in bp.rewards
+                    ]
+                pools.append(bp_dict)
+            b_dict['pool'] = pools
 
-        # P56：epitomizable_cards——仅非空时写入以保持 TOML 简洁
-        epitomizable = getattr(pool, 'epitomizable_cards', None)
-        if epitomizable:
-            pool_dict['epitomizable_cards'] = list(epitomizable)
+        if b.lifecycle:
+            lifecycle = []
+            for lc in b.lifecycle:
+                lc_dict: dict = {'condition': lc.condition}
+                if lc.pool is not None:
+                    lc_dict['pool'] = lc.pool
+                lc_dict['at'] = lc.at / DAY if lc.condition == 'time_window' else lc.at
+                if lc.match != 'card_id':
+                    lc_dict['match'] = lc.match
+                if lc.action != 'switch_to':
+                    lc_dict['action'] = lc.action
+                if lc.target is not None:
+                    lc_dict['target'] = lc.target
+                lifecycle.append(lc_dict)
+            b_dict['lifecycle'] = lifecycle
 
-        # rerun_of / exchange_card_id 可选
-        if pool.rerun_of:
-            pool_dict['rerun_of'] = pool.rerun_of
-        if pool.exchange_card_id:
-            pool_dict['exchange_card_id'] = pool.exchange_card_id
+        banners.append(b_dict)
 
-        # 判定：模板引用 vs 内联分布
-        template_name = pool.distribution_template
-        if template_name and _distribution_matches_template(
-            pool.distribution, template_name, pool.bindings, original_templates
-        ):
-            pool_dict['distribution_template'] = template_name
-            used_templates.add(template_name)
-        else:
-            pool_dict['distribution'] = [
-                {
-                    'card_id': d.card_id,
-                    'probability': d.probability,
-                    'rarity': d.rarity,
-                    'featured': d.featured,
-                    **({'resources_gained': dict(d.resources_gained)}
-                       if d.resources_gained else {}),
-                }
-                for d in pool.distribution
-            ]
-
-        data['pools'].append(pool_dict)
-
-    # 写被引用的模板
-    if used_templates:
-        data['distribution_templates'] = [
-            t for t in original_templates if t['name'] in used_templates
-        ]
-
-
-def _distribution_matches_template(
-    distribution: List[PoolDistEntry],
-    template_name: str,
-    bindings: Dict[str, str],
-    templates: List[dict],
-) -> bool:
-    """比较当前分布与模板展开结果是否一致（浮点容差 rel_tol=1e-6）。"""
-    template = next((t for t in templates if t['name'] == template_name), None)
-    if template is None:
-        return False
-
-    expanded = _expand_template_with_bindings(template['cards'], bindings)
-
-    if len(distribution) != len(expanded):
-        return False
-
-    dist_sorted = sorted(distribution, key=lambda d: d.card_id)
-    exp_sorted = sorted(expanded, key=lambda d: d.card_id)
-
-    for d, e in zip(dist_sorted, exp_sorted):
-        if d.card_id != e.card_id:
-            return False
-        if d.rarity != e.rarity:
-            return False
-        if d.featured != e.featured:
-            return False
-        if not math.isclose(d.probability, e.probability, rel_tol=1e-6):
-            return False
-        # P63：resources_gained 比较——含非默认值的分布不应误判为模板匹配
-        if d.resources_gained != e.resources_gained:
-            return False
-
-    return True
-
-
-# ══════════════════════════════════════════════════════════════════
-# 绑定展开
-# ══════════════════════════════════════════════════════════════════
-
-
-def _expand_binding(value: str, prob: float) -> List[Tuple[str, float]]:
-    """展开逗号分隔的绑定值。
-
-    从 pool_config.py 原样迁移至 config_toml.py。
-    支持等权展开（"a,b,c" → 均分概率）和冒号加权展开（"a:2.0,b:1.0" → 按权重比例分配）。
-    """
-    if ',' not in value:
-        return [(value, prob)]
-    parts = [p.strip() for p in value.split(',')]
-    weighted = []
-    unweighted = []
-    for part in parts:
-        if ':' in part:
-            cid, w = part.rsplit(':', 1)
-            try:
-                weight = float(w)
-                weighted.append((cid.strip(), weight))
-            except ValueError:
-                weighted.append((part.strip(), 1.0))
-        else:
-            unweighted.append(part.strip())
-    if not weighted and not unweighted:
-        return [(value, prob)]
-    total_weight = sum(w for _, w in weighted) + len(unweighted)
-    results = []
-    for cid, w in weighted:
-        results.append((cid, prob * (w / total_weight)))
-    for cid in unweighted:
-        results.append((cid, prob * (1.0 / total_weight)))
-    return results
-
-
-def _expand_template_with_bindings(
-    template_cards: List[dict],
-    bindings: Dict[str, str],
-) -> List[PoolDistEntry]:
-    """将模板中的绑定键展开为具体 PoolDistEntry 列表。
-
-    card_id 为绑定键（ssr/sr/r/ssr_alt/ssr_alt1/ssr_alt2 等）时，
-    调用 _expand_binding() 展开；否则按原样作为单卡 ID。
-    featured 仅当显式为 True 时标记。
-    """
-    BINDING_KEYS = {'ssr', 'sr', 'r', 'ssr_alt', 'ssr_alt1', 'ssr_alt2',
-                    'featured', 'offrate'}
-    result: List[PoolDistEntry] = []
-
-    for tc in template_cards:
-        card_id = tc['card_id']
-        prob = tc['probability']
-        rarity = tc.get('rarity', 'r')
-        featured = tc.get('featured', False)
-
-        resources_gained = dict(tc.get('resources_gained', {}))
-
-        if card_id in BINDING_KEYS:
-            # 绑定键 → 从 bindings 查找值并展开
-            binding_value = bindings.get(card_id, card_id)
-            expanded = _expand_binding(binding_value, prob)
-            for cid, card_prob in expanded:
-                result.append(PoolDistEntry(
-                    card_id=cid,
-                    probability=card_prob,
-                    rarity=rarity,
-                    featured=(featured and card_id == 'ssr'),
-                    resources_gained=resources_gained,
-                ))
-        else:
-            # 非绑定键 → 直接作为单卡 ID
-            result.append(PoolDistEntry(
-                card_id=card_id,
-                probability=prob,
-                rarity=rarity,
-                featured=featured,
-                resources_gained=resources_gained,
-            ))
-
-    return result
+    data['banner'] = banners
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -681,6 +634,866 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
     store.pity = PityConfig(enabled=True, pities=pities)
 
 
+def _validate_reward_dict(reward: dict, known_card_ids: set, allow_empty: bool = False) -> dict:
+    """校验单个 reward dict（cards / resources / random_cards 三字段，P78 ISSUE-131）。
+
+    供 `_build_milestone` 的 bonus_reward（allow_empty=True——空 {} 合法，ISSUE-503）
+    与 alternate_rewards 每个交替项（allow_empty=False——空 {} 拒，ISSUE-112 规则 2）
+    共用——与引擎侧 `_resolve_bonus_from(reward)` 同构（交替项与 bonus_reward 同为
+    卡片/资源/随机池三字段）。set_config 恢复路径亦经此（ISSUE-114/116 同构校验）。
+
+    **校验 + 规范化写回一体（ISSUE-701）**：非纯校验——对 random_cards 的
+    weights/count 原地规范化写回（与 _build_milestone 原 L696-708/L717 行为一致），
+    保证 set_config 入口对字符串数值权重同样规范化、引擎 rng.choices 收到 float
+    权重不崩溃。副作用声明：原地修改调用方传入的 dict（幂等无害）。
+
+    Args:
+        reward: 待校验的 reward dict（cards/resources/random_cards）。
+        known_card_ids: 已知卡 id 集合（cards/random_cards 存在性校验）。
+        allow_empty: True 时空 {} 直接通过（bonus_reward 合法空奖励里程碑）；
+            False 时空 {} 抛 ConfigError（alternate_rewards 空项，ISSUE-112 规则 2）。
+
+    Returns:
+        校验后的 reward dict（含 cards/resources/random_cards 三键，规范化后的
+        random_cards 写回原 dict）。若 allow_empty=True 且 reward 为空 {} 则原样返回。
+    """
+    # ISSUE-503：bonus_reward={} 空奖励里程碑是既有合法语义（纯计数/统计锚点）
+    if allow_empty and not reward:
+        return reward
+    if not isinstance(reward, dict):
+        raise ConfigError(
+            f"奖励项必须是表（dict），当前为 {type(reward).__name__}")
+
+    # ── cards 校验（存在性 + 类型）──
+    cards = reward.get('cards', [])
+    if not isinstance(cards, list):
+        raise ConfigError(
+            f"奖励项 cards 必须是数组，当前为 {type(cards).__name__}")
+    for cid in cards:
+        if cid not in known_card_ids:
+            raise ConfigError(f"奖励项 cards 引用不存在的 card_id: '{cid}'")
+
+    # ── resources 校验（类型 + 值数值——ISSUE-303）──
+    resources = reward.get('resources', {})
+    if not isinstance(resources, dict):
+        raise ConfigError(
+            f"奖励项 resources 必须是键值对，当前为 {type(resources).__name__}")
+    for _rk, _rv in resources.items():
+        if not isinstance(_rv, (int, float)) or isinstance(_rv, bool):
+            raise ConfigError(
+                f"奖励项 resources['{_rk}'] 值必须为数值（int/float），"
+                f"当前为 {type(_rv).__name__}")
+
+    # ── random_cards 校验（类型 + candidates 存在性 + weights 数值 + count ≥1）──
+    random_cards = reward.get('random_cards', [])
+    if not isinstance(random_cards, list):
+        raise ConfigError(
+            f"奖励项 random_cards 必须是数组，当前为 {type(random_cards).__name__}")
+    for i, rc in enumerate(random_cards):
+        # ISSUE-606：rc['candidates'] 缺键 KeyError 兜底——显式报错而非裸 KeyError
+        if not isinstance(rc, dict):
+            raise ConfigError(f"奖励项 random_cards[{i}] 必须是表（dict）")
+        candidates = rc.get('candidates')
+        if candidates is None:
+            raise ConfigError(f"奖励项 random_cards[{i}] 缺少 candidates 字段")
+        if not candidates:
+            raise ConfigError(f"奖励项 random_cards[{i}].candidates 不得为空")
+        for cid in candidates:
+            if cid not in known_card_ids:
+                raise ConfigError(
+                    f"奖励项 random_cards[{i}].candidates 引用不存在的 card_id: '{cid}'")
+        if 'weights' in rc and len(rc['weights']) != len(candidates):
+            raise ConfigError(
+                f"奖励项 random_cards[{i}].weights 长度({len(rc['weights'])})"
+                f"与 candidates({len(candidates)})不匹配")
+        # ISSUE-302：权重逐项 float 数值校验 + 规范化写回
+        wlist = rc.get('weights', [1.0] * len(candidates))
+        w_norm: list = []
+        for w in wlist:
+            try:
+                w_norm.append(float(w))
+            except (TypeError, ValueError):
+                raise ConfigError(
+                    f"奖励项 random_cards[{i}].weights 含非数字值 '{w}'"
+                    f"（类型 {type(w).__name__}）——必须为数值")
+        if w_norm and all(w == 0.0 for w in w_norm):
+            raise ConfigError(
+                f"奖励项 random_cards[{i}].weights 全为零——random.choices 无法抽样，至少一个权重 > 0")
+        rc['weights'] = w_norm
+        # ISSUE-301：count 解析期校验 + 规范化写回（ISSUE-701）
+        try:
+            count = int(rc.get('count', 1))
+        except (TypeError, ValueError):
+            raise ConfigError(f"奖励项 random_cards[{i}].count 必须为整数")
+        if count < 1:
+            raise ConfigError(
+                f"奖励项 random_cards[{i}].count 必须 ≥ 1（正整数），当前为 {count}")
+        rc['count'] = count
+
+    return {
+        'cards': list(cards),
+        'resources': dict(resources),
+        'random_cards': list(random_cards),
+    }
+
+
+def _build_select_voucher(data: dict, store: ConfigStore) -> None:
+    """[[select_voucher]] → store.select_vouchers（P78 自选券候选集段）。
+
+    候选集定义——资源 id → 可兑换卡片显式列表。纯元数据声明（模拟结算不消费，
+    仅供查询/展示层）。依赖 store.resource_defs（_build_resources 已先执行）做
+    voucher id 自动补全、store.card_defs（_build_cards 已先执行）做候选卡存在性校验。
+    """
+    sv_list = data.get('select_voucher', [])
+    if not sv_list:
+        store.select_vouchers = []
+        return
+
+    known_card_ids = {c.card_id for c in store.card_defs}
+    seen_vouchers: set = set()
+    vouchers = []
+    for i, item in enumerate(sv_list):
+        if not isinstance(item, dict):
+            raise ConfigError(f"select_voucher[{i}] 必须是表（dict），当前为 {type(item).__name__}")
+        raw_voucher = item.get('voucher', '')
+        if not isinstance(raw_voucher, str):
+            raise ConfigError(f"select_voucher[{i}] voucher 字段必须是字符串，当前为 {type(raw_voucher).__name__}")
+        voucher = raw_voucher.strip()
+        if not voucher:
+            raise ConfigError(f"select_voucher[{i}] 缺少 voucher 字段")
+        # ISSUE-111：voucher id 唯一性
+        if voucher in seen_vouchers:
+            raise ConfigError(f"select_voucher voucher id 重复: '{voucher}'")
+        seen_vouchers.add(voucher)
+
+        cards = item.get('cards', [])
+        if not isinstance(cards, list):
+            raise ConfigError(f"select_voucher '{voucher}' cards 必须是数组，当前为 {type(cards).__name__}")
+        # ISSUE-111：候选卡存在性校验
+        for cid in cards:
+            if not isinstance(cid, str) or cid not in known_card_ids:
+                raise ConfigError(
+                    f"select_voucher '{voucher}' cards 引用不存在的 card_id: '{cid}'")
+        # ISSUE-111：空候选集允许（可兑换空集，模拟不崩溃）但发 warning（ISSUE-105 通道）
+        if not cards:
+            warnings.warn(
+                f"select_voucher '{voucher}' 候选集为空（cards = []）——可兑换空集，"
+                "确认是否笔误（P78，ISSUE-105 通道）")
+        # ISSUE-005/119：voucher id 自动补全 resource_defs——setdefault 保留既有显示名
+        store.resource_defs.setdefault(voucher, voucher)
+
+        vouchers.append(SelectVoucherDef(voucher=voucher, cards=list(cards)))
+
+    store.select_vouchers = vouchers
+
+
+def _validate_milestone_dict(md_dict: dict, known_card_ids: set) -> MilestoneDef:
+    """校验单个里程碑 dict 并构造 MilestoneDef（P78 ISSUE-114/606）。
+
+    供 set_config 恢复路径（config_panel 跨模块复用，ISSUE-125 契约——与
+    `_normalize_permanent_banners` 先例同构）构造 MilestoneDef 前校验——校验范围
+    与 `_build_milestone` 全量同构（name/threshold/max_triggers/repeat/banner/
+    bonus_reward/alternate_rewards/offset），保证「同一非法配置经 TOML 与
+    set_config 两入口均被拒」；D6/D7/ISSUE-120 warning 亦同强度复跑（ISSUE-707）。
+
+    Args:
+        md_dict: 里程碑配置 dict（get_config 输出或外部 JSON 恢复源）。
+        known_card_ids: 已知卡 id 集合（cards/random_cards 存在性校验，ISSUE-201）。
+
+    Returns:
+        校验后的 MilestoneDef 实例。
+
+    Raises:
+        ConfigError: 任一字段非法（与 _build_milestone 同强度）。
+    """
+    # ISSUE-606：与 _build_milestone 同构——非 dict 类型守卫（set_config 注入 None/str
+    # 时抛 ConfigError 而非裸 AttributeError，两入口错误通道一致）
+    if not isinstance(md_dict, dict):
+        raise ConfigError(
+            f"里程碑配置项必须是表（dict），当前为 {type(md_dict).__name__}")
+    # name
+    raw_name = md_dict.get('name', '')
+    if not isinstance(raw_name, str):
+        raise ConfigError(
+            f"里程碑 name 字段必须是字符串，当前为 {type(raw_name).__name__}")
+    name = raw_name.strip()
+    if not name:
+        raise ConfigError("里程碑缺少 name 字段")
+
+    # threshold/max_triggers——拒 bool/float（ISSUE-606 全量同构）
+    for field, default in (('threshold', 40), ('max_triggers', 0)):
+        val = md_dict.get(field, default)
+        if isinstance(val, bool) or not isinstance(val, int):
+            raise ConfigError(
+                f"里程碑 '{name}' {field} 必须为整数，当前为 {type(val).__name__}"
+                f"（值 {val!r}）")
+    threshold = md_dict['threshold'] if 'threshold' in md_dict else 40
+    max_triggers = md_dict['max_triggers'] if 'max_triggers' in md_dict else 0
+    if threshold < 1:
+        raise ConfigError(f"里程碑 '{name}' 阈值必须 ≥ 1，当前为 {threshold}")
+    if max_triggers < 0:
+        raise ConfigError(
+            f"里程碑 '{name}' max_triggers 必须 ≥ 0（0=无限触发），当前为 {max_triggers}")
+
+    # repeat——拒字符串 truthy
+    repeat = md_dict.get('repeat', False)
+    if not isinstance(repeat, bool):
+        raise ConfigError(
+            f"里程碑 '{name}' repeat 必须是布尔值，当前为 {type(repeat).__name__}")
+
+    # banner——类型
+    raw_banner = md_dict.get('banner', '')
+    if not isinstance(raw_banner, str):
+        raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
+
+    # bonus_reward——委托 _validate_reward_dict（allow_empty=True，空 {} 合法，ISSUE-503）
+    br = md_dict.get('bonus_reward', {})
+    if not isinstance(br, dict):
+        raise ConfigError(
+            f"里程碑 '{name}' bonus_reward 必须是表（dict），当前为 {type(br).__name__}")
+    bonus_reward = _validate_reward_dict(br, known_card_ids, allow_empty=True)
+
+    # alternate_rewards——与 _build_milestone 同构（ISSUE-112/120）
+    alt_key_present = 'alternate_rewards' in md_dict
+    alt_raw = md_dict.get('alternate_rewards', [])
+    if alt_key_present and not isinstance(alt_raw, list):
+        raise ConfigError(
+            f"里程碑 '{name}' alternate_rewards 必须是数组，当前为 {type(alt_raw).__name__}")
+    if alt_key_present and len(alt_raw) == 0:
+        raise ConfigError(
+            f"里程碑 '{name}' 显式配置了空 alternate_rewards = []——"
+            "交替奖励为空却声明该键（与未配置等效却易误导），请删除该键或填写交替项")
+    if len(alt_raw) == 1:
+        warnings.warn(
+            f"里程碑 '{name}' alternate_rewards 仅 1 项——单元素交替列表等价于 "
+            "bonus_reward（% len(...) 恒返回同一项），确认是否笔误（P78，ISSUE-105 通道）")
+    alternate_rewards: list = []
+    for _i, item in enumerate(alt_raw):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"里程碑 '{name}' alternate_rewards[{_i}] 必须是表（dict），"
+                f"当前为 {type(item).__name__}")
+        if not item:
+            raise ConfigError(
+                f"里程碑 '{name}' alternate_rewards[{_i}] 为空项 {{}}——"
+                "至少含 cards/resources/random_cards 之一")
+        alternate_rewards.append(
+            _validate_reward_dict(item, known_card_ids, allow_empty=False))
+
+    # offset——ISSUE-007（int、≥0、threshold+offset≥1）
+    offset = md_dict.get('offset', 0)
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        raise ConfigError(
+            f"里程碑 '{name}' offset 必须为整数，当前为 {type(offset).__name__}"
+            f"（值 {offset!r}）")
+    if offset < 0:
+        raise ConfigError(
+            f"里程碑 '{name}' offset 必须 ≥ 0（负 offset 非法——首节点不得早于 threshold），"
+            f"当前为 {offset}")
+    if threshold + offset < 1:
+        raise ConfigError(
+            f"里程碑 '{name}' threshold + offset 必须 ≥ 1，当前为 {threshold + offset}")
+
+    # D6/D7 warning 同强度复跑（ISSUE-707）
+    if offset != 0 and not repeat:
+        warnings.warn(
+            f"里程碑 '{name}' 配置了 offset={offset} 但 repeat=False（at=N 单次触发）——"
+            "offset 仅推后单次触发点（首节点 = threshold+offset），确认语义正确（P78，ISSUE-105 通道）")
+    if alternate_rewards and not repeat:
+        warnings.warn(
+            f"里程碑 '{name}' 配置了 alternate_rewards 但 repeat=False（at=N 单次触发）——"
+            "交替序列仅触发一次、只取第一项 A，B 及后续永不使用，确认是否笔误（P78，ISSUE-105 通道）")
+
+    return MilestoneDef(
+        name=name,
+        threshold=threshold,
+        repeat=repeat,
+        max_triggers=max_triggers,
+        bonus_reward=bonus_reward,
+        banner=raw_banner,
+        alternate_rewards=alternate_rewards,
+        offset=offset,
+    )
+
+
+def _validate_select_voucher_dict(sv_list: list, known_card_ids: set) -> list:
+    """校验 select_voucher 条目列表并返回 SelectVoucherDef 列表（P78 ISSUE-116）。
+
+    供 set_config 恢复路径跨模块复用——校验范围与 `_build_select_voucher` 全量同构
+    （voucher 类型/空/去重 + cards 类型/候选卡存在性 + 空候选集 warning），保证
+    「同一非法配置经 TOML 与 set_config 两入口均被拒」且 warning 强度一致。
+
+    Args:
+        sv_list: select_voucher 条目 dict 列表（get_config 输出或外部 JSON 恢复源，
+            条目格式与 TOML `[[select_voucher]]` 段同构：{'voucher', 'cards'}）。
+        known_card_ids: 已知卡 id 集合（ISSUE-201）。
+
+    Returns:
+        校验后的 SelectVoucherDef 列表。
+
+    Raises:
+        ConfigError: 任一条目非法。
+    """
+    if not isinstance(sv_list, list):
+        raise ConfigError(
+            f"select_voucher 必须是数组，当前为 {type(sv_list).__name__}")
+    seen_vouchers: set = set()
+    result = []
+    for i, item in enumerate(sv_list):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"select_voucher[{i}] 必须是表（dict），当前为 {type(item).__name__}")
+        raw_voucher = item.get('voucher', '')
+        if not isinstance(raw_voucher, str):
+            raise ConfigError(
+                f"select_voucher[{i}] voucher 字段必须是字符串，当前为 {type(raw_voucher).__name__}")
+        voucher = raw_voucher.strip()
+        if not voucher:
+            raise ConfigError(f"select_voucher[{i}] 缺少 voucher 字段")
+        if voucher in seen_vouchers:
+            raise ConfigError(f"select_voucher voucher id 重复: '{voucher}'")
+        seen_vouchers.add(voucher)
+
+        cards = item.get('cards', [])
+        if not isinstance(cards, list):
+            raise ConfigError(
+                f"select_voucher '{voucher}' cards 必须是数组，当前为 {type(cards).__name__}")
+        for cid in cards:
+            if not isinstance(cid, str) or cid not in known_card_ids:
+                raise ConfigError(
+                    f"select_voucher '{voucher}' cards 引用不存在的 card_id: '{cid}'")
+        if not cards:
+            warnings.warn(
+                f"select_voucher '{voucher}' 候选集为空（cards = []）——可兑换空集，"
+                "确认是否笔误（P78，ISSUE-105 通道）")
+        result.append(SelectVoucherDef(voucher=voucher, cards=list(cards)))
+    return result
+
+
+def _build_milestone(data: dict, store: ConfigStore) -> None:
+    """[[milestone]] → store.milestone（P58 累抽奖励段）。
+
+    独立于保底体系——milestone 不操作概率、旁路注入。依赖 store.card_defs
+    （_build_cards 已先执行）做 cards/random_cards 引用存在性校验。
+    """
+    ml_list = data.get('milestone', [])
+    if not ml_list:
+        store.milestone = MilestoneConfig(enabled=True)
+        return
+
+    # card_id 引用校验集合（ISSUE-101：store.card_defs 是 List[CardDefEntry]，
+    # 禁止 `cid not in store.card_defs`——str in 列表恒 False）
+    known_card_ids = {c.card_id for c in store.card_defs}
+
+    seen_names: set = set()
+    milestones = []
+    for m in ml_list:
+        # ISSUE-012：全部输入校验统一走 ConfigError 通道（禁止裸 KeyError/ValueError）
+        # 代码审查 F1（2026-08-05）：m 非 dict / name 非 str → ConfigError 而非裸 AttributeError
+        if not isinstance(m, dict):
+            raise ConfigError(f"里程碑配置项必须是表（dict），当前为 {type(m).__name__}")
+        raw_name = m.get('name', '')
+        if not isinstance(raw_name, str):
+            raise ConfigError(
+                f"里程碑 name 字段必须是字符串，当前为 {type(raw_name).__name__}")
+        name = raw_name.strip()
+        if not name:
+            raise ConfigError("里程碑缺少 name 字段")
+        if name in seen_names:
+            raise ConfigError(f"里程碑名称重复: '{name}'")
+        seen_names.add(name)
+
+        # 代码审查 F3（2026-08-05）：threshold/max_triggers 拒绝 bool 与 float 截断（静默误配置）
+        for field, val in (('threshold', m.get('threshold', 40)),
+                           ('max_triggers', m.get('max_triggers', 0))):
+            if isinstance(val, bool) or not isinstance(val, int):
+                raise ConfigError(
+                    f"里程碑 '{name}' {field} 必须为整数，当前为 {type(val).__name__}"
+                    f"（值 {val!r}）")
+        threshold = m['threshold'] if 'threshold' in m else 40
+        max_triggers = m['max_triggers'] if 'max_triggers' in m else 0
+
+        if threshold < 1:
+            raise ConfigError(f"里程碑 '{name}' 阈值必须 ≥ 1，当前为 {threshold}")
+
+        # 代码审查 F2（2026-08-05）：max_triggers 负数 → 触发一次即永久停用的静默行为偏离
+        if max_triggers < 0:
+            raise ConfigError(
+                f"里程碑 '{name}' max_triggers 必须 ≥ 0（0=无限触发），当前为 {max_triggers}")
+
+        br = m.get('bonus_reward', {})
+        if not isinstance(br, dict):
+            raise ConfigError(
+                f"里程碑 '{name}' bonus_reward 必须是表（dict），当前为 {type(br).__name__}")
+
+        # ── bonus_reward 校验（P78 委托 _validate_reward_dict，allow_empty=True——空 {} 合法，ISSUE-503）──
+        bonus_reward = _validate_reward_dict(br, known_card_ids, allow_empty=True)
+
+        # ── P78: alternate_rewards 解析（交替奖励序列——ISSUE-006/112）──
+        # 区分「键存在与否」：显式空列表抛 ConfigError（用户写了以为在交替、实际静默
+        # 回退 bonus_reward），键缺失走默认值 []（不配置旧 TOML 行为完全不变）。
+        alt_key_present = 'alternate_rewards' in m
+        alternate_rewards_raw = m.get('alternate_rewards', [])
+        if alt_key_present and not isinstance(alternate_rewards_raw, list):
+            raise ConfigError(
+                f"里程碑 '{name}' alternate_rewards 必须是数组，当前为 {type(alternate_rewards_raw).__name__}")
+        if alt_key_present and len(alternate_rewards_raw) == 0:
+            raise ConfigError(
+                f"里程碑 '{name}' 显式配置了空 alternate_rewards = []——"
+                "交替奖励为空却声明该键（与未配置等效却易误导），请删除该键或填写交替项")
+        # ISSUE-120：单元素交替列表发 warning（等价于 bonus_reward，疑似笔误）
+        if len(alternate_rewards_raw) == 1:
+            warnings.warn(
+                f"里程碑 '{name}' alternate_rewards 仅 1 项——单元素交替列表等价于 "
+                "bonus_reward（% len(...) 恒返回同一项），确认是否笔误（P78，ISSUE-105 通道）")
+        # 逐项校验（allow_empty=False——空 {} 项拒，ISSUE-112 规则 2）
+        alternate_rewards: list = []
+        for _i, item in enumerate(alternate_rewards_raw):
+            if not isinstance(item, dict):
+                raise ConfigError(
+                    f"里程碑 '{name}' alternate_rewards[{_i}] 必须是表（dict），"
+                    f"当前为 {type(item).__name__}")
+            # ISSUE-112 规则 2：空项 {}（无 cards/resources/random_cards 任一）抛 ConfigError
+            if not item:
+                raise ConfigError(
+                    f"里程碑 '{name}' alternate_rewards[{_i}] 为空项 {{}}——"
+                    "至少含 cards/resources/random_cards 之一")
+            alternate_rewards.append(
+                _validate_reward_dict(item, known_card_ids, allow_empty=False))
+
+        # 代码审查 F3（2026-08-05）：repeat 拒绝字符串 truthy（如 repeat = "false" 被当 True）
+        # P78：提前到 offset/alternate_rewards 之前——D6/D7 warning 需判断 repeat
+        repeat = m.get('repeat', False)
+        if not isinstance(repeat, bool):
+            raise ConfigError(
+                f"里程碑 '{name}' repeat 必须是布尔值，当前为 {type(repeat).__name__}")
+
+        # ── P78: offset 解析（ISSUE-007——int 拒 bool/float、offset ≥ 0、threshold+offset ≥ 1）──
+        offset = m.get('offset', 0)
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            raise ConfigError(
+                f"里程碑 '{name}' offset 必须为整数，当前为 {type(offset).__name__}"
+                f"（值 {offset!r}）")
+        # ISSUE-501：显式 offset ≥ 0（原「threshold+offset ≥ 1 兜底」数学上不成立——threshold+offset
+        # 恒 = 首次触发，GUI 已保证 ≥ 1，永不触发拒绝；须显式 offset ≥ 0 拒绝负 offset）
+        if offset < 0:
+            raise ConfigError(
+                f"里程碑 '{name}' offset 必须 ≥ 0（负 offset 非法——首节点不得早于 threshold），"
+                f"当前为 {offset}")
+        if threshold + offset < 1:
+            raise ConfigError(
+                f"里程碑 '{name}' threshold + offset 必须 ≥ 1，当前为 {threshold + offset}")
+
+        # D6：offset × at=N（repeat=False）语义易混淆 → warning（非 ConfigError）
+        if offset != 0 and not repeat:
+            warnings.warn(
+                f"里程碑 '{name}' 配置了 offset={offset} 但 repeat=False（at=N 单次触发）——"
+                "offset 仅推后单次触发点（首节点 = threshold+offset），确认语义正确（P78，ISSUE-105 通道）")
+        # D7：alternate_rewards × repeat=False 只取 A → warning（非 ConfigError）
+        if alternate_rewards and not repeat:
+            warnings.warn(
+                f"里程碑 '{name}' 配置了 alternate_rewards 但 repeat=False（at=N 单次触发）——"
+                "交替序列仅触发一次、只取第一项 A，B 及后续永不使用，确认是否笔误（P78，ISSUE-105 通道）")
+
+        # ── banner 过滤（类型检查；存在性校验推迟到 M9——P61 已落地，见计划）──
+        raw_banner = m.get('banner', '')
+        if not isinstance(raw_banner, str):
+            raise ConfigError(f"里程碑 '{name}' banner 字段必须是字符串（空 = 全部）")
+
+        milestones.append(MilestoneDef(
+            name=name,
+            threshold=threshold,
+            repeat=repeat,
+            max_triggers=max_triggers,
+            bonus_reward=bonus_reward,
+            banner=raw_banner,
+            # ── P78 新增（解析期已校验）──
+            alternate_rewards=alternate_rewards,
+            offset=offset,
+        ))
+
+    store.milestone = MilestoneConfig(enabled=True, milestones=milestones)
+
+
+def validate_resource_lifecycle_rules(rules_raw, resource_ids, banner_until,
+                                      permanent_ids=None, enabled=True):
+    """校验规则列表并构造 ResourceLifecycleConfig（P77 两入口共用）。
+
+    解析期（_build_resource_lifecycle）与 GUI/外部 config 恢复路径共用同一实现，
+    保证「同一非法配置经两入口均被拒」（与 P78 的 _validate_milestone_dict 同纪律）。
+    九类校验：到期时刻二选一 / banner 引用与永久池拒绝 / resource_id 存在性 /
+    去重 / on_expire 两态 / convert_to 存在性与自环 / 到期与动作成对 / from,to 正整数。
+
+    Args:
+        rules_raw: 规则 dict 列表（TOML 解析结果或 config 注入的 dict 列表）。
+        resource_ids: 已知资源 id 集合（resource_id 与 convert_to 存在性校验）。
+        banner_until: banner id 映射到 available_until（秒）。
+        permanent_ids: 归一前永久池 id 集合（拒绝作为到期对齐目标）。
+        enabled: 全局开关。
+
+    Returns:
+        校验后的 ResourceLifecycleConfig。
+
+    Raises:
+        ConfigError: 任一规则非法（显式报错而非静默漂移）。
+    """
+    from .resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig
+
+    if not isinstance(rules_raw, list):
+        raise ConfigError("resources.lifecycle.rules 必须是数组")
+
+    permanent_ids = set(permanent_ids or set())
+    banner_ids = set(banner_until.keys())
+    seen_resource: set = set()
+    rules: List[ResourceLifecycle] = []
+    for idx, item in enumerate(rules_raw):
+        if not isinstance(item, dict):
+            raise ConfigError(f"resources.lifecycle.rules[{idx}] 必须是表（dict）")
+        rid = item.get('resource_id', '')
+        if not isinstance(rid, str) or not rid.strip():
+            raise ConfigError(f"resources.lifecycle.rules[{idx}] 缺少 resource_id")
+        rid = rid.strip()
+        if rid in seen_resource:
+            raise ConfigError(f"resources.lifecycle: resource_id '{rid}' 重复，一个资源只允许一条生命周期")
+        seen_resource.add(rid)
+        if rid not in resource_ids:
+            raise ConfigError(
+                f"resources.lifecycle.rules[{idx}] 的 resource_id '{rid}' 未在 [resources.defs] 中定义")
+
+        has_at = item.get('expire_at') is not None
+        has_banner = bool(item.get('expire_with_banner'))
+        if has_at == has_banner:
+            raise ConfigError(
+                f"resources.lifecycle.rules[{idx}] 的 expire_at 与 expire_with_banner 必须二选一")
+
+        expire_at_sec = None
+        expire_with_banner = None
+        if has_at:
+            try:
+                expire_at_sec = float(item['expire_at']) * DAY
+            except (TypeError, ValueError):
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_at 必须为数值（天）")
+        else:
+            eb = str(item.get('expire_with_banner', '')).strip()
+            if not eb:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_with_banner 必须为非空字符串")
+            if eb not in banner_ids:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_with_banner '{eb}' 不存在")
+            if eb in permanent_ids:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_with_banner '{eb}' 指向永久 Banner"
+                    "（归一前无结束时间，需为该 Banner 显式配置 end_day）")
+            if banner_until.get(eb) is None:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 expire_with_banner '{eb}' 无可用结束时间")
+            expire_with_banner = eb
+
+        on_expire = item.get('on_expire')
+        if not isinstance(on_expire, dict) or not on_expire:
+            raise ConfigError(
+                f"resources.lifecycle.rules[{idx}] 缺少 on_expire 或 on_expire 既不是转换也不是清零"
+                "，到期时间与 on_expire 必须成对出现")
+        has_convert = 'convert_to' in on_expire
+        has_clear = 'clear' in on_expire
+        if has_convert == has_clear:
+            raise ConfigError(
+                f"resources.lifecycle.rules[{idx}] 的 on_expire 必须二选一："
+                "转换（convert_to+from/to）或清零（clear）")
+        if has_convert:
+            tgt = on_expire.get('convert_to', '')
+            if not isinstance(tgt, str) or not tgt.strip():
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.convert_to 必须为非空字符串")
+            tgt = tgt.strip()
+            if tgt == rid:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 convert_to 不能与 resource_id 相同（自环无意义）")
+            if tgt not in resource_ids:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 convert_to '{tgt}' 未在 [resources.defs] 中定义"
+                    "（转换目标须为已声明资源，避免 GUI 回填时静默改写目标）")
+            fval = on_expire.get('from')
+            tval = on_expire.get('to')
+            if isinstance(fval, bool) or not isinstance(fval, int):
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.from 必须为正整数")
+            if isinstance(tval, bool) or not isinstance(tval, int):
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.to 必须为正整数")
+            if fval < 1 or tval < 1:
+                raise ConfigError(
+                    f"resources.lifecycle.rules[{idx}] 的 on_expire.from/to 必须不小于 1")
+            on_expire_norm = {'convert_to': tgt, 'from': int(fval), 'to': int(tval)}
+        else:
+            on_expire_norm = {'clear': True}
+
+        rules.append(ResourceLifecycle(
+            resource_id=rid,
+            expire_at=expire_at_sec,
+            expire_with_banner=expire_with_banner,
+            on_expire=on_expire_norm,
+        ))
+
+    return ResourceLifecycleConfig(enabled=bool(enabled), rules=rules)
+
+
+def _save_stop_condition(store: ConfigStore, data: dict) -> None:
+    """将 ``store.stop_condition`` 写回 ``data['stop_condition']``（P79 5.6）。
+
+    空树（``None`` / 空字典）**省略段**——不写空表头，load 侧据此规范化为
+    ``None``。写出形态由 ``tomli_w`` 自行决定：复合子节点写
+    ``[[stop_condition.conditions]]`` 表头，``mode='not'`` 一类节点的子数组可能
+    写成内联 ``conditions = [{...}]``，两者**解析后结构相等而 TOML 文本不同**，
+    故 8.2 的「写入 → 读取 → 再写入」按解析后的结构比对、不按文本比对。
+    """
+    tree = getattr(store, 'stop_condition', None)
+    if tree:
+        data['stop_condition'] = tree
+
+
+
+
+# P79 5.5 第 5 类：resource_threshold 的运算符白名单。
+# ResourceThresholdCondition.check 只对这三个值分支求值，其余值（含 => / =< /
+# 中文别名 / 空串）一律静默 return False——条件永不成立，用户看不到任何提示。
+_RESOURCE_THRESHOLD_OPERATORS = ('<=', '>=', '==')
+
+
+def _iter_stop_condition_leaves(node):
+    """深度优先遍历条件树，产出所有叶子节点。
+
+    带 ``conditions`` 的节点是复合 / 否定节点，不产出自身（其参数区并非叶子参数）。
+    """
+    if not isinstance(node, dict):
+        return
+    children = node.get('conditions')
+    if children is None:
+        yield node
+        return
+    for child in children:
+        yield from _iter_stop_condition_leaves(child)
+
+
+def _validate_stop_condition_config(data: dict, store: ConfigStore) -> None:
+    """P79 5.5 的加载期轻量校验——**一律报 warning、不抛错**。
+
+    抛错会改变既有加载行为（超出本次范围）；校验结果同时写入
+    ``store.load_warnings`` 与 stderr——``warnings.warn`` 只落 stderr 且 gui 目录内
+    无任何捕获，故必须经前者上浮供 MainWindow 展示。
+
+    ``end_time`` 一律取 ``store.end_time``（core 层共用函数），**不在此复制公式**，
+    否则形成第二真相源。本函数必须排在 ``_build_banners`` 之后调用——排在之前时
+    ``store.end_time`` 走空输入分支返回 0，下列校验会全量误报。
+    """
+    def warn(msg: str) -> None:
+        store.load_warnings.append(msg)
+        warnings.warn(msg)
+
+    end_time = store.end_time
+
+    # ── 形态问题（未声明叶子键 / mode 缺 conditions）──
+    # 与保存闸门共用 core 层纯函数，不在此复刻。二者均属「配置没按你写的生效」
+    # 而非结构非法，故取「只告警、不阻断加载」的口径，与本节其余校验一致。
+    for issue in stop_condition_shape_issues(getattr(store, 'stop_condition', None)):
+        warn(issue)
+
+    # ── 校验项 2：死规则（配置白写）──
+    if end_time > 0:
+        for rule in getattr(store.resource_lifecycle, 'rules', []):
+            if rule.expire_at is not None and rule.expire_at > end_time:
+                warn(
+                    f"[resources.lifecycle] 「{rule.resource_id}」的 expire_at"
+                    f"（{rule.expire_at / DAY:.1f} 天）晚于模拟终点"
+                    f"（{end_time / DAY:.1f} 天）——该规则永不触发")
+        for b in store.banner.banners:
+            for lc in getattr(b, 'lifecycle', []):
+                if lc.condition == 'time_window' and lc.at > end_time:
+                    warn(
+                        f"[[banner.lifecycle]] 「{b.id}」的 time_window at"
+                        f"（{lc.at / DAY:.1f} 天）晚于模拟终点"
+                        f"（{end_time / DAY:.1f} 天）——该规则永不触发")
+
+    # ── 用户条件相关校验（校验项 3 / 第 4 类）──
+    for leaf in _iter_stop_condition_leaves(getattr(store, 'stop_condition', None)):
+        ctype = leaf.get('type')
+
+        if ctype == 'resource_threshold':
+            # 校验项 3：语义陷阱——resource_threshold 以 <= 比较 0
+            if leaf.get('operator') == '<=' and leaf.get('threshold') == 0:
+                warn(
+                    "停止条件 resource_threshold 以 <= 比较 0：资源耗尽在当前引擎中是"
+                    "暂态（收入日程会回血），该条件表达的是「首次暂时没钱就收工」而非"
+                    "「注定失败」。若需终局判据，请叠加时间维度，如 "
+                    "all(资源耗尽, 时间已到某点)")
+
+            # 第 5 类：operator / resource 非白名单值（本项由 4a6 交付）
+            # 二者在 GUI 参数区渲染为自由文本（StrParam → QLineEdit），打错一个字
+            # 即形成「配了却永不生效的停止条件」。处置取保守方案：解析期记入
+            # load_warnings 并给出合法取值集合与当前值，**不改 check() 的求值语义**
+            # （非白名单 operator 仍返回 False）、**不在解析期抛错**。
+            op = leaf.get('operator')
+            if op not in _RESOURCE_THRESHOLD_OPERATORS:
+                warn(
+                    f"停止条件 resource_threshold 的 operator 取值 {op!r} 不在白名单内"
+                    f"（合法取值：{' / '.join(_RESOURCE_THRESHOLD_OPERATORS)}）——"
+                    f"该条件将恒不成立，模拟只能由硬边界收口")
+            res = leaf.get('resource')
+            if isinstance(res, str) and res not in store.resource_defs:
+                warn(
+                    f"停止条件 resource_threshold 的 resource 取值 {res!r} 不在已定义"
+                    f"资源中（可用：{', '.join(sorted(store.resource_defs)) or '（无）'}）"
+                    f"——查询恒取 0，该条件将退化为常量判据")
+
+        elif ctype in COAXIAL_THRESHOLD_KEYS:
+            # 第 4 类：与硬边界同轴条件的阈值早于硬边界
+            pkey = COAXIAL_THRESHOLD_KEYS[ctype]
+            val = leaf.get(pkey)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                if val <= 0:
+                    warn(
+                        f"停止条件 {ctype} 的 {pkey} 为 {val}（未设置或为 0）——"
+                        f"模拟将在第 0 轮结束，final_time = 0，_obtainable 系列 GDR "
+                        f"的分母随之收窄")
+                elif end_time > 0 and val < end_time:
+                    warn(
+                        f"停止条件 {ctype} 的 {pkey}（{val / DAY:.1f} 天）早于硬边界"
+                        f"（{end_time / DAY:.1f} 天）——模拟将提前结束")
+
+
+def _build_resource_lifecycle(data: dict, store: ConfigStore) -> None:
+    """[resources.lifecycle] 解析为 store.resource_lifecycle（P77）。
+
+    只做 TOML 段定位与 store 上下文提取，九类校验委托
+    validate_resource_lifecycle_rules（与 GUI/外部 config 恢复路径共用）。
+    """
+    from .resource_lifecycle import ResourceLifecycleConfig
+
+    raw = data.get('resources', {}).get('lifecycle')
+    if raw is None:
+        store.resource_lifecycle = ResourceLifecycleConfig(enabled=True, rules=[])
+        return
+    if not isinstance(raw, dict):
+        raise ConfigError("resources.lifecycle 必须是表（dict）")
+    enabled = raw.get('enabled', True)
+    if not isinstance(enabled, bool):
+        raise ConfigError("resources.lifecycle.enabled 必须是布尔值")
+
+    store.resource_lifecycle = validate_resource_lifecycle_rules(
+        raw.get('rules', []),
+        set(store.resource_defs.keys()),
+        {b.id: b.available_until for b in store.banner.banners},
+        {b.id for b in store.banner.banners if getattr(b, '_is_permanent', False)},
+        enabled,
+    )
+
+
+def _normalize_stop_condition_node(node):
+    """递归规范化条件树节点（P79 5.6「空树规范化」）。
+
+    ``conditions`` 为空数组（或所有子节点都被规范化为空）的节点整支丢弃、返回
+    ``None``——**不构造空复合节点**。否则 ``mode='all'`` 下 ``all([]) == True``
+    会让内层恒真，外层 ``any(用户条件, 硬边界)`` 短路，模拟在 iteration 0 结束
+    （``final_time = 0`` / ``total_draws = 0``，``_obtainable`` 系列 GDR 的分母
+    随之塌缩为 1）。
+
+    注：``mode='not'`` 节点的唯一子节点若被规范化为空，该否定节点一并丢弃——
+    保守取向是「少一个分支」而非「把否定变成恒真」。
+    """
+    if not isinstance(node, dict):
+        raise ConfigError(
+            f"stop_condition 的节点必须是表（dict），收到 {type(node).__name__}")
+
+    if not node:
+        # 空表 = 无节点。顶层命中「裸表头」（[stop_condition] 下无任何键，TOML 解析
+        # 为 {}）；子节点命中 conditions 里的空表项。**必须在此收口**：否则 {} 会被
+        # 下方当作「叶子节点」原样返回，store.stop_condition 变成 {}——运行时行为与
+        # None 相同（create_stop_condition 对 falsy 返回 None），但规范化摘要不同
+        # （'{}' vs ''），两个行为一致的配置因而得到不同 config_hash，可比性分析
+        # 误判为「配置不同」（计划 5.6「空树规范化」三形态之二）。
+        return None
+
+    children = node.get('conditions')
+    if children is None:
+        return dict(node)          # 叶子节点：type + 平铺参数
+
+    if not isinstance(children, list):
+        raise ConfigError("stop_condition 的 conditions 必须是数组")
+
+    kept = []
+    for child in children:
+        norm = _normalize_stop_condition_node(child)
+        if norm is not None:
+            kept.append(norm)
+    if not kept:
+        return None
+
+    out = dict(node)
+    out['conditions'] = kept
+    return out
+
+
+def _build_stop_condition(data: dict, store: ConfigStore) -> None:
+    """``[stop_condition]`` 段解析为 ``store.stop_condition``（P79 5.6）。
+
+    存**递归嵌套表**（不存表达式字符串——表达式只是 GUI 的编辑视图）：复合节点带
+    ``mode``（``any`` / ``all``）+ ``conditions``，否定节点 ``mode='not'`` 恰带一个
+    子节点，叶子节点带 ``type`` + 平铺参数（无 ``conditions``）。
+
+    **空树规范化**：段缺失 / 顶层节点为空 / ``conditions`` 为空数组一律置
+    ``None``，使 ``env.stop_condition`` 为 ``None``、由 ``_run_single`` 退化为单一
+    硬边界——与接线前逐字段等价。
+    """
+    raw = data.get('stop_condition')
+    if raw is None:
+        store.stop_condition = None
+        return
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"stop_condition 必须是表（dict），收到 {type(raw).__name__}")
+    store.stop_condition = _normalize_stop_condition_node(raw)
+
+
+def _save_resource_lifecycle(store: ConfigStore, data: dict) -> None:
+    """将 store.resource_lifecycle 写回 data['resources']['lifecycle']（P77）。
+
+    两档条件写键：
+    - enabled==False 恒写（保留关闭态，避免往返丢失）
+    - enabled==True 且 rules 非空才写段，空列表省略段
+    """
+    lc = getattr(store, 'resource_lifecycle', None)
+    if lc is None:
+        return
+    if not lc.enabled:
+        # 关闭态恒写（rules 可空亦保留开关）
+        rules_out = []
+        for r in lc.rules:
+            item = {'resource_id': r.resource_id}
+            if r.expire_at is not None:
+                item['expire_at'] = float(r.expire_at) / DAY
+            elif r.expire_with_banner:
+                item['expire_with_banner'] = r.expire_with_banner
+            item['on_expire'] = dict(r.on_expire) if r.on_expire else {}
+            rules_out.append(item)
+        data['resources']['lifecycle'] = {'enabled': False, 'rules': rules_out}
+        return
+    if not lc.rules:
+        return
+    rules_out = []
+    for r in lc.rules:
+        item = {'resource_id': r.resource_id}
+        if r.expire_at is not None:
+            item['expire_at'] = float(r.expire_at) / DAY
+        elif r.expire_with_banner:
+            item['expire_with_banner'] = r.expire_with_banner
+        item['on_expire'] = dict(r.on_expire) if r.on_expire else {}
+        rules_out.append(item)
+    data['resources']['lifecycle'] = {'enabled': True, 'rules': rules_out}
+
+
+
 def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linear') -> tuple:
     """将 soft_interval / soft_additive 语法糖展开为 deltas。
 
@@ -766,7 +1579,9 @@ def _pitydef_to_toml(p) -> dict:
         entry['target_featured'] = True
     if p.reset:
         entry['reset'] = p.reset
-    if p.pools and p.pools != ('*',):
+    if p.pools != ('*',):
+        # P61（ISSUE-328）：pools=()（空勾选 = 不绑定任何池）必须显式写出 pools = []
+        # ——否则重载默认 ('*',) 语义反转（不绑定 → 绑定全部池）
         entry['pools'] = list(p.pools)
 
     # 语法糖参数（优先写出直观形式，否则写出 deltas）
@@ -1008,115 +1823,155 @@ def _build_weights(data: dict, store: ConfigStore) -> None:
         )
 
 
-def _build_distribution_templates(data: dict) -> List[dict]:
-    """[[distribution_templates]] → List[dict]（中间产物，尚未展开）。
+def _build_banners(data: dict, store: ConfigStore) -> None:
+    """[[banner]] → store.banner.banners。
 
-    每个 dict 含 'name' 键和 'cards' 键，
-    格式：[{"name": "xxx", "cards": [...]}, ...]。
+    只认 [[banner]]（D3/D4 一次性迁移，无自动包装路径）；旧 [[pools]] 段残留不解析
+    （load_toml 检测到残留时显式警告，ISSUE-004）。
+    - start_day/end_day（天）→ available_from/until（秒，*DAY，ISSUE-001）
+    - max_draws=0（「0=无限制」合法写法）归一化为 None（ISSUE-331）
+    - lifecycle time_window.at（模拟内相对天数）*DAY 换算为秒
+    - rewards 统一 dict 表示（ISSUE-304）；exchange_card_id 快捷方式 → 100% 单卡分布
+    - pool_type/rerun_of 旧键解析时忽略（不报错，ISSUE-012）
     """
-    result = []
-    for t in data.get('distribution_templates', []):
-        result.append({
-            'name': t['name'],
-            'cards': t.get('cards', []),
-        })
-    return result
-
-
-def _build_pools(data: dict, store: ConfigStore, templates: List[dict]) -> None:
-    """[[pools]] → store.pools，含绑定展开 + 分布模板引用解析。"""
-    # 构建模板索引：name → cards
-    template_index = {t['name']: t['cards'] for t in templates}
-
-    for p in data.get('pools', []):
-        pool_type = p.get('pool_type') or '角色'
-
-        # 解析 distribution
-        distribution: List[PoolDistEntry] = []
-        template_name = p.get('distribution_template', '')
-
-        if p.get('exchange_card_id'):
-            # 兑换池——100% 出指定卡
-            distribution = [
-                PoolDistEntry(
-                    card_id=p['exchange_card_id'],
-                    probability=100.0,
-                    rarity='ssr',
-                    featured=True,
-                )
-            ]
-        elif p.get('rerun_of'):
-            # 复刻池——稍后在第二步从同名池子复制
-            pass  # 第二步处理
-        elif template_name and template_name in template_index:
-            # 模板引用 → 展开
-            bindings = dict(p.get('bindings', {}))
-            distribution = _expand_template_with_bindings(
-                template_index[template_name], bindings
-            )
-        elif 'distribution' in p:
-            # 内联分布
-            for d in p['distribution']:
-                distribution.append(PoolDistEntry(
-                    card_id=d['card_id'],
-                    probability=d['probability'],
-                    rarity=d.get('rarity', 'r'),
-                    featured=d.get('featured', False),
-                    resources_gained=dict(d.get('resources_gained', {})),
-                ))
-
-        # bindings + target_specs
-        bindings = dict(p.get('bindings', {}))
-        # pool_type 双写——同时设置 PoolEntry.pool_type 和 bindings['type']
-        bindings['type'] = pool_type
-
-        target_specs = [
-            (cid, 1) for cid in p.get('target_cards', [])
-        ]
-
-        # P56：解析 epitomizable_cards——校验 card_id 在 distribution 中存在
-        epitomizable_raw = p.get('epitomizable_cards', [])
-        epitomizable_cards = []
-        if epitomizable_raw:
-            dist_card_ids = {d.card_id for d in distribution}
-            for cid in epitomizable_raw:
-                if cid not in dist_card_ids:
-                    raise ConfigError(
-                        f"池子 '{p['id']}' 的 epitomizable_cards 中包含 "
-                        f"未在 distribution 中出现的卡牌 '{cid}'——"
-                        f"请检查卡牌 ID 拼写或将该卡加入池子分布"
-                    )
-                epitomizable_cards.append(cid)
-
-        pool_entry = PoolEntry(
-            pool_id=p['id'],
-            name=p.get('name', p['id']),
-            pool_type=pool_type,
-            start_day=p.get('start_day', 0),
-            end_day=p.get('end_day', 21),
-            cost=p.get('cost', 'draw_resource:160'),
-            batch_size=p.get('batch_size', 1),
-            distribution_template=template_name,
-            bindings=bindings,
-            target_specs=target_specs,
-            rerun_of=p.get('rerun_of'),
-            exchange_card_id=p.get('exchange_card_id'),
-            distribution=distribution,
-            epitomizable_cards=epitomizable_cards,
+    for b in data.get('banner', []):
+        banner_id = b['id']
+        _raw_end_day = b.get('end_day')
+        banner_entry = BannerEntry(
+            id=banner_id,
+            name=b.get('name', banner_id),
+            enabled=b.get('enabled', True),
+            max_draws=_normalize_max_draws(b.get('max_draws')),
+            available_from=_days_to_sec(b.get('start_day')),
+            available_until=_days_to_sec(_raw_end_day),
+            # P77：记录归一前永久池标记（end_day 缺省）——归一后 available_until 恒非 None
+            _is_permanent=(_raw_end_day is None),
         )
-        store.pools.append(pool_entry)
 
-    # 第二步：处理 rerun_of（从同名池子复制 distribution）
-    pool_index = {p.pool_id: p for p in store.pools}
-    for pool in store.pools:
-        if pool.rerun_of and not pool.distribution:
-            source = pool_index.get(pool.rerun_of)
-            if source:
-                pool.distribution = list(source.distribution)
+        for bp in b.get('pool', []):
+            rewards = _parse_pool_rewards(bp)
+            banner_entry.pools.append(BannerPoolEntry(
+                id=bp['id'],
+                cost=bp.get('cost', 'draw_resource:160'),
+                batch_size=bp.get('batch_size', 1),
+                excludes_all_pity=bp.get('excludes_all_pity', False),
+                max_draws=_normalize_max_draws(bp.get('max_draws')),
+                exchange_card_id=bp.get('exchange_card_id'),
+                epitomizable_cards=_parse_epitomizable_cards(bp, rewards, banner_id),
+                rewards=rewards,
+            ))
 
-    # P60：统一填充 featured_card_ids——覆盖所有 pool（含复刻池，其 distribution 在第二步才赋值）
-    for pool in store.pools:
-        pool.featured_card_ids = [d.card_id for d in pool.distribution if d.featured]
+        for lc in b.get('lifecycle', []):
+            banner_entry.lifecycle.append(LifecycleRuleEntry(
+                condition=lc['condition'],
+                pool=lc.get('pool'),
+                at=_lifecycle_at(lc),
+                match=lc.get('match', 'card_id'),
+                action=lc.get('action', 'switch_to'),
+                target=lc.get('target'),
+            ))
+
+        store.banner.banners.append(banner_entry)
+
+    # P61（2026-08-04 用户决策）：永久 Banner（available_until=None）解析归一为有限池，
+    # 运行时不再出现 None（消除 streaming/pool_end_times/worst_impact_panel 的 None 守卫族）。
+    _normalize_permanent_banners(store.banner.banners)
+
+
+def _normalize_permanent_banners(banners) -> None:
+    """永久 Banner（available_until=None）解析归一为有限池（2026-08-04 用户决策）。
+
+    把 available_until=None 的 Banner 归一为「最后一个有结束时间的 Banner 的
+    available_until」——运行时按有限池处理，无 None、无需额外守卫。
+    全永久组合（无任何有结束时间的 Banner）无法确定模拟期参照 → 拒绝加载。
+    空配置（无 banner）跳过——由 load_toml 的空 banner 旧格式警告处理。
+    """
+    if not banners:
+        return
+    finite_ends = [b.available_until for b in banners if b.available_until is not None]
+    if not finite_ends:
+        raise ConfigError(
+            "配置中所有 Banner 均为永久（无结束时间 end_day），至少需要一个有 "
+            "available_until 的 Banner 作为模拟期参照。")
+    last_end = max(finite_ends)
+    for b in banners:
+        if b.available_until is None:
+            b.available_until = last_end
+
+
+def _normalize_max_draws(value) -> Optional[int]:
+    """TOML/UI 层「0=无限制」归一化为运行时 None 哨兵（ISSUE-331）。
+
+    max_draws=0 直接落引擎则 _total_draws >= 0 恒 True、首抽即自动 exhaust，与语义相反。
+    """
+    if value is None:
+        return None
+    v = int(value)
+    return None if v <= 0 else v
+
+
+def _days_to_sec(value) -> Optional[float]:
+    """天 → 秒（ISSUE-001）；None（永久 Banner/无窗口）透传 None。"""
+    if value is None:
+        return None
+    return float(value) * DAY
+
+
+def _lifecycle_at(lc: dict) -> float:
+    """lifecycle 阈值解析：time_window 条件以「模拟内相对天数」书写 → 秒（*DAY）。
+
+    P61（ISSUE-009）：抽数条件（pool_draws / banner_draws）的 at 必须为整数——
+    浮点阈值会在 int() 截断处产生 1 抽偏差（at=10.5 实际 11 抽才满足、
+    pending_transitions 却 int() 截断显示 10），配置错误显式报错而非静默漂移。
+    """
+    at = lc.get('at', 0.0)
+    if lc.get('condition') == 'time_window':
+        return float(at) * DAY
+    if isinstance(at, float) and not at.is_integer():
+        raise ValueError(
+            f"lifecycle {lc.get('condition', '')} 的阈值必须为整数抽数，实际 {at}")
+    return float(at)
+
+
+def _parse_pool_rewards(bp: dict) -> List[dict]:
+    """[[banner.pool.reward]] → List[dict]（card_id/probability/rarity/featured/resources_gained）。
+
+    exchange_card_id 快捷方式 → 100% 单卡分布。
+    """
+    if bp.get('exchange_card_id'):
+        return [{
+            'card_id': bp['exchange_card_id'],
+            'probability': 100.0,
+            'rarity': 'ssr',
+            'featured': True,
+        }]
+    rewards = []
+    for r in bp.get('reward', []):
+        entry = {
+            'card_id': r['card_id'],
+            'probability': r['probability'],
+            'rarity': r.get('rarity', 'r'),
+            'featured': r.get('featured', False),
+        }
+        if r.get('resources_gained'):
+            entry['resources_gained'] = dict(r['resources_gained'])
+        rewards.append(entry)
+    return rewards
+
+
+def _parse_epitomizable_cards(bp: dict, rewards: List[dict], banner_id: str) -> List[str]:
+    """epitomizable_cards 解析 + 校验（card_id 在 rewards 中，P56）。"""
+    raw = bp.get('epitomizable_cards', [])
+    if not raw:
+        return []
+    reward_ids = {r['card_id'] for r in rewards}
+    for cid in raw:
+        if cid not in reward_ids:
+            raise ConfigError(
+                f"池子 '{banner_id}.{bp['id']}' 的 epitomizable_cards 中包含 "
+                f"未在 distribution 中出现的卡牌 '{cid}'——请检查卡牌 ID 拼写或将该卡加入池子分布"
+            )
+    return list(raw)
 
 
 def _parse_overflow_bands_array(raw_bands: list) -> Optional[List[OverflowBand]]:
@@ -1171,8 +2026,8 @@ def _backfill_card_pools(store: ConfigStore) -> None:
 
     旧 schedule.txt → _load_schedule 的等价逻辑：
     pool.distribution 中每出现一张卡，就把该 pool_id 加入对应的
-    card_defs 条目。distribution 已在 _build_pools 中展开为具体
-    卡牌 ID（非绑定键），因此无需再做展开。
+    card_defs 条目。distribution 已在 _build_banners 中展开为具体
+    卡牌 ID（含 exchange_card_id 快捷方式展开），因此无需再做展开。
     """
     card_index = {cd.card_id: i for i, cd in enumerate(store.card_defs)}
     for pool in store.pools:

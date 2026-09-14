@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional, List, Dict, Any
 
+from .param_descriptor import (
+    FloatParam, IntParam, StrParam, ListParam, DictParam,
+)
+
 if TYPE_CHECKING:
     from .state import GachaState
     from .info_vector import InfoVector
@@ -144,6 +148,13 @@ class CompositeStopCondition(StopCondition):
 
     def check(self, state: 'GachaState', history: List['InfoVector'],
               stats: Optional['SimulationStats'] = None) -> bool:
+        # P79 5.6 第二道防线（第一道是解析期的空树规范化，见 config_toml 的
+        # _normalize_stop_condition_node）：空条件数组不得恒真。
+        # mode='all' 时 all([]) == True 会让内层恒真，外层
+        # any(用户条件, 硬边界) 短路，模拟在 iteration 0 结束（final_time = 0，
+        # _obtainable 系列 GDR 的分母随之塌缩为 1）。
+        if not self.conditions:
+            return False
         if self.mode == 'any':
             return any(c.check(state, history, stats) for c in self.conditions)
         else:
@@ -154,94 +165,223 @@ class CompositeStopCondition(StopCondition):
         return ops.join(c.description() for c in self.conditions)
 
 
+class NotCondition(StopCondition):
+    """否定节点——对单个子条件取反（P79 5.6）。
+
+    由 ``mode='not'`` 判别，**不是** registry 的 ``type``——``not`` 是表达式的
+    运算符，不需要往 STOP_CONDITION_REGISTRY 注册。
+    """
+
+    def __init__(self, child: StopCondition):
+        self.child = child
+
+    def check(self, state: 'GachaState', history: List['InfoVector'],
+              stats: Optional['SimulationStats'] = None) -> bool:
+        return not self.child.check(state, history, stats)
+
+    def description(self) -> str:
+        # StopCondition.description 是抽象方法，且 CompositeStopCondition.description
+        # 会逐个调用子节点——漏实现会在实例化或 GUI 摘要列渲染时抛 TypeError。
+        return f"非({self.child.description()})"
+
+
+# P79 5.5 第 4 类 / 5.7 预填共用：与引擎硬边界同轴的条件类型 → 其阈值参数键。
+# 这些条件的判据是 real_time >= limit，与硬边界同一根轴——阈值早于 end_time 即
+# 让模拟提前收口。解析期校验与 GUI 参数区预填都以本映射为单一真相源。
+COAXIAL_THRESHOLD_KEYS = {'all_pools_end': 'end_time', 'time_limit': 'max_time'}
+
+# P79 5.6：与硬边界同轴条件（all_pools_end / time_limit）的阈值上界。
+# 默认配置 end_time = 168 天 = 14515200 秒，远超 FloatParam 的类默认 max_val
+# （99999.0，约 1.16 天）——沿用类默认会让 5.7 的「以 env.end_time 秒预填」被
+# QDoubleSpinBox 静默钳位到 1.16 天，恰好构造出要防的失效形态。
+# 该常量大于 FloatParam 同时服务注册表与 8.x 断言；GUI 侧一律走
+# self._store.end_time（5.7），不得读本常量做预填，否则形成第二真相源。
+MAX_SIM_TIME = 365 * 86400 * 100          # ≈ 100 年，默认配置留约 217 倍余量
+
 STOP_CONDITION_REGISTRY = {
     'all_pools_end': {
         'display_name': '所有池结束',
         'description': '所有池子到期后停止',
         'class': AllPoolsEndCondition,
-        'params': {
-            'end_time': {'type': 'float', 'default': 0.0, 'label': '结束时间(秒)'},
-        },
+        'params': [
+            FloatParam('end_time', '结束时间(秒)', default=0.0,
+                       min_val=0.0, max_val=MAX_SIM_TIME),
+        ],
     },
     'fixed_action_count': {
         'display_name': '固定次数',
         'description': '抽满指定次数后停止',
         'class': FixedActionCountCondition,
-        'params': {
-            'max_actions': {'type': 'int', 'default': 100, 'label': '最大操作数'},
-        },
+        'params': [
+            IntParam('max_actions', '最大操作数', default=100),
+        ],
     },
     'resource_threshold': {
         'display_name': '资源阈值',
         'description': '资源达到阈值时停止',
         'class': ResourceThresholdCondition,
-        'params': {
-            'resource': {'type': 'str', 'default': 'draw_resource', 'label': '资源名'},
-            'threshold': {'type': 'float', 'default': 0.0, 'label': '阈值'},
-            'operator': {'type': 'str', 'default': '<=', 'label': '比较运算符'},
-        },
+        'params': [
+            StrParam('resource', '资源名', default='draw_resource'),
+            FloatParam('threshold', '阈值', default=0.0),
+            StrParam('operator', '比较运算符', default='<='),
+        ],
     },
     'target_acquired': {
         'display_name': '目标获得',
         'description': '获得指定目标卡后停止',
         'class': TargetAcquiredCondition,
-        'params': {
-            'target_id': {'type': 'str', 'default': '', 'label': '目标卡ID'},
-            'quantity': {'type': 'int', 'default': 1, 'label': '数量'},
-        },
+        'params': [
+            StrParam('target_id', '目标卡ID', default=''),
+            IntParam('quantity', '数量', default=1),
+        ],
     },
     'last_draw_card': {
         'display_name': '抽到即停',
         'description': '最后一次抽到指定卡时停止',
         'class': LastDrawCardCondition,
-        'params': {
-            'card_id': {'type': 'str', 'default': '', 'label': '卡牌ID'},
-        },
+        'params': [
+            StrParam('card_id', '卡牌ID', default=''),
+        ],
     },
     'time_limit': {
         'display_name': '时间限制',
         'description': '模拟时间达到限制后停止',
         'class': TimeLimitCondition,
-        'params': {
-            'max_time': {'type': 'float', 'default': 86400.0, 'label': '最大时间(秒)'},
-        },
+        'params': [
+            FloatParam('max_time', '最大时间(秒)', default=86400.0,
+                       min_val=0.0, max_val=MAX_SIM_TIME),
+        ],
     },
     'consecutive_pool_target': {
         'display_name': '连续池目标',
         'description': '资源耗尽或连续池目标未达成时停止',
         'class': ConsecutivePoolTargetCondition,
-        'params': {
-            'pool_schedules': {'type': 'list', 'default': [], 'label': '池时间表'},
-            'pool_targets': {'type': 'dict', 'default': {}, 'label': '池目标卡'},
-            'resource_name': {'type': 'str', 'default': 'draw_resource', 'label': '资源名'},
-            'end_time': {'type': 'float', 'default': 0.0, 'label': '最大时间(秒)'},
-        },
+        'params': [
+            ListParam('pool_schedules', '池时间表'),
+            DictParam('pool_targets', '池目标卡'),
+            StrParam('resource_name', '资源名', default='draw_resource'),
+            FloatParam('end_time', '最大时间(秒)', default=0.0),
+        ],
         'internal': True,
     },
 }
 
 
-def create_stop_condition(name: str, params: Optional[Dict[str, Any]] = None) -> StopCondition:
-    entry = STOP_CONDITION_REGISTRY.get(name)
+def create_stop_condition(tree: Optional[Dict[str, Any]]) -> Optional[StopCondition]:
+    """从递归条件树构造停止条件对象（P79 5.6）。
+
+    ``tree`` 为 ``None`` / 空字典时返回 ``None``——语义是「空树 = 仅引擎硬边界
+    收口」，与接线前的行为等价（见 5.6「空树规范化」）。
+
+    节点三形态互斥且穷尽，按 **「``conditions`` → ``mode`` → ``type``」** 分派：
+
+    1. 复合节点——``mode ∈ {"any", "all"}`` + ``conditions: [...]``
+    2. 否定节点——``mode = "not"`` + ``conditions: [恰好 1 项]``
+    3. 叶子节点——``type = <registry key>`` + 平铺参数（**无 ``conditions``**）
+
+    ``conditions`` 在场时一律不查 registry——判别键是「是否出现 conditions」，
+    故未知 ``type`` 只在叶子形态下才抛 ``ValueError``。
+    """
+    if not tree:
+        return None
+    return _build_stop_condition_node(tree)
+
+
+def _build_stop_condition_node(node: Dict[str, Any]) -> StopCondition:
+    """树分派的单节点构造（递归）。"""
+    if not isinstance(node, dict):
+        raise ValueError(
+            f"停止条件节点须为字典，收到 {type(node).__name__}: {node!r}")
+
+    children = node.get('conditions')
+    if children is not None:
+        # ── 复合 / 否定节点 ──
+        if not isinstance(children, list):
+            raise ValueError(
+                f"conditions 须为数组，收到 {type(children).__name__}: {children!r}")
+        mode = node.get('mode')
+        if mode == 'not':
+            # 否定节点恰带一个子节点：多子节点时直接取 children[0] 会静默丢弃其余，
+            # 而 conditions 在场即不查 registry、不会触发 ValueError，故须显式校验。
+            if len(children) != 1:
+                raise ValueError(
+                    f"否定节点（mode='not'）恰带一个子节点，当前 {len(children)} 个")
+            return NotCondition(_build_stop_condition_node(children[0]))
+        if mode in ('any', 'all'):
+            return CompositeStopCondition(
+                [_build_stop_condition_node(c) for c in children], mode)
+        raise ValueError(
+            f"复合节点的 mode 须为 'any' / 'all' / 'not'，收到 {mode!r}")
+
+    # ── 叶子节点 ──
+    node_type = node.get('type')
+    if node_type is None:
+        raise ValueError(f"叶子节点缺少 'type' 键: {node!r}")
+    entry = STOP_CONDITION_REGISTRY.get(node_type)
     if entry is None:
-        raise ValueError(f"Unknown stop condition: {name!r}. "
+        raise ValueError(f"Unknown stop condition: {node_type!r}. "
                          f"Available: {list(STOP_CONDITION_REGISTRY.keys())}")
-    cls = entry['class']
-    resolved = dict(params) if params else {}
-    param_defs = entry.get('params', {})
-    for pname, pdef in param_defs.items():
-        if pname not in resolved:
-            resolved[pname] = pdef['default']
-    return cls(**resolved)
+    param_defs = entry.get('params', [])
+    # 叶子键白名单过滤（5.6）：构造参数只取「registry 声明键 ∩ 叶子表键」——
+    # `type`（以及 TOML 表中可能残留的 `mode`）不是构造参数，整体透传会抛
+    # TypeError: __init__() got an unexpected keyword argument 'type'。
+    declared = {pdesc.key for pdesc in param_defs}
+    resolved = {k: v for k, v in node.items() if k in declared}
+    for pdesc in param_defs:
+        resolved.setdefault(pdesc.key, pdesc.default)
+    return entry['class'](**resolved)
 
 
-def stop_condition_type_to_key(display_name: str) -> str:
-    for key, entry in STOP_CONDITION_REGISTRY.items():
-        if entry['display_name'] == display_name:
-            return key
-    return 'all_pools_end'
+def stop_condition_shape_issues(tree: Optional[Dict[str, Any]]) -> List[str]:
+    """条件树的**形态问题**清单（供加载期校验与保存闸门共用，单一实现点）。
 
+    报两类「配置没按你写的生效」但都不阻断构造的问题：
 
-def stop_condition_key_to_type(key: str) -> str:
-    entry = STOP_CONDITION_REGISTRY.get(key)
-    return entry['display_name'] if entry else '所有池结束'
+    1. **叶子节点含未声明参数键。** 工厂的叶子键白名单过滤只取「registry 声明键 ∩
+       叶子表键」，未声明键被静默丢弃、对应参数落回 ``default``。键名笔误（把
+       ``max_actions`` 写成 ``count``）因此零信号地改变停止点：写着 500，跑的是
+       100，加载期无告警、保存闸门也放行。``type`` 与「可能残留的 ``mode``」不是
+       参数键（5.6 明示容忍后者），不计入未声明集。
+    2. **节点带 ``mode`` 但缺 ``conditions``。** 5.6 把节点形态定为「复合（``mode``
+       + ``conditions``）/ 否定（``mode='not'`` + ``conditions``）/ 叶子（``type``
+       + 平铺参数）」三者互斥且穷尽，本形态是**未规定的第四种**：加载期不报错，
+       直到装配期才因「被当作叶子、缺 ``type``」抛 ``ValueError``，讯息指向错误的
+       方向（真正缺的是 ``conditions``）。
+
+    只读不改：本函数不修改 ``tree``，也不参与构造。全函数（不抛异常）——输入非法
+    （非 dict、类型不明）时静默跳过，交给 ``_build_stop_condition_node`` 报错。
+    """
+    if not tree:
+        return []
+
+    issues: List[str] = []
+
+    def walk(node: Any, path: str) -> None:
+        if not isinstance(node, dict):
+            return
+        children = node.get('conditions')
+        if children is None:
+            if 'mode' in node and 'type' not in node:
+                issues.append(
+                    f"{path}：节点带 mode={node['mode']!r} 但缺少 conditions 数组。"
+                    f"复合节点须写成 mode + conditions 两者；当前形态会在装配期被"
+                    f"当作叶子节点处理，并因缺少 type 报错（讯息指向错误的方向）")
+                return
+            node_type = node.get('type')
+            entry = STOP_CONDITION_REGISTRY.get(node_type) if node_type else None
+            if entry is not None:
+                declared = {pdesc.key for pdesc in entry.get('params', [])}
+                unknown = sorted(
+                    k for k in node if k not in declared and k not in ('type', 'mode'))
+                if unknown:
+                    issues.append(
+                        f"{path}：停止条件 '{node_type}' 含未声明参数键 {unknown}。"
+                        f"这些键在构造时被忽略，对应参数落回默认值"
+                        f"（该条件声明的参数键：{sorted(declared)}）")
+            return
+        if isinstance(children, list):
+            for i, child in enumerate(children):
+                walk(child, f"{path}.conditions[{i}]")
+
+    walk(tree, 'stop_condition')
+    return issues

@@ -1,0 +1,28 @@
+/* ══ 右键菜单样式覆盖（@imengyu/vue3-context-menu）══
+   用户要求：去掉圆角与阴影，直角扁平化，贴合应用整体视觉。 */
+
+.mx-context-menu {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 4px 0;
+  border: 1px solid var(--gsc-border);
+  --mx-menu-backgroud-radius: 0px;
+  --mx-menu-shadow-color: transparent;
+  --mx-menu-backgroud: #ffffff;
+  --mx-menu-hover-backgroud: #f0f2f5;
+  --mx-menu-active-backgroud: #e5e8ec;
+  --mx-menu-divider: #f0f0f0;
+  --mx-menu-text: #333333;
+  --mx-menu-hover-text: #1a1a1a;
+  --mx-menu-active-text: #1a1a1a;
+  --mx-menu-icon-size: 14px;
+}
+
+/* 菜单项：密度与项目 Qt 高密度一致 */
+.mx-context-menu .mx-context-menu-item {
+  padding: 4px 14px;
+  font-size: 12px;
+}
+.mx-context-menu .mx-context-menu-item .label {
+  font-size: 12px;
+}

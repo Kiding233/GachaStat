@@ -18,7 +18,8 @@ pytest --cov=gacha_simulator                         # 测试
 **架构分层：**
 ```
 gacha_simulator/
-├── core/       # 引擎：池子、状态、策略、保底、GDR、溢出、分析算法（无 GUI 依赖）
+├── core/       # 引擎：池子、状态、策略、保底、GDR、溢出、里程碑、分析算法（无 GUI 依赖）
+│               #   milestone.py — 累抽奖励引擎（P58，独立于 PityEngine，旁路注入）
 ├── service/    # GachaService + batch_simulator
 ├── gui/        # PyQt6 面板（Tab 列表见 main.py，C1 cron 自动同步）
 │               # wheel_blocker.py — QApplication 全局事件过滤器，统一拦截
@@ -27,7 +28,7 @@ gacha_simulator/
 └── visualization/  # matplotlib 中文字体
 ```
 
-**核心数据流：** `ConfigStore → SimulationEnvBuilder → SimulationEnv → GachaService(pools, strategy, stop_cond) → run_simulation(CompactCollector) → CompactResult → SharedResultCollector`。两种模式：紧凑 `CompactResult`（主流，O(1) 内存，`to_dict()`/`from_dict()` 序列化）/ 完整 `List[InfoVector]`（逐抽记录）。
+**核心数据流：** `ConfigStore → SimulationEnvBuilder → SimulationEnv → GachaService(banners, strategy, stop_cond) → run_simulation(CompactCollector) → CompactResult → SharedResultCollector`。两种模式：紧凑 `CompactResult`（主流，O(1) 内存，`to_dict()`/`from_dict()` 序列化）/ 完整 `List[InfoVector]`（逐抽记录）。**P61：** 配置单位为 Banner（`[[banner]]`，内含多 Pool + Lifecycle 规则），`store.pools` 为只读展平视图；GachaService 构造桥对 `List[Pool]`/`List[Banner]` 双型收纳为运行时 `self._banners`；`env.pools` 承载 `List[Banner]`（深拷贝隔离跨模拟状态）。
 
 **版本号：** 见 `gacha_simulator/_version.py`（Pride Versioning: MAJOR=PROUD / MINOR=DEFAULT / PATCH=SHAME）。C1 每日同步到 `技术栈.md`。
 
@@ -90,6 +91,8 @@ gacha_simulator/
 
 **复合策略**（`core/strategy.py`，代码级 building block——不进入 TOML/GUI）：`DrawSegmentStrategy`（按抽数分段）/ `PriorityChainStrategy`（优先级降级链）/ `ConditionalStrategy`（lambda 条件分支）。三者均设 `_strategy_key = None` 哨兵。旧 `CompositeStrategy` 保留并发出 `DeprecationWarning`。
 
+**枯竭态契约（P79）：** 策略在「不再有任何想做的事」时必须返回**推进时间**的等待，不得返回 `WaitAction(duration=0)`（后者让 `real_time` 冻结、时间型停止条件永远够不着，循环只能烧满 `max_iterations`）。统一入口是 `core/strategy.py` 的 `next_event_wait(ctx) -> float`（86400 秒硬上限），调用点一律写 `return WaitAction(duration=next_event_wait(ctx))`——helper 返回时长而非 Action，直接返回 float 会让动作分发三路 `isinstance` 全部落空并抛 `ValueError`。
+
 **P60 变更：** `acquired` 改为 `@property`，从 `state.acquired` 实时读取——单一真相源。**P56 新增：** `NonDrawAction`（`type='non_draw'`）——策略可返回非抽卡动作（`switch_epitomized_target` 切换定轨目标 / `cancel_epitomized_path` 取消定轨），由 `gacha_service._apply_non_draw()` 分发执行。
 
 ### 保底 (`core/pity.py`)
@@ -100,9 +103,11 @@ gacha_simulator/
 
 **其他设施：** `PityState`——三层嵌套 namespace；`Counter`/`Flag` 遥控器；`DrawInfo`（frozen dataclass）抽卡静态事实；`PityContext` 管道载体；`LifecycleConfig`（frozen——`max_triggers`/`deactivate_on_early_hit`/`depends_on`）；`_build_pity_state_init()`——从 `PityDef` 注入 `counter_init`/`guaranteed_init`/`fate_points_init` 初始状态；`_expand_soft_to_deltas()`——`soft_interval`/`soft_additive` 语法糖 → deltas。
 
+**P75 `_rebind_state` 纪律（强制，四条）：** `PityEngine` 每次调度（`before_draw`/`after_draw`/`get_probabilities`）首行调用 `_rebind_state(state)`，把 behaviors 的 Counter/Flag 重绑到 per-call state——**纯重定向不复制旧值**，初始值完全由 `env.pity_state_init`（阶段 3 完整快照，engine 构造后取 `_state.to_dict()`）承载；绑定对象不同则计数器写入错账本、保底快照恒空（P75 根因）。**新增保底行为/查询时四条纪律：** 1) **新 behavior 必须实现 `_rebind_state`**（或确认走基类空实现；子类特有 Counter/Flag 经 `_on_rebind_state` 覆写，不得因「无覆写者」删除该调用）；2) **新只读查询不得依赖未 rebind 的 `self._state`**（无 `state` 参数的只读查询须纳入 ISSUE-104 豁免清单或改走引擎级 rebind，不得默认豁免）；3) **所有带 `state` 参数的公开入口方法必须在首行 rebind，且先于任何 spec=None 早退**；4) **`per-call state` 必须由 `env.pity_state_init` 快照派生或含构造期 `_active`/`guaranteed` 等初始 Flag 键**，否则 `_active` 读默认 False、计数型保底静默失效。
+
 ### GachaState (`core/state.py`)
 
-dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`acquired_by_path`（P63 路径切片）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id, path, overflow_bands, initial_counts) → Dict[str, float]` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。P63：`add_card()` 统一溢出管道——接受分段表，内部匹配区间并返回溢出资源（无规则返回 `{}`）；`clone()` 深拷贝 `acquired_by_path`。
+dataclass——模拟状态一等公民。`resources`（资源）、`acquired`（卡牌持有，P60 新增）、`acquired_by_path`（P63 路径切片）、`real_time`、`total_actions`、`extra_state`。`pity_counters` 字段已删除。P60 新增方法：`add_card(card_id, path, overflow_bands, initial_counts) → Dict[str, float]` / `get_card_count(card_id)` / `total_holding(card_id, initial_counts)`。P63：`add_card()` 统一溢出管道——接受分段表，内部匹配区间并返回溢出资源（无规则返回 `{}`）；`clone()` 深拷贝 `acquired_by_path`。P61：`get_available_pools()` 方法已删除——池子可用性由 Banner 级 `is_available(real_time)` 判定（时间窗口 + lifecycle 激活，见扩展指南「新 Banner 生命周期规则」）。
 
 ### 溢出 (`core/overflow.py`)
 
@@ -110,7 +115,7 @@ P63 新建——`OverflowBand` dataclass（`min`/`max: int|None`/`resources`，`
 
 ### GDR (`core/gdr.py` + `core/generalized_drop_rate.py`)
 
-`UNIFIED_GDR_REGISTRY` 定义 21 种广义出率指标（含 P62 4 个可达变体）。两路计算：`compute_from_compact`（O(1)）/ `compute_from_history`（O(T)）。**P62 变更：** `GDRDefinition.needs_store: bool = False` 标志位——告知调用方该 GDR 需传入 `store` 方可正确计算（如 `_obtainable` 可达变体）。`filter_target_specs_by_obtainable(target_specs, store, final_time) -> Dict[str, int]` 公共函数——依据池子 `start_day ≤ final_time` 判定目标卡可达性，`store=None` 时保守回退返回原始 `target_specs`。4 个 `_obtainable` 后缀 GDR key（`target_achievement_obtainable` / `target_collection_obtainable` / `all_targets_obtainable` / `weighted_satisfaction_obtainable`）分母仅含模拟期间池子已开放的目标卡，排除不可达卡的虚降/永久惩罚。`compute_gdr_from_compact()` / `compute_gdr_from_cumulative()` / `compute_success_probability()` 均新增 `store=None` 参数并透传至 wrapper；`GDRCalculator.__init__` / `make_gdr_calculator()` 同理。`streaming.py` 累积快照新增 `pool_end_time` 字段供可达过滤使用。
+`UNIFIED_GDR_REGISTRY` 定义 21 种广义出率指标（含 P62 4 个可达变体）。两路计算：`compute_from_compact`（O(1)）/ `compute_from_history`（O(T)）。**P62 变更：** `GDRDefinition.needs_store: bool = False` 标志位——告知调用方该 GDR 需传入 `store` 方可正确计算（如 `_obtainable` 可达变体）。`filter_target_specs_by_obtainable(target_specs, store, final_time) -> Dict[str, int]` 公共函数——依据池子开放时间判定目标卡可达性，`store=None` 时保守回退返回原始 `target_specs`。**P61 变更（ISSUE-009/310）：** 可达判定数据源由 `store.pools` 的 `start_day`（天）改为 `store.banner.banners` 的 `available_from`（秒）——比较单位由天修正为秒（晚开池早停场景可达性收严，ISSUE-307），`pool_start` 键为全限定 `{banner_id}.{pool_id}`（与 `card_defs[].pools` 同键空间）；GDR 转化效率白名单由 `pool_type in ('角色','武器','')` 改为推导属性 `output == 'card' and random`（§3.13.1，类型字段已退役）。4 个 `_obtainable` 后缀 GDR key（`target_achievement_obtainable` / `target_collection_obtainable` / `all_targets_obtainable` / `weighted_satisfaction_obtainable`）分母仅含模拟期间池子已开放的目标卡，排除不可达卡的虚降/永久惩罚。`compute_gdr_from_compact()` / `compute_gdr_from_cumulative()` / `compute_success_probability()` 均新增 `store=None` 参数并透传至 wrapper；`GDRCalculator.__init__` / `make_gdr_calculator()` 同理。`streaming.py` 累积快照新增 `pool_end_time` 字段供可达过滤使用。
 
 **调用规范（强制）：** 必须用 `make_gdr_calculator(store, target_specs, gdr_key)` 构造 `GDRCalculator`——权重从 `ConfigStore` 自动提取。**禁止绕过直接调** `compute_gdr_from_compact`/`compute_success_probability`（权重易漏传、静默退化 1.0）。例外：`process_trace.py`/`per_pool_analysis.py` 通过 `**kwargs` 透传权重。**P60 变更：** `PityProgressAtT` 读取 `history[t].pity_state`（dict，非 PityState 对象）时，必须通过 `PityState.from_dict()` 反序列化后再使用 `ps.get(name, 'counter', 0)`——禁止直接对 dict 调用 3 参数 `get()`（TypeError）。
 
@@ -138,10 +143,14 @@ CLI / GUI / 脚本 / 测试均通过此统一入口。
 |------|------|
 | 新 GDR | `core/gdr.py` + `UNIFIED_GDR_REGISTRY` 注册 `GDRDefinition` |
 | 新溢出规则 | `core/overflow.py` → `CardDefEntry.overflow_bands` / `[rarity_defaults]` TOML 段 / GUI「满突溢出」标签页 |
-| 新策略 | `strategies/builtin/` 或 `strategies/` 插件目录 —— `@register_strategy` 装饰器 + `Strategy` ABC |
-| 新停止条件 | `core/stop_condition.py` + `STOP_CONDITION_REGISTRY` 注册 |
+| 新 Banner 生命周期规则 | `[[banner.lifecycle]]` TOML 段（P61）——`condition`（pool_draws/banner_draws/card_obtained/pool_exhausted/time_window）+ `action`（switch_to/exhaust_banner）；`card_obtained` 的匹配值存 `pool` 字段（`match`=card_id/rarity）；`time_window` 的 `at` 为秒（UI/TOML 层以天书写，解析边界 `*DAY`） |
+| 新策略 | `strategies/builtin/` 或 `strategies/` 插件目录 —— `@register_strategy` 装饰器 + `Strategy` ABC；枯竭态须返回推进时间的等待，用 `core/strategy.py` 的 `next_event_wait(ctx)`（见「策略」一节的枯竭态契约） |
+| 新停止条件 | ① 在 `core/stop_condition.py` 实现条件类（`check()` + `description()`）并在 `STOP_CONDITION_REGISTRY` 注册条目——`params` 为 `List[ParamDescriptor]`（`core/param_descriptor.py`）② 声明它在 `[stop_condition]` TOML 段中的嵌套形态（复合节点带 `mode`+`conditions`、否定节点 `mode='not'` 恰带一子节点、叶子节点带 `type`+平铺参数），工厂 `create_stop_condition(tree)` 按「`conditions` → `mode` → `type`」分派 ③ 表达式（GUI 编辑视图，不落盘）由 `core/stop_condition_expr.py` 解析 ④ 形态问题（叶子含**未声明参数键**、节点带 `mode` 却缺 `conditions`）由 `core/stop_condition.py` 的 `stop_condition_shape_issues(tree)` 统一报出：加载期写入 `load_warnings`，保存闸门的 tree 分支（WebUI）阻断。**参数键名即契约**，改键名会让旧配置的那一项静默落回默认值（该校验负责把它喊出来） |
 | 新面板 | `gui/` + `MainWindow._setup_ui()` 注册 Tab |
 | 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 type→class+params 元数据 + 实现 `CounterBasedBehavior` 子类（counter 驱动）或 `PityBehavior` 子类（事件驱动） |
+| 新里程碑 | `core/milestone.py` → `MilestoneEngine` 计数器引擎 + `[[milestone]]` TOML 段（P58）——`threshold`/`repeat`/`max_triggers`/`banner`/`bonus_reward`（cards/resources/random_cards 三字段任意组合）；`register_milestone_engine(notifier, engine)` 订阅 `after_draw` 事件（priority=0，P61 装配点）。P78：`alternate_rewards`（交替奖励序列——每次触发取下一条、索引模长度循环）+ `offset`（首节点相位偏移，仅首节点生效）；无交替/零偏移里程碑条件写键省略（round-trip 纪律） |
+| 新自选券 | `[[select_voucher]]` TOML 段（P78）——`voucher`（资源 id）→ `cards`（可兑换卡显式列表），只记券不落卡（供查询/展示）；`ConfigStore.get_select_voucher_candidates(voucher_id)`/`is_select_voucher()` 读取接口；解析期自动补全 `resource_defs`（setdefault 保留既有显示名） |
+| 新资源生命周期 | `core/resource_lifecycle.py` + `[resources.lifecycle]` TOML 段（P77）：`resource_id` + 到期时刻二选一（`expire_at` 天，解析边界 `*DAY`／`expire_with_banner` 对齐该 banner 下架时刻）+ `on_expire` 二选一（转换 `{convert_to, from, to}` 按「每 from 个换 to 个」，零头随源作废／清零 `{clear}`）；到期由 `GachaService` 三处时间检查点（等待期／每抽后／循环收尾）结算，策略经 `ctx.resource_expiry` 感知余额与剩余天数；记账为转换 = 源 `total_consumed` + 目标 `total_gained`。**与 `[[banner.lifecycle]]` 的分工**：本段管**资源**的到期转换/清零（时间驱动，复用 banner 的 `available_until` 只是取时刻的快捷写法），`[[banner.lifecycle]]` 管**池子**的可用性与切换（条件驱动）；两者互不消费对方事件，同一资源被多池共用时只需一条规则 |
 | 新卡片维度 | `CardDefEntry.tags`（单值）/`CardDefEntry.list_tags`（多值）——TOML 中 `[card.tags]` 加一行即可，无需改代码（P65） |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
 | 新脆弱性分析方法 | `core/vulnerability.py` 中新增私有函数（如新的分箱策略或推断方法），通过 `_fit_vulnerability_pava` 主入口集成 |

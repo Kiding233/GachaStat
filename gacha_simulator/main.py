@@ -124,6 +124,61 @@ if __name__ == '__main__':
     window = MainWindow()
     window.show()
 
+    # ── Ps03：Ctrl+R 重启快捷键（开发调试用）──
+    restart_pid = None
+
+    def _on_restart_requested():
+        """重启：保存配置 → 启动新进程 → 探测 → 记录 pid → 关闭旧进程。
+
+        新进程作为本进程子进程启动，退出清理（下方）需跳过 restart_pid，否则误杀。
+        任一失败路径都 cancel_restart() 复位防抖并保持旧进程，避免「改错一行应用就没了」。
+        """
+        global restart_pid
+        from PyQt6.QtWidgets import QMessageBox
+        try:
+            # 保存序列复用 export_config（main_window.py L266-290）：校验 → 应用 → 写盘
+            errors = window.config_panel.validate_banners()
+            if errors:
+                QMessageBox.warning(
+                    window, "配置校验失败",
+                    "以下问题需修正后才能重启：\n\n" + '\n'.join(f"  · {e}" for e in errors))
+                window.cancel_restart()
+                return
+            window.config_panel.apply_to_store()
+            from gacha_simulator.core.config_toml import save_toml
+            from gacha_simulator.paths import get_config_dir
+            save_toml(window._store, os.path.join(get_config_dir(), 'config.toml'))
+        except Exception:
+            window.cancel_restart()
+            return
+
+        # 启动新进程（cwd 必须是含 gacha_simulator 包的目录，否则 -m 失败）
+        try:
+            if getattr(sys, 'frozen', False):
+                proc = _subprocess.Popen([sys.executable])
+            else:
+                proc = _subprocess.Popen(
+                    [sys.executable, '-m', 'gacha_simulator.main'], cwd=parent_dir)
+        except Exception as e:
+            QMessageBox.warning(window, "重启失败", f"无法启动新进程：{e}")
+            window.cancel_restart()
+            return
+
+        # 启动探测：语法/导入错误通常在导入早期秒崩，poll() 判定后取消重启
+        import time as _time
+        _time.sleep(0.8)
+        if proc.poll() is not None:
+            QMessageBox.warning(
+                window, "重启失败",
+                "新进程启动即退出，可能代码存在语法/导入错误（检查终端报错）。已保留当前窗口。")
+            window.cancel_restart()
+            return
+
+        restart_pid = proc.pid
+        window.close()
+
+    window.restart_requested.connect(_on_restart_requested)
+
     _exit_code = app.exec()
 
     # 退出前杀掉所有子进程，然后 os._exit 绕过 C++ 析构阶段。
@@ -139,6 +194,9 @@ if __name__ == '__main__':
         for line in result.stdout.splitlines():
             line = line.strip()
             if line.isdigit() and int(line) != _my_pid:
+                # Ps03：跳过重启启动的新进程，否则误杀刚启动的实例
+                if int(line) == restart_pid:
+                    continue
                 try:
                     os.kill(int(line), _signal.SIGTERM)
                 except OSError:

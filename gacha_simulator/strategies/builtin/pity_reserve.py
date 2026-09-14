@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from gacha_simulator.core.strategy import (
-    Strategy, StrategyContext, register_strategy,
+    Strategy, StrategyContext, register_strategy, next_event_wait,
 )
 from gacha_simulator.core.param_descriptor import FloatParam
 from gacha_simulator.core.action import Action
@@ -20,9 +20,10 @@ class PityReserveStrategy(Strategy):
     def description(cls) -> str:
         return "保底预留：只在大保底概率≥阈值时才抽卡"
 
-    def _pool_needs_target(self, pool_id: str, ctx: StrategyContext) -> bool:
+    def _pool_needs_target(self, banner_id: str, ctx: StrategyContext) -> bool:
+        # P61（ISSUE-303/315）：匹配口径为 banner.id
         for t in ctx.target_cards.targets:
-            if pool_id in t.pool_ids and ctx.acquired.get(t.card_id, 0) < t.quantity_needed:
+            if banner_id in t.pool_ids and ctx.acquired.get(t.card_id, 0) < t.quantity_needed:
                 return True
         return False
 
@@ -32,29 +33,28 @@ class PityReserveStrategy(Strategy):
         for t in ctx.target_cards.targets:
             if ctx.acquired.get(t.card_id, 0) >= t.quantity_needed:
                 continue
-            for pool in ctx.all_pools:
+            for banner in ctx.all_banners:
+                pool = banner.active_pool
                 if pool.is_exchange and pool.exchange_card_id == t.card_id:
-                    if pool.is_available_at(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
-                        return DrawAction(pool_id=pool.id)
+                    if banner.is_available(ctx.state.real_time) and ctx.state.can_afford_batch(pool.cost, pool.batch_size):
+                        return DrawAction(banner_id=banner.id)
 
-        for pool in ctx.current_pools:
+        for banner in ctx.banners:
+            pool = banner.active_pool
             if pool.is_exchange or not ctx.state.can_afford_batch(pool.cost, pool.batch_size):
                 continue
-            if not self._pool_needs_target(pool.id, ctx):
+            if not self._pool_needs_target(banner.id, ctx):
                 continue
 
-            pool_probs = ctx.get_pity_probabilities(pool.id)
+            # P61（ISSUE-002）：get_pity_probabilities 改传全限定键（strategy.py 经 banners
+            # 维度拆分定位 active_pool），不再传裸 pool.id（查询不到全限定 spec、保底阈值退化基础概率）
+            qualified_key = f"{banner.id}.{banner.active_pool_id}"
+            pool_probs = ctx.get_pity_probabilities(qualified_key)
             if pool_probs:
                 ssr_prob = sum(p for cid, p in pool_probs.items() if cid in ctx.ssr_ids)
                 if ssr_prob >= self.pity_threshold_pct:
-                    return DrawAction(pool_id=pool.id)
+                    return DrawAction(banner_id=banner.id)
             else:
-                return DrawAction(pool_id=pool.id)
+                return DrawAction(banner_id=banner.id)
 
-        wait_time = 86400
-        for pool in ctx.current_pools:
-            if hasattr(pool, 'available_until') and pool.available_until and pool.available_until > ctx.state.real_time:
-                wait_time = min(wait_time, pool.available_until - ctx.state.real_time)
-        if wait_time <= 0:
-            wait_time = 3600
-        return WaitAction(duration=wait_time)
+        return WaitAction(duration=next_event_wait(ctx))

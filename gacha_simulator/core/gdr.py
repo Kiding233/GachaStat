@@ -469,7 +469,10 @@ def _gdr_draw_conversion_efficiency(compact, target_specs,
     draw_pool_draws = 0
     for pid, cnt in pool_draw_counts.items():
         pt = pool_types.get(pid, '角色')
-        if pt in ('角色', '武器', ''):
+        # P61（§3.13.1）：转化效率白名单 = 普通抽卡池——pool_types 由 output/random
+        # 推导填充（Ph7），'角色' ⟺ output=='card' and random（兑换/资源池不计分母）。
+        # 旧字面 '角色','武器','' 中 '武器'/'' 为 derive_type 不产出的死分支，已去除。
+        if pt == '角色':
             draw_pool_draws += cnt
     if draw_pool_draws == 0:
         draw_pool_draws = compact.get('total_draws', 0)
@@ -507,13 +510,23 @@ def filter_target_specs_by_obtainable(
     for cd in store.card_defs:
         card_pools[cd.card_id] = set(cd.pools)
 
-    # 构建 pool_id → start_day 映射（仅 enabled 池子）
-    pool_start: Dict[str, int] = {}
-    for p in store.pools:
-        if p.enabled:
-            pool_start[p.pool_id] = p.start_day
+    # P61（ISSUE-307/309）：pool_start 数据源改 store.banner.banners——
+    # 开放时间取 Banner 级 available_from（秒），与 final_time（秒）同单位比较。
+    # 旧实现遍历 store.pools 展平视图取 start_day（天）与秒比较，晚开池在早停/
+    # 截断时间线恒判可达（147 ≤ 4320000）；修正后晚开池在 final_time 早于其开放
+    # 时刻时判不可达（_obtainable GDR 分母收严，属有意修正）。
+    # 键为全限定 {banner_id}.{pool_id}（与 card_defs[].pools 同键空间，ISSUE-310）。
+    pool_start: Dict[str, float] = {}
+    for b in store.banner.banners:
+        if not getattr(b, 'enabled', True):
+            continue
+        # 永久 Banner（available_from=None）归一 0.0（恒可达）——否则 start is None
+        # 恒 False、该 Banner 目标卡全部判不可达、_obtainable GDR 分母退化
+        from_sec = b.available_from if b.available_from is not None else 0.0
+        for p in b.pools:
+            pool_start[f"{b.id}.{p.id}"] = from_sec
 
-    # 筛选：至少一个所属池子的 start_day ≤ final_time
+    # 筛选：至少一个所属池子的开放时间(秒) ≤ final_time
     obtainable: Dict[str, int] = {}
     for cid, qty in target_specs.items():
         for pid in card_pools.get(cid, set()):
@@ -1111,14 +1124,16 @@ def compute_gdr_from_cumulative(cum_snapshot, target_specs, gdr_key,
     cum_consumed = cum_snapshot.get('cumulative_consumed', {})
     cum_gained = cum_snapshot.get('cumulative_gained', {})
     _, resource_id = parse_gdr_key(gdr_key)
-    # 优先使用多资源 dict（P22 扩展），回退旧格式标量 pool_end_resource
-    pool_end_resources = cum_snapshot.get('pool_end_resources')
-    if pool_end_resources is not None:
-        pseudo_final_resources = dict(pool_end_resources)
+    # P61（Ph7 / ISSUE-322）：累积快照字段已改 banner_end_*（streaming.py 生产端同步），
+    # 键为 banner_id——per-pool 累计 GDR 与 P62 可达过滤伪最终资源读真实数据
+    #（旧 pool_end_* 读点 .get 静默拿空、回退 initial_resources/derive 推算分支）。
+    banner_end_resources = cum_snapshot.get('banner_end_resources')
+    if banner_end_resources is not None:
+        pseudo_final_resources = dict(banner_end_resources)
     else:
-        pool_end_resource = cum_snapshot.get('pool_end_resource')
-        if pool_end_resource is not None:
-            pseudo_final_resources = {resource_id: pool_end_resource}
+        banner_end_resource = cum_snapshot.get('banner_end_resource')
+        if banner_end_resource is not None:
+            pseudo_final_resources = {resource_id: banner_end_resource}
         else:
             pseudo_final_resources = {}
             if initial_resources:

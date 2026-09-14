@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QApplication,
 )
 from PyQt6.QtCore import pyqtSignal, QThread, Qt
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtGui import QAction, QIcon, QShortcut, QKeySequence
 
 from .config_panel import ConfigPanel
 from .gacha_panel import GachaPanel
@@ -22,9 +22,10 @@ from .process_analysis_panel import ProcessAnalysisPanel
 from .comparison_analysis_panel import ComparisonAnalysisPanel
 from ..core.result_store import (
     ResultStore, StoredDataset, ComparabilityFingerprint, compute_config_hash,
+    canonical_stop_condition_summary,
 )
 from .data_manager_panel import DataManagerPanel
-from ..core.config_store import ConfigStore
+from ..core.config_store import ConfigStore, derive_pool_type_from_distribution
 from ..core.config_toml import load_toml, save_toml
 from ..paths import get_config_dir, get_resource
 
@@ -37,6 +38,7 @@ class MainWindow(QMainWindow):
 
     simulation_requested = pyqtSignal(dict)
     batch_simulation_requested = pyqtSignal(dict, int)
+    restart_requested = pyqtSignal()   # Ps03：Ctrl+R 重启快捷键
 
     def __init__(self):
         super().__init__()
@@ -65,6 +67,9 @@ class MainWindow(QMainWindow):
         self._setup_menu()
         self._connect_signals()
         self._load_default_config()
+        # Ps03：Ctrl+R 重启快捷键（开发调试用，防抖）
+        self._restarting = False
+        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._request_restart)
 
     def _setup_ui(self):
         central_widget = QWidget()
@@ -270,16 +275,20 @@ class MainWindow(QMainWindow):
         )
         if path:
             try:
+                # P61（2026-08-04 用户决策）：保存校验——Banner id 唯一/Pool id 唯一/
+                # cost 必填，违反时拦截保存并提示（§3.10.2）
+                errors = self.config_panel.validate_banners()
+                if errors:
+                    QMessageBox.warning(
+                        self, "配置校验失败",
+                        "以下问题需修正后才能保存：\n\n"
+                        + '\n'.join(f"  · {e}" for e in errors))
+                    return
                 self.config_panel.apply_to_store()
                 save_toml(self._store, path)
-                # 模板匹配失败提示
-                inline_count = sum(1 for p in self._store.pools
-                                   if not p.distribution_template)
-                if inline_count > 0:
-                    self.status_bar.showMessage(
-                        f"配置已保存。{inline_count} 个池子使用内联分布（模板不匹配）。", 8000)
-                else:
-                    self.status_bar.showMessage(f"配置已导出: {path}")
+                # P61（Ph8c / ISSUE-005）：池子模板已移除，内联分布统计失去语义——
+                # 展平视图无 distribution_template 字段、提示恒显示（误导），删除。
+                self.status_bar.showMessage(f"配置已导出: {path}")
             except Exception as e:
                 traceback.print_exc()
                 QMessageBox.warning(self, "导出失败", str(e))
@@ -383,10 +392,12 @@ class MainWindow(QMainWindow):
         self.worst_impact_panel._load_last_pool_config()
         self.retreat_panel.set_simulation_results(aggregate_data, target_specs, no_draw_resource=no_draw_resource, no_draw_resources=no_draw_resources, no_draw_pool_resources=no_draw_pool_resources)
 
-        pool_types = {}
-        for pe in self._store.pools:
-            pool_type = pe.pool_type or (pe.bindings.get('type', '角色') if pe.bindings else '角色')
-            pool_types[pe.pool_id] = pool_type
+        # P61（§3.13.1 / ISSUE-002）：pool_type 字段已退役，由 distribution 推导三值，
+        # 键保持全限定 {banner_id}.{pool_id}（process_trace 按此键匹配，GDR 消费端同口径）
+        pool_types = {
+            pe.pool_id: derive_pool_type_from_distribution(pe.distribution)
+            for pe in self._store.pools
+        }
 
         self.process_analysis_panel.update_results(
             aggregate_data,
@@ -430,9 +441,18 @@ class MainWindow(QMainWindow):
 
         pool_ids = tuple(pe.pool_id for pe in self._store.pools)
 
+        # P61（Ph7 / ISSUE-013）：config_hash 纳入 Banner 级配置——改传
+        # store.banner.banners（含 lifecycle/时间窗口/featured），展平视图
+        # 仅含 pool_id/cost 会漏掉 Banner 级差异致指纹误判可比
+        # P79：停止条件的规范化摘要（含参数值；空树产出哨兵 ''）。
+        # 原实现把指纹的 stop_condition 硬编码为 'all_pools_end'，与用户实际配置无关。
+        _stop_summary = canonical_stop_condition_summary(
+            getattr(self._store, 'stop_condition', None))
         config_hash = compute_config_hash(
-            self._store.pools, getattr(self._store, 'pity', None),
-            getattr(self._store, 'schedules', [])
+            self._store.banner.banners, getattr(self._store, 'pity', None),
+            getattr(self._store, 'schedules', []),
+            milestone_config=getattr(self._store, 'milestone', None),   # P58（ISSUE-008）：里程碑配置纳入可比性指纹
+            stop_condition_summary=_stop_summary,   # P79：停止条件纳入可比性指纹
         )
 
         aggregate_count = len(aggregate_data) if isinstance(aggregate_data, list) else 0
@@ -442,7 +462,7 @@ class MainWindow(QMainWindow):
             strategy_key=strategy_name,
             target_cards=target_specs_for_fp,
             initial_resources=initial_resources,
-            stop_condition='all_pools_end',
+            stop_condition=_stop_summary,   # P79：条件树渲染的规范化摘要（原为硬编码）
             seed_start=seed_start,
             seed_end=seed_start + aggregate_count - 1 if aggregate_count > 0 else seed_start,
             num_simulations=aggregate_count,
@@ -593,7 +613,22 @@ class MainWindow(QMainWindow):
         dialog = AboutDialog(self)
         dialog.exec()
 
+    def _request_restart(self):
+        """Ps03：Ctrl+R 触发重启（防抖——重启中忽略后续触发）。"""
+        if self._restarting:
+            return
+        self._restarting = True
+        self.restart_requested.emit()
+
+    def cancel_restart(self):
+        """Ps03：取消重启（main.py 重启失败路径调用，复位防抖标记）。"""
+        self._restarting = False
+
     def closeEvent(self, event):
+        if self._restarting:
+            # Ps03：重启路径跳过「确定要退出吗」确认框（一键重启）
+            event.accept()
+            return
         reply = QMessageBox.question(
             self, "确认退出",
             "确定要退出吗？",

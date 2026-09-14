@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .stop_condition import StopCondition
     from .pity import PityEngine, PityState
     from .param_descriptor import ParamDescriptor
+    from .milestone import MilestoneEngine, MilestoneDef   # P58（M4a）：策略层里程碑查询
 
 
 # ── 策略注册表元数据 ──────────────────────────────────────────────
@@ -79,12 +80,29 @@ def register_strategy(
 
 
 @dataclass
+class ResourceExpiryPreview:
+    """策略可读的资源到期预览（P77），与 TransitionPreview 同处策略域。"""
+
+    resource_id: str
+    balance: float
+    remaining: int
+    expire_at: float
+    on_expire: Optional[dict] = None
+    description: str = ""
+
+
+@dataclass
 class StrategyContext:
     state: 'GachaState'
     current_pools: List['Pool']
     all_pools: List['Pool']
     future_schedules: List[PoolSchedule]
     target_cards: TargetCardSet
+    # P79 语义变更（插件作者可见）：装配后本字段**不是**用户配置的条件本身，而是
+    # `CompositeStopCondition([用户条件, 引擎硬边界], mode='any')`——硬边界恒附，
+    # 保证任何「策略 × 停止条件」组合都在 `env.end_time` 收口（用户条件不可满足时
+    # 由硬边界兜底）。用户条件为 None 时退化为单一硬边界。策略**不应**用它判断
+    # 「我该收工了吗」——策略枯竭态请返回推进时间的等待（见 next_event_wait）。
     stop_condition: 'StopCondition'
     _pity_engine: Optional['PityEngine'] = field(default=None, repr=False)
     _pity_state: Optional['PityState'] = field(default=None, repr=False)
@@ -105,6 +123,37 @@ class StrategyContext:
     last_draw_pity_triggered: bool = False
     ssr_ids: Set[str] = field(default_factory=set)
     _pity_cache: Dict[str, Dict[str, float]] = field(default_factory=dict, repr=False)
+    # P61（Ph5）：banner 维度——active_banners / 全部 banners（策略迁移主接口，ISSUE-005）
+    banners: List = field(default_factory=list)
+    all_banners: List = field(default_factory=list)
+    # P58（M4a）：里程碑引擎（代理查询，只读——策略不可修改计数器）
+    _milestone_engine: Optional['MilestoneEngine'] = field(default=None, repr=False)
+    # P77：资源到期预览（带空列表默认值，P69 契约）
+    resource_expiry: List['ResourceExpiryPreview'] = field(default_factory=list)
+
+    def get_milestone_counter(self, name: str) -> int:
+        """当前累计抽数（已抽次数），不存在 → 0。余量 = md.threshold - get_milestone_counter(name)。
+
+        P78（ISSUE-104）：该值为相对计数器（未叠加 offset 的原始累计值）——首节点
+        阶段（offset 生效区间）实际触发点 = threshold + offset，策略按
+        「余量 = threshold - counter」预测会低估首节点到 80（实际 100）。
+        精确余量须叠加 offset（首节点阶段）或经 `get_all_defs()[name].offset` 判断。
+        """
+        if self._milestone_engine is None:
+            return 0
+        return self._milestone_engine.get_counter(name)
+
+    def is_milestone_active(self, name: str) -> bool:
+        """该里程碑是否仍在生效（at=N 触发后停用）。"""
+        if self._milestone_engine is None:
+            return False
+        return self._milestone_engine.is_active(name)
+
+    def get_milestone_defs(self) -> Dict[str, 'MilestoneDef']:
+        """返回全部里程碑定义——含 threshold / bonus_reward。"""
+        if self._milestone_engine is None:
+            return {}
+        return self._milestone_engine.get_all_defs()
 
     def get_pity_probabilities(self, pool_id: str) -> Dict[str, float]:
         if self._pity_engine is None:
@@ -112,7 +161,17 @@ class StrategyContext:
         cached = self._pity_cache.get(pool_id)
         if cached is not None:
             return cached
-        pool = next((p for p in self.current_pools if p.id == pool_id), None)
+        # P61（ISSUE-305）：pool_id 为全限定键 {banner_id}.{pool_id} 时，经 banners 维度
+        # 拆分定位 banner.active_pool 读 rewards（current_pools 元素 .id 是 Banner 内字典键，
+        # 无法承载全限定键）；裸键则回退 current_pools 旧路径（保留兼容）
+        pool = None
+        if '.' in pool_id:
+            banner_id, pool_key = pool_id.split('.', 1)
+            banner = next((b for b in self.banners if b.id == banner_id), None)
+            if banner is not None and pool_key == banner.active_pool_id:
+                pool = banner.active_pool
+        if pool is None:
+            pool = next((p for p in self.current_pools if p.id == pool_id), None)
         if pool is None or pool.is_exchange:
             return {}
         probs = {r.id: p for r, p in pool.rewards}
@@ -136,6 +195,44 @@ class Strategy(ABC):
     @abstractmethod
     def select_action(self, ctx: StrategyContext) -> Action:
         pass
+
+
+# ── 策略枯竭态契约（P79 5.3）────────────────────────────────────
+# 策略在「不再有任何想做的事」时必须返回一个**推进时间**的等待，不得返回
+# WaitAction(duration=0)：后者让 real_time 原地不动，时间型停止条件
+# （all_pools_end / time_limit）永远够不着，循环只能烧满 max_iterations。
+# 下面的 helper 是「下一个事件时刻」的统一口径，抽自 5 份重复实现
+# （smart / stop_on_target / pity_reserve / pool_quota / draw_target 的末段
+# 等待块）。插件策略要实现同一契约，故公开在本模块而非 strategies/builtin
+# 的私有路径。
+
+EVENT_WAIT_CAP = 86400  # 等待粒度硬上限（一天）
+
+
+def next_event_wait(ctx: StrategyContext) -> float:
+    """返回推进到下一事件所需的等待秒数。
+
+    **返回 float 时长（秒），不是 Action。** 调用点一律写作
+    ``return WaitAction(duration=next_event_wait(ctx))``——「helper 产数值 /
+    调用点包 WaitAction」两层显式分离。直接 ``return next_event_wait(ctx)``
+    会让 GachaService 的动作分发（isinstance 三路 DrawAction / NonDrawAction /
+    WaitAction）全部落空，末尾抛 ValueError。
+
+    契约（86400 为硬上限）：
+
+    - 有可用 banner 且其 ``available_until`` 早于一天后 → 取该差值
+    - 最近的关闭时刻晚于一天后 → 86400
+    - 无可用 banner，或所有 ``available_until`` 为 None → 86400
+    """
+    wait_time: float = EVENT_WAIT_CAP
+    for banner in ctx.banners:
+        if banner.available_until and banner.available_until > ctx.state.real_time:
+            wait_time = min(wait_time, banner.available_until - ctx.state.real_time)
+    if wait_time <= 0:
+        # 防御性保留：上面的循环只用「已确保为正」的差值取 min、初值为 86400，
+        # 故本分支不可达（5 份原实现中的同款防线原样搬运）。
+        wait_time = 3600
+    return float(wait_time)
 
 
 # ── 内置策略——通过 import 触发 @register_strategy 装饰器副作用 ──
@@ -209,7 +306,7 @@ class DrawSegmentStrategy(Strategy):
             if ctx.total_draws >= start and (end is None or ctx.total_draws < end):
                 return strategy.select_action(ctx)
         from .action import WaitAction
-        return WaitAction(duration=0)
+        return WaitAction(duration=next_event_wait(ctx))
 
 
 class PriorityChainStrategy(Strategy):
@@ -217,8 +314,10 @@ class PriorityChainStrategy(Strategy):
 
     strategies: List[Strategy]
         按优先级排列的策略列表。每个策略依次调用 select_action()，
-        第一个返回非 None 且非 WaitAction(duration=0) 的结果被采纳。
-        若全部返回 WaitAction(0)，则返回最后一个。
+        返回第一个非 None 的结果；全部为 None 时返回推进时间的等待。
+        （P79 5.3：兜底不得返回 WaitAction(duration=0)——那会让 real_time
+        冻结、时间型停止条件永远够不着。此处不补 WaitAction(0) 过滤：
+        会改变本 building block 的既有行为并波及插件策略的组合语义。）
     """
 
     _strategy_key = None  # 哨兵——非注册策略，无 key
@@ -236,7 +335,7 @@ class PriorityChainStrategy(Strategy):
             if action is not None:
                 return action
         from .action import WaitAction
-        return WaitAction(duration=0)
+        return WaitAction(duration=next_event_wait(ctx))
 
 
 class ConditionalStrategy(Strategy):

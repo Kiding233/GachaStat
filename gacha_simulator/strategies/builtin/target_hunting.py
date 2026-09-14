@@ -22,8 +22,10 @@ class TargetHuntingStrategy(Strategy):
 
     def select_action(self, ctx: StrategyContext) -> Action:
         from gacha_simulator.core.action import DrawAction, WaitAction
-        target_pools = [p for p in ctx.current_pools if p.id in self.target_pool_ids]
-        for pool in target_pools:
+        # P61（ISSUE-303/315）：target_pool_ids 匹配口径为 banner.id
+        target_banners = [b for b in ctx.banners if b.id in self.target_pool_ids]
+        for banner in target_banners:
+            pool = banner.active_pool
             if ctx.state.can_afford_batch(pool.cost, pool.batch_size):
-                return DrawAction(pool_id=pool.id)
+                return DrawAction(banner_id=banner.id)
         return WaitAction(duration=3600)

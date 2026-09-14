@@ -124,6 +124,11 @@ class PlanSearchEngine:
             # 完整时间线模式
             from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
             env = SimulationEnvBuilder.from_config_store(self.config_store)
+            # P79：搜索模式不继承用户停止条件——用户在配置面板设的条件（如
+            # fixed_action_count(N) / resource_threshold(<=0)）会截断搜索模拟，
+            # 污染 GDR 成功率与「最少资源」结论。本分支与下方的截断分支一并置空，
+            # 使两条时间线语义一致，均由硬边界收口。
+            env.stop_condition = None
             ir = dict(env.initial_resources)
             ir['draw_resource'] = initial_resource_value
             env.initial_resources = ir
@@ -138,7 +143,10 @@ class PlanSearchEngine:
                 pity_counter_init=self.pity_counter_init,
             )
             from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
-            return SimulationEnvBuilder.from_config_store(truncated_store)
+            env = SimulationEnvBuilder.from_config_store(truncated_store)
+            # P79：同上——截断时间线同样不继承用户停止条件
+            env.stop_condition = None
+            return env
 
     # 保留旧方法名作为别名，向后兼容
     _build_truncated_env = _build_env
@@ -404,13 +412,15 @@ class PlanSearchEngine:
     def _get_obtainable_card_ids(self, env) -> Set[str]:
         """从截断后的环境中收集所有可获取的卡ID"""
         obtainable = set()
-        for pool in env.pools:
-            if pool.is_exchange:
-                if pool.exchange_card_id:
-                    obtainable.add(pool.exchange_card_id)
-            else:
-                for reward, _ in pool.rewards:
-                    obtainable.add(reward.id)
+        # P61（Ph6 / AUDIT-BREAK-5 ②）：env.pools 承载 List[Banner]，按 banner 池展开读取
+        for b in env.pools:
+            for pool in b.pools.values():
+                if pool.is_exchange:
+                    if pool.exchange_card_id:
+                        obtainable.add(pool.exchange_card_id)
+                else:
+                    for reward, _ in pool.rewards:
+                        obtainable.add(reward.id)
         return obtainable
 
     def _filter_obtainable_targets(self, target_specs: Dict[str, int]) -> Dict[str, int]:
@@ -724,7 +734,12 @@ def get_cost_per_draw(pools) -> float:
     if not pools:
         return 160
     for p in pools:
+        # P61（Ph6 / ISSUE-304）：env.pools 承载 List[Banner]，读 banner.active_pool.cost；
+        # 裸 Pool（旧路径）直接读 p.cost。Banner 的 getattr(p, 'cost') 返回 None——
+        # 必须经 active_pool 取真实成本，不得静默 continue 回退 160
         cost = getattr(p, 'cost', None)
+        if cost is None and hasattr(p, 'active_pool'):
+            cost = getattr(p.active_pool, 'cost', None)
         if cost is None:
             continue
         if isinstance(cost, (int, float)) and cost > 0:

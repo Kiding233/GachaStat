@@ -91,6 +91,14 @@ class PityBehavior(ABC):
         """该保底在给定计数器值下是否影响概率。子类应覆写此方法。"""
         return False
 
+    def _rebind_state(self, state: 'PityState') -> None:
+        """P75：将本 behavior 的 Counter/Flag 重绑到新的 PityState 实例。
+
+        纯重定向、不复制旧值——初始状态完全由 per-call state（阶段 3 完整快照）承载。
+        子类覆写此方法重绑自身特有的 Counter/Flag（无特有字段则继承默认空实现）。
+        """
+        pass
+
 
 # ── P60 新增：计数器驱动型保底基类 ──
 
@@ -137,6 +145,27 @@ class CounterBasedBehavior(PityBehavior, ABC):
 
     def _counter(self) -> 'Counter':
         return Counter(self._state, self._name, "counter")
+
+    # ── P75：_rebind_state——重绑 Counter/Flag 到 per-call state ──
+
+    def _rebind_state(self, state: 'PityState') -> None:
+        """重绑本 behavior 的 Counter/Flag 到新 PityState（纯重定向，不复制旧值）。
+
+        P55 蓝图（归档文档 line 1914-1925）设计——构造时绑定 + per-call 调度重绑，
+        保证计数写入调度层实际使用的 state 对象。初始值由阶段 3 完整快照承载。
+        """
+        self._state = state
+        self._active = Flag(state, self._name, "_active")
+        self._on_rebind_state(state)
+
+    def _on_rebind_state(self, state: 'PityState') -> None:
+        """子类覆写点——重绑子类特有的 Counter/Flag。默认空实现。
+
+        当前 10 种 behavior 均无覆写需求（特有字段已由各自 _rebind_state 或
+        PityBehavior 子类显式处理），该钩子仅为未来新增带特有 Counter/Flag 的
+        behavior 预留扩展点。实现时不得因「无覆写者」删除该调用。
+        """
+        pass
 
     # ── P55：_on_reset() 钩子 ──
 
@@ -472,6 +501,10 @@ class RotatingBehavior(PityBehavior):
         if guaranteed_init:
             self._guaranteed.set()
 
+    def _rebind_state(self, state):
+        self._state = state
+        self._guaranteed = Flag(state, self._name, "guaranteed")
+
     def before_draw(self, ctx, readonly=False):
         total = self._scope_total_prob(ctx)
         if total <= 0:
@@ -543,6 +576,12 @@ class SoftPityMixin:
                 self._counter.reset()
         super().after_draw(ctx)
 
+    def _rebind_state(self, state):
+        """重绑 mixin 自身 + 委托软保底引擎（MRO 链：本 mixin 须在继承列表首位）。"""
+        self._counter = Counter(state, self._name, "counter")
+        self._soft_engine._rebind_state(state)
+        super()._rebind_state(state)
+
 
 # ── P56：RotatingSoftBehavior —— 轮换 + 软保底（mixin 版） ──
 
@@ -566,6 +605,9 @@ class RotatingCRBehavior(RotatingBehavior):
         else:
             self._cr_state_probs = [0.0] * self._cr_max + [1.0]
         self._cr_counter = Counter(state, name, "cr_counter")
+    def _rebind_state(self, state):
+        self._cr_counter = Counter(state, self._name, "cr_counter")
+        super()._rebind_state(state)
     def before_draw(self, ctx, readonly=False):
         if self._guaranteed.is_set():
                 return super().before_draw(ctx, readonly=readonly)
@@ -630,6 +672,14 @@ class TargetedBehavior(PityBehavior):
                 self._guaranteed.set()
         if fate_points_init:
                 self._fate_points._state.set(name, "fate_points", fate_points_init)
+
+    def _rebind_state(self, state):
+        self._state = state
+        self._guaranteed = Flag(state, self._name, "guaranteed")
+        self._losses = Counter(state, self._name, "losses")
+        self._lost_flag = Flag(state, self._name, "lost_rotating")
+        self._fate_points = Counter(state, self._name, "fate_points")
+
     def before_draw(self, ctx, readonly=False):
         total = self._scope_total_prob(ctx)
         if total <= 0:
@@ -1262,9 +1312,35 @@ class PityEngine:
 
     # ── 策略层查询接口（保留旧方法签名兼容） ──
 
+    def _rebind_state(self, state: 'PityState') -> None:
+        """P75：将所有 behavior 的 Counter/Flag 重绑到 per-call state。
+
+        在 before_draw()/after_draw()/get_probabilities() 入口调用——确保
+        behavior 内部 Counter/Flag 遥控器指向调度层实际使用的 state 对象，
+        否则计数器递增写入错误对象（P55 文档 line 1785-1789 预见的 A/B 分裂）。
+
+        纯重定向不复制旧值；rebind 发生在每轮模拟第一次调度，此时旧绑定是
+        上一轮模拟的账本，复制旧值会重新引入跨模拟残留。初始值完全由
+        阶段 3 完整快照（env.pity_state_init）承载。
+        """
+        if state is self._state:
+            return  # 同一对象——无需重绑定
+        self._state = state
+        for bh in self._behavior_list:
+            # ISSUE-102：legacy 签名实例（state=None 分支构造）缺 _name/_active/_state，显式跳过
+            if getattr(bh, '_legacy_mode', False):
+                continue
+            if hasattr(bh, '_rebind_state'):
+                bh._rebind_state(state)
+
     def get_probabilities(self, pool_id: str, state: PityState,
                           base_probabilities: Dict[str, float]) -> Dict[str, float]:
-        """查询保底调整后的概率分布，不修改保底计数器。"""
+        """查询保底调整后的概率分布。
+
+        P75（ISSUE-122）：首行 rebind state 至传入参数（带重绑副作用），随后以只读
+        语义查询——「查询不写计数」仍成立，但不再是 P55 归档定义的无副作用纯查询。
+        """
+        self._rebind_state(state)  # 必须先于 spec=None 早退（ISSUE-123）
         spec = self.pool_specs.get(pool_id)
         if spec is None:
             return base_probabilities.copy()
@@ -1293,7 +1369,7 @@ class PityEngine:
     def before_draw(self, pool_id: str, state: PityState,
                     base_probabilities: Dict[str, float]) -> Dict[str, float]:
         """抽前调度：仅对当前池关联的 behavior 执行 before_draw。"""
-        self._state = state
+        self._rebind_state(state)  # P75：重绑 behaviors 到 per-call state（ISSUE-123 先于早退）
         spec = self.pool_specs.get(pool_id)
         if spec is None:
             return base_probabilities.copy()
@@ -1321,6 +1397,7 @@ class PityEngine:
 
     def after_draw(self, pool_id: str, state: PityState, reward_id: str):
         """抽后调度：仅对当前池关联的 behavior 执行 after_draw。"""
+        self._rebind_state(state)  # P75：重绑 behaviors 到 per-call state
         spec = self.pool_specs.get(pool_id)
         if spec is None:
             return
@@ -1375,7 +1452,10 @@ class PityEngine:
         return self._state.get(name, "guaranteed", False) if self._state else False
 
     def is_active(self, name: str) -> bool:
-        return self._state.get(name, "_active", True) if self._state else True
+        # ISSUE-120：默认 False——depends_on 依赖方初始 inactive（构造期不 set），
+        # 与 Flag.is_set() 默认 False 一致；正常 behavior 的 _active=True 由构造期 set + 阶段 3 快照承载。
+        # 已无运行时调用方，保留仅供策略层未来使用。
+        return self._state.get(name, "_active", False) if self._state else False
 
     def get_state_summary(self) -> Dict[str, Dict[str, Any]]:
         if self._state is None:

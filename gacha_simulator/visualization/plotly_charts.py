@@ -411,15 +411,22 @@ class PlotlyRenderer:
             row = i + 1
             color = colors[i % len(colors)]
             label = labels_map.get(key, key)  # 显示名优先，回退到内部键
-            mean_val = np.mean(d.series[key])
+            _samples = np.asarray(d.series[key], dtype=np.float64)
+            mean_val = np.mean(_samples)
 
             fig.add_trace(
                 go.Histogram(
-                    x=d.series[key],
+                    x=_samples,
                     xbins=dict(start=bin_edges[0], end=bin_edges[-1] + bin_size + bin_size * 1e-6, size=bin_size),
+                    # 悬停显示样本真实值而非箱中心：共享分箱下箱宽由全部池的样本跨度决定
+                    # （实测 160 = 单抽成本），箱中心与真实值最多差半个箱宽。资源剩余类的
+                    # 池若格点间距远小于箱宽（如清零点后的池只落在 3 个值上），偏差被放大
+                    # 到肉眼可见（显示 120/440 而真实值 180/500）。customdata 按样本绑定，
+                    # 悬停取该箱内样本的真实取值——实测各池每箱恰含 1 个唯一值，故显示精确。
+                    customdata=_samples,
                     marker_color=color,
                     name=label,
-                    hovertemplate=f"{label}<br>值: %{{x:.2f}}<br>频数: %{{y}}<extra></extra>",
+                    hovertemplate=f"{label}<br>值: %{{customdata:.2f}}<br>频数: %{{y}}<extra></extra>",
                 ),
                 row=row, col=1,
             )

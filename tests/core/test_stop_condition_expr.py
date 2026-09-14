@@ -195,6 +195,26 @@ def test_validate_config_tree_side_rejects(tree, frag):
     assert errors and any(frag in e for e in errors)
 
 
+def test_validate_config_tree_side_reports_shape_issues():
+    """保存闸门（tree 分支）并入形态问题，且对 mode 缺 conditions 只报贴题的那条。
+
+    该形态原先只报「叶子节点缺少 type 键」，指向错误的方向（真正缺的是
+    conditions）；两条并报则冗余，故此时抑制泛化讯息。
+    """
+    from gacha_simulator.core.stop_condition_expr import (
+        validate_stop_condition_config as V,
+    )
+
+    errors = V(tree={'mode': 'any'})
+    assert len(errors) == 1, errors
+    assert 'conditions' in errors[0]
+    assert not any('缺少 type 键' in e for e in errors), '泛化讯息未抑制'
+
+    unknown = V(tree={'type': 'fixed_action_count', 'count': 500})
+    assert len(unknown) == 1, unknown
+    assert 'count' in unknown[0] and 'max_actions' in unknown[0]
+
+
 def test_validate_config_tree_side_accepts_nested():
     from gacha_simulator.core.stop_condition_expr import (
         validate_stop_condition_config as V,

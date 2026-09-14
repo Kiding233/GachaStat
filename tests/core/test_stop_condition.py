@@ -185,3 +185,64 @@ def test_coaxial_condition_range_covers_default_end_time():
         pdesc = next(p for p in STOP_CONDITION_REGISTRY[key]['params'] if p.key == pname)
         assert pdesc.max_val == MAX_SIM_TIME
         assert pdesc.max_val > DEFAULT_END_TIME
+
+
+# ══════════════════════════════════════════════════════════════════
+# P79 R20：条件树形态问题检查（未声明叶子键 / mode 缺 conditions）
+# ══════════════════════════════════════════════════════════════════
+
+def _shape(tree):
+    from gacha_simulator.core.stop_condition import stop_condition_shape_issues
+    return stop_condition_shape_issues(tree)
+
+
+def test_shape_issues_reports_unknown_leaf_keys():
+    """叶子含未声明参数键：构造时被忽略、该参数落回默认值，须报出。
+
+    键名笔误（把 max_actions 写成 count）此前是零信号故障：配置写着 500、
+    实际跑的是 100，加载期无告警、保存闸门也放行。
+    """
+    tree = {'mode': 'any', 'conditions': [
+        {'type': 'fixed_action_count', 'count': 500}]}
+    issues = _shape(tree)
+    assert len(issues) == 1, issues
+    assert 'count' in issues[0]
+    assert 'max_actions' in issues[0], '讯息须给出合法键名，否则用户无从改正'
+    assert 'conditions[0]' in issues[0], '须带路径定位到具体节点'
+
+
+def test_shape_issues_reports_mode_without_conditions():
+    """mode 在场但缺 conditions：5.6 三形态之外的第四种。"""
+    issues = _shape({'mode': 'any'})
+    assert len(issues) == 1, issues
+    assert 'conditions' in issues[0]
+    assert "'any'" in issues[0]
+
+
+def test_shape_issues_silent_on_valid_nested_tree():
+    """合法树不得误报：复合 / 否定 / 叶子三形态齐备。"""
+    tree = {'mode': 'any', 'conditions': [
+        {'type': 'time_limit', 'max_time': 1.0},
+        {'mode': 'not', 'conditions': [
+            {'type': 'target_acquired', 'target_id': 'x', 'quantity': 1}]},
+        {'mode': 'all', 'conditions': [
+            {'type': 'last_draw_card', 'card_id': 'c1'}]},
+    ]}
+    assert _shape(tree) == []
+    assert _shape(None) == []
+    assert _shape({}) == []
+
+
+def test_shape_issues_tolerates_lingering_mode_on_leaf():
+    """叶子表里残留的 mode 不算未声明参数键（5.6 明示容忍，白名单会过滤它）。
+
+    该形态能正常构造（mode 被丢弃），故不属「配置没按你写的生效」。
+    """
+    assert _shape({'type': 'time_limit', 'max_time': 1.0, 'mode': 'any'}) == []
+
+
+def test_shape_issues_is_total():
+    """全函数：输入非法时交给构造期报错，本函数只负责产出讯息，不得抛异常。"""
+    assert _shape('不是字典') == []
+    assert _shape([{'type': 'time_limit'}]) == []
+    assert _shape({'type': 'no_such_type', 'foo': 1}) == []

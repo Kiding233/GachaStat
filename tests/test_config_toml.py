@@ -730,6 +730,36 @@ def test_p79_stop_condition_bare_table_normalizes_to_none(tmp_path):
     assert '[stop_condition]' not in out.read_text(encoding='utf-8')
 
 
+def test_p79_shape_issues_surface_as_load_warnings(tmp_path):
+    """R20：两类形态问题在加载期各产生一条 load_warnings（只告警、不阻断加载）。"""
+    store = load_toml(_p79_config_with(tmp_path, """
+[stop_condition]
+mode = "any"
+[[stop_condition.conditions]]
+type = "fixed_action_count"
+count = 500
+""", name='shape1.toml'))
+    unknown = [w for w in store.load_warnings if '未声明参数键' in w]
+    assert len(unknown) == 1, store.load_warnings
+    assert 'count' in unknown[0] and 'max_actions' in unknown[0]
+    # 不阻断：条件树照常填充、照常可构造（只是参数用了默认值）
+    assert store.stop_condition is not None
+
+    store2 = load_toml(_p79_config_with(tmp_path, """
+[stop_condition]
+mode = "all"
+""", name='shape2.toml'))
+    shape = [w for w in store2.load_warnings if '缺少 conditions' in w]
+    assert len(shape) == 1, store2.load_warnings
+
+
+def test_p79_default_config_has_no_shape_warnings(tmp_path):
+    """默认真实配置不得误报（告警一响就没人看了）。"""
+    store = load_toml(_p79_config_with(tmp_path, ''))
+    assert [w for w in store.load_warnings if '未声明参数键' in w] == []
+    assert [w for w in store.load_warnings if '缺少 conditions' in w] == []
+
+
 def test_p79_load_validation_dead_rules(tmp_path):
     """8.2「加载期校验」：死规则两条（资源生命周期 + banner 生命周期）。"""
     store = load_toml(_p79_config_with(tmp_path, """

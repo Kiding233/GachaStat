@@ -46,6 +46,7 @@ from .stop_condition import (
     TargetAcquiredCondition, TimeLimitCondition, CompositeStopCondition,
     AllPoolsEndCondition, LastDrawCardCondition, NotCondition,
     STOP_CONDITION_REGISTRY, create_stop_condition, MAX_SIM_TIME,
+    stop_condition_shape_issues,
 )
 from .resource_gain import ResourceGainFunction, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
 from .generalized_drop_rate import (
@@ -143,6 +144,7 @@ __all__ = [
     'StopConditionExprError', 'parse_stop_condition_expr',
     'expr_ast_to_text', 'tree_to_conditions_and_expr', 'expr_to_tree',
     'validate_stop_condition_config',
+    'stop_condition_shape_issues',
     'load_plugin_strategies', 'build_strategy_context',
     'StopCondition', 'FixedActionCountCondition', 'ResourceThresholdCondition',
     'TargetAcquiredCondition', 'TimeLimitCondition', 'CompositeStopCondition',

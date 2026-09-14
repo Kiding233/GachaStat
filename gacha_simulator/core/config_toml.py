@@ -13,7 +13,10 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-from .stop_condition import COAXIAL_THRESHOLD_KEYS   # P79：同轴条件的阈值参数键（单一真相源）
+from .stop_condition import (   # P79：同轴条件的阈值参数键 + 形态问题检查（单一真相源）
+    COAXIAL_THRESHOLD_KEYS,
+    stop_condition_shape_issues,
+)
 from .config_store import (
     BannerEntry,
     BannerPoolEntry,
@@ -1290,6 +1293,12 @@ def _validate_stop_condition_config(data: dict, store: ConfigStore) -> None:
         warnings.warn(msg)
 
     end_time = store.end_time
+
+    # ── 形态问题（未声明叶子键 / mode 缺 conditions）──
+    # 与保存闸门共用 core 层纯函数，不在此复刻。二者均属「配置没按你写的生效」
+    # 而非结构非法，故取「只告警、不阻断加载」的口径，与本节其余校验一致。
+    for issue in stop_condition_shape_issues(getattr(store, 'stop_condition', None)):
+        warn(issue)
 
     # ── 校验项 2：死规则（配置白写）──
     if end_time > 0:

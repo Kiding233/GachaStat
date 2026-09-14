@@ -341,13 +341,17 @@ def _validate_tree(tree: Optional[Dict[str, Any]]) -> List[str]:
     """条件树侧：结构合法性（落盘形态，TOML 只存条件树）。
 
     校三件事：节点形态（有无 conditions / mode 取值）、否定节点的子节点数、
-    叶子节点的 type 是否已注册。
+    叶子节点的 type 是否已注册。另并入 `stop_condition_shape_issues` 的两类形态
+    问题（未声明叶子键、`mode` 缺 `conditions`）——本函数是保存闸门，返回值即
+    阻断项，故两者都在此可见。
     """
     if not tree:
         return []
-    from .stop_condition import STOP_CONDITION_REGISTRY
+    from .stop_condition import (
+        STOP_CONDITION_REGISTRY, stop_condition_shape_issues,
+    )
 
-    errors: List[str] = []
+    errors: List[str] = list(stop_condition_shape_issues(tree))
 
     def walk(node: Any, path: str) -> None:
         if not isinstance(node, dict):
@@ -357,7 +361,11 @@ def _validate_tree(tree: Optional[Dict[str, Any]]) -> List[str]:
         if children is None:
             node_type = node.get('type')
             if node_type is None:
-                errors.append(f"{path}：叶子节点缺少 type 键")
+                # `mode` 在场而缺 `conditions` 属未规定的第四形态，已由
+                # stop_condition_shape_issues 给出贴题讯息（缺的是 conditions），
+                # 此处不再补一条指向 type 的误导性讯息。
+                if 'mode' not in node:
+                    errors.append(f"{path}：叶子节点缺少 type 键")
             elif node_type not in STOP_CONDITION_REGISTRY:
                 errors.append(f"{path}：未知的停止条件类型 '{node_type}'")
             return

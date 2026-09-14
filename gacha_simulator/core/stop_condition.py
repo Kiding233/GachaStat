@@ -330,3 +330,58 @@ def _build_stop_condition_node(node: Dict[str, Any]) -> StopCondition:
     for pdesc in param_defs:
         resolved.setdefault(pdesc.key, pdesc.default)
     return entry['class'](**resolved)
+
+
+def stop_condition_shape_issues(tree: Optional[Dict[str, Any]]) -> List[str]:
+    """条件树的**形态问题**清单（供加载期校验与保存闸门共用，单一实现点）。
+
+    报两类「配置没按你写的生效」但都不阻断构造的问题：
+
+    1. **叶子节点含未声明参数键。** 工厂的叶子键白名单过滤只取「registry 声明键 ∩
+       叶子表键」，未声明键被静默丢弃、对应参数落回 ``default``。键名笔误（把
+       ``max_actions`` 写成 ``count``）因此零信号地改变停止点：写着 500，跑的是
+       100，加载期无告警、保存闸门也放行。``type`` 与「可能残留的 ``mode``」不是
+       参数键（5.6 明示容忍后者），不计入未声明集。
+    2. **节点带 ``mode`` 但缺 ``conditions``。** 5.6 把节点形态定为「复合（``mode``
+       + ``conditions``）/ 否定（``mode='not'`` + ``conditions``）/ 叶子（``type``
+       + 平铺参数）」三者互斥且穷尽，本形态是**未规定的第四种**：加载期不报错，
+       直到装配期才因「被当作叶子、缺 ``type``」抛 ``ValueError``，讯息指向错误的
+       方向（真正缺的是 ``conditions``）。
+
+    只读不改：本函数不修改 ``tree``，也不参与构造。全函数（不抛异常）——输入非法
+    （非 dict、类型不明）时静默跳过，交给 ``_build_stop_condition_node`` 报错。
+    """
+    if not tree:
+        return []
+
+    issues: List[str] = []
+
+    def walk(node: Any, path: str) -> None:
+        if not isinstance(node, dict):
+            return
+        children = node.get('conditions')
+        if children is None:
+            if 'mode' in node and 'type' not in node:
+                issues.append(
+                    f"{path}：节点带 mode={node['mode']!r} 但缺少 conditions 数组。"
+                    f"复合节点须写成 mode + conditions 两者；当前形态会在装配期被"
+                    f"当作叶子节点处理，并因缺少 type 报错（讯息指向错误的方向）")
+                return
+            node_type = node.get('type')
+            entry = STOP_CONDITION_REGISTRY.get(node_type) if node_type else None
+            if entry is not None:
+                declared = {pdesc.key for pdesc in entry.get('params', [])}
+                unknown = sorted(
+                    k for k in node if k not in declared and k not in ('type', 'mode'))
+                if unknown:
+                    issues.append(
+                        f"{path}：停止条件 '{node_type}' 含未声明参数键 {unknown}。"
+                        f"这些键在构造时被忽略，对应参数落回默认值"
+                        f"（该条件声明的参数键：{sorted(declared)}）")
+            return
+        if isinstance(children, list):
+            for i, child in enumerate(children):
+                walk(child, f"{path}.conditions[{i}]")
+
+    walk(tree, 'stop_condition')
+    return issues

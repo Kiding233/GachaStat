@@ -87,7 +87,7 @@ gacha_simulator/
 
 **策略组织：** 8 个内置策略拆分至 `strategies/builtin/*.py`，与插件策略统一目录结构。框架核心（`Strategy` ABC / `StrategyContext` / `StrategyMeta` / `register_strategy` / `create_strategy`）保留在 `core/strategy.py`。`StrategyContext` 含新字段 `future_resource_gains`/`inter_pool_pity_links`/`time_discount`（均带默认值），由 `core/strategy_context_builder.py` 的 `build_strategy_context()` 集中构造。
 
-**插件系统**（`core/strategy_loader.py`）：`load_plugin_strategies(plugin_dir)` 扫描 `strategies/*.py`，importlib 动态加载，装饰器自动注册。加载失败注册 `_invalid_state` 占位。`reload_plugin_strategy()` / `disable_plugin_strategy()` / `enable_plugin_strategy()` 热重载。GUI 插件管理面板（`gui/plugin_manager_panel.py`）提供启用/禁用/重新扫描。禁用状态持久化到 TOML `[plugins].disabled`。
+**插件系统**（`core/strategy_loader.py`）：`load_plugin_strategies(plugin_dir)` 扫描 `strategies/*.py`，importlib 动态加载，装饰器自动注册。加载失败注册 `_invalid_state` 占位。`disable_plugin_strategy()` / `enable_plugin_strategy()` 启停；改插件文件后用「重新扫描」重载（`load_plugin_strategies` 每次新建模块并 `exec_module`，重扫即重载，故不另设单插件重载接口）。GUI 插件管理面板（`gui/plugin_manager_panel.py`）提供启用/禁用/重新扫描。禁用状态持久化到 TOML `[plugins].disabled`。
 
 **复合策略**（`core/strategy.py`，代码级 building block——不进入 TOML/GUI）：`DrawSegmentStrategy`（按抽数分段）/ `PriorityChainStrategy`（优先级降级链）/ `ConditionalStrategy`（lambda 条件分支）。三者均设 `_strategy_key = None` 哨兵。旧 `CompositeStrategy` 保留并发出 `DeprecationWarning`。
 

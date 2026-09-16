@@ -558,6 +558,15 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
 
         btype = p.get('type', 'soft_interval')
         scope = p.get('scope', 'ssr').lower()
+        # 2026-09-16 新增：scope 白名单校验（与上方 name 校验同层，硬拒）。
+        # 不带此校验时，scope 写错值会被 PityEngine 原样采用，而 behavior 的
+        # _scope 永远匹配不到任何槽位（scope_slots 只含 [rarities].ranks 定义的稀有度），
+        # 该保底静默失效且无任何提示。
+        if rarity_rank_map and scope not in rarity_rank_map:
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 scope='{scope}' 不是已定义的稀有度"
+                f"（可用：{', '.join(sorted(rarity_rank_map))}）——该保底将永远无法触发"
+            )
 
         # scope 注册校验（AUDIT-BREAK-1/2 修复）
         if rarity_rank_map and scope not in rarity_rank_map:

@@ -8,16 +8,14 @@
 - 规则 1（name 重名）经直接调用触发：构造路径不可达
 - 边界：同 scope 但 btype 不同 的两个 soft 不冲突
 
-发现记录（2026-09-15，编写本测试时发现）：
-1. **规则 1 在构造路径不可达**：`PityEngine.__init__` 先把 behavior 存入
-   `self.behaviors[pdef.name]`，同名条目被后者静默覆盖，传到
-   `_validate_behaviors()` 的列表中已无重名元素。故该规则只在直接调用时生效。
-2. **scope 未接通**：`create_behavior()` 从不读取 `PityDef.scope`，behavior 的
-   `_scope` 恒取自 `BEHAVIOR_REGISTRY` 条目的 `default_scope`（10 个条目全为
-   `"ssr"`）。因此 `_validate_behaviors()` 的「同 scope」判断实际等价于「全局」，
-   跨 scope 的互斥豁免当前不可能达成。两类现状断言见 `TestScopeNotWired`。
+修复记录（2026-09-16，两项现状异常均已修复）：
+1. **规则 1 构造路径不可达** 已修：`PityEngine.__init__` 现在在构造 behavior 前
+   先做重名校验，重名直接抛 `ValueError`（此前被 dict 静默覆盖，只留后者）。
+2. **scope 未接通** 已修：`create_behavior()` 现在优先读取 `PityDef.scope`，
+   缺省时回退 `BEHAVIOR_REGISTRY` 的 `default_scope`。跨稀有度保底配置自此生效，
+   `_validate_behaviors()` 的「同 scope」判断按真实 scope 工作。
 
-以上两项均待裁决，裁决后本文件需相应更新。
+对应断言见 `TestNameDuplicate` 与 `TestScopeWired`。
 """
 
 import pytest
@@ -30,7 +28,7 @@ from gacha_simulator.core.pity import (
     create_behavior,
 )
 
-_RARITY = {'ssr': 0, 'weapon': 1}
+_RARITY = {'ssr': 0, 'sr': 1, 'r': 2}
 
 
 def _engine(pity_defs):
@@ -104,41 +102,41 @@ class TestNameDuplicate:
         with pytest.raises(ValueError, match='重复的 behavior name'):
             _validate_behaviors([bh1, bh2])
 
-    def test_duplicate_name_engine_path_silently_overwrites(self):
-        """现状记录：经构造路径重名不报错，被 dict 静默覆盖，只留后一条。
-
-        若将来在 PityEngine 构造前做重名检查，本用例需改为断言抛错。
-        """
-        engine = _engine([
-            PityDef(name='dup', btype='hard', scope='ssr', threshold=90),
-            PityDef(name='dup', btype='hard', scope='ssr', threshold=80),
-        ])
-        assert len(engine.behaviors) == 1
-        assert engine.behaviors['dup']._threshold == 80  # 后者覆盖前者
+    def test_duplicate_name_via_engine_raises(self):
+        """构造路径亦抛错（2026-09-16 修复：此前被 dict 静默覆盖、只留后者）。"""
+        with pytest.raises(ValueError, match='重复的保底 name'):
+            _engine([
+                PityDef(name='dup', btype='hard', scope='ssr', threshold=90),
+                PityDef(name='dup', btype='soft_interval', scope='ssr',
+                        soft_start=73, soft_end=90),
+            ])
 
 
-class TestScopeNotWired:
-    """现状记录：scope 未接通（见模块 docstring 发现 2）。
+class TestScopeWired:
+    """scope 已接通（2026-09-16 修复）：`PityDef.scope` 现在传递到 behavior。
 
-    期望（按设计）：不同 scope 的同类保底不互斥。
-    实际：`PityDef.scope` 被忽略，`_scope` 恒为 `default_scope`（"ssr"），
-    两条不同 scope 的 hard 仍判为同 scope 冲突。
-
-    待该项裁决后，`test_different_scope_hard_still_conflicts` 应改为
-    正向断言（构造不抛异常）。
+    修复前 `create_behavior()` 只读 registry 的 `default_scope`（全为 "ssr"），
+    `PityDef.scope` 被静默忽略，跨稀有度保底无法配置。
     """
 
-    def test_behavior_scope_ignores_pitydef_scope(self):
-        """写 scope='weapon'，behavior 实得 'ssr'。"""
+    def test_behavior_scope_follows_pitydef(self):
+        """写 scope='sr'，behavior 实得 'sr'（此前恒为 registry 的 'ssr'）。"""
         engine = _engine([
-            PityDef(name='h', btype='hard', scope='weapon', threshold=90),
+            PityDef(name='h', btype='hard', scope='sr', threshold=90),
+        ])
+        assert engine._behavior_list[0]._scope == 'sr'
+
+    def test_empty_scope_falls_back_to_registry_default(self):
+        """scope 缺省时回退 registry 的 default_scope（'ssr'）。"""
+        engine = _engine([
+            PityDef(name='h', btype='hard', scope='', threshold=90),
         ])
         assert engine._behavior_list[0]._scope == 'ssr'
 
-    def test_different_scope_hard_still_conflicts(self):
-        """跨 scope 豁免当前不可能达成：两条不同 scope 的 hard 仍冲突。"""
-        with pytest.raises(ConfigError, match='两个硬保底'):
-            _engine([
-                PityDef(name='h1', btype='hard', scope='ssr', threshold=90),
-                PityDef(name='h2', btype='hard', scope='weapon', threshold=80),
-            ])
+    def test_different_scope_hard_coexist(self):
+        """跨 scope 的同类保底现在可以共存（互斥判断按真实 scope 走）。"""
+        engine = _engine([
+            PityDef(name='h1', btype='hard', scope='ssr', threshold=90),
+            PityDef(name='h2', btype='hard', scope='sr', threshold=80),
+        ])
+        assert len(engine.behaviors) == 2

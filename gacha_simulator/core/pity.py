@@ -885,8 +885,12 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
             f"P56 将交付事件驱动型保底。"
         )
 
-    # scope 从 registry 条目读取（小写归一化）
-    scope = entry.get("default_scope", "ssr").lower()
+    # scope：优先取 PityDef.scope（用户配置），回退 registry 的 default_scope。
+    # 2026-09-16 修正：此前只读 registry，PityDef.scope 被静默忽略，
+    # 导致跨稀有度保底无法配置。旧格式 PityDefParsed 无 scope 字段，
+    # getattr 返回 None 时自然回退。
+    _default_scope = entry.get("default_scope", "ssr")
+    scope = (getattr(pdef, 'scope', None) or _default_scope).lower()
 
     # btype 传递给 behavior——基类据此推导 is_soft/is_hard/is_event_driven
     params: Dict[str, Any] = {"btype": pdef.btype}
@@ -1239,6 +1243,20 @@ class PityEngine:
             # 从 PityDef 构造 behavior 实例
             self.behaviors: Dict[str, PityBehavior] = {}
             from .config_store import PityDef as _PityDef
+
+            # 重名校验（2026-09-16 修正）：此前重名会被下面的 dict 赋值静默覆盖、
+            # 只留后者，用户无从察觉，`_validate_behaviors` 的规则 1 因此永不可达。
+            _seen_names: set = set()
+            for pdef in (pity_defs or []):
+                if not isinstance(pdef, _PityDef):
+                    continue
+                if pdef.name in _seen_names:
+                    raise ValueError(
+                        f"PityEngine: 重复的保底 name '{pdef.name}'——"
+                        f"每条保底必须有唯一的 PityDef.name"
+                    )
+                _seen_names.add(pdef.name)
+
             for pdef in (pity_defs or []):
                 if not isinstance(pdef, _PityDef):
                     continue

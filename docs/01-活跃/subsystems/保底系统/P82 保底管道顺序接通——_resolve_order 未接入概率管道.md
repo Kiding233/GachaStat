@@ -1,11 +1,11 @@
 <!-- META: P82 | module:subsystems/保底系统 | status:designing | last:2026-09-15 | depends:P55✅,P56✅,P64📋 -->
-# P82 保底管道顺序接通——`_resolve_order()` 未接入概率管道
+# P82 保底管道顺序接通：`_resolve_order()` 未接入概率管道
 
 > 日期：2026-09-15 | 状态：设计中（待实测裁决）
-> 来源：P30 归档（2026-09-14）时的独立代码复核——发现缺陷 #11 的处置结论「顺序确定性已解决」不成立
+> 来源：P30 归档（2026-09-14）时的独立代码复核，发现缺陷 #11 的处置结论「顺序确定性已解决」不成立
 > 涉及文件：`core/pity.py`、`service/batch_simulator.py`、`core/banner.py`
-> 依赖：P55（引入 `_resolve_order`）✅ + P56（事件驱动型保底）✅ + **P64（保底状态机引擎，📋 设计中——其 G5 项建立在本计划所推翻的前提上）**
-> 优先级：P1（风险性——接线会改变模拟行为，且 P64 的设计依赖本项裁决）
+> 依赖：P55（引入 `_resolve_order`）✅ + P56（事件驱动型保底）✅ + **P64（保底状态机引擎，📋 设计中，其 G5 项建立在本计划所推翻的前提上）**
+> 优先级：P1（风险性，接线会改变模拟行为，且 P64 的设计依赖本项裁决）
 
 ---
 
@@ -45,7 +45,7 @@ PityEngine.__init__()
 ### 1.3 证据
 
 - 代码链路如上，逐跳可查。
-- `tests/` 全库对 `_resolve_order` **零引用**——没有任何测试断言它的排序结果被使用。
+- `tests/` 全库对 `_resolve_order` **零引用**：没有任何测试断言它的排序结果被使用。
 - P30 §2.4 的复核勘误（`docs/03-归档/P30 策略系统与保底理论文档补充计划.md`）已记录本条。
 
 ---
@@ -92,7 +92,7 @@ PityEngine.__init__()
 
 ### 方案 A：接线（推荐先实测，再定是否实施）
 
-在 `PityEngine.__init__` 里把排序结果写回各 spec 的 `pity_names`——改动一处，不动调用路径，无运行时开销：
+在 `PityEngine.__init__` 里把排序结果写回各 spec 的 `pity_names`：改动一处，不动调用路径，无运行时开销。
 
 ```python
 ordered = _resolve_order(list(self.behaviors.values()), self._rarity_rank)
@@ -105,7 +105,7 @@ for spec in self.pool_specs.values():
     spec.pity_names.sort(key=lambda n: _order_idx.get(n, len(ordered)))
 ```
 
-**备选实现**：在 `get_behaviors_for_pool()` 里按 `_behavior_list` 过滤重排。不推荐——该方法每抽被调用三次（三个调度入口），会在热路径引入过滤开销，除非再加缓存层。
+**备选实现**：在 `get_behaviors_for_pool()` 里按 `_behavior_list` 过滤重排。不推荐：该方法每抽被调用三次（三个调度入口），会在热路径引入过滤开销，除非再加缓存层。
 
 ### 方案 B：明确废弃
 
@@ -140,7 +140,7 @@ for spec in self.pool_specs.values():
 | # | 风险 | 说明 | 缓解 |
 |---|------|------|------|
 | 1 | **模拟结果变更**（主要） | 凡「同池多保底且书写顺序与排序键不一致」的配置，结果都会变。这是行为变更而非纯重构 | §六 的基线对照；无历史包袱原则要求（`RELEASED=False` 期间允许，但必须配等价对照） |
-| 2 | **`spec.pity_names` 承担双重职责** | 它不只喂概率管道，还被 `core/banner.py:259-261` 用于拼装输出标签：`triggered_pity_name = ','.join(pity_spec.pity_names)`，写入 `CompactResult.draw_pity_names`。就地重排会**顺带改变该输出字符串的拼接顺序** | 下游多数消费者会转 set 或 sorted（`streaming.py:175-176`、`:198`、`process_trace.py:153`），最终聚合结果可能不变，但**原始字符串会变**，字符串比对类测试/golden 快照会失败。若要彻底隔离，需让管道读一份独立排序视图而非重排 `pity_names` 本身，改动面随之变大——此权衡需在实测阶段一并评估 |
+| 2 | **`spec.pity_names` 承担双重职责** | 它不只喂概率管道，还被 `core/banner.py:259-261` 用于拼装输出标签：`triggered_pity_name = ','.join(pity_spec.pity_names)`，写入 `CompactResult.draw_pity_names`。就地重排会**顺带改变该输出字符串的拼接顺序** | 下游多数消费者会转 set 或 sorted（`streaming.py:175-176`、`:198`、`process_trace.py:153`），最终聚合结果可能不变，但**原始字符串会变**，字符串比对类测试/golden 快照会失败。若要彻底隔离，需让管道读一份独立排序视图而非重排 `pity_names` 本身，改动面随之变大：此权衡需在实测阶段一并评估 |
 | 3 | **`rarity_rank` 为空时排序退化** | `PityEngine` 存的是 `rarity_rank or {}`（`pity.py:1223`），`_resolve_order` 内部也有 `if rarity_rank is None: rarity_rank = {}` 防御（不会崩），但此时所有 scope 的 rank 都退化为 99，「稀有度层级优先」不生效，排序退化为只按 type + name | 接线前确认 `ConfigStore.[rarities].ranks` 在真实配置中已填写 |
 | 4 | **测试覆盖为零** | `_resolve_order` 与 `_validate_behaviors` 均无测试（`tests/` 零引用） | 接线时同步补测试，否则回归无法捕获 |
 
@@ -170,7 +170,7 @@ P64（保底状态机引擎，📋 设计）的 G5 项原文：
 
 | # | 事项 | 待定 |
 |---|------|------|
-| 1 | 方案选择 | A（接线）/ B（废弃）/ C（暂缓）——建议先做实测再定 |
+| 1 | 方案选择 | A（接线）/ B（废弃）/ C（暂缓）：建议先做实测再定 |
 | 2 | 与 P64 的排期关系 | 合并实施 / 先后实施 / 一并撤销 |
 | 3 | `pity_names` 双职责的处理 | 直接重排（影响输出字符串）/ 引入独立排序视图（改动更大） |
 

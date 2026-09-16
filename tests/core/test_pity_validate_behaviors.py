@@ -5,7 +5,7 @@
 
 覆盖：
 - 规则 2/3/4 经 `PityEngine` 构造路径触发（同 scope 双 hard / 双事件驱动 / 同 btype 双 soft）
-- 规则 1（name 重名）经直接调用触发——构造路径不可达
+- 规则 1（name 重名）经直接调用触发：构造路径不可达
 - 边界：同 scope 但 btype 不同 的两个 soft 不冲突
 
 发现记录（2026-09-15，编写本测试时发现）：
@@ -34,14 +34,14 @@ _RARITY = {'ssr': 0, 'weapon': 1}
 
 
 def _engine(pity_defs):
-    """最小构造——pool_specs 留空，只走 behavior 注册 + 校验路径。"""
+    """最小构造：pool_specs 留空，只走 behavior 注册 + 校验路径。"""
     return PityEngine(
         pool_specs={}, pity_defs=pity_defs, state=PityState(), rarity_rank=_RARITY,
     )
 
 
 class TestValidConfigPasses:
-    """合法配置不抛异常——各 btype 的最小可构造形态。"""
+    """合法配置不抛异常：各 btype 的最小可构造形态。"""
 
     def test_single_hard(self):
         _engine([PityDef(name='h', btype='hard', scope='ssr', threshold=90)])
@@ -94,7 +94,7 @@ class TestNameDuplicate:
     """规则 1：name 重名 → ValueError。"""
 
     def test_duplicate_name_direct_call(self):
-        """直接调用可触发——这是该规则唯一可达的路径（见模块 docstring 发现 1）。"""
+        """直接调用可触发：这是该规则唯一可达的路径（见模块 docstring 发现 1）。"""
         st = PityState()
         bh1 = create_behavior(
             PityDef(name='dup', btype='hard', scope='ssr', threshold=90), st)
@@ -105,7 +105,7 @@ class TestNameDuplicate:
             _validate_behaviors([bh1, bh2])
 
     def test_duplicate_name_engine_path_silently_overwrites(self):
-        """现状记录：经构造路径重名不报错——被 dict 静默覆盖，只留后一条。
+        """现状记录：经构造路径重名不报错，被 dict 静默覆盖，只留后一条。
 
         若将来在 PityEngine 构造前做重名检查，本用例需改为断言抛错。
         """
@@ -136,7 +136,7 @@ class TestScopeNotWired:
         assert engine._behavior_list[0]._scope == 'ssr'
 
     def test_different_scope_hard_still_conflicts(self):
-        """跨 scope 豁免当前不可能达成——两条不同 scope 的 hard 仍冲突。"""
+        """跨 scope 豁免当前不可能达成：两条不同 scope 的 hard 仍冲突。"""
         with pytest.raises(ConfigError, match='两个硬保底'):
             _engine([
                 PityDef(name='h1', btype='hard', scope='ssr', threshold=90),

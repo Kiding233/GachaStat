@@ -2,7 +2,8 @@
 """
 统一批量模拟模块
 
-为 gacha_panel、strategy_panel、resource_search_panel 提供共享的并行批量模拟能力。
+为 cli、gui/gacha_panel、webui 及 core 的搜索与分析模块（retreat_search / worst_impact）
+提供共享的并行批量模拟能力。
 使用 multiprocessing.Pool + initializer 模式，静态环境通过 initializer 传入，
 动态参数（target_specs, initial_resources）通过任务参数传入。
 """

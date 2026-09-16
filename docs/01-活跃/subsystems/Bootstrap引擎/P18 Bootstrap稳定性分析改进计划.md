@@ -50,12 +50,14 @@ Bootstrap 不是重新跑模拟，而是对已有的 N 条模拟结果做有放�
 
 ### 3.2 需小改即可 Bootstrap 的面板
 
+> **2026-09-17（P81 C1）**：下表中 **strategy_panel** 与 **resource_search_panel** 两行已**作废**——两个面板均于 2026-09-17 归档至 `.recycle_bin/2026-09-17-p81-archived-panels/`（P8 面板合并后其三种搜索模式已由 `plan_search_panel` 取代，且二者从未在 `main_window` 注册）。若需为「搜索」类分析加 Bootstrap CI，对象是活面板 `plan_search_panel`。
+
 这些面板每步跑 N 次模拟，但只保存聚合结果。只需额外保存个体结果（N 个 bool），**零额外模拟**。
 
 | 面板 | 当前保存 | 需额外保存 | 改动量 |
 |------|---------|-----------|--------|
-| **strategy_panel** | 每步 `success_probability: float` | 每步 `success_flags: List[bool]`（N×1 字节） | 小 |
-| **resource_search_panel** | 每步 `success_probability: float` | 每步 `success_flags: List[bool]` | 小 |
+| ~~**strategy_panel**~~ | ~~每步 `success_probability: float`~~ | ~~每步 `success_flags: List[bool]`（N×1 字节）~~ | **已作废**（面板已归档） |
+| ~~**resource_search_panel**~~ | ~~每步 `success_probability: float`~~ | ~~每步 `success_flags: List[bool]`~~ | **已作废**（面板已归档） |
 | **worst_impact_panel（新池子分布）** | 聚合 `pool_distribution` | `pool_success_counts: List[int]` | 小 |
 
 ### 3.3 不做 Bootstrap 的面板
@@ -297,8 +299,8 @@ class BootstrapResult:
     └── process_analysis_panel 已有 Wilson CI，不需要 Bootstrap CI（见 §7.1）
 
 阶段 3B（扩展，3-6h）
-├── strategy_panel：成功率趋势图 CI 阴影带（需小改数据保存：+success_flags）
-├── resource_search_panel：成功率-资源曲线 CI 阴影带（需小改数据保存）
+├── ~~strategy_panel~~：成功率趋势图 CI 阴影带   ← 已作废（面板已归档，P81 C1）
+├── ~~resource_search_panel~~：成功率-资源曲线 CI 阴影带   ← 已作废（同上）
 ├── retreat_panel：条件分布分位数 CI + 核密度回归 CI 阴影带
 └── worst_impact_panel：保守资源 CI + 安全边际 CI
 
@@ -365,13 +367,17 @@ CI 嵌入单元格内，格式为：
 
 > **📋 详细的分面板实施子任务、代码改动量预估、图表 CI 通用模式见 [P48 §五](P48 Bootstrap UI集成计划.md#五阶段-3b--扩展面板待实施)。**
 
-#### strategy_panel（需小改数据保存）
+#### ~~strategy_panel~~（需小改数据保存）
+
+> **已作废（2026-09-17，P81 C1）**：该面板已归档，下列三项不再执行。若 3B 重启，落点应改为活面板 `plan_search_panel`。
 
 - [ ] **ForwardStep/BackwardStep 添加 `success_flags: List[bool]` 字段**
 - [ ] **修改前进法/后退法——每步保存个体成功/失败结果**
 - [ ] **趋势图添加阴影带（Bootstrap CI）**——自动计算，无需按钮
 
-#### resource_search_panel（需小改）
+#### ~~resource_search_panel~~（需小改）
+
+> **已作废（2026-09-17，P81 C1）**：该面板已归档，下列三项不再执行。同上，落点应改为 `plan_search_panel`。
 
 - [ ] **步骤数据类添加 `success_flags: List[bool]`**
 - [ ] **修改 `_simulate_with_resource`——返回个体结果**
@@ -403,8 +409,8 @@ CI 嵌入单元格内，格式为：
 - [x] 引擎已知问题修复（5/6 项已处置：3实现 + 2架构绕过/主动拒绝 + 1低优先级搁置）
 - [x] process_analysis_panel AA/BB/AB/BA 概率列保持 Wilson CI（现有实现，无需改动；Bootstrap CI 冗余，见 §7.1）
 - [x] analysis_panel GDR 统计表格显示 Bootstrap CI（均值/中位数/VaR，独立CI列，置信水平可配置）
-- [ ] strategy_panel 成功率趋势图显示阴影带（阶段 3B——见 [P48 §5.1](P48 Bootstrap UI集成计划.md#51-strategy_panel--成功率趋势图-ci-阴影带)）
-- [ ] resource_search_panel 成功率-资源曲线显示阴影带（阶段 3B——见 [P48 §5.2](P48 Bootstrap UI集成计划.md#52-resource_search_panel--成功率-资源曲线-ci-阴影带)）
+- [ ] ~~strategy_panel 成功率趋势图显示阴影带~~ → **已作废（2026-09-17，P81 C1）**：目标面板 `gui/strategy_panel.py` 已归档（死代码，未被 `main_window` 注册）。3B 若重启，应改为给活面板 `plan_search_panel` 加 CI 阴影带
+- [ ] ~~resource_search_panel 成功率-资源曲线显示阴影带~~ → **已作废（2026-09-17，P81 C1）**：同上，面板已归档
 - [ ] retreat_panel 条件分布、核密度回归、资源不足概率显示 CI（阶段 3B——见 [P48 §5.3](P48 Bootstrap UI集成计划.md#53-retreat_panel--条件分布-ci)）
 - [ ] worst_impact_panel 保守资源显示 CI（阶段 3B——见 [P48 §5.4](P48 Bootstrap UI集成计划.md#54-worst_impact_panel--保守资源-ci)）
 - [x] 性能：N=10000、B=1000 时，单次 Bootstrap 计算 < 5 秒（scipy 实现，已验证高效）

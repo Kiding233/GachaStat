@@ -7714,44 +7714,6 @@ def _gain_rule_param_placeholder(gui_type: str) -> str:
     return hints.get(gui_type, '请输入参数')
 
 
-def _pity_start(pity):
-    for p in pity.pities:
-        if 'start' in p.params:
-            try:
-                return int(p.params['start'])
-            except ValueError:
-                pass
-        if 'threshold' in p.params:
-            try:
-                return int(p.params['threshold'])
-            except ValueError:
-                pass
-    return 80
-
-
-def _pity_end(pity):
-    for p in pity.pities:
-        if 'end' in p.params:
-            try:
-                return int(p.params['end'])
-            except ValueError:
-                pass
-    return 90
-
-
-def _pity_counter_group(pity):
-    counter_names = set(p.name for p in pity.pities)
-    if len(counter_names) <= 1:
-        return 0
-    has_type_counters = any('_pity' in cn and cn != 'draw' for cn in counter_names)
-    has_pool_counters = any(cn.startswith('draw_') and cn != 'draw' for cn in counter_names)
-    if has_pool_counters:
-        return 2
-    if has_type_counters:
-        return 1
-    return 0
-
-
 def _daily_income(store):
     for rule in store.gain_rules:
         if rule.rule_type == 'every_n_days' and (rule.param == '1' or rule.param == ''):

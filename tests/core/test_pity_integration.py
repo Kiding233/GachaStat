@@ -9,7 +9,8 @@
 import pytest
 from gacha_simulator.core.pity import (
     PityState, PityEngine, DrawInfo, PityContext,
-    TargetedBehavior, compute_scope_mappings,
+    TargetedBehavior, RotatingBehavior, HardPityBehavior,
+    compute_scope_mappings,
     PoolPitySpec,
 )
 from gacha_simulator.core.config_store import PityDef
@@ -191,3 +192,81 @@ class TestMultiPityCoordination:
         # 两条保底叠加后 standard 槽位归零（全部导向 featured）
         assert probs2['ssr_standard'] == pytest.approx(0.0)
         assert probs2['ssr_featured'] >= 0.005  # featured 至少保持基础概率
+
+
+# ══════════════════════════════════════════════════════════════════
+# M4：did_fire 统一语义（2026-09-16）
+# ══════════════════════════════════════════════════════════════════
+
+def _mk_draw(reward_id, rarity, is_featured):
+    """构造一次抽卡的 DrawInfo——ssr 与 sr 两个稀有度都有 featured 卡。"""
+    return DrawInfo(
+        pool_id='p1', pool_instance_id='p1_0',
+        reward_id=reward_id, reward_rarity=rarity, is_featured=is_featured,
+        scope_cards={'ssr': ('f1',), 'sr': ('sf1',)},
+        featured_cards={'ssr': ('f1',), 'sr': ('sf1',)},
+        scope_slots={'ssr': ('ssr_featured',), 'sr': ('sr_featured',)},
+        featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr_featured',)},
+        card_to_slot={'f1': 'ssr_featured', 'sf1': 'sr_featured'},
+        base_probabilities={},
+        rarity_rank={'ssr': 0, 'sr': 1},
+    )
+
+
+class TestDidFireUnified:
+    """did_fire ≡ 本次抽卡是否让本保底回到初始状态。
+
+    统一前 rotating / targeted 只判 judge、不含 scope 门控，会在「出非 scope 稀有度的
+    UP」时为真而状态并未翻转，`depends_on` 依赖方被提前激活。
+    """
+
+    def test_rotating_requires_scope(self):
+        state = PityState()
+        bh = RotatingBehavior('rot', state, scope='ssr')
+
+        out_of_scope = PityContext(draw=_mk_draw('sf1', 'sr', True),
+                                   current={}, state=state)
+        assert bh._is_hit(out_of_scope) is True      # judge 命中（is_featured）
+        assert bh.did_fire(out_of_scope) is False    # 但 scope 门控挡住
+
+        in_scope = PityContext(draw=_mk_draw('f1', 'ssr', True),
+                               current={}, state=state)
+        assert bh.did_fire(in_scope) is True
+
+    def test_rotating_matches_after_draw_reset(self):
+        """did_fire 与 after_draw 的重置分支严格同条件。"""
+        state = PityState()
+        bh = RotatingBehavior('rot', state, scope='ssr')
+        ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state)
+        bh.after_draw(ctx)
+        assert state.get('rot', 'guaranteed', False) is False   # 状态未翻转
+        assert bh.did_fire(ctx) is False                        # did_fire 亦为假
+
+    def test_targeted_requires_scope(self):
+        state = PityState()
+        bh = TargetedBehavior('tgt', state, scope='ssr', fate_threshold=1)
+        state.set('tgt', 'selected_card', 'sf1')     # 定轨卡指向非 scope 稀有度
+
+        ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state)
+        assert bh._is_hit(ctx) is True               # judge 命中
+        assert bh.did_fire(ctx) is False             # 但 scope 门控挡住
+
+    def test_targeted_in_scope_fires(self):
+        state = PityState()
+        bh = TargetedBehavior('tgt', state, scope='ssr', fate_threshold=1)
+        state.set('tgt', 'selected_card', 'f1')
+        ctx = PityContext(draw=_mk_draw('f1', 'ssr', True), current={}, state=state)
+        assert bh.did_fire(ctx) is True
+
+    def test_counter_family_unchanged(self):
+        """counter 驱动型仍为 _should_reset——出 scope 即真，不看 featured。"""
+        state = PityState()
+        bh = HardPityBehavior('h', state, scope='ssr', threshold=90)
+
+        not_featured = PityContext(draw=_mk_draw('s1', 'ssr', False),
+                                   current={}, state=state)
+        assert bh.did_fire(not_featured) is True
+
+        other_rarity = PityContext(draw=_mk_draw('sf1', 'sr', True),
+                                   current={}, state=state)
+        assert bh.did_fire(other_rarity) is False

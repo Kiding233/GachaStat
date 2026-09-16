@@ -558,22 +558,16 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
 
         btype = p.get('type', 'soft_interval')
         scope = p.get('scope', 'ssr').lower()
-        # 2026-09-16 新增：scope 白名单校验（与上方 name 校验同层，硬拒）。
-        # 不带此校验时，scope 写错值会被 PityEngine 原样采用，而 behavior 的
-        # _scope 永远匹配不到任何槽位（scope_slots 只含 [rarities].ranks 定义的稀有度），
-        # 该保底静默失效且无任何提示。
+        # scope 白名单校验（与上方 name 校验同层，硬拒）。
+        # 原为 AUDIT-BREAK-1/2 修复引入的 warning 软校验，2026-09-16 升级为 ConfigError：
+        # scope 写错时会被 PityEngine 原样采用，而 behavior 的 _scope 永远匹配不到任何
+        # 槽位（scope_slots 只含 [rarities].ranks 定义的稀有度），该保底静默失效。
+        # 仅 warning 不足以阻断（用户不读日志），故与新增校验合并为一处硬拒。
         if rarity_rank_map and scope not in rarity_rank_map:
             raise ConfigError(
-                f"[[pity]] 条目 name='{name}' 的 scope='{scope}' 不是已定义的稀有度"
-                f"（可用：{', '.join(sorted(rarity_rank_map))}）——该保底将永远无法触发"
-            )
-
-        # scope 注册校验（AUDIT-BREAK-1/2 修复）
-        if rarity_rank_map and scope not in rarity_rank_map:
-            from .pity import logger as pity_logger
-            pity_logger.warning(
-                f"PityDef '{name}' scope='{scope}' 未在 [rarities] 中注册——"
-                f"保底行为将分配给未知稀有度层级。"
+                f"[[pity]] 条目 name='{name}' 的 scope='{scope}' 未在 [rarities] 中注册"
+                f"（可用：{', '.join(sorted(rarity_rank_map))}），"
+                f"该保底匹配不到任何槽位，概率修正不会生效"
             )
 
         # 解析 deltas / 语法糖参数

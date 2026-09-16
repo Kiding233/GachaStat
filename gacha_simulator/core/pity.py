@@ -541,7 +541,10 @@ class RotatingBehavior(PityBehavior):
         return ctx.draw.featured_slots.get(self._scope, ())
 
     def did_fire(self, ctx):
-        return self._is_hit(ctx)
+        # M4（2026-09-16 统一）：did_fire ≡ 本次抽卡是否让本保底回到初始状态。
+        # 旧实现只判 is_featured、不含 scope 门控，会在「出非 scope 稀有度的 UP」时
+        # 为真而状态并未翻转，导致 depends_on 依赖方被提前激活。
+        return self._is_trigger_rarity(ctx.draw.reward_rarity, ctx) and self._is_hit(ctx)
 
 
 # ── P56：SoftPityMixin —— 消除 _soft 后缀类型重复的软保底 mixin ──
@@ -638,7 +641,8 @@ class RotatingCRBehavior(RotatingBehavior):
                 self._cr_counter.reset()
         else:
             self._cr_counter.incr()
-    def did_fire(self, ctx): return ctx.draw.is_featured
+    # M4（2026-09-16）：did_fire 继承 RotatingBehavior 的统一实现（出 scope ∧ is_featured）。
+    # 原覆写 `return ctx.draw.is_featured` 缺 scope 门控，且与父类 _is_hit 完全相同，故删除。
 
 
 # ── P56：RotatingCRSoftBehavior —— 轮换 + CR + 软保底（mixin 版） ──
@@ -735,7 +739,9 @@ class TargetedBehavior(PityBehavior):
         slots = ctx.draw.scope_slots.get(self._scope, ())
         return sum(ctx.current.get(s, 0.0) for s in slots)
     def _featured_slots(self, ctx): return ctx.draw.featured_slots.get(self._scope, ())
-    def did_fire(self, ctx): return self._is_hit(ctx)
+    def did_fire(self, ctx):
+        # M4（2026-09-16 统一）：同 RotatingBehavior，需出 scope 稀有度且命中定轨卡。
+        return self._is_trigger_rarity(ctx.draw.reward_rarity, ctx) and self._is_hit(ctx)
 
 
 # ── P56：TargetedSoftBehavior —— 定轨 + 软保底（mixin 版） ──

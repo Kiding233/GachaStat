@@ -300,7 +300,6 @@ class ConfigStore:
     rarity_rank: Dict[str, int] = field(default_factory=dict)       # ← P60：稀有度 → 层级（0=最高）
     rarity_defaults: Dict[str, Any] = field(default_factory=dict)    # ← P63：稀有度默认溢出规则（键名 .lower()）
     card_overflow_map: Dict[str, List[OverflowBand]] = field(default_factory=dict)  # ← P63：card_id → 分段表
-    _migrated_from_legacy: bool = False                              # ← P55：旧格式迁移标记
 
     def __post_init__(self):
         # P69：strategy_type 字段已删除，strategy_name → strategy_key。
@@ -337,7 +336,6 @@ class ConfigStore:
         self.rarity_rank.clear()                                      # ← P60
         self.rarity_defaults.clear()                                  # ← P63
         self.card_overflow_map.clear()                                # ← P63
-        self._migrated_from_legacy = False                            # ← P55
 
     # ── P79：时间线终点（只读派生值）────────────────────────────────
     @property

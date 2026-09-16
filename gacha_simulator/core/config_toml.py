@@ -382,6 +382,45 @@ def _save_banners(store: ConfigStore, data: dict) -> None:
 # ══════════════════════════════════════════════════════════════════
 
 
+def _check_pity_format(pity_list: list) -> None:
+    """P81 B11：阻断 P55 之前的旧 [[pity]] 写法。
+
+    旧格式自动迁移已于 P81 删除，原因是**该迁移本身产出错误配置**：它把
+    ``reset='featured_ssr'`` 原样保留，而新引擎 ``_should_reset`` 只对
+    ``'featured'`` 特判、其余值与稀有度字符串比较，该值恒 False，导致迁移
+    过来的保底计数器**永不重置**（无报错、无日志）。
+
+    与 P65 的 ``_check_card_format`` 同口径：仅旧格式 → ConfigError 提示手工
+    升级；新旧混用 → ConfigError 报告歧义。
+    """
+    if not pity_list:
+        return
+
+    legacy, modern = [], []
+    for e in pity_list:
+        keys = set(e.keys())
+        if ('start' in keys and 'scope' not in keys) or 'func' in keys:
+            legacy.append(e)
+        else:
+            modern.append(e)
+
+    if not legacy:
+        return
+
+    names = '、'.join(str(e.get('name', '?')) for e in legacy)
+    if modern:
+        raise ConfigError(
+            f"[[pity]] 段内混用新旧格式：条目「{names}」仍是 P55 之前的写法，"
+            f"其余条目已是新格式。请统一改写为新格式（旧格式自动迁移已于 P81 删除）。"
+        )
+    raise ConfigError(
+        f"[[pity]] 条目「{names}」使用 P55 之前的旧格式（含 start/end/func 等字段），"
+        f"已不再支持自动迁移——原迁移会把 reset='featured_ssr' 原样保留，使保底计数器永不重置。"
+        f"请手工改写为新格式：type 用 soft_interval / soft_additive / hard 等，"
+        f"软保底爬升用 soft_start + soft_end + soft_increment（或直接写 deltas）。"
+    )
+
+
 def _check_card_format(data: dict) -> None:
     """P65：防御性检测——阻断旧格式卡片段，避免静默数据丢失。
 
@@ -541,10 +580,8 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             warnings.warn(msg)
         return
 
-    # P55 阶段十B：旧格式自动迁移
-    if _is_legacy_format(pity_list):
-        pity_list = _migrate_legacy_pity(pity_list)
-        store._migrated_from_legacy = True
+    # P81 B11：旧格式不再自动迁移，改为显式拒绝（口径同 P65 _check_card_format）
+    _check_pity_format(pity_list)
 
     # 稀有度 rank map（小写归一化——ISSUE-023/§0.2）
     rarity_rank_map = {k.lower(): v for k, v in store.rarity_rank.items()}
@@ -1648,101 +1685,6 @@ _LEGACY_PITY_KEYS = frozenset({'start', 'end', 'func', 'reset', 'target',
                                'counter_init_top'})
 
 
-def _is_legacy_format(pity_list: list) -> bool:
-    """检测 [[pity]] 节是否使用旧格式。
-
-    旧格式特征：条目含 'start'/'end'/'func' 等语法糖字段（非新格式的 'scope'/'deltas'）。
-    """
-    if not pity_list:
-        return False
-    for p in pity_list:
-        keys = set(p.keys())
-        if 'start' in keys and 'scope' not in keys:
-            return True
-        if 'func' in keys:
-            return True
-    return False
-
-
-def _migrate_legacy_pity(pity_list: list) -> list:
-    """将旧格式 [[pity]] 条目迁移为新格式。
-
-    旧格式示例：
-      {name='p1', type='soft', start=74, end=90, func='linear', reset='any_ssr'}
-    新格式示例：
-      {name='p1', type='soft_interval', scope='ssr', start=74, end=90,
-       deltas=((74,0.0),(16,6.25))}
-
-    func='exp'/'step' 不支持——抛出 ConfigError。
-    """
-    if not pity_list:
-        return pity_list
-
-    new_pities = []
-    for p in pity_list:
-        btype = p.get('type', 'soft')
-        name = p.get('name', 'pity')
-
-        # 映射旧 type → 新 btype
-        if btype == 'soft':
-            btype = 'soft_interval'
-
-        entry = {'name': name, 'type': btype, 'scope': 'ssr'}
-
-        # func 检查——仅 linear 支持
-        func = p.get('func', 'linear')
-        if func not in ('linear', '', None):
-            raise ConfigError(
-                f"Pity '{name}': func='{func}' 在 P55 后不再支持——"
-                f"仅 linear 可用。如需自定义爬升曲线，请使用 soft_step + deltas。"
-            )
-
-        # start/end → soft_interval 参数
-        start = p.get('start')
-        end_val = p.get('end')
-        if start is not None:
-            entry['start'] = int(start)
-        if end_val is not None:
-            entry['end'] = int(end_val)
-
-        # increment → soft_additive 参数
-        increment = p.get('increment')
-        if increment is not None:
-            entry['increment'] = float(increment)
-
-        # threshold → hard 参数
-        threshold = p.get('threshold')
-        if threshold is not None:
-            entry['threshold'] = int(threshold)
-
-        # reset 条件
-        reset = p.get('reset')
-        if reset and reset != 'any_ssr':
-            entry['reset'] = reset
-
-        # target_distribution → target_featured
-        target = p.get('target', {})
-        if target:
-            entry['target_featured'] = True
-
-        # pools
-        pools = p.get('pools', '*')
-        if pools != '*':
-            entry['pools'] = [pools] if isinstance(pools, str) else list(pools)
-
-        # counter_init（旧格式中可能在顶层）
-        ci = p.get('counter_init', 0)
-        if ci:
-            entry['counter_init'] = int(ci)
-
-        # deltas（如果旧格式直接有 deltas）
-        deltas = p.get('deltas')
-        if deltas is not None:
-            entry['deltas'] = deltas
-
-        new_pities.append(entry)
-
-    return new_pities
 
 
 def _build_rarity_defaults(data: dict, store: ConfigStore) -> None:

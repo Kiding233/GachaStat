@@ -57,7 +57,7 @@ def main():
     parser.add_argument('--no-progress', action='store_true',
         help='禁用进度条输出')
     parser.add_argument('--migrate', action='store_true',
-        help='将旧格式 TOML 迁移为新格式并覆盖保存（P55）')
+        help='检查 TOML 是否为新格式（旧 [[pools]] 格式已不支持自动迁移，见 P61）')
     parser.add_argument('--version', action='version',
         version=f'gacha_simulator {__version__}')
 

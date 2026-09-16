@@ -1,7 +1,7 @@
-<!-- META: P82 | module:subsystems/保底系统 | status:designing | last:2026-09-16 | depends:P55✅,P56✅,P64📋 -->
+<!-- META: P82 | module:subsystems/保底系统 | status:merged-into-P64 | last:2026-09-16 | depends:P55✅,P56✅,P64📋 -->
 # P82 保底管道顺序接通：`_resolve_order()` 未接入概率管道
 
-> 日期：2026-09-15 | 状态：设计中（**实测已完成**，见 §六；待方案裁决）
+> 日期：2026-09-15 | 状态：**已于 2026-09-16 并入 P64（保底状态机引擎）**，见 P64 §1.5；本文件归档保留作该计划的输入材料，方案裁决（§九）移入 P64 一并处理
 > 来源：P30 归档（2026-09-14）时的独立代码复核，发现缺陷 #11 的处置结论「顺序确定性已解决」不成立
 > 涉及文件：`core/pity.py`、`service/batch_simulator.py`、`core/banner.py`
 > 依赖：P55（引入 `_resolve_order`）✅ + P56（事件驱动型保底）✅ + **P64（保底状态机引擎，📋 设计中，其 G5 项建立在本计划所推翻的前提上）**

@@ -99,10 +99,6 @@ def _serialize_result(result) -> dict:
              'success_probability': p.success_probability}
             for p in result.points
         ]
-    if getattr(result, 'forward_result', None):
-        out['forward_result'] = _serialize_result(result.forward_result)
-    if getattr(result, 'backward_result', None):
-        out['backward_result'] = _serialize_result(result.backward_result)
     if getattr(result, 'pareto_points', None):
         out['pareto_points'] = [
             {'extra_resource': p.extra_resource, 'target_specs': dict(p.target_specs),

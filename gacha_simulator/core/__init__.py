@@ -71,9 +71,6 @@ from .per_pool_analysis import (
     TransitionMatrix, compute_transition_matrices,
     compute_transition_matrices_from_flags, compute_transition_flags_from_gdr,
 )
-from .forward_backward import (
-    ForwardStep, BackwardStep, ForwardResult, BackwardResult,
-)
 from .vulnerability import (
     VulnerabilityInterval, PityStatSnapshot, PoolVulnerabilityResult, VulnerabilityAnalysisResult,
     compute_vulnerability_analysis, plot_vulnerability, plot_vulnerability_ridge,
@@ -167,7 +164,6 @@ __all__ = [
     'per_pool_summary_stats', 'cumulative_gdr_at_pool_ends',
     'TransitionMatrix', 'compute_transition_matrices',
     'compute_transition_matrices_from_flags', 'compute_transition_flags_from_gdr',
-    'ForwardStep', 'BackwardStep', 'ForwardResult', 'BackwardResult',
     'VulnerabilityInterval', 'PityStatSnapshot', 'PoolVulnerabilityResult', 'VulnerabilityAnalysisResult',
     'compute_vulnerability_analysis', 'plot_vulnerability', 'plot_vulnerability_ridge',
     'WorstImpactAnalyzer', 'WorstImpactResult', 'ConditionalResourceDistribution',

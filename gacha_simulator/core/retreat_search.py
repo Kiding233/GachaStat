@@ -37,9 +37,6 @@ class PlanSearchResult:
     min_resource: Optional[float] = None
     binary_steps: List = field(default_factory=list)  # ResourceSearchStep 列表
 
-    # 最多目标卡
-    forward_result: Optional[any] = None   # type: ignore  # ForwardResult
-    backward_result: Optional[any] = None  # type: ignore  # BackwardResult
 
     # 元数据
     cost_per_draw: float = 160.0

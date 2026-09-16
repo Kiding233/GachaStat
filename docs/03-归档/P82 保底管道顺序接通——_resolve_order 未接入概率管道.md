@@ -6,6 +6,8 @@
 > 涉及文件：`core/pity.py`、`service/batch_simulator.py`、`core/banner.py`
 > 依赖：P55（引入 `_resolve_order`）✅ + P56（事件驱动型保底）✅ + **P64（保底状态机引擎，📋 设计中，其 G5 项建立在本计划所推翻的前提上）**
 > 优先级：P1（风险性，接线会改变模拟行为，且 P64 的设计依赖本项裁决）
+>
+> **⚠ 2026-09-16 后续修正（P64 设计阶段发现）**：§六 结论表「soft + hard 顺序无关」一行**仅在 `target_featured=False` 时成立**。当 soft 的 `target_featured=True`（目标收窄为 featured 槽位）时，hard 给满的是整个 scope、soft 仍会从 hard 铺好的非 featured 部分继续偷，两种顺序结果不同。实测（hard threshold=8 触发那一抽）：`[soft,hard]` 得 ssr 0.5 / ssr_featured 0.5，`[hard,soft]` 得 ssr 0.2 / ssr_featured 0.8。判据与证明见 P64 §3.1.5.4。故本文件「仅含 `rotating_cr` 的配置会变」应修正为「含 `rotating_cr`，或 `target_featured=True` 的 soft 与 hard 共存的配置会变」。原结论表保留不改，作为当时的实测记录。
 
 ---
 

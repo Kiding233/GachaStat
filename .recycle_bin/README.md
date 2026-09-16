@@ -30,3 +30,13 @@
 | `2026-09-17-p81-archived-panels/test_strategy_search_panels_p79.py` | **随被测面板一并归档** | P79 5f2 落点，断言「两个死面板自建 env 不继承用户停止条件」这一**负面性质**。其被测对象已归档，故该断言不再有意义；**非覆盖度损失**（它不覆盖任何活行为）。P79 的 8.2 结论（搜索由硬边界收口）在活面板上仍成立，落点为 `plan_search_panel` 经 `retreat_search._build_env`。 |
 
 **连带改动**：`tests/gui/test_gui_imports.py` 的 `GUI_MODULES` 去掉 `strategy_panel` 一项；`batch_simulator.py` 的模块 docstring 不再声称服务于两个已归档面板（改列为 cli / gacha_panel / webui / core 搜索分析模块）。P18 两条验收项 + P22 相关条目 + 验收清单三节 + 搁置计划记录本项的 savefig 范围，均已标注作废/收窄。
+
+## P81 §三 D3 归档（2026-09-17）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| `2026-09-17-p81-archived-p61-scaffold/migrate_config_p61_ph4b.py`（140 行） | P61 Ph4b 一次性配置改写器，`[[pools]]` → `[[banner]]` | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §三 D3。唯一输入形态（`[[pools]]`）已退役，`config.toml` 早已是新格式，再跑它是迁移一份已迁移过的文件。 |
+| `2026-09-17-p81-archived-p61-scaffold/p61_verify.py`（204 行） | P61 专用等价对照脚本 | 自带 P61 专属归一化规则（`{pid}.main`→裸 pid、`pool_end_resources`→`banner_end_resources`、时间窗口字段不参与）。与 `baseline_pool_golden.json` **配对归档**——它的 `GOLDEN_PATH` 指向该 fixture，留着会成「读不存在文件」的坏工具。 |
+| `2026-09-17-p81-archived-p61-scaffold/baseline_pool_golden.json`（67KB） | golden 快照（`meta` + `single` 8 个逐抽数组 + `batch_aggregate`） | 由 **P61 之前的旧代码 + 旧 `[[pools]]` 配置**产生，**不可复现**，故不能用于将来对照。其历史价值（证明 P61 等价）已由 P61 归档计划与提交记录承载，归档后仍可从 git 取回。 |
+
+**协议范例的接替**：P61 这套「基线固化 + 等价对照」的范例角色，现由 **P79 的在线版本**承担——`scripts/p79_baseline.py` / `scripts/p79_verify.py` / `tests/fixtures/p79_golden/`（9 组策略快照）被活测试 `tests/test_p79_stop_condition_baseline.py` 消费，属常驻无回归护栏（可复现、有消费者），与 P61 这套一次性脚手架性质不同。

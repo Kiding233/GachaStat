@@ -108,8 +108,8 @@ def test_stop_condition_has_no_cross_round_state():
         mode='any')
 
     snapshot = pickle.dumps(cond)
-    assert cond.check(state, []) is True
-    assert cond.check(state, []) is True
+    assert cond.check(state, _stats()) is True
+    assert cond.check(state, _stats()) is True
     assert pickle.dumps(cond) == snapshot
 
 
@@ -220,3 +220,12 @@ def test_toml_stop_condition_end_to_end(tmp_path):
     # 用户条件 fixed_action_count(20) 先于硬边界收口
     assert r.total_draws == 20
     assert r.final_time < env.end_time
+
+
+def _stats(**kw):
+    """P81 §4.1-4：停止条件 check() 的 stats 形参改为必填，测试统一由此构造。"""
+    from gacha_simulator.service.gacha_service import SimulationStats
+    s = SimulationStats()
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s

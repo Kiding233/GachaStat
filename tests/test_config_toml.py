@@ -848,8 +848,8 @@ threshold = 5.0
     from gacha_simulator.core.stop_condition import ResourceThresholdCondition
 
     state = GachaState(resources={'draw_resource': 10})
-    assert ResourceThresholdCondition('draw_resource', 0, '<').check(state, []) is False
-    assert ResourceThresholdCondition('no_such_resource', 5, '>=').check(state, []) is False
+    assert ResourceThresholdCondition('draw_resource', 0, '<').check(state, _stats()) is False
+    assert ResourceThresholdCondition('no_such_resource', 5, '>=').check(state, _stats()) is False
 
 
 def test_p79_empty_condition_tree_omits_toml_section(tmp_path):
@@ -876,3 +876,12 @@ def test_p79_nonempty_condition_tree_writes_toml_section(tmp_path):
     text = out.read_text(encoding='utf-8')
     assert '[stop_condition]' in text
     assert load_toml(str(out)).stop_condition == store.stop_condition
+
+
+def _stats(**kw):
+    """P81 §4.1-4：停止条件 check() 的 stats 形参改为必填，测试统一由此构造。"""
+    from gacha_simulator.service.gacha_service import SimulationStats
+    s = SimulationStats()
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s

@@ -193,7 +193,7 @@ def test_stop_when_pool_ended_without_target():
     state = _FakeState({'draw_resource': 1000}, real_time=90000)  # > pool_a end
     stats = _FakeStats({'card_a': 0})  # 没拿到
 
-    assert cond.check(state, [], stats) is True, "池结束未拿到目标卡，应停止"
+    assert cond.check(state, stats) is True, "池结束未拿到目标卡，应停止"
 
 
 def test_continue_when_pool_ended_with_target():
@@ -207,7 +207,7 @@ def test_continue_when_pool_ended_with_target():
     state = _FakeState({'draw_resource': 1000}, real_time=90000)
     stats = _FakeStats({'card_a': 1})  # 拿到了
 
-    assert cond.check(state, [], stats) is False, "池结束拿到目标卡，应继续"
+    assert cond.check(state, stats) is False, "池结束拿到目标卡，应继续"
 
 
 def test_no_check_unfinished_pool():
@@ -226,7 +226,7 @@ def test_no_check_unfinished_pool():
 
     # pool_a 结束且拿到 → OK
     # pool_b 未结束 → break, 不检查 → 不停止
-    assert cond.check(state, [], stats) is False, "未结束的池子不应触发停止"
+    assert cond.check(state, stats) is False, "未结束的池子不应触发停止"
 
 
 def test_stop_on_resource_exhausted():
@@ -238,7 +238,7 @@ def test_stop_on_resource_exhausted():
     )
 
     state = _FakeState({'draw_resource': 0}, real_time=100)
-    assert cond.check(state, [], None) is True, "资源耗尽应停止"
+    assert cond.check(state, _stats()) is True, "资源耗尽应停止"
 
 
 def test_first_pool_fails_stops_immediately():
@@ -256,4 +256,13 @@ def test_first_pool_fails_stops_immediately():
     stats = _FakeStats({'card_a': 0, 'card_b': 1})  # pool_a 失败, pool_b 却有 card_b?
 
     # schedules 按 end_time 排序，先检查 pool_a
-    assert cond.check(state, [], stats) is True, "第一个池失败应立即停止"
+    assert cond.check(state, stats) is True, "第一个池失败应立即停止"
+
+
+def _stats(**kw):
+    """P81 §4.1-4：停止条件 check() 的 stats 形参改为必填，测试统一由此构造。"""
+    from gacha_simulator.service.gacha_service import SimulationStats
+    s = SimulationStats()
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s

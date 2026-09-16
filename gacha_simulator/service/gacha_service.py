@@ -380,7 +380,7 @@ class GachaService:
             real_time, state, total_consumed, total_gained, recorded_resource_expiries)
 
         for iteration in range(max_iterations):
-            if _check(state, [], stats):
+            if _check(state, stats):
                 _stop_reason = 'condition'
                 break
 

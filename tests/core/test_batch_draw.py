@@ -100,7 +100,7 @@ def test_strategy_can_afford_batch_uses_pool_batch_size():
     from gacha_simulator.core.target_card import TargetCardSet, TargetCard
 
     class NoopStop(StopCondition):
-        def check(self, state, history, stats=None):
+        def check(self, state, stats=None):
             return False
         def description(self):
             return "noop"
@@ -170,7 +170,7 @@ class TestGachaServiceBatchDrawSkeleton:
                 return "fixed batch"
 
         class NeverStop(StopCondition):
-            def check(self, state, pools, stats):
+            def check(self, state, stats):
                 return False
             def description(self):
                 return "never stop"
@@ -211,7 +211,7 @@ class TestGachaServiceBatchDrawSkeleton:
                 return "fixed batch"
 
         class NeverStop(StopCondition):
-            def check(self, state, pools, stats):
+            def check(self, state, stats):
                 return stats.total_draws > 0
             def description(self):
                 return "never stop"
@@ -255,7 +255,7 @@ def test_batch_draw_pity_called_per_draw():
             return "fixed batch"
 
     class ThreeDrawStop(StopCondition):
-        def check(self, state, pools, stats):
+        def check(self, state, stats):
             return stats.total_draws >= 3
         def description(self):
             return "three draw stop"
@@ -305,7 +305,7 @@ def test_batch_on_draw_called_per_draw_not_per_action():
             return "fixed batch"
 
     class ThreeDrawStop(StopCondition):
-        def check(self, state, pools, stats):
+        def check(self, state, stats):
             return stats.total_draws >= 3
         def description(self):
             return "three draw stop"

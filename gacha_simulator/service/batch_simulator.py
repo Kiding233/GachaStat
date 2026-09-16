@@ -103,7 +103,6 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
 
     新格式示例：{'name': 'p1', 'type': 'soft_interval', 'scope': 'ssr',
                   'deltas': ((73,0.0), (17,5.882353)), ...}
-    旧格式向后兼容：{'name': 'p1', 'type': 'soft', 'params': {...}, ...}
     """
     from gacha_simulator.core.pity import (
         PityEngine, PoolPitySpec, PityState,
@@ -116,82 +115,83 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
 
     pities_cfg = pity_config.get('pities', [])
 
-    # 检测新旧格式
-    is_new_format = any('scope' in p or 'deltas' in p or 'target_featured' in p
-                        for p in pities_cfg)
+    # P81 §4.1-6：删除 is_new_format 假兼容检测（其旧分支从未实现，非新格式时由
+    # 函数末尾隐式 return None 静默禁用保底）。空列表现显式 early-return，保持「无
+    # 引擎」语义不变——原语义正是由该隐式 return 顺带产生的。
+    if not pities_cfg:
+        return None
 
-    if is_new_format:
-        # ── P55 新路径：从扁平化 dict 构造 PityDef → create_behavior() ──
-        pity_defs_list = []
-        for p in pities_cfg:
-            pdef = _PityDef(
-                name=p.get('name', 'pity'),
-                btype=p.get('type', 'soft_interval'),
-                scope=p.get('scope', 'ssr'),
-                target_featured=p.get('target_featured', False),
-                deltas=p.get('deltas'),
-                threshold=p.get('threshold'),
-                counter_init=p.get('counter_init', 0),
-                guaranteed_init=p.get('guaranteed_init', False),
-                fate_points_init=p.get('fate_points_init', 0),
-                selected_card_init=p.get('selected_card_init'),
-                soft_start=p.get('start'),
-                soft_end=p.get('end'),
-                soft_increment=p.get('increment'),
-                soft_deltas=p.get('soft_deltas'),
-                cr_counter_threshold=p.get('cr_counter_threshold'),
-                cr_base_rate=p.get('cr_base_rate'),
-                cr_state_probs=p.get('cr_state_probs'),
-                fate_threshold=p.get('fate_threshold'),
-                switch_allowed=p.get('switch_allowed'),
-                switch_resets_progress=p.get('switch_resets_progress'),
-                pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), (list, tuple)) else (p.get('pools', '*'),),
-                deactivate_on_early_hit=p.get('deactivate_on_early_hit', False),
-                depends_on=p.get('depends_on'),
-                reset=p.get('reset', ''),
+    # ── P55 新路径：从扁平化 dict 构造 PityDef → create_behavior() ──
+    pity_defs_list = []
+    for p in pities_cfg:
+        pdef = _PityDef(
+            name=p.get('name', 'pity'),
+            btype=p.get('type', 'soft_interval'),
+            scope=p.get('scope', 'ssr'),
+            target_featured=p.get('target_featured', False),
+            deltas=p.get('deltas'),
+            threshold=p.get('threshold'),
+            counter_init=p.get('counter_init', 0),
+            guaranteed_init=p.get('guaranteed_init', False),
+            fate_points_init=p.get('fate_points_init', 0),
+            selected_card_init=p.get('selected_card_init'),
+            soft_start=p.get('start'),
+            soft_end=p.get('end'),
+            soft_increment=p.get('increment'),
+            soft_deltas=p.get('soft_deltas'),
+            cr_counter_threshold=p.get('cr_counter_threshold'),
+            cr_base_rate=p.get('cr_base_rate'),
+            cr_state_probs=p.get('cr_state_probs'),
+            fate_threshold=p.get('fate_threshold'),
+            switch_allowed=p.get('switch_allowed'),
+            switch_resets_progress=p.get('switch_resets_progress'),
+            pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), (list, tuple)) else (p.get('pools', '*'),),
+            deactivate_on_early_hit=p.get('deactivate_on_early_hit', False),
+            depends_on=p.get('depends_on'),
+            reset=p.get('reset', ''),
+        )
+        pity_defs_list.append(pdef)
+
+    state = PityState()
+    # 注入 counter_init 和其他初始状态
+    counter_init_overrides = pity_config.get('counter_init', {})
+    from gacha_simulator.core.pity import _build_pity_state_init
+    state = _build_pity_state_init(pity_defs_list, counter_init_overrides)
+
+    if rarity_rank is None:
+        rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
+
+    # P61（Ph6 / ISSUE-332）：遍历对象重写——pools 承载 List[Banner]，
+    # for b in pools: for pool_key, p in b.pools.items(): 双重展开。
+    # pool_specs 键全限定 {banner_id}.{pool_key}（多池展开自然承接 {pid}.main 键，
+    # 与 PityDef.pools 全限定 fnmatch 同口径，ISSUE-005/010/011）。
+    pool_specs = {}
+    for b in pools:
+        for pool_key, p in b.pools.items():
+            qualified_key = f"{b.id}.{pool_key}"
+            spec_pity_names = []
+            for pdef in pity_defs_list:
+                pools_ptn = pdef.pools
+                if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
+                    spec_pity_names.append(pdef.name)
+
+            featured = (pool_featured_map.get(qualified_key) or pool_featured_map.get(pool_key, set())
+                        if pool_featured_map else set())
+            ssr = (pool_ssr_map.get(qualified_key) or pool_ssr_map.get(pool_key, set())
+                   if pool_ssr_map else set())
+            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(p)
+            pool_specs[qualified_key] = PoolPitySpec(
+                pity_names=spec_pity_names,
+                featured_ids=featured,
+                ssr_ids=ssr,
+                scope_cards=scope_cards,
+                featured_cards=featured_cards,
+                scope_slots=scope_slots,
+                featured_slots=featured_slots,
+                card_to_slot=card_to_slot,
             )
-            pity_defs_list.append(pdef)
 
-        state = PityState()
-        # 注入 counter_init 和其他初始状态
-        counter_init_overrides = pity_config.get('counter_init', {})
-        from gacha_simulator.core.pity import _build_pity_state_init
-        state = _build_pity_state_init(pity_defs_list, counter_init_overrides)
-
-        if rarity_rank is None:
-            rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
-
-        # P61（Ph6 / ISSUE-332）：遍历对象重写——pools 承载 List[Banner]，
-        # for b in pools: for pool_key, p in b.pools.items(): 双重展开。
-        # pool_specs 键全限定 {banner_id}.{pool_key}（多池展开自然承接 {pid}.main 键，
-        # 与 PityDef.pools 全限定 fnmatch 同口径，ISSUE-005/010/011）。
-        pool_specs = {}
-        for b in pools:
-            for pool_key, p in b.pools.items():
-                qualified_key = f"{b.id}.{pool_key}"
-                spec_pity_names = []
-                for pdef in pity_defs_list:
-                    pools_ptn = pdef.pools
-                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
-                        spec_pity_names.append(pdef.name)
-
-                featured = (pool_featured_map.get(qualified_key) or pool_featured_map.get(pool_key, set())
-                            if pool_featured_map else set())
-                ssr = (pool_ssr_map.get(qualified_key) or pool_ssr_map.get(pool_key, set())
-                       if pool_ssr_map else set())
-                scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(p)
-                pool_specs[qualified_key] = PoolPitySpec(
-                    pity_names=spec_pity_names,
-                    featured_ids=featured,
-                    ssr_ids=ssr,
-                    scope_cards=scope_cards,
-                    featured_cards=featured_cards,
-                    scope_slots=scope_slots,
-                    featured_slots=featured_slots,
-                    card_to_slot=card_to_slot,
-                )
-
-        return PityEngine(pool_specs, pity_defs_list, state=state, rarity_rank=rarity_rank)
+    return PityEngine(pool_specs, pity_defs_list, state=state, rarity_rank=rarity_rank)
 
 
 # --- Worker 全局变量（每个子进程内共享）---

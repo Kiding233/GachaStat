@@ -533,6 +533,12 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
     pity_list = data.get('pity', [])
     if not pity_list:
         store.pity = PityConfig(enabled=True)
+        # P81 §4.1-6：声明了 pity 段却零条定义时保底静默不生效，加载期报出
+        if 'pity' in data:
+            msg = ("配置含 pity 段但没有任何保底定义（[[pity]] 条目为空），"
+                   "保底将完全不生效。若本意即无保底，请删除该段以消除本告警。")
+            store.load_warnings.append(msg)
+            warnings.warn(msg)
         return
 
     # P55 阶段十B：旧格式自动迁移
@@ -1781,8 +1787,9 @@ def _build_targets(data: dict, store: ConfigStore) -> None:
 def _build_strategy(data: dict, store: ConfigStore) -> None:
     """[strategy] → store.strategy_key + store.strategy_params（P69：key + params 格式）。
 
-    旧 TOML type + name 格式自动检测并迁移到 key 格式。
-    key 不存在时回退 'smart'。
+    P81 §4.1-6：旧 name 格式的兼容分支已删除（save_toml 恒写 key，该分支只对手写旧 TOML
+    可达，且会造成「静默换策略」）。命中旧格式或缺 key 时**只告警、不改写**：strategy_key
+    保持原值（新建 store 时即为字段默认 'smart'），故加载行为与删除前逐字节等价。
     """
     strat = data.get('strategy', {})
     if not strat:
@@ -1794,11 +1801,14 @@ def _build_strategy(data: dict, store: ConfigStore) -> None:
         store.strategy_params = dict(strat.get('params', {}))
         return
 
-    # 旧格式兼容：type(显示名) + name(key) —— 自动迁移
+    # P81 §4.1-6：旧 name 格式不再兼容——只告警、不改写（保留原 fall-through 语义）
     if 'name' in strat:
-        store.strategy_key = str(strat['name'])
-        store.strategy_params = dict(strat.get('params', {}))
-        return
+        msg = (f"strategy 段使用旧 name 格式（name='{strat['name']}'），已不再支持；"
+               f"策略将回退默认值 'smart'。请改写为 key = \"...\"。")
+    else:
+        msg = "strategy 段缺少 key，策略将回退默认值 'smart'。"
+    store.load_warnings.append(msg)
+    warnings.warn(msg)
 
 
 def _build_plugins(data: dict, store: ConfigStore) -> None:

@@ -483,70 +483,71 @@ class WorstImpactAnalyzer:
             return None
 
         # P55：从扁平化 PityDef 构造引擎
-        is_new_format = any(hasattr(pd, 'scope') and not hasattr(pd, 'params')
-                           for pd in self.store.pity.pities)
+        # P81 §4.1-6：删除 is_new_format 假兼容检测；空列表显式 early-return，
+        # 保持「无引擎」语义（原由检测的隐式 return None 顺带产生）。
+        if not self.store.pity.pities:
+            return None
 
-        if is_new_format:
-            from gacha_simulator.core.config_store import PityDef as _PityDef
-            pity_defs_list = []
-            for pd in self.store.pity.pities:
-                if not isinstance(pd, _PityDef):
-                    continue
-                # shallow copy via dataclass fields
-                pity_defs_list.append(pd)
+        from gacha_simulator.core.config_store import PityDef as _PityDef
+        pity_defs_list = []
+        for pd in self.store.pity.pities:
+            if not isinstance(pd, _PityDef):
+                continue
+            # shallow copy via dataclass fields
+            pity_defs_list.append(pd)
 
-            state = PityState()
-            from gacha_simulator.core.pity import _build_pity_state_init
-            state = _build_pity_state_init(pity_defs_list)
+        state = PityState()
+        from gacha_simulator.core.pity import _build_pity_state_init
+        state = _build_pity_state_init(pity_defs_list)
 
-            # P55 ISSUE-032：从参考池或已知 ID 构建 scope 映射
-            ref_pool = getattr(self, '_ref_pool', None)
-            if ref_pool and hasattr(ref_pool, 'rewards'):
-                scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(ref_pool)
+        # P55 ISSUE-032：从参考池或已知 ID 构建 scope 映射
+        ref_pool = getattr(self, '_ref_pool', None)
+        if ref_pool and hasattr(ref_pool, 'rewards'):
+            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(ref_pool)
+        else:
+            scope_cards = {'ssr': tuple(self._ssr_ids)} if self._ssr_ids else {}
+            featured_cards = {'ssr': tuple(self._featured_ids)} if self._featured_ids else {}
+            card_to_slot = {}
+            if self._ssr_ids and self._featured_ids:
+                scope_slots = {'ssr': ('ssr', 'ssr_featured')}
+                featured_slots = {'ssr': ('ssr_featured',)}
+                for cid in self._featured_ids:
+                    card_to_slot[cid] = 'ssr_featured'
+                for cid in (self._ssr_ids - self._featured_ids):
+                    card_to_slot[cid] = 'ssr'
             else:
-                scope_cards = {'ssr': tuple(self._ssr_ids)} if self._ssr_ids else {}
-                featured_cards = {'ssr': tuple(self._featured_ids)} if self._featured_ids else {}
-                card_to_slot = {}
-                if self._ssr_ids and self._featured_ids:
-                    scope_slots = {'ssr': ('ssr', 'ssr_featured')}
-                    featured_slots = {'ssr': ('ssr_featured',)}
-                    for cid in self._featured_ids:
-                        card_to_slot[cid] = 'ssr_featured'
-                    for cid in (self._ssr_ids - self._featured_ids):
-                        card_to_slot[cid] = 'ssr'
-                else:
-                    scope_slots = {'ssr': ('ssr',)} if self._ssr_ids else {}
-                    featured_slots = {'ssr': ('ssr',)} if self._featured_ids else {}
-                    for cid in self._ssr_ids:
-                        card_to_slot[cid] = 'ssr'
+                scope_slots = {'ssr': ('ssr',)} if self._ssr_ids else {}
+                featured_slots = {'ssr': ('ssr',)} if self._featured_ids else {}
+                for cid in self._ssr_ids:
+                    card_to_slot[cid] = 'ssr'
 
-            pool_specs = {}
-            for pool_idx in range(MAX_POOLS):
-                pid = f'_worst_impact_pool_{pool_idx}'
-                # P61（Ph1a / ISSUE-301）：pool_specs 键全限定 {pid}.main（单池包装口径），
-                # pdef.pools 的 fnmatch 按全限定键匹配——否则 gacha_service 查询键
-                # '_worst_impact_pool_0.main' 查裸键引擎为 None、before_draw 保底调整静默跳过
-                qualified_key = f"{pid}.main"
-                matching = []
-                for pdef in pity_defs_list:
-                    pools_ptn = getattr(pdef, 'pools', ('*',))
-                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
-                        matching.append(pdef.name)
+        pool_specs = {}
+        for pool_idx in range(MAX_POOLS):
+            pid = f'_worst_impact_pool_{pool_idx}'
+            # P61（Ph1a / ISSUE-301）：pool_specs 键全限定 {pid}.main（单池包装口径），
+            # pdef.pools 的 fnmatch 按全限定键匹配——否则 gacha_service 查询键
+            # '_worst_impact_pool_0.main' 查裸键引擎为 None、before_draw 保底调整静默跳过
+            qualified_key = f"{pid}.main"
+            matching = []
+            for pdef in pity_defs_list:
+                pools_ptn = getattr(pdef, 'pools', ('*',))
+                if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
+                    matching.append(pdef.name)
 
-                pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
-                pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
+            pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
+            pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
 
-                pool_specs[qualified_key] = PoolPitySpec(
-                    pity_names=matching,
-                    featured_ids=pool_featured,
-                    ssr_ids=pool_ssr,
-                    scope_cards=scope_cards,
-                    featured_cards=featured_cards,
-                    scope_slots=scope_slots,
-                    featured_slots=featured_slots,
-                    card_to_slot=card_to_slot,
-                )
+            pool_specs[qualified_key] = PoolPitySpec(
+                pity_names=matching,
+                featured_ids=pool_featured,
+                ssr_ids=pool_ssr,
+                scope_cards=scope_cards,
+                featured_cards=featured_cards,
+                scope_slots=scope_slots,
+                featured_slots=featured_slots,
+                card_to_slot=card_to_slot,
+            )
 
-            rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
-            return PityEngine(pool_specs, pity_defs_list,
-                            state=state, rarity_rank=rr)
+        rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
+        return PityEngine(pool_specs, pity_defs_list,
+                        state=state, rarity_rank=rr)

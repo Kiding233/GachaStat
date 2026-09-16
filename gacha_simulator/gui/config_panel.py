@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """配置面板"""
 
+import warnings
 from typing import List, Optional
 
 from PyQt6.QtWidgets import (
@@ -6610,13 +6611,18 @@ class ConfigPanel(QWidget):
         )
 
         strategy = config.get('strategy', {})
-        # P69：新格式 {key, params}，兼容旧格式 {type, name, params}
+        # P69：新格式 {key, params}；P81 §4.1-6 起旧 name 格式不再兼容（改为告警 + 回退默认）
         if 'key' in strategy:
             store.strategy_key = str(strategy['key'])
-        elif 'name' in strategy:
-            store.strategy_key = str(strategy['name'])
         else:
             store.strategy_key = 'smart'
+            if 'name' in strategy:
+                _smsg = (f"strategy 段使用旧 name 格式（name='{strategy['name']}'），"
+                         f"已不再支持；策略回退默认值 'smart'。请改写为 key = \"...\"。")
+            else:
+                _smsg = "strategy 段缺少 key，策略回退默认值 'smart'。"
+            store.load_warnings.append(_smsg)
+            warnings.warn(_smsg)
         store.strategy_params = strategy.get('params', {})
         # auto_wait：优先从顶层读取（P69 新位置），回退到旧 strategy 子 dict
         store.auto_wait = config.get('auto_wait', strategy.get('auto_wait', True))

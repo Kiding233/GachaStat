@@ -38,12 +38,10 @@ a = Analysis(
         'gacha_simulator.core.process_trace',
         'gacha_simulator.core.process_analysis',
         'gacha_simulator.core.bootstrap',
-        'gacha_simulator.core.gdr_analysis',
         'gacha_simulator.core.forward_backward',
         'gacha_simulator.core.vulnerability',
         'gacha_simulator.core.worst_impact',
         'gacha_simulator.core.per_pool_analysis',
-        'gacha_simulator.core.risk_analysis',
 
         # 图表渲染——analysis_panel 函数体内惰性导入
         'gacha_simulator.visualization.chart_spec',

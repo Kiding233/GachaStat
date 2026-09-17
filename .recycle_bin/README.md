@@ -63,3 +63,18 @@
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
 | （无整文件归档） | — | 保底旧路径四项均为**代码内删除**，无文件移入本回收站。涉及文件：`core/pity.py`（`HardPityBehavior` 旧接口、`create_behavior` 的 `params` 旧路径、`PityEngine` 旧签名与 P75 守卫、`PityDefParsed`、`_parse_target_distribution`）、`core/config_store.py`（一处注释）、`core/__init__.py`（导出）、`tests/core/test_pity_rebind.py`（删 `TestLegacyRebind`）。行为等价性由 P79 在线护栏（`tests/test_p79_stop_condition_baseline.py`，14 passed 不变）实证。 |
+
+## P81 §十 块 4 归档（2026-09-17）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| `2026-09-17-p81-archived-risk-analysis/risk_analysis.py`（97 行） | 全库零调用方；其输入类型（每局一整个明细列表）随 InfoVector 明细路径一并消失 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §十 / §0.4-4。GUI 的 `risk_worst_case`/`risk_best_case` 由 `analysis_panel.py:406-670` 自建、WebUI 由 `analysis_service.py:470-509` 的 `_risk_tail` 自建，两条路都不经它；`tests/`、`scripts/`、`gui/`、`webui/` 零引用；`GachaStat.spec` 的 hiddenimports 条目同批清除。**它是块 4b 的强制前置**：其 `:3` 的模块级 `from .gdr import resource_remaining` 会让删除 O(T) 族之后的 `import gacha_simulator.core` 直接失败 |
+
+**连带清除（均为代码内删除，无文件移入）**
+
+- `core/gdr.py`：`GDRDefinition.compute_from_history` 字段 + `UNIFIED_GDR_REGISTRY` 的 13 处实参 + 22 个以 `history` 为首参的顶层函数（213 行）
+- `core/distribution.py`：`WorstCaseAnalysis`(L284) / `BestCaseAnalysis`(L316)（唯一消费者即 `RiskAnalyzer`）+ `EmpiricalDistribution.from_gdr`/`from_resource_remaining`/`from_batch`（零调用方），共 67 行
+- `core/__init__.py`：按名清 4 处（`:55` 的两个类、`:56` 整行、`:146` 与 `:147` 的 `__all__` 条目）
+- `GachaStat.spec`：清 `core.risk_analysis` 一行，并同批清 `core.gdr_analysis`（批 A 归档时漏改的同一清单条目）
+
+**验证**：P79 在线护栏 14 passed 不变；全量 `pytest -q` 1563 → 1563 passed；`ruff check` 全绿；`import gacha_simulator.core, gacha_simulator.service` 通过。

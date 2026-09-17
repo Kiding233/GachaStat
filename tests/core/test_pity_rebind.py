@@ -228,20 +228,6 @@ class TestEngineRebindExtended:
         assert bh._state is cur
 
 
-class TestLegacyRebind:
-    """ISSUE-102：legacy 签名（state=None）behavior 在 engine rebind 时跳过不崩溃。"""
-
-    def test_legacy_behavior_rebind_no_crash(self):
-        legacy = HardPityBehavior(name='legacy', state=None, scope='ssr',
-                                  btype='hard', threshold=90)
-        assert getattr(legacy, '_legacy_mode', False) is True
-        engine = PityEngine(pool_specs={}, pity_defs=[], state=PityState(), rarity_rank={})
-        engine._behavior_list.append(legacy)
-        b = PityState()
-        engine._rebind_state(b)  # 不应 AttributeError
-        assert engine._state is b
-
-
 class TestDependsOnIsActive:
     """ISSUE-120/133：counter 型依赖方激活链——未激活 False、源 did_fire 后 True。"""
 

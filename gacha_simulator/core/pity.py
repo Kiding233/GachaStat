@@ -347,56 +347,17 @@ class HardPityBehavior(CounterBasedBehavior):
     """计数器驱动硬保底——counter 达到 threshold 时 scope 概率强制 100%。
 
     P55 变更：从 PityBehavior 直接子类改为 CounterBasedBehavior 子类，
-    通过 scope 槽位定位目标（替代旧 target_distribution / resolved_targets）。
+    通过 scope 槽位定位目标。
     """
 
-    def __init__(self, name: str = '', state: 'PityState' = None,
+    def __init__(self, name: str, state: 'PityState',
                  scope: str = 'ssr', btype: str = 'hard',
                  threshold: int = 90, target_featured: bool = False,
-                 lifecycle: 'LifecycleConfig' = None, reset: str = None,
-                 # ── 旧接口兼容参数（P55 阶段十三删除） ──
-                 target_distribution: Dict[str, float] = None):
-        # 旧接口兼容：无 state 时跳过 CounterBasedBehavior.__init__
-        if state is None:
-            self._threshold = threshold
-            self._legacy_target_dist = target_distribution or {}
-            self._legacy_mode = True
-            return
+                 lifecycle: 'LifecycleConfig' = None, reset: str = None):
         super().__init__(name, state, scope, btype,
                          reset=reset, target_featured=target_featured,
                          lifecycle=lifecycle)
         self._threshold = threshold
-        self._legacy_target_dist = target_distribution or {}
-
-    def is_active(self, counter_value: int) -> bool:
-        return counter_value >= self._threshold
-
-    def apply(self, counter_value: int, probabilities: Dict[str, float],
-              extra: Dict[str, Any] = None) -> Dict[str, float]:
-        """旧接口桥接——P55 阶段十三删除。"""
-        if counter_value < self._threshold:
-            return probabilities.copy()
-
-        resolved = self._legacy_target_dist if hasattr(self, '_legacy_target_dist') else {}
-        if extra and 'resolved_targets' in extra:
-            resolved = extra['resolved_targets']
-
-        if resolved:
-            present = {tid: w for tid, w in resolved.items() if tid in probabilities}
-            if not present:
-                return probabilities.copy()
-            total = sum(present.values())
-            if total <= 0:
-                return probabilities.copy()
-            result = {k: 0.0 for k in probabilities}
-            for tid, w in present.items():
-                result[tid] = w / total
-            return result
-
-        result = {k: 0.0 for k in probabilities}
-        if probabilities:
-            result[list(probabilities.keys())[0]] = 1.0
-        return result
 
     # ── 新架构接口 ──
 
@@ -878,10 +839,10 @@ _validate_registry()
 
 
 def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
-    """工厂函数——从 PityDef（新）或 PityDefParsed（旧）构造 behavior 实例。
+    """工厂函数——从 PityDef（P55 扁平化字段）构造 behavior 实例。
 
-    P55 新路径（PityDef 扁平化）：直接从 dataclass 字段读取参数。
-    旧路径（PityDefParsed）：从 .params dict 读取并做类型强制转换。
+    参数直接从 dataclass 字段读取；软保底语法糖（soft_start/soft_end/soft_increment）
+    经 _expand_soft_to_deltas() 展开为 deltas。
     """
     entry = BEHAVIOR_REGISTRY[pdef.btype]
     cls = entry["class"]
@@ -893,7 +854,7 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
 
     # scope：优先取 PityDef.scope（用户配置），回退 registry 的 default_scope。
     # 2026-09-16 修正：此前只读 registry，PityDef.scope 被静默忽略，
-    # 导致跨稀有度保底无法配置。旧格式 PityDefParsed 无 scope 字段，
+    # 导致跨稀有度保底无法配置。P55 前的旧格式无 scope 字段，
     # getattr 返回 None 时自然回退。
     _default_scope = entry.get("default_scope", "ssr")
     scope = (getattr(pdef, 'scope', None) or _default_scope).lower()
@@ -904,80 +865,45 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     _SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
     _P56_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft', 'targeted', 'targeted_soft'})
 
-    # ── 检测新旧格式 ──
-    if hasattr(pdef, 'params') and isinstance(pdef.params, dict):
-        # 旧路径：PityDefParsed——params dict 中所有值为 str
-        for pname, pvalue in pdef.params.items():
-            param_meta = entry.get("params", {}).get(pname, {})
-            ptype = param_meta.get("type", "str")
-            if ptype == "int":
-                params[pname] = int(pvalue)
-            elif ptype == "float":
-                params[pname] = float(pvalue)
-            elif ptype == "bool":
-                params[pname] = pvalue.lower() in ("true", "1", "yes")
-            elif ptype == "deltas":
-                params[pname] = _parse_deltas_string(pvalue)
-            else:
-                params[pname] = pvalue
-    else:
-        # 新路径：PityDef（config_store）——扁平化字段
-        if getattr(pdef, 'deltas', None) is not None:
-            params['deltas'] = pdef.deltas
-        elif pdef.btype in _SOFT_SUFFIX_TYPES:
-            pass  # deltas 由 SoftPityMixin._init_soft_pity() 独立展开
-        elif hasattr(pdef, 'soft_start') and pdef.soft_start is not None:
-            from .config_toml import _expand_soft_to_deltas
-            params['deltas'] = _expand_soft_to_deltas(
-                pdef.btype, pdef.soft_start,
-                getattr(pdef, 'soft_end', None),
-                getattr(pdef, 'soft_increment', None),
-            )
-        if getattr(pdef, 'threshold', None) is not None:
-            params['threshold'] = pdef.threshold
-        if getattr(pdef, 'target_featured', False):
-            params['target_featured'] = True
-        if getattr(pdef, 'reset', None):
-            params['reset'] = pdef.reset
-        # ── P56：事件驱动型参数透传（仅 P56 type） ──
-        if pdef.btype in _P56_TYPES:
-            for attr in ('cr_counter_threshold', 'cr_base_rate', 'cr_state_probs',
-                         'fate_threshold', 'switch_allowed', 'switch_resets_progress',
-                         'soft_deltas', 'soft_start', 'soft_end', 'soft_increment'):
-                v = getattr(pdef, attr, None)
-                if v is not None:
-                        params[attr] = v
-            if getattr(pdef, 'guaranteed_init', False):
-                    params['guaranteed_init'] = True
-            if getattr(pdef, 'fate_points_init', 0):
-                    params['fate_points_init'] = pdef.fate_points_init
-        # 生命周期参数——LifecycleConfig 跨 type 共享
-        lifecycle_kwargs = {}
-        if getattr(pdef, 'deactivate_on_early_hit', False):
-            lifecycle_kwargs['deactivate_on_early_hit'] = True
-        if getattr(pdef, 'depends_on', None):
-            lifecycle_kwargs['depends_on'] = pdef.depends_on
-        if lifecycle_kwargs:
-            params['lifecycle'] = LifecycleConfig(**lifecycle_kwargs)
+    if getattr(pdef, 'deltas', None) is not None:
+        params['deltas'] = pdef.deltas
+    elif pdef.btype in _SOFT_SUFFIX_TYPES:
+        pass  # deltas 由 SoftPityMixin._init_soft_pity() 独立展开
+    elif hasattr(pdef, 'soft_start') and pdef.soft_start is not None:
+        from .config_toml import _expand_soft_to_deltas
+        params['deltas'] = _expand_soft_to_deltas(
+            pdef.btype, pdef.soft_start,
+            getattr(pdef, 'soft_end', None),
+            getattr(pdef, 'soft_increment', None),
+        )
+    if getattr(pdef, 'threshold', None) is not None:
+        params['threshold'] = pdef.threshold
+    if getattr(pdef, 'target_featured', False):
+        params['target_featured'] = True
+    if getattr(pdef, 'reset', None):
+        params['reset'] = pdef.reset
+    # ── P56：事件驱动型参数透传（仅 P56 type） ──
+    if pdef.btype in _P56_TYPES:
+        for attr in ('cr_counter_threshold', 'cr_base_rate', 'cr_state_probs',
+                     'fate_threshold', 'switch_allowed', 'switch_resets_progress',
+                     'soft_deltas', 'soft_start', 'soft_end', 'soft_increment'):
+            v = getattr(pdef, attr, None)
+            if v is not None:
+                    params[attr] = v
+        if getattr(pdef, 'guaranteed_init', False):
+                params['guaranteed_init'] = True
+        if getattr(pdef, 'fate_points_init', 0):
+                params['fate_points_init'] = pdef.fate_points_init
+    # 生命周期参数——LifecycleConfig 跨 type 共享
+    lifecycle_kwargs = {}
+    if getattr(pdef, 'deactivate_on_early_hit', False):
+        lifecycle_kwargs['deactivate_on_early_hit'] = True
+    if getattr(pdef, 'depends_on', None):
+        lifecycle_kwargs['depends_on'] = pdef.depends_on
+    if lifecycle_kwargs:
+        params['lifecycle'] = LifecycleConfig(**lifecycle_kwargs)
 
     return cls(name=pdef.name, state=state, scope=scope, **params)
-
-
-def _parse_deltas_string(value) -> tuple:
-    """解析 deltas 字符串 → tuple[tuple[int, float], ...]。
-    格式：'73:0.0,17:5.88' 或已是 tuple/list。
-    """
-    if isinstance(value, (tuple, list)):
-        return tuple(tuple(seg) for seg in value)
-    if isinstance(value, str) and value.strip():
-        result = []
-        for part in value.split(','):
-            part = part.strip()
-            if ':' in part:
-                n_str, inc_str = part.split(':', 1)
-                result.append((int(n_str.strip()), float(inc_str.strip())))
-        return tuple(result)
-    return ()
 
 
 # ── P55：behavior 排序与校验 ──
@@ -1102,22 +1028,10 @@ def _build_pity_state_init(pity_defs, counter_init_overrides=None):
 
 
 @dataclass
-class PityDefParsed:
-    name: str
-    btype: str
-    params: Dict[str, str]
-    target_distribution: Dict[str, float]
-    reset_condition: str
-    pools: str
-
-
-@dataclass
 class PoolPitySpec:
     pity_names: List[str]
     featured_ids: Set[str] = field(default_factory=set)
     ssr_ids: Set[str] = field(default_factory=set)
-    # ⚠️ 旧路径兼容——新路径中此字段始终为空 dict
-    resolved_targets: Dict[str, Dict[str, float]] = field(default_factory=dict)
     # ── P55 新增：槽位映射（供 DrawInfo 构造） ──
     scope_cards: Dict[str, tuple] = field(default_factory=dict)
     featured_cards: Dict[str, tuple] = field(default_factory=dict)
@@ -1216,72 +1130,58 @@ class PityState:
 class PityEngine:
     """保底引擎——P55 重构：自行管理 behavior 生命周期。
 
-    P55 新签名：PityEngine(pool_specs, pity_defs: List[PityDef], state, rarity_rank)
-    旧签名（向后兼容）：PityEngine(pool_specs, pity_defs: Dict, behaviors: Dict, rarity_rank)
+    PityEngine(pool_specs, pity_defs: List[PityDef], state, rarity_rank)
 
     新引擎在构造时通过 create_behavior() 从 PityDef 构造 behavior 实例，
     经过 _resolve_order() 排序 + _validate_behaviors() 校验后存入内部 registry。
     """
 
     def __init__(self, pool_specs: Dict[str, PoolPitySpec],
-                 pity_defs,  # List[PityDef] (新) 或 Dict[str, PityDefParsed] (旧)
-                 behaviors=None,  # 旧签名关键字
+                 pity_defs,  # List[PityDef]（P55 扁平化定义列表）
                  rarity_rank: Dict[str, int] = None,
-                 # ── 新签名关键字 ──
                  state: 'PityState' = None):
         self.pool_specs = pool_specs
         self._rarity_rank = rarity_rank or {}
 
-        # ── 检测新旧签名 ──
-        if isinstance(pity_defs, dict):
-            # 旧签名：(pool_specs, pity_defs: Dict, behaviors: Dict, rarity_rank)
-            self._legacy_mode = True
-            self.pity_defs = pity_defs
-            self.behaviors = behaviors or {}
-            self._state = state  # 由 before_draw/after_draw 注入（旧签名中通常为 None）
-            self._behavior_list: List[PityBehavior] = list(self.behaviors.values())
-        else:
-            # 新签名：(pool_specs, pity_defs: List[PityDef], state=..., rarity_rank=...)
-            self._legacy_mode = False
-            self.pity_defs = {p.name: p for p in pity_defs} if pity_defs else {}
-            self._state = state
+        self.pity_defs = {p.name: p for p in pity_defs} if pity_defs else {}
+        self._state = state
 
-            # 从 PityDef 构造 behavior 实例
-            self.behaviors: Dict[str, PityBehavior] = {}
-            from .config_store import PityDef as _PityDef
+        # 从 PityDef 构造 behavior 实例
+        self.behaviors: Dict[str, PityBehavior] = {}
+        from .config_store import PityDef as _PityDef
 
-            # 重名校验（2026-09-16 修正）：此前重名会被下面的 dict 赋值静默覆盖、
-            # 只留后者，用户无从察觉，`_validate_behaviors` 的规则 1 因此永不可达。
-            _seen_names: set = set()
-            for pdef in (pity_defs or []):
-                if not isinstance(pdef, _PityDef):
-                    continue
-                if pdef.name in _seen_names:
-                    raise ValueError(
-                        f"PityEngine: 重复的保底 name '{pdef.name}'——"
-                        f"每条保底必须有唯一的 PityDef.name"
-                    )
-                _seen_names.add(pdef.name)
+        # 重名校验（2026-09-16 修正）：此前重名会被下面的 dict 赋值静默覆盖、
+        # 只留后者，用户无从察觉，`_validate_behaviors` 的规则 1 因此永不可达。
+        _seen_names: set = set()
+        for pdef in (pity_defs or []):
+            if not isinstance(pdef, _PityDef):
+                continue
+            if pdef.name in _seen_names:
+                raise ValueError(
+                    f"PityEngine: 重复的保底 name '{pdef.name}'——"
+                    f"每条保底必须有唯一的 PityDef.name"
+                )
+            _seen_names.add(pdef.name)
 
-            for pdef in (pity_defs or []):
-                if not isinstance(pdef, _PityDef):
-                    continue
-                # P56：移除 skip guard——所有 10 种 type 均由 create_behavior() 处理
-                try:
-                    bh = create_behavior(pdef, self._state)
-                    self.behaviors[pdef.name] = bh
-                except Exception:
-                    logger.warning(
-                        f"PityEngine: 跳过 behavior '{pdef.name}' (type={pdef.btype})——"
-                        f"构造失败",
-                        exc_info=True,
-                    )
+        for pdef in (pity_defs or []):
+            if not isinstance(pdef, _PityDef):
+                continue
+            # P56：移除 skip guard——所有 10 种 type 均由 create_behavior() 处理
+            try:
+                bh = create_behavior(pdef, self._state)
+                self.behaviors[pdef.name] = bh
+            except Exception:
+                logger.warning(
+                    f"PityEngine: 跳过 behavior '{pdef.name}' (type={pdef.btype})——"
+                    f"构造失败",
+                    exc_info=True,
+                )
 
-            # 排序 + 校验
-            ordered = _resolve_order(list(self.behaviors.values()), self._rarity_rank)
-            _validate_behaviors(ordered)
-            self._pity_defs_list = pity_defs  # P56
-            self._behavior_list: List[PityBehavior] = ordered
+        # 排序 + 校验
+        ordered = _resolve_order(list(self.behaviors.values()), self._rarity_rank)
+        _validate_behaviors(ordered)
+        self._pity_defs_list = pity_defs  # P56
+        self._behavior_list: List[PityBehavior] = ordered
 
         # ── P56：构建 depends_on 激活传播图 ──
         self._activation_graph: Dict[str, List[str]] = self._build_activation_graph(
@@ -1351,9 +1251,6 @@ class PityEngine:
             return  # 同一对象——无需重绑定
         self._state = state
         for bh in self._behavior_list:
-            # ISSUE-102：legacy 签名实例（state=None 分支构造）缺 _name/_active/_state，显式跳过
-            if getattr(bh, '_legacy_mode', False):
-                continue
             if hasattr(bh, '_rebind_state'):
                 bh._rebind_state(state)
 
@@ -1485,22 +1382,5 @@ class PityEngine:
         if self._state is None:
             return {}
         return {name: dict(ns) for name, ns in self._state.data.items()}
-
-
-def _parse_target_distribution(text: str) -> Dict[str, float]:
-    result = {}
-    if not text:
-        return result
-    for part in text.split(','):
-        part = part.strip()
-        if ':' in part:
-            cid, w = part.rsplit(':', 1)
-            try:
-                result[cid.strip()] = float(w.strip())
-            except ValueError:
-                result[cid.strip()] = 1.0
-        else:
-            result[part.strip()] = 1.0
-    return result
 
 

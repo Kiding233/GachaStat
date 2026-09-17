@@ -57,3 +57,9 @@
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
 | （无整文件归档） | — | 批 B 是**代码内删除**而非文件归档，故本表无新增文件。涉及文件：`core/gdr.py`（删 A6 旧注册表族全块 + D1 四符号）、`core/strategy.py`（删 `CompositeStrategy`）、`core/per_pool_analysis.py`（删 `compute_transition_matrices` + 两处失效导入）、`core/__init__.py`（六处导出名移除）。 |
+
+## P81 A1–A4 批（2026-09-17）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| （无整文件归档） | — | 保底旧路径四项均为**代码内删除**，无文件移入本回收站。涉及文件：`core/pity.py`（`HardPityBehavior` 旧接口、`create_behavior` 的 `params` 旧路径、`PityEngine` 旧签名与 P75 守卫、`PityDefParsed`、`_parse_target_distribution`）、`core/config_store.py`（一处注释）、`core/__init__.py`（导出）、`tests/core/test_pity_rebind.py`（删 `TestLegacyRebind`）。行为等价性由 P79 在线护栏（`tests/test_p79_stop_condition_baseline.py`，14 passed 不变）实证。 |

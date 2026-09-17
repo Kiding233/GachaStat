@@ -148,7 +148,7 @@ def resolve_banner_end_time(banners) -> float:
 
 @dataclass
 class PityDef:
-    """P55 扁平化：24 个独立类型字段（原 PityDefParsed 6 字段 + param 分裂）。
+    """P55 扁平化：24 个独立类型字段（由 P55 之前的 6 字段旧格式 + param 分裂而来）。
 
     旧字段（params/target_distribution/reset_condition）已移除。
     counter_init 从 PityConfig 全局移至每条 PityDef。

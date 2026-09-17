@@ -10,7 +10,7 @@ from .info_vector import InfoVector
 from .pity import (
     PityBehavior, SoftStepBehavior,
     CounterBasedBehavior, HardPityBehavior,
-    PityDefParsed, PoolPitySpec,
+    PoolPitySpec,
     PityState, PityEngine,
     DrawInfo, PityContext, Counter, Flag, LifecycleConfig,
     BEHAVIOR_REGISTRY, create_behavior,
@@ -111,7 +111,7 @@ __all__ = [
     'InfoVector',
     'PityBehavior', 'SoftStepBehavior',
     'CounterBasedBehavior', 'HardPityBehavior',
-    'PityDefParsed', 'PoolPitySpec',
+    'PoolPitySpec',
     'PityState', 'PityEngine',
     'DrawInfo', 'PityContext', 'Counter', 'Flag', 'LifecycleConfig',
     'BEHAVIOR_REGISTRY', 'create_behavior',

@@ -12,19 +12,19 @@
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-16-p81-archived-tests/test_batch_service.py` | 测试对象在代码库中零定义，且整文件被模块级 `pytest.skip` 永久跳过 | 见 [P81 代码清理专项 §4.1-1](../docs/02-待办/P81%20代码清理专项.md)。该文件测的 `BatchService` / `BatchConfig` / `SimulationVariant` / `ConditionGenerator` 四符号生产代码零命中（实现被 `run_batch_parallel()` 这一函数式入口取代，`service/batch_service.py` 从未创建）；L45 另断言已于 P60 删除的 `GachaState.pity_counters` 字段，取消跳过亦必失败。归档前基线 `pytest -q` = 1573 passed / 1 skipped。P57、P4 的测试落点已改指 `tests/service/test_batch_simulator.py`。 |
+| `2026-09-16-p81-archived-tests/test_batch_service.py` | 测试对象在代码库中零定义，且整文件被模块级 `pytest.skip` 永久跳过 | 见 [P81 代码清理专项 §4.1-1](../docs/03-归档/P81%20代码清理专项.md)。该文件测的 `BatchService` / `BatchConfig` / `SimulationVariant` / `ConditionGenerator` 四符号生产代码零命中（实现被 `run_batch_parallel()` 这一函数式入口取代，`service/batch_service.py` 从未创建）；L45 另断言已于 P60 删除的 `GachaState.pity_counters` 字段，取消跳过亦必失败。归档前基线 `pytest -q` = 1573 passed / 1 skipped。P57、P4 的测试落点已改指 `tests/service/test_batch_simulator.py`。 |
 
 ## P81 §4.1-7 归档（2026-09-16）
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-16-p81-archived-config/gacha_simulator-pyproject.toml` | 根 `pyproject.toml` 的陈旧副本，全库零引用 | 见 [P81 代码清理专项 §4.1-7](../docs/02-待办/P81%20代码清理专项.md)。原为早期「包内独立 pyproject」布局遗留：version 与根同为 `1.6.0`、依赖表缺 `scipy`/`binsreg`/`tomli`/`tomli-w`、把 `PyQt6` 列为基础依赖。已复查 `*.spec`/`*.toml`/`*.cfg`/`*.yml`/`*.py`/`*.in` 均无引用。**同类事实**：本仓库从未安装过该包（`pip show` 无结果、无 `*.egg-info`），打包路径在开发中不被走到。 |
+| `2026-09-16-p81-archived-config/gacha_simulator-pyproject.toml` | 根 `pyproject.toml` 的陈旧副本，全库零引用 | 见 [P81 代码清理专项 §4.1-7](../docs/03-归档/P81%20代码清理专项.md)。原为早期「包内独立 pyproject」布局遗留：version 与根同为 `1.6.0`、依赖表缺 `scipy`/`binsreg`/`tomli`/`tomli-w`、把 `PyQt6` 列为基础依赖。已复查 `*.spec`/`*.toml`/`*.cfg`/`*.yml`/`*.py`/`*.in` 均无引用。**同类事实**：本仓库从未安装过该包（`pip show` 无结果、无 `*.egg-info`），打包路径在开发中不被走到。 |
 
 ## P81 §三 C1 归档（2026-09-17）
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-17-p81-archived-panels/strategy_panel.py`（682 行） | P8 面板合并后被 `plan_search_panel` 取代，且从未在 `main_window` 注册 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §三 C1。三种搜索模式（最多目标卡 / 最少资源 / 退路分析）均已并入活面板 `plan_search_panel`。 |
+| `2026-09-17-p81-archived-panels/strategy_panel.py`（682 行） | P8 面板合并后被 `plan_search_panel` 取代，且从未在 `main_window` 注册 | 见 [P81 代码清理专项](../docs/03-归档/P81%20代码清理专项.md) §三 C1。三种搜索模式（最多目标卡 / 最少资源 / 退路分析）均已并入活面板 `plan_search_panel`。 |
 | `2026-09-17-p81-archived-panels/resource_search_panel.py`（646 行） | 同上 | 同上 |
 | `2026-09-17-p81-archived-panels/retreat_search_panel.py`（549 行） | 同上 | 同上 |
 | `2026-09-17-p81-archived-panels/test_strategy_search_panels_p79.py` | **随被测面板一并归档** | P79 5f2 落点，断言「两个死面板自建 env 不继承用户停止条件」这一**负面性质**。其被测对象已归档，故该断言不再有意义；**非覆盖度损失**（它不覆盖任何活行为）。P79 的 8.2 结论（搜索由硬边界收口）在活面板上仍成立，落点为 `plan_search_panel` 经 `retreat_search._build_env`。 |
@@ -35,7 +35,7 @@
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-17-p81-archived-p61-scaffold/migrate_config_p61_ph4b.py`（140 行） | P61 Ph4b 一次性配置改写器，`[[pools]]` → `[[banner]]` | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §三 D3。唯一输入形态（`[[pools]]`）已退役，`config.toml` 早已是新格式，再跑它是迁移一份已迁移过的文件。 |
+| `2026-09-17-p81-archived-p61-scaffold/migrate_config_p61_ph4b.py`（140 行） | P61 Ph4b 一次性配置改写器，`[[pools]]` → `[[banner]]` | 见 [P81 代码清理专项](../docs/03-归档/P81%20代码清理专项.md) §三 D3。唯一输入形态（`[[pools]]`）已退役，`config.toml` 早已是新格式，再跑它是迁移一份已迁移过的文件。 |
 | `2026-09-17-p81-archived-p61-scaffold/p61_verify.py`（204 行） | P61 专用等价对照脚本 | 自带 P61 专属归一化规则（`{pid}.main`→裸 pid、`pool_end_resources`→`banner_end_resources`、时间窗口字段不参与）。与 `baseline_pool_golden.json` **配对归档**——它的 `GOLDEN_PATH` 指向该 fixture，留着会成「读不存在文件」的坏工具。 |
 | `2026-09-17-p81-archived-p61-scaffold/baseline_pool_golden.json`（67KB） | golden 快照（`meta` + `single` 8 个逐抽数组 + `batch_aggregate`） | 由 **P61 之前的旧代码 + 旧 `[[pools]]` 配置**产生，**不可复现**，故不能用于将来对照。其历史价值（证明 P61 等价）已由 P61 归档计划与提交记录承载，归档后仍可从 git 取回。 |
 
@@ -45,7 +45,7 @@
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-17-p81-archived-legacy-services/config_service.py`（22 行） | 零调用方；其服务的「一配置一 JSON」模型已被 P53 的单一 config.toml 取代 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §三 B1 |
+| `2026-09-17-p81-archived-legacy-services/config_service.py`（22 行） | 零调用方；其服务的「一配置一 JSON」模型已被 P53 的单一 config.toml 取代 | 见 [P81 代码清理专项](../docs/03-归档/P81%20代码清理专项.md) §三 B1 |
 | `2026-09-17-p81-archived-legacy-services/analysis_service.py`（78 行） | 旧 GDR 计算器家族的服务层门面；同族其余两文件一并归档 | §三 B2。**注意**：与 `gacha_simulator/webui/analysis_service.py`（P74 新增同名无关类）**不同物**，勿混 |
 | `2026-09-17-p81-archived-legacy-services/gdr_analysis.py`（228 行） | 旧 GDR 计算器（`SuccessProbabilityAnalyzer` / `LegacyGDRCalculator`，自标 DEPRECATED）；所在家族被 `UNIFIED_GDR_REGISTRY` + `GDRCalculator` 取代 | §三 B2 |
 | `2026-09-17-p81-archived-legacy-services/generalized_drop_rate.py`（193 行） | 时间索引模型 `GDR(t)` 的 ABC 与 8 个指标类；统一后改为「不依赖时刻 t 的终局口径」 | §三 B2 |
@@ -68,7 +68,7 @@
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-17-p81-archived-risk-analysis/risk_analysis.py`（97 行） | 全库零调用方；其输入类型（每局一整个明细列表）随 InfoVector 明细路径一并消失 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §十 / §0.4-4。GUI 的 `risk_worst_case`/`risk_best_case` 由 `analysis_panel.py:406-670` 自建、WebUI 由 `analysis_service.py:470-509` 的 `_risk_tail` 自建，两条路都不经它；`tests/`、`scripts/`、`gui/`、`webui/` 零引用；`GachaStat.spec` 的 hiddenimports 条目同批清除。**它是块 4b 的强制前置**：其 `:3` 的模块级 `from .gdr import resource_remaining` 会让删除 O(T) 族之后的 `import gacha_simulator.core` 直接失败 |
+| `2026-09-17-p81-archived-risk-analysis/risk_analysis.py`（97 行） | 全库零调用方；其输入类型（每局一整个明细列表）随 InfoVector 明细路径一并消失 | 见 [P81 代码清理专项](../docs/03-归档/P81%20代码清理专项.md) §十 / §0.4-4。GUI 的 `risk_worst_case`/`risk_best_case` 由 `analysis_panel.py:406-670` 自建、WebUI 由 `analysis_service.py:470-509` 的 `_risk_tail` 自建，两条路都不经它；`tests/`、`scripts/`、`gui/`、`webui/` 零引用；`GachaStat.spec` 的 hiddenimports 条目同批清除。**它是块 4b 的强制前置**：其 `:3` 的模块级 `from .gdr import resource_remaining` 会让删除 O(T) 族之后的 `import gacha_simulator.core` 直接失败 |
 
 **连带清除（均为代码内删除，无文件移入）**
 
@@ -83,7 +83,7 @@
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-17-p81-archived-info-vector/info_vector.py`（58 行） | InfoVector 明细路径的最后载体；其唯一生产者 `InfoVectorCollector` 同批删除 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §十 / §10.11 第 2 次提交。生产管线全部经 `run_simulation_compact` → `CompactCollector`，该路径自 P12 起即记为「仅 collector=None 时触发」，从未被生产代码走到。其 `__reduce__` pickle 协议只为跨进程传递而存在，而该收集器从不在 worker 内运行，故协议本身也是死的 |
+| `2026-09-17-p81-archived-info-vector/info_vector.py`（58 行） | InfoVector 明细路径的最后载体；其唯一生产者 `InfoVectorCollector` 同批删除 | 见 [P81 代码清理专项](../docs/03-归档/P81%20代码清理专项.md) §十 / §10.11 第 2 次提交。生产管线全部经 `run_simulation_compact` → `CompactCollector`，该路径自 P12 起即记为「仅 collector=None 时触发」，从未被生产代码走到。其 `__reduce__` pickle 协议只为跨进程传递而存在，而该收集器从不在 worker 内运行，故协议本身也是死的 |
 
 **连带清除（均为代码内删除与改写）**
 
@@ -106,7 +106,7 @@
 
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
-| `2026-09-18-p81-archived-generator/generator/`（`__init__.py` / `schedule_generator.py` / `target_generator.py`，共 101 行） | 整包零生产消费者 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §12.5.2。P53 把配置迁到单一 TOML 后，「程序化生成排期／目标」被「在 TOML 里写出来」取代；全库 import 只有它自己的 `__init__.py` 与两个测试，`core/`／`service/`／`gui/`／`webui/`／`cli.py`／`scripts/`／`tools/` 均无引用。**未损坏**（依赖的 `PoolSchedule`／`TargetCard` 字段未变），性质是「无人调用」而非「已失效」 |
+| `2026-09-18-p81-archived-generator/generator/`（`__init__.py` / `schedule_generator.py` / `target_generator.py`，共 101 行） | 整包零生产消费者 | 见 [P81 代码清理专项](../docs/03-归档/P81%20代码清理专项.md) §12.5.2。P53 把配置迁到单一 TOML 后，「程序化生成排期／目标」被「在 TOML 里写出来」取代；全库 import 只有它自己的 `__init__.py` 与两个测试，`core/`／`service/`／`gui/`／`webui/`／`cli.py`／`scripts/`／`tools/` 均无引用。**未损坏**（依赖的 `PoolSchedule`／`TargetCard` 字段未变），性质是「无人调用」而非「已失效」 |
 | `2026-09-18-p81-archived-generator/tests/`（`__init__.py` / `test_schedule_generator.py` / `test_target_generator.py`） | 随被测包一并归档 | 两个用例断言的是生成器自身行为，非活行为覆盖。**非覆盖度损失** |
 | `2026-09-18-p81-archived-generator/empty-dir-*` 与 `pycache-snapshots/` | 空目录会被 Python 3 当作命名空间包 | 移走文件后 `import gacha_simulator.generator` 仍会成功（返回 `_NamespacePath`），故连空目录与残留 `__pycache__` 一并移入（`rmdir` 被 H2 门控拦下，改用 `mv`）。**仅本地存在、未纳入 git**：空目录无法被 git 跟踪，`.pyc` 属构建产物 |
 

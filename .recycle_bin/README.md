@@ -40,3 +40,14 @@
 | `2026-09-17-p81-archived-p61-scaffold/baseline_pool_golden.json`（67KB） | golden 快照（`meta` + `single` 8 个逐抽数组 + `batch_aggregate`） | 由 **P61 之前的旧代码 + 旧 `[[pools]]` 配置**产生，**不可复现**，故不能用于将来对照。其历史价值（证明 P61 等价）已由 P61 归档计划与提交记录承载，归档后仍可从 git 取回。 |
 
 **协议范例的接替**：P61 这套「基线固化 + 等价对照」的范例角色，现由 **P79 的在线版本**承担——`scripts/p79_baseline.py` / `scripts/p79_verify.py` / `tests/fixtures/p79_golden/`（9 组策略快照）被活测试 `tests/test_p79_stop_condition_baseline.py` 消费，属常驻无回归护栏（可复现、有消费者），与 P61 这套一次性脚手架性质不同。
+
+## P81 §三 批 A 归档（2026-09-17）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| `2026-09-17-p81-archived-legacy-services/config_service.py`（22 行） | 零调用方；其服务的「一配置一 JSON」模型已被 P53 的单一 config.toml 取代 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §三 B1 |
+| `2026-09-17-p81-archived-legacy-services/analysis_service.py`（78 行） | 旧 GDR 计算器家族的服务层门面；同族其余两文件一并归档 | §三 B2。**注意**：与 `gacha_simulator/webui/analysis_service.py`（P74 新增同名无关类）**不同物**，勿混 |
+| `2026-09-17-p81-archived-legacy-services/gdr_analysis.py`（228 行） | 旧 GDR 计算器（`SuccessProbabilityAnalyzer` / `LegacyGDRCalculator`，自标 DEPRECATED）；所在家族被 `UNIFIED_GDR_REGISTRY` + `GDRCalculator` 取代 | §三 B2 |
+| `2026-09-17-p81-archived-legacy-services/generalized_drop_rate.py`（193 行） | 时间索引模型 `GDR(t)` 的 ABC 与 8 个指标类；统一后改为「不依赖时刻 t 的终局口径」 | §三 B2 |
+
+**导出清理**：`core/__init__.py` 两个导入块 + 两段 `__all__`；`service/__init__.py` 现仅 `GachaService`。

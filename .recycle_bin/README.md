@@ -78,3 +78,20 @@
 - `GachaStat.spec`：清 `core.risk_analysis` 一行，并同批清 `core.gdr_analysis`（批 A 归档时漏改的同一清单条目）
 
 **验证**：P79 在线护栏 14 passed 不变；全量 `pytest -q` 1563 → 1563 passed；`ruff check` 全绿；`import gacha_simulator.core, gacha_simulator.service` 通过。
+
+## P81 §十 块 1/2/3/5/7 归档（2026-09-17，第 2 次提交）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| `2026-09-17-p81-archived-info-vector/info_vector.py`（58 行） | InfoVector 明细路径的最后载体；其唯一生产者 `InfoVectorCollector` 同批删除 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §十 / §10.11 第 2 次提交。生产管线全部经 `run_simulation_compact` → `CompactCollector`，该路径自 P12 起即记为「仅 collector=None 时触发」，从未被生产代码走到。其 `__reduce__` pickle 协议只为跨进程传递而存在，而该收集器从不在 worker 内运行，故协议本身也是死的 |
+
+**连带清除（均为代码内删除与改写）**
+
+- `core/collector.py`：删 `InfoVectorCollector`（40 行）+ `TYPE_CHECKING` 的 `InfoVector` 导入 + 重写 `on_bonus` 基类 docstring（原「`InfoVectorCollector` 继承空实现 → 历史路径静默丢弃 milestone 产出」随路径消失）
+- `service/gacha_service.py`：**收拢 `_is_compact` 门控族**（1 处赋值 + 5 处条件初值 + 1 处注释 + 5 处 `if`，其中 1 处带 `else` 子句），删 `lightweight` 形参 / `self.session_id` / `import uuid` / `_EMPTY_DICT` / 去条件后不可达的尾部 `return collector.get_result()`，返回类型收为 `CompactResult`，`collector=None` 的默认构造改为 `CompactCollector()`；`_settle_resource_expiry` 的两处 `if total_consumed is not None:` 保护随之删除（收拢后恒真）
+- `core/per_pool_analysis.py`：删 InfoVector 形状读取族 6 个顶层块（`CumulativeSnapshot` + `compute_per_pool_snapshots` / `compute_cumulative_snapshots` / 两个 `_batch` 包装 / `cumulative_gdr_at_pool_ends`），保留 `PoolSnapshot` / `per_pool_summary_stats` / `TransitionMatrix` / `compute_transition_matrices_from_flags` / `compute_transition_flags_from_gdr`
+- `gui/gacha_panel.py`：删 `_calculate_quick_stats` 中按 InfoVector 形状访问元素的 `else` 分支（406-414，经复核三轮证实不可达）
+- `core/__init__.py`：按名清 `InfoVector` / `InfoVectorCollector` / `CumulativeSnapshot` / 4 个 `compute_*` / `cumulative_gdr_at_pool_ends`
+- **测试**：删 `TestNonCompactPath`（1 个用例）与 `TestPerPoolAnalysisBannerKeys`（2 个用例）。P72 的「键为 banner 级」约定仍由同文件的 `test_parallel_vs_single_thread_snapshot_equiv`（活跃抽取路径）守护
+
+**验证**：P79 在线护栏 14 passed 不变；全量 `pytest -q` **1563 → 1560 passed**（−3 = 上述三个用例，与「预期 −1」的差额系块 7 裁决新增的 2 个）；`ruff check` 全绿；`import gacha_simulator.core / service / cli` 通过。

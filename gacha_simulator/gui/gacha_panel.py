@@ -403,15 +403,6 @@ class GachaPanel(QWidget):
                 pity_counts.append(h.get('pity_triggers', 0))
                 final_time = h.get('final_time', 0)
                 sim_durations.append(final_time / 86400.0)
-            else:
-                draws = [iv for iv in h if iv.action_type == 'draw']
-                total_draws.append(len(draws))
-                ssr_count = sum(1 for iv in draws if iv.card_id in ssr_ids)
-                target_obtained = sum(1 for iv in draws if iv.card_id in target_ids)
-                ssr_counts.append(ssr_count)
-                target_rates.append((target_obtained / target_count) * 100 if target_ids else 0)
-                pity_counts.append(0)
-                sim_durations.append(0)
 
         if not total_draws:
             for row in range(5):

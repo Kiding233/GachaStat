@@ -1,12 +1,11 @@
 from .result_types import CompactResult
-from .collector import SimulationCollector, InfoVectorCollector, CompactCollector
+from .collector import SimulationCollector, CompactCollector
 from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, aggregate_probs_by_rarity, infer_rarity_from_spec  # ← P61（Ph1）
 from .notifier import Notifier
 from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
 from .banner import Banner, DrawOutcome, TransitionRule, TransitionPreview  # ← P61（Ph1c）
 from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
-from .info_vector import InfoVector
 from .pity import (
     PityBehavior, SoftStepBehavior,
     CounterBasedBehavior, HardPityBehavior,
@@ -55,10 +54,8 @@ from .config_toml import load_toml, save_toml
 from .distribution import EmpiricalDistribution, DistributionSummary, JointSamples
 from .gdr import GDRContext, UNIFIED_GDR_REGISTRY, register_gdr, GDRCalculator, make_gdr_calculator, GDRDefinition, populate_gdr_combo, get_default_threshold, compute_gdr_from_compact, compute_gdr_from_cumulative, compute_success_probability, parse_gdr_key, get_expanded_gdr_entries, resolve_gdr_definition, is_resource_gdr
 from .per_pool_analysis import (
-    PoolSnapshot, CumulativeSnapshot,
-    compute_per_pool_snapshots, compute_cumulative_snapshots,
-    compute_per_pool_snapshots_batch, compute_cumulative_snapshots_batch,
-    per_pool_summary_stats, cumulative_gdr_at_pool_ends,
+    PoolSnapshot,
+    per_pool_summary_stats,
     TransitionMatrix,
     compute_transition_matrices_from_flags, compute_transition_flags_from_gdr,
 )
@@ -99,7 +96,7 @@ from .process_analysis import (
 
 __all__ = [
     'CompactResult',
-    'SimulationCollector', 'InfoVectorCollector', 'CompactCollector',
+    'SimulationCollector', 'CompactCollector',
     'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
     'aggregate_probs_by_rarity', 'infer_rarity_from_spec',
     'Notifier',
@@ -107,7 +104,6 @@ __all__ = [
     'Banner', 'DrawOutcome', 'TransitionRule', 'TransitionPreview',
     'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
-    'InfoVector',
     'PityBehavior', 'SoftStepBehavior',
     'CounterBasedBehavior', 'HardPityBehavior',
     'PoolPitySpec',
@@ -144,10 +140,8 @@ __all__ = [
     'load_toml', 'save_toml',
     'EmpiricalDistribution', 'DistributionSummary', 'JointSamples',
     'GDRContext', 'UNIFIED_GDR_REGISTRY', 'register_gdr', 'GDRCalculator', 'make_gdr_calculator', 'GDRDefinition', 'populate_gdr_combo', 'get_default_threshold', 'compute_gdr_from_compact', 'compute_gdr_from_cumulative', 'compute_success_probability', 'parse_gdr_key', 'get_expanded_gdr_entries', 'resolve_gdr_definition', 'is_resource_gdr',
-    'PoolSnapshot', 'CumulativeSnapshot',
-    'compute_per_pool_snapshots', 'compute_cumulative_snapshots',
-    'compute_per_pool_snapshots_batch', 'compute_cumulative_snapshots_batch',
-    'per_pool_summary_stats', 'cumulative_gdr_at_pool_ends',
+    'PoolSnapshot',
+    'per_pool_summary_stats',
     'TransitionMatrix',
     'compute_transition_matrices_from_flags', 'compute_transition_flags_from_gdr',
     'VulnerabilityInterval', 'PityStatSnapshot', 'PoolVulnerabilityResult', 'VulnerabilityAnalysisResult',

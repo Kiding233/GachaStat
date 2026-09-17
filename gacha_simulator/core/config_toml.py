@@ -1310,8 +1310,6 @@ def _save_stop_condition(store: ConfigStore, data: dict) -> None:
         data['stop_condition'] = tree
 
 
-
-
 # P79 5.5 第 5 类：resource_threshold 的运算符白名单。
 # ResourceThresholdCondition.check 只对这三个值分支求值，其余值（含 => / =< /
 # 中文别名 / 空串）一律静默 return False——条件永不成立，用户看不到任何提示。
@@ -1549,7 +1547,6 @@ def _save_resource_lifecycle(store: ConfigStore, data: dict) -> None:
     data['resources']['lifecycle'] = {'enabled': True, 'rules': rules_out}
 
 
-
 def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linear') -> tuple:
     """将 soft_interval / soft_additive 语法糖展开为 deltas。
 
@@ -1684,17 +1681,6 @@ def _pitydef_to_toml(p) -> dict:
         entry['lifecycle'] = lifecycle
 
     return entry
-
-
-# ══════════════════════════════════════════════════════════════════
-# P55 阶段十B：旧格式自动迁移
-# ══════════════════════════════════════════════════════════════════
-
-# 旧格式特征字段——这些字段在新格式中不存在（被扁平化替代）
-_LEGACY_PITY_KEYS = frozenset({'start', 'end', 'func', 'reset', 'target',
-                               'counter_init_top'})
-
-
 
 
 def _build_rarity_defaults(data: dict, store: ConfigStore) -> None:

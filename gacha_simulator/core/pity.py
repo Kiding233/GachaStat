@@ -87,10 +87,6 @@ class LifecycleConfig:
 
 
 class PityBehavior(ABC):
-    def is_active(self, counter_value: int) -> bool:
-        """该保底在给定计数器值下是否影响概率。子类应覆写此方法。"""
-        return False
-
     def _rebind_state(self, state: 'PityState') -> None:
         """P75：将本 behavior 的 Counter/Flag 重绑到新的 PityState 实例。
 

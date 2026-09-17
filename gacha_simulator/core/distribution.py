@@ -1,9 +1,7 @@
 import math
 from typing import List, Callable, Tuple
-from dataclasses import dataclass
 
 
-@dataclass
 class JointSamples:
     def __init__(self, paired: List[Tuple[float, float]]):
         self._paired = list(paired)
@@ -24,6 +22,7 @@ class JointSamples:
     def conditional_second(self, predicate_on_first: Callable[[float], bool]) -> 'EmpiricalDistribution':
         filtered = [s for f, s in self._paired if predicate_on_first(f)]
         return EmpiricalDistribution(filtered)
+
 
 class EmpiricalDistribution:
     def __init__(self, samples: List[float]):
@@ -174,6 +173,7 @@ class EmpiricalDistribution:
 
     def var_median_diff(self, alpha: float = 0.05) -> float:
         return self.var(alpha) - self.median()
+
 
 def freedman_diaconis_bins(data, min_bins: int = 5, max_bins: int = 200) -> int:
     """Freedman-Diaconis 规则自适应 Bin 宽度: bin_width = 2 * IQR * n^(-1/3)"""

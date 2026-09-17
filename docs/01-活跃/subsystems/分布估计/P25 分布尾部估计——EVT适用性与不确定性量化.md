@@ -526,6 +526,8 @@ class EmpiricalDistribution:
 
 ### 6.5 缺陷 B6：条件顶部无样本量下限（低等）
 
+> **2026-09-17（P81 §十 收尾）**：本条对象 `conditional_top_alpha` 已删除（零调用）。**缺陷实质仍成立**：活跃入口 `JointSamples.conditional_second(predicate)` 的条件子集同样没有样本量下限，本条的推荐方案（`low_sample` 标记）应改挂到该入口，不得随对象一并作废。
+
 `conditional_top_alpha(alpha=0.05)` 在 n<20 时返回空分布。n=1000 时仅 50 个样本，在长尾分布中极不稳定。
 
 **推荐方案**：添加 `_low_sample` 标记——若条件子集的样本量 < 50，在返回的 `EmpiricalDistribution` 中标记 `low_sample=True`，UI 可据此显示「低样本量（n=X）」警告。

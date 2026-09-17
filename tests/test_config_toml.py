@@ -813,3 +813,33 @@ def _stats(**kw):
     for k, v in kw.items():
         setattr(s, k, v)
     return s
+
+
+def test_b8_legacy_colon_gain_rule_surfaces_as_load_warning():
+    """P81 B8：旧写法（参数嵌在类型串里）的增益规则在加载期报出、不阻断加载。
+
+    该写法已不再被识别——GUI 对未识别的类型统一显示为「每天」，用户无从察觉，
+    故必须靠告警说明「配置没按写的生效」。此处直接测 `_build_gain_rules`（告警
+    所在单元），不构造整份 TOML：主配置的 gain_rules 是内联数组，无法再追加同名表。
+    """
+    from gacha_simulator.core.config_store import ConfigStore
+    from gacha_simulator.core.config_toml import _build_gain_rules
+
+    store = ConfigStore()
+    _build_gain_rules({'resources': {'gain_rules': [
+        {'type': 'every_n_days:3', 'param': '', 'gains': {'draw_resource': 160}},
+    ]}}, store)
+
+    legacy = [w for w in store.load_warnings if '旧写法' in w]
+    assert len(legacy) == 1, store.load_warnings
+    assert 'every_n_days:3' in legacy[0]
+    # 不阻断：规则照常入 store（界面会显示为「每天」，用户靠上面这条告警察觉）
+    assert [r.rule_type for r in store.gain_rules] == ['every_n_days:3']
+
+    # 新格式（type + param 两字段）不产生该告警
+    store2 = ConfigStore()
+    _build_gain_rules({'resources': {'gain_rules': [
+        {'type': 'every_n_days', 'param': '3', 'gains': {'draw_resource': 160}},
+    ]}}, store2)
+    assert [w for w in store2.load_warnings if '旧写法' in w] == []
+    assert [r.rule_type for r in store2.gain_rules] == ['every_n_days']

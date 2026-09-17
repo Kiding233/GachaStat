@@ -1120,10 +1120,8 @@ class PityState:
         if "data" in d:
             # 防御性复制——确保 from_dict() 返回的 PityState 与输入 dict 完全解耦
             ps.data = {name: dict(ns) for name, ns in d["data"].items()}
-        elif "counters" in d:
-            # ── P60：旧格式自动升级 ──
-            for name, val in d["counters"].items():
-                ps.data[name] = {"counter": val}
+        # P81 B9：P60 之前的 {"counters": {...}} 旧序列化格式的自动升级分支已删除
+        # （其生产者只有测试；真实数据均为 to_dict() 产出的 {"data": {...}} 新格式）。
         return ps
 
 

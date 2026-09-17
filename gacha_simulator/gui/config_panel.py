@@ -7655,18 +7655,6 @@ def _gain_rule_type_to_gui(rule_type: str, param: str = '') -> str:
     if rule_type == 'monthly_week':
         return '每月第几周几'
 
-    # 兼容旧格式（rule_type 中仍含冒号+参数，未归一化数据）
-    if rule_type.startswith('every_n_days:'):
-        n = rule_type.split(':')[1].strip()
-        return '每天' if n == '1' else '每N天'
-    if rule_type.startswith('monthly_day:'):
-        param_str = rule_type.split(':', 1)[1].strip()
-        return '指定日期' if ',' in param_str else '每月第几天'
-    if rule_type.startswith('weekly:'):
-        return '每周几'
-    if rule_type.startswith('monthly_week:'):
-        return '每月第几周几'
-
     return '每天'
 
 
@@ -7679,13 +7667,6 @@ def _gain_rule_param_to_gui(rule_type: str, param: str = '') -> str:
         return param if param not in ('1', '') else ''
     if rule_type in ('weekly', 'monthly_day', 'monthly_week'):
         return param
-
-    # 兼容旧格式（rule_type 中仍含冒号+参数）
-    if ':' in rule_type:
-        if rule_type.startswith('every_n_days:'):
-            n = rule_type.split(':')[1].strip()
-            return n if n != '1' else ''
-        return rule_type.split(':', 1)[1].strip()
 
     return param if param else ''
 

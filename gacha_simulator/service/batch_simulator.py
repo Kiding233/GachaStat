@@ -277,7 +277,8 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
     pity_state = None
     if env.pity_state_init:
         from gacha_simulator.core.pity import PityState
-        # P60：from_dict 已内置旧格式自动升级（检测 'counters' 键自动迁移）
+        # P81 B9：from_dict 已删除 P60 之前的 'counters' 旧格式自动升级分支
+        # （真实数据均为 to_dict() 产出的新格式；旧格式不再被支持）
         pity_state = PityState.from_dict(env.pity_state_init)
 
     # P61 Ph0：装配层创建共享 Notifier 实例，与模拟循环 emit 同一实例（§3.5「Notifier 装配位置」）

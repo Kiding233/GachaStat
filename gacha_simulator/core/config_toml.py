@@ -550,8 +550,18 @@ def _build_gain_rules(data: dict, store: ConfigStore) -> None:
     """[[resources.gain_rules]] → store.gain_rules"""
     res = data.get('resources', {})
     for r in res.get('gain_rules', []):
+        rule_type = r['type']
+        # P81 B8：旧写法把参数嵌在类型串里（如 "every_n_days:3"），该兼容分支已删除。
+        # 命中时只告警、不改写——GUI 对未识别的类型统一显示为「每天」，用户无从察觉，
+        # 故必须在此报出（口径同 A5/B7：清理 + 让失效可见）。
+        if ':' in rule_type:
+            msg = (f"[[resources.gain_rules]] 的 type='{rule_type}' 使用 P55 之前的旧写法"
+                   f"（参数嵌在类型串中，已不再支持）。请改为 type + param 两个字段；"
+                   f"当前该规则在界面上会显示为「每天」，与配置不符。")
+            store.load_warnings.append(msg)
+            warnings.warn(msg)
         store.gain_rules.append(GainRule(
-            rule_type=r['type'],
+            rule_type=rule_type,
             param=str(r.get('param', '1')),
             gains=dict(r.get('gains', {})),
         ))

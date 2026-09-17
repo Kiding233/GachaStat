@@ -46,16 +46,6 @@ class GDRContext:
         )
 
 
-class WeightedGDRConfig:
-    def __init__(self, weight_config, scheme_map: Dict[str, str] = None):
-        self.weight_config = weight_config
-        self.scheme_map = scheme_map or {}
-
-    def get_weight_function(self, gdr_name: str) -> Callable[[str], float]:
-        scheme = self.scheme_map.get(gdr_name, 'default')
-        return self.weight_config.create_weight_function(scheme)
-
-
 def _count_draws(history) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for iv in history:
@@ -118,20 +108,6 @@ def all_targets_obtained(history, ctx: GDRContext) -> float:
 
 def ssr_collection_rate(history, ctx: GDRContext) -> float:
     return card_collection_rate(history, ctx, 'SSR', ctx.ssr_ids)
-
-
-def weighted_collection_rate(history, ctx: GDRContext, get_weight: Callable[[str], float], card_set: Optional[Set[str]] = None) -> float:
-    if not card_set:
-        return 0.0
-    counts = _count_draws(history)
-    weighted_obtained = 0.0
-    total_weight = 0.0
-    for card_id in card_set:
-        weight = get_weight(card_id)
-        total_weight += weight
-        if counts.get(card_id, 0) > 0:
-            weighted_obtained += weight
-    return weighted_obtained / total_weight if total_weight > 0 else 0.0
 
 
 def card_collection_rate(history, ctx: GDRContext, collection_name: str, card_set: Optional[Set[str]] = None) -> float:
@@ -225,18 +201,6 @@ def pity_draws(history, ctx: GDRContext) -> float:
         if iv.action_type == 'draw' and iv.pity_triggered:
             count += 1
     return float(count)
-
-
-def guaranteed_gdr(history, ctx: GDRContext, gdr_func: Callable, threshold: float) -> float:
-    value = gdr_func(history, ctx)
-    return 1.0 if value >= threshold else 0.0
-
-
-def joint_gdr(history, ctx: GDRContext, gdr_results: Dict[str, float], thresholds: Dict[str, float]) -> float:
-    for name, threshold in thresholds.items():
-        if gdr_results.get(name, 0) < threshold:
-            return 0.0
-    return 1.0
 
 
 def resource_efficiency(history, ctx: GDRContext) -> float:
@@ -856,93 +820,6 @@ def register_gdr(definition: GDRDefinition, *, overwrite: bool = False) -> None:
                 f"by key '{k}'. Choose a different display_name."
             )
     UNIFIED_GDR_REGISTRY[definition.key] = definition
-
-
-def _build_legacy_registries():
-    gdr_registry = {}
-    compact_gdr_registry = {}
-    for key, defn in UNIFIED_GDR_REGISTRY.items():
-        compact_gdr_registry[key] = (defn.display_name, defn.default_threshold)
-        if defn.compute_from_history is not None:
-            gdr_registry[defn.display_name] = defn.compute_from_history
-    return gdr_registry, compact_gdr_registry
-
-
-GDR_REGISTRY, COMPACT_GDR_REGISTRY = _build_legacy_registries()
-
-
-def compute_all_gdr(history, ctx: GDRContext) -> Dict[str, float]:
-    return {name: func(history, ctx) for name, func in GDR_REGISTRY.items()}
-
-
-def compute_collection_rates(history, ctx: GDRContext) -> Dict[str, float]:
-    rates = {}
-    for name, card_set in ctx.collection_sets.items():
-        rates[f'{name}收集率'] = card_collection_rate(history, ctx, name, card_set)
-    return rates
-
-
-def compute_weighted_gdr(
-    history, ctx: GDRContext,
-    weight_config_or_func: Any,
-    miss_cost_func: Callable[[str], float] = None
-) -> Dict[str, float]:
-    if callable(weight_config_or_func):
-        get_weight = weight_config_or_func
-    else:
-        get_weight = weight_config_or_func.create_weight_function('default')
-
-    results = {
-        '加权目标达成率': weighted_target_achievement_rate(history, ctx, get_weight),
-        '加权额外卡': weighted_extra_cards(history, ctx, get_weight),
-        '遗憾指数': regret_index(history, ctx, get_weight),
-        '总出卡价值': total_card_value(history, ctx, get_weight),
-    }
-    if miss_cost_func is not None:
-        results['加权满意度'] = weighted_satisfaction(history, ctx, get_weight, miss_cost_func)
-    return results
-
-
-def compute_custom_weighted_gdr(
-    history, ctx: GDRContext,
-    gdr_weight_configs: Dict[str, Any],
-    miss_cost_func: Callable[[str], float] = None
-) -> Dict[str, float]:
-    results = {}
-
-    for gdr_name, config in gdr_weight_configs.items():
-        if gdr_name == '加权目标达成率':
-            get_weight = config if callable(config) else config.create_weight_function(
-                config.scheme_map.get('加权目标达成率', 'default')
-            )
-            results[gdr_name] = weighted_target_achievement_rate(history, ctx, get_weight)
-
-        elif gdr_name == '加权额外卡':
-            get_weight = config if callable(config) else config.create_weight_function(
-                config.scheme_map.get('加权额外卡', 'default')
-            )
-            results[gdr_name] = weighted_extra_cards(history, ctx, get_weight)
-
-        elif gdr_name == '遗憾指数':
-            get_weight = config if callable(config) else config.create_weight_function(
-                config.scheme_map.get('遗憾指数', 'default')
-            )
-            results[gdr_name] = regret_index(history, ctx, get_weight)
-
-        elif gdr_name == '总出卡价值':
-            get_weight = config if callable(config) else config.create_weight_function(
-                config.scheme_map.get('总出卡价值', 'default')
-            )
-            results[gdr_name] = total_card_value(history, ctx, get_weight)
-
-        elif gdr_name == '加权满意度':
-            get_weight = config if callable(config) else config.create_weight_function(
-                config.scheme_map.get('加权满意度', 'default')
-            )
-            if miss_cost_func is not None:
-                results[gdr_name] = weighted_satisfaction(history, ctx, get_weight, miss_cost_func)
-
-    return results
 
 
 def compute_gdr_from_compact(

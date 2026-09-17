@@ -249,34 +249,6 @@ from gacha_simulator.strategies.builtin.no_draw import NoDrawStrategy  # noqa: E
 from gacha_simulator.strategies.builtin.draw_target import DrawTargetStrategy  # noqa: E402, F401
 
 
-class CompositeStrategy(Strategy):
-    """[DEPRECATED] 请使用 PriorityChainStrategy 替代。
-
-    P69 阶段 3：内部委托给 PriorityChainStrategy，实例化时发出 DeprecationWarning。
-    """
-
-    def __init__(self, strategies: List[Strategy], mode: str = 'first_valid'):
-        import warnings
-        warnings.warn(
-            "CompositeStrategy 已废弃，请使用 PriorityChainStrategy 替代",
-            DeprecationWarning, stacklevel=2,
-        )
-        if mode not in ('first_valid',):
-            raise ValueError(
-                f"CompositeStrategy mode must be 'first_valid', got '{mode}'"
-            )
-        self.strategies = strategies
-        self.mode = mode
-        self._delegate = PriorityChainStrategy(strategies)
-
-    @classmethod
-    def description(cls) -> str:
-        return "组合多个策略"
-
-    def select_action(self, ctx: StrategyContext) -> Action:
-        return self._delegate.select_action(ctx)
-
-
 # ── 复合策略 Building Block（P69 阶段 3） ─────────────────────────
 # 纯 Python API——不进入 TOML 序列化，不进入 GUI。
 # 供 coding agent 在插件策略中作为子策略组合使用。

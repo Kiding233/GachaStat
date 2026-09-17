@@ -27,7 +27,7 @@ from .strategy import (
     Strategy, StrategyContext, StrategyMeta, register_strategy,
     SmartStrategy, PoolQuotaStrategy, PityReserveStrategy, StopOnTargetStrategy,
     FixedCountStrategy, TargetHuntingStrategy, NoDrawStrategy, DrawTargetStrategy,
-    CompositeStrategy, DrawSegmentStrategy, PriorityChainStrategy, ConditionalStrategy,
+    DrawSegmentStrategy, PriorityChainStrategy, ConditionalStrategy,
     STRATEGY_REGISTRY, create_strategy, strategy_type_to_key, strategy_key_to_type,
     next_event_wait,
 )
@@ -54,13 +54,13 @@ from .target_card import TargetCard, TargetCardSet
 from .config_toml import load_toml, save_toml
 from .distribution import EmpiricalDistribution, DistributionSummary, JointSamples, WorstCaseAnalysis, BestCaseAnalysis
 from .risk_analysis import RiskAnalyzer
-from .gdr import GDRContext, GDR_REGISTRY, COMPACT_GDR_REGISTRY, UNIFIED_GDR_REGISTRY, register_gdr, GDRCalculator, make_gdr_calculator, GDRDefinition, populate_gdr_combo, get_default_threshold, compute_gdr_from_compact, compute_gdr_from_cumulative, compute_success_probability, parse_gdr_key, get_expanded_gdr_entries, resolve_gdr_definition, is_resource_gdr
+from .gdr import GDRContext, UNIFIED_GDR_REGISTRY, register_gdr, GDRCalculator, make_gdr_calculator, GDRDefinition, populate_gdr_combo, get_default_threshold, compute_gdr_from_compact, compute_gdr_from_cumulative, compute_success_probability, parse_gdr_key, get_expanded_gdr_entries, resolve_gdr_definition, is_resource_gdr
 from .per_pool_analysis import (
     PoolSnapshot, CumulativeSnapshot,
     compute_per_pool_snapshots, compute_cumulative_snapshots,
     compute_per_pool_snapshots_batch, compute_cumulative_snapshots_batch,
     per_pool_summary_stats, cumulative_gdr_at_pool_ends,
-    TransitionMatrix, compute_transition_matrices,
+    TransitionMatrix,
     compute_transition_matrices_from_flags, compute_transition_flags_from_gdr,
 )
 from .vulnerability import (
@@ -126,7 +126,7 @@ __all__ = [
     'Strategy', 'StrategyContext', 'StrategyMeta', 'register_strategy',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',
-    'CompositeStrategy', 'DrawSegmentStrategy', 'PriorityChainStrategy', 'ConditionalStrategy',
+    'DrawSegmentStrategy', 'PriorityChainStrategy', 'ConditionalStrategy',
     'STRATEGY_REGISTRY', 'create_strategy', 'strategy_type_to_key', 'strategy_key_to_type',
     'next_event_wait',
     'FloatParam', 'IntParam', 'BoolParam', 'StrParam', 'StringListParam', 'PoolIntMapParam',
@@ -145,12 +145,12 @@ __all__ = [
     'load_toml', 'save_toml',
     'EmpiricalDistribution', 'DistributionSummary', 'JointSamples', 'WorstCaseAnalysis', 'BestCaseAnalysis',
     'RiskAnalyzer',
-    'GDRContext', 'GDR_REGISTRY', 'COMPACT_GDR_REGISTRY', 'UNIFIED_GDR_REGISTRY', 'register_gdr', 'GDRCalculator', 'make_gdr_calculator', 'GDRDefinition', 'populate_gdr_combo', 'get_default_threshold', 'compute_gdr_from_compact', 'compute_gdr_from_cumulative', 'compute_success_probability', 'parse_gdr_key', 'get_expanded_gdr_entries', 'resolve_gdr_definition', 'is_resource_gdr',
+    'GDRContext', 'UNIFIED_GDR_REGISTRY', 'register_gdr', 'GDRCalculator', 'make_gdr_calculator', 'GDRDefinition', 'populate_gdr_combo', 'get_default_threshold', 'compute_gdr_from_compact', 'compute_gdr_from_cumulative', 'compute_success_probability', 'parse_gdr_key', 'get_expanded_gdr_entries', 'resolve_gdr_definition', 'is_resource_gdr',
     'PoolSnapshot', 'CumulativeSnapshot',
     'compute_per_pool_snapshots', 'compute_cumulative_snapshots',
     'compute_per_pool_snapshots_batch', 'compute_cumulative_snapshots_batch',
     'per_pool_summary_stats', 'cumulative_gdr_at_pool_ends',
-    'TransitionMatrix', 'compute_transition_matrices',
+    'TransitionMatrix',
     'compute_transition_matrices_from_flags', 'compute_transition_flags_from_gdr',
     'VulnerabilityInterval', 'PityStatSnapshot', 'PoolVulnerabilityResult', 'VulnerabilityAnalysisResult',
     'compute_vulnerability_analysis', 'plot_vulnerability', 'plot_vulnerability_ridge',

@@ -1,6 +1,5 @@
-from typing import List, Dict, Set, Callable
+from typing import List, Dict, Set
 from dataclasses import dataclass, field
-import warnings
 from .gdr import GDRContext
 
 
@@ -181,50 +180,6 @@ class TransitionMatrix:
     fail_to_fail: float
     success_rate_before: float
     success_rate_after: float
-
-
-def compute_transition_matrices(
-    histories, ctx: GDRContext,
-    pool_end_times: Dict[str, float],
-    target_ids: Set[str] = None,
-    success_func: Callable = None,
-) -> List[TransitionMatrix]:
-    """[deprecated] 基于 InfoVector 历史路径的转移矩阵计算。
-
-    请改用 compute_transition_matrices_from_flags() + compute_transition_flags_from_gdr()。
-    """
-    warnings.warn(
-        "compute_transition_matrices() 已废弃，请使用 "
-        "compute_transition_matrices_from_flags() + compute_transition_flags_from_gdr()",
-        DeprecationWarning, stacklevel=2,
-    )
-    sorted_pools = sorted(pool_end_times.items(), key=lambda x: x[1])
-    pool_ids_ordered = [pid for pid, _ in sorted_pools]
-
-    n_sims = len(histories)
-    if n_sims == 0:
-        return []
-
-    if success_func is None:
-        if target_ids is None:
-            target_ids = set(ctx.target_specs.keys())
-        total_target_qty = sum(ctx.target_specs.values())
-
-        def success_func(history, end_time):
-            obtained = 0
-            for iv in history:
-                if iv.action_type == 'draw' and iv.real_time_after <= end_time and iv.card_id in target_ids:
-                    obtained += 1
-            return obtained >= total_target_qty
-
-    success_flags_per_sim: List[List[bool]] = []
-    for h in histories:
-        flags = []
-        for pool_id, end_time in sorted_pools:
-            flags.append(success_func(h, end_time))
-        success_flags_per_sim.append(flags)
-
-    return compute_transition_matrices_from_flags(success_flags_per_sim, pool_ids_ordered)
 
 
 def compute_transition_matrices_from_flags(

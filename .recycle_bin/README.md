@@ -51,3 +51,9 @@
 | `2026-09-17-p81-archived-legacy-services/generalized_drop_rate.py`（193 行） | 时间索引模型 `GDR(t)` 的 ABC 与 8 个指标类；统一后改为「不依赖时刻 t 的终局口径」 | §三 B2 |
 
 **导出清理**：`core/__init__.py` 两个导入块 + 两段 `__all__`；`service/__init__.py` 现仅 `GachaService`。
+
+## P81 §三 批 B 归档（2026-09-17）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| （无整文件归档） | — | 批 B 是**代码内删除**而非文件归档，故本表无新增文件。涉及文件：`core/gdr.py`（删 A6 旧注册表族全块 + D1 四符号）、`core/strategy.py`（删 `CompositeStrategy`）、`core/per_pool_analysis.py`（删 `compute_transition_matrices` + 两处失效导入）、`core/__init__.py`（六处导出名移除）。 |

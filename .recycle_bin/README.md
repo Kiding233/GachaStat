@@ -95,3 +95,9 @@
 - **测试**：删 `TestNonCompactPath`（1 个用例）与 `TestPerPoolAnalysisBannerKeys`（2 个用例）。P72 的「键为 banner 级」约定仍由同文件的 `test_parallel_vs_single_thread_snapshot_equiv`（活跃抽取路径）守护
 
 **验证**：P79 在线护栏 14 passed 不变；全量 `pytest -q` **1563 → 1560 passed**（−3 = 上述三个用例，与「预期 −1」的差额系块 7 裁决新增的 2 个）；`ruff check` 全绿；`import gacha_simulator.core / service / cli` 通过。
+
+## P81 distribution.py 孤儿方法清理（2026-09-17）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| （无整文件归档） | — | 本批为**代码内删除**：删 `core/distribution.py` 的 13 个零调用方法与 `DistributionSummary` 类（唯一构造点是已删的 `summary()`），`core/__init__.py` 按名清两处导出。核验：AST 全库扫描零引用、无子类化、无动态属性钩子、`getattr` 字面名零命中、插件零引用。**注**：同批曾一度把 `DistributionSummary` 的 `@dataclass` 装饰器遗留在 `JointSamples` 上（致其不可哈希、`==` 恒真），已由 2026-09-17 收尾审查发现并修复 |

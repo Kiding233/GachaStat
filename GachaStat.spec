@@ -47,9 +47,9 @@ a = Analysis(
         'gacha_simulator.visualization.chart_spec',
         'gacha_simulator.visualization.plotly_charts',
 
-        # 排期生成器
-        'gacha_simulator.generator.schedule_generator',
-        'gacha_simulator.generator.target_generator',
+        # 2026-09-18（P81 §12.5.2）：原列 generator 的两模块。该包零生产消费者、
+        # **并非动态导入**（本注释此前称其为动态/惰性导入，经核查不成立），已整包归档，
+        # 本清单同步移除
     ],
 
     hookspath=[],

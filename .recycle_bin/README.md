@@ -101,3 +101,19 @@
 | 文件 | 归档原因 | 说明 |
 |------|---------|------|
 | （无整文件归档） | — | 本批为**代码内删除**：删 `core/distribution.py` 的 13 个零调用方法与 `DistributionSummary` 类（唯一构造点是已删的 `summary()`），`core/__init__.py` 按名清两处导出。核验：AST 全库扫描零引用、无子类化、无动态属性钩子、`getattr` 字面名零命中、插件零引用。**注**：同批曾一度把 `DistributionSummary` 的 `@dataclass` 装饰器遗留在 `JointSamples` 上（致其不可哈希、`==` 恒真），已由 2026-09-17 收尾审查发现并修复 |
+
+## P81 §12.5.2 generator 包归档（2026-09-18）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| `2026-09-18-p81-archived-generator/generator/`（`__init__.py` / `schedule_generator.py` / `target_generator.py`，共 101 行） | 整包零生产消费者 | 见 [P81 代码清理专项](../docs/02-待办/P81%20代码清理专项.md) §12.5.2。P53 把配置迁到单一 TOML 后，「程序化生成排期／目标」被「在 TOML 里写出来」取代；全库 import 只有它自己的 `__init__.py` 与两个测试，`core/`／`service/`／`gui/`／`webui/`／`cli.py`／`scripts/`／`tools/` 均无引用。**未损坏**（依赖的 `PoolSchedule`／`TargetCard` 字段未变），性质是「无人调用」而非「已失效」 |
+| `2026-09-18-p81-archived-generator/tests/`（`__init__.py` / `test_schedule_generator.py` / `test_target_generator.py`） | 随被测包一并归档 | 两个用例断言的是生成器自身行为，非活行为覆盖。**非覆盖度损失** |
+| `2026-09-18-p81-archived-generator/empty-dir-*` 与 `pycache-snapshots/` | 空目录会被 Python 3 当作命名空间包 | 移走文件后 `import gacha_simulator.generator` 仍会成功（返回 `_NamespacePath`），故连空目录与残留 `__pycache__` 一并移入（`rmdir` 被 H2 门控拦下，改用 `mv`）。**仅本地存在、未纳入 git**：空目录无法被 git 跟踪，`.pyc` 属构建产物 |
+
+**连带清理五处**：`GachaStat.spec` 的两行 hiddenimports ＋ `docs/01-活跃/subsystems/应用打包/02-实施.md` 的同一清单副本 ＋ `docs/01-活跃/subsystems/测试体系/02-实施.md` 的测试树。**其中两处注释的依据经核查不成立**（spec 称「动态/惰性导入」、文档副本称「GUI 可能通过配置面板引用」，实际全库零引用），已一并移除。
+
+## P81 §12.5.1 `to_html` 删除（2026-09-18）
+
+| 文件 | 归档原因 | 说明 |
+|------|---------|------|
+| （无整文件归档） | — | **代码内删除**：`gacha_simulator/visualization/plotly_charts.py` 删 `to_html`（24 行）与它独占的 `_HTML_TEMPLATE`（125 行），`tests/visualization/test_plotly_charts.py` 删 `TestToHtml`（3 用例）。**注意 `PlotlyRenderer` 本身未动**：`to_figure` 被 `gui/chart_webview.py:306/328` 调用、`_build_*` 经 f-string `getattr` 派发，均为活代码。`to_html` 的能力（把图表导成独立 HTML）在项目里已有两个更好做法：活的 WebView 路径，以及 `scripts/benchmark_chart.py` 用的 plotly 自带 `to_html`；且 P74 实施清单已写明「PlotlyRenderer 退役，ChartSpec IR 保留」 |

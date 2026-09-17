@@ -23,6 +23,7 @@ def renderer():
 
 
 class TestHistogram:
+
     def test_basic(self, renderer):
         spec = ChartSpec("histogram", HistogramData(np.array([1, 2, 2, 3, 3, 3])), "H", "X", "Y")
         fig = renderer.to_figure(spec)
@@ -51,6 +52,7 @@ class TestHistogram:
 
 
 class TestCDF:
+
     def test_basic(self, renderer):
         samples = np.array([1.0, 5.0, 10.0, 3.0, 7.0])
         spec = ChartSpec("cdf", CDFData(samples), "CDF")
@@ -70,6 +72,7 @@ class TestCDF:
 
 
 class TestRidge:
+
     def test_basic(self, renderer):
         spec = ChartSpec(
             "ridge",
@@ -121,6 +124,7 @@ class TestRidge:
 
 
 class TestBoxplot:
+
     def test_basic(self, renderer):
         spec = ChartSpec(
             "boxplot",
@@ -133,6 +137,7 @@ class TestBoxplot:
 
 
 class TestScatter:
+
     def test_markers_mode(self, renderer):
         spec = ChartSpec("scatter", ScatterData(np.array([1, 2]), np.array([3, 4]), "markers"), "S")
         fig = renderer.to_figure(spec)
@@ -145,6 +150,7 @@ class TestScatter:
 
 
 class TestBar:
+
     def test_basic(self, renderer):
         spec = ChartSpec("bar", BarData(["A", "B"], np.array([10, 20])), "Bar")
         fig = renderer.to_figure(spec)
@@ -153,6 +159,7 @@ class TestBar:
 
 
 class TestHeatmap:
+
     def test_basic(self, renderer):
         matrix = np.array([[1, 2], [3, 4]])
         spec = ChartSpec("heatmap", HeatmapData(matrix, ["r1", "r2"], ["c1", "c2"]), "HM")
@@ -177,6 +184,7 @@ class TestHeatmap:
 
 
 class TestAnnotations:
+
     def test_vline(self, renderer):
         spec = ChartSpec(
             "cdf", CDFData(np.array([0.5])), "CDF",
@@ -196,6 +204,7 @@ class TestAnnotations:
 
 
 class TestToJson:
+
     def test_valid_json(self, renderer):
         spec = ChartSpec("bar", BarData(["A"], np.array([1])), "B")
         json_str = renderer.to_json(spec)
@@ -207,29 +216,8 @@ class TestToJson:
         assert "layout" in data
 
 
-class TestToHtml:
-    def test_contains_plotly_js(self, renderer):
-        spec = ChartSpec("bar", BarData(["A"], np.array([1])), "B")
-        html = renderer.to_html({"chart1": spec}, "file:///tmp/plotly.min.js")
-        assert "file:///tmp/plotly.min.js" in html
-        assert "chart1" in html
-
-    def test_multi_chart_tabs(self, renderer):
-        s1 = ChartSpec("bar", BarData(["A"], np.array([1])), "图1")
-        s2 = ChartSpec("cdf", CDFData(np.array([0.5])), "图2")
-        html = renderer.to_html({"a": s1, "b": s2}, "file:///p.js", use_tabs=True)
-        assert "图1" in html
-        assert "图2" in html
-        # 标签模式应包含 tab-btn 类
-        assert "tab-btn" in html
-
-    def test_single_chart_no_tabs(self, renderer):
-        spec = ChartSpec("bar", BarData(["A"], np.array([1])), "单图")
-        html = renderer.to_html({"only": spec}, "file:///p.js")
-        assert "collapsible" in html
-
-
 class TestEncodeHeatmapBinary:
+
     def test_roundtrip(self):
         matrix = np.random.rand(100, 20)
         encoded = encode_heatmap_binary(matrix)
@@ -245,6 +233,7 @@ class TestEncodeHeatmapBinary:
 
 
 class TestErrorHandling:
+
     def test_unsupported_chart_type(self, renderer):
         spec = ChartSpec("histogram", HistogramData(np.array([1.0])), "H")
         spec.chart_type = "unsupported_type"

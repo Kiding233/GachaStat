@@ -246,8 +246,7 @@ class TestDeltasTable:
         panel.pity_list.setCurrentRow(0)
         ss_idx = next((i for i, (t, _) in enumerate(panel._PITY_TYPES)
                        if t == "soft_step"), None)
-        if ss_idx is None:
-            pytest.skip("soft_step 不在类型列表中")
+        assert ss_idx is not None, "soft_step 不在 _PITY_TYPES 中（类型表变更致本测试前提失效）"
         panel.pity_type_combo.setCurrentIndex(ss_idx)
         # 使用 isHidden() 而非 isVisible()：面板未显示时后者总是 False
         assert not panel._pity_deltas_group.isHidden()

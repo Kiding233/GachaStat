@@ -911,7 +911,6 @@ class ConfigPanel(QWidget):
         self.lifecycle_table.verticalHeader().setVisible(False)
         self.lifecycle_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.lifecycle_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.lifecycle_table.itemChanged.connect(self._on_lifecycle_item_changed)
         lifecycle_layout.addWidget(self.lifecycle_table)
         lc_btn_layout = QHBoxLayout()
         add_lc_btn = QPushButton("添加")
@@ -1981,10 +1980,6 @@ class ConfigPanel(QWidget):
         if row < 0 or row >= len(rules):
             return
         rules[row][key] = value
-
-    def _on_lifecycle_item_changed(self, item):
-        # 生命周期表为 cellWidget 驱动，无文本 item——此回调保留占位
-        pass
 
     def _add_lifecycle_row(self):
         bidx = self._current_banner_row

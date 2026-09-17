@@ -483,8 +483,8 @@ class WorstImpactAnalyzer:
             return None
 
         # P55：从扁平化 PityDef 构造引擎
-        # P81 §4.1-6：删除 is_new_format 假兼容检测；空列表显式 early-return，
-        # 保持「无引擎」语义（原由检测的隐式 return None 顺带产生）。
+        # P81 §4.1-6：原「假兼容」检测已删除；空列表显式 early-return，保持
+        # 「无引擎」语义（原由该检测的隐式 return None 顺带产生）。
         if not self.store.pity.pities:
             return None
 

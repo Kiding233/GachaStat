@@ -116,9 +116,9 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
 
     pities_cfg = pity_config.get('pities', [])
 
-    # P81 §4.1-6：删除 is_new_format 假兼容检测（其旧分支从未实现，非新格式时由
-    # 函数末尾隐式 return None 静默禁用保底）。空列表现显式 early-return，保持「无
-    # 引擎」语义不变——原语义正是由该隐式 return 顺带产生的。
+    # P81 §4.1-6：原「假兼容」检测已删除（其旧格式分支从未实现，非新格式时由函数
+    # 末尾隐式 return None 静默禁用保底）。空列表现显式 early-return，保持「无引擎」
+    # 语义不变：该语义原本是由那个隐式 return 顺带产生的。
     if not pities_cfg:
         return None
 

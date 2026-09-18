@@ -150,6 +150,7 @@ class Ref:
     status: str = "unparsed"
     detail: str = ""     # 状态的原因（别名命中、标准库、多候选等）
     line_in_file: bool | None = None
+    ref_span: tuple[int, int] | None = None   # 引用自己写的行号范围
     symbol: str | None = None
     symbol_span: tuple[int, int] | None = None
     symbol_fp: str | None = None
@@ -163,6 +164,7 @@ class Ref:
             "form": self.form, "context": self.context, "raw": self.raw,
             "target_raw": self.target_raw, "target": self.target,
             "status": self.status, "detail": self.detail,
+            "ref_span": list(self.ref_span) if self.ref_span else None,
             "symbol": self.symbol,
             "symbol_span": list(self.symbol_span) if self.symbol_span else None,
             "symbol_fp": self.symbol_fp,
@@ -470,6 +472,7 @@ def finish(ref: Ref, root: Path, idx_in, idx_all, idx_ign, cfg: Config, lines,
         return
 
     want = (int(start), int(end) if end else int(start))
+    ref.ref_span = want
     ref.target, ref.status, ref.detail = classify_target(
         ref.target_raw, root, idx_in, idx_all, idx_ign, cfg, ref.src, want)
     if ref.form == "bare" or ref.target is None:
@@ -597,11 +600,34 @@ SAMPLE_ORDER = ["ok", "module_level", "external", "ambiguous",
                 "file_not_found", "line_out_of_range", "unparsable"]
 
 
+def read_lines(path: Path) -> list[str]:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+
+def fenced(lines: list[str], span: tuple[int, int], mark: int | None = None,
+           limit: int = 14) -> str:
+    """把一段行范围渲染成带行号的代码块；mark 指定的行加一个箭头标记。"""
+    lo, hi = span
+    out = []
+    for n in range(lo, min(hi, lo + limit - 1) + 1):
+        if n - 1 >= len(lines):
+            break
+        arrow = ">>" if n == mark else "  "
+        out.append(f"{arrow}{n:>5} | {lines[n - 1]}")
+    if hi - lo + 1 > limit:
+        out.append(f"   ...  | （还有 {hi - lo + 1 - limit} 行）")
+    return "\n".join(out)
+
+
 def cmd_sample(args) -> int:
     """分层抽样，产出一份可复现的人工抽查清单。
 
     分层的理由：纯随机抽样会几乎全是 ok，测不出误报；抽查要看的是各类
     非 ok 项的判因对不对，以及 ok 项里有没有「解析成功但语义指错」的。
+    带 --detail 时额外给出上下游原文，让核对者不必自己开文件。
     """
     root = Path(args.root).resolve()
     cfg, note, cfg_path = load_config(root, args.config)
@@ -643,6 +669,48 @@ def cmd_sample(args) -> int:
         print(f"| {i} | `{loc}` | {r.context}/{r.form} | `{raw}` | "
               f"`{tgt}` | {sym} | |")
     print(f"\n统计：{dict(Counter(r.status for r in picked))}")
+
+    if not args.detail:
+        return 0
+
+    print("\n---\n\n## 逐条上下游对照\n")
+    for i, r in enumerate(picked, 1):
+        print(f"### {i}. `{r.src}:{r.line}`\n")
+        print(f"- 原文：`{r.raw}`（{r.context} / {r.form} / {r.status}"
+              + (f"，{r.detail}）" if r.detail else "）"))
+        print(f"- 解析到：`{r.target or '未解析'}`"
+              + (f"，所属 `{r.symbol}` {list(r.symbol_span)}"
+                 if r.symbol else ""))
+        if r.symbol_fp:
+            print(f"- 目标指纹：`{r.symbol_fp}`")
+        if r.section:
+            print(f"- 所在章节：`{r.section}` {list(r.section_span)}")
+        print("\n**引用所在处（箭头为引用行）**\n")
+        print("```")
+        print(fenced(read_lines(root / r.src), (max(1, r.line - 2), r.line + 2),
+                     mark=r.line))
+        print("```")
+        if r.target:
+            tlines = read_lines(root / r.target)
+            if r.ref_span and r.line_in_file is not False:
+                lo, hi = r.ref_span
+                print(f"\n**被引行号处的内容**（引用写的是 {lo}-{hi}，"
+                      f"箭头为起始行）\n")
+                print("```")
+                print(fenced(tlines, (max(1, lo - 3), hi + 3), mark=lo))
+                print("```")
+                if r.symbol:
+                    print(f"\n所属符号：`{r.symbol}` {list(r.symbol_span)}"
+                          f"，指纹 `{r.symbol_fp}`")
+            else:
+                print(f"\n**被引目标**：`{r.target}` 共 {len(tlines)} 行，"
+                      f"引用写的是 `{r.raw}`，对不上，故无对应内容。"
+                      f"文件末尾如下（{r.status}）：\n")
+                print("```")
+                print(fenced(tlines, (max(1, len(tlines) - 7), len(tlines))))
+                print("```")
+        print("\n- 判定（目标与范围是否就是文中所指的那一处）：____")
+        print("- 备注：\n")
     return 0
 
 
@@ -668,6 +736,9 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--n", type=int, default=20)
     m.add_argument("--seed", type=int, default=20260918)
     m.add_argument("--include-bare", action="store_true")
+    m.add_argument("--detail", action="store_true",
+                   help="每条附上引用所在处的原文与被引目标的当前内容，"
+                        "便于不开文件直接批注")
     m.set_defaults(func=cmd_sample)
 
     args = p.parse_args(argv)

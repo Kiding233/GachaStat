@@ -8,12 +8,25 @@
 2. 按状态分层抽样，产出一份可复现的人工抽查清单（`sample`）。
 
 「解析成功」不等于「指对了」。文件级解析只保证目标文件存在、行号落在文件内，
-而文档完全可能把锚点指到同一文件的另一处。故每条引用除 `status` 外另带
-`checks`（目标侧疑点），两者都干净才进迁移基线。已知的两类硬错及其判据：
+而文档完全可能把锚点指到同一文件的另一处。故每条引用除 `status` 外另带两层
+目标侧结论：
 
-* 锚点落在注释或空行上：注释永不改动，指纹也永不变，这样的错引用会永远
-  显示为「未漂移」，比报错更糟。
-* 文中点名的符号不覆盖目标行（如点名 `foo()` 而锚点落在同文件的别处）。
+* **门控层**（`checks`）：精度高的判据，命中者不进迁移基线。目前三条：模块级
+  单行锚点落在空行或注释上（指纹永不变化，错引用会永远显示为「未漂移」）；
+  文中点名的私有符号**全仓库都不存在**（被删或改名）；源与目标同文件且引用
+  位于字符串字面量里（测试数据被当成引用）。
+* **复核队列**（`queues`）：文中点名的符号不覆盖目标行。这条精度只有约七成
+  （文档既引定义处也引使用处，判据只认得出「不是定义处」），故只把可疑的排到
+  前面，由语义复核裁决，不门控。
+
+**`in_baseline` 只表示「确定性层面没发现问题」，不等于锚点指对了。** 独立审查
+实测基线内仍有约三成锚点指向错误位置，而那些错没有任何确定性判据能认出来
+（十个硬错里只有三个被任一条判据命中）。锚点得以确认的环节是迁移本身：迁移
+要为每条引用写出正确范围，那一步必须做语义判断。详见计划 §九。
+
+已知覆盖缺口：无文件名的行号引用（`` `L3899` ``、`` `:609` `` 一类）完全不识别，
+实测本仓库约 65 处、11 个文件，占存量的近两成。这类引用的指称对象靠上下文
+（同句或同节最近提到的文件名）确定，解析规则未定，尚未实现。
 
 不做的事：
 
@@ -44,6 +57,7 @@ import sys
 import tokenize
 from collections import Counter
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -165,18 +179,27 @@ class Ref:
     symbol: str | None = None
     symbol_span: tuple[int, int] | None = None
     symbol_fp: str | None = None
-    section: str | None = None
-    section_span: tuple[int, int] | None = None
-    section_fp: str | None = None
+    src_section: str | None = None
+    src_section_span: tuple[int, int] | None = None
+    src_section_fp: str | None = None
+    target_section: str | None = None
+    target_section_span: tuple[int, int] | None = None
+    target_section_fp: str | None = None
     index: int = -1      # 排序后的序号，供 dup_of 指向
     dup_of: int | None = None   # 同一行内与另一条引用指向同一处（链接文字与链接目标两半）
-    checks: list[str] = field(default_factory=list)   # 目标侧疑点
+    checks: list[str] = field(default_factory=list)   # 门控级疑点
+    queues: list[str] = field(default_factory=list)    # 复核队列（低精度，不门控）
     suggest: str | None = None  # 疑点成立时，文中点名符号的实际位置
     names: list[str] = field(default_factory=list)    # 文中点名且在目标文件里有定义的符号
 
     @property
     def in_baseline(self) -> bool:
-        """能否进迁移基线：解析干净且无目标侧疑点。"""
+        """能否进迁移基线：解析干净且无门控级疑点。
+
+        注意这只说明「确定性层面没发现问题」，**不等于锚点指对了**：独立
+        审查实测基线内仍有约三成锚点指向错误位置，而那些错没有任何确定性
+        判据能认出来。迁移本身才是锚点得以确认的环节，见计划 §九。
+        """
         return self.status in ("ok", "module_level") and not self.checks
 
     def to_dict(self) -> dict:
@@ -189,11 +212,17 @@ class Ref:
             "symbol": self.symbol,
             "symbol_span": list(self.symbol_span) if self.symbol_span else None,
             "symbol_fp": self.symbol_fp,
-            "section": self.section,
-            "section_span": list(self.section_span) if self.section_span else None,
-            "section_fp": self.section_fp,
+            "src_section": self.src_section,
+            "src_section_span": (list(self.src_section_span)
+                                 if self.src_section_span else None),
+            "src_section_fp": self.src_section_fp,
+            "target_section": self.target_section,
+            "target_section_span": (list(self.target_section_span)
+                                    if self.target_section_span else None),
+            "target_section_fp": self.target_section_fp,
             "duplicate_of": self.dup_of,
             "checks": list(self.checks),
+            "queues": list(self.queues),
             "suggest": self.suggest,
             "names": list(self.names),
             "in_baseline": self.in_baseline,
@@ -344,6 +373,35 @@ def parse_py(path: Path) -> ast.AST | None:
         return None
 
 
+@lru_cache(maxsize=None)
+def parse_py_cached(path_str: str) -> ast.AST | None:
+    """按路径缓存解析结果。
+
+    同一次运行里文件不会变，而同一个目标文件会被几十条引用反复引用
+    （实测 pity.py 六十余次）。没有这层缓存时，全仓库名表那一步会把
+    解析开销翻好几倍。
+    """
+    return parse_py(Path(path_str))
+
+
+def repo_defined_names(root: Path, paths: list[str]) -> set[str]:
+    """全仓库定义过的名字。
+
+    用来区分两件事：符号**已经不存在于仓库任何地方**（被删或改名，是漂移
+    信号），与符号**本来就在另一个文件里**（同一句话里引了两处而已）。
+    只看目标文件会把这第二种判成第一种：实测 `_check_pity_format` 与
+    `_resolve_order` 都因此被误报，它们好端端地在 config_toml.py 与 pity.py 里。
+    """
+    out: set[str] = set()
+    for rel in paths:
+        if not rel.endswith(".py"):
+            continue
+        tree = parse_py_cached(str(root / rel))
+        if tree is not None:
+            out.update(defined_symbols(tree))
+    return out
+
+
 def symbol_at(tree: ast.AST, line: int):
     """包含该行的最内层函数或类。返回 (限定名, (起, 止), 指纹)。"""
     best: tuple[int, str, tuple[int, int], ast.AST] | None = None
@@ -371,25 +429,42 @@ def fingerprint_node(node: ast.AST) -> str:
 
 
 def defined_symbols(tree: ast.AST) -> dict[str, list[tuple[int, int]]]:
-    """目标文件里定义过的名字 → 行范围。函数、类、模块级简单赋值。
+    """目标文件里定义过的名字 → 行范围。函数、类、方法、任意层级的赋值。
 
-    只在目标文件内部查找，不入 import 的名字：文档点名的若是外部符号，
-    这里查不到，也就不产生疑点，宁可漏报不误报。
+    必须走完整棵树，不能只看 `tree.body`。文档点名的常常是方法
+    （`_build_ridge`、`_auto_generate_resource_defs`），只看模块级就查不到，
+    判据 (a) 于是**永远没有生效的机会**。实测约三成以 .py 为目标的引用
+    落在这个盲区里，其中就有硬错。
+
+    限定名与末段名都登记：调用方按末段名匹配，`Foo.bar` 与 `bar` 都查得到。
     """
     out: dict[str, list[tuple[int, int]]] = {}
-    for node in tree.body:
-        lo = getattr(node, "lineno", None)
-        hi = getattr(node, "end_lineno", None) or lo
-        if lo is None:
-            continue
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            out.setdefault(node.name, []).append((lo, hi))
-        elif isinstance(node, ast.Assign):
-            for tgt in node.targets:
+
+    def walk(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef)):
+                name = prefix + child.name
+                lo = child.lineno
+                hi = child.end_lineno or lo
+                out.setdefault(child.name, []).append((lo, hi))
+                out.setdefault(name, []).append((lo, hi))
+                walk(child, name + ".")
+                continue
+            if isinstance(child, ast.Assign):
+                targets = child.targets
+            elif isinstance(child, ast.AnnAssign):
+                targets = [child.target]
+            else:
+                targets = []
+            for tgt in targets:
                 if isinstance(tgt, ast.Name):
-                    out.setdefault(tgt.id, []).append((lo, hi))
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            out.setdefault(node.target.id, []).append((lo, hi))
+                    lo = child.lineno
+                    out.setdefault(tgt.id, []).append(
+                        (lo, child.end_lineno or lo))
+            walk(child, prefix)
+
+    walk(tree, "")
     return out
 
 
@@ -397,76 +472,42 @@ NAME_RE = re.compile(r"(?<![A-Za-z0-9_])_?[A-Za-z][A-Za-z0-9_]{2,}(?![A-Za-z0-9_
 COMMENT_ONLY = re.compile(r"^\s*#")
 
 
-def named_tokens(text: str, skip: tuple[int, int] | None) -> list[str]:
-    """从一行里挑出「像符号名」的记号。
+def named_tokens(text: str, skip: tuple[int, int] | None) -> list[tuple[str, int]]:
+    """挑出「像符号名」的记号，返回 (名字, 在本段内的列)。
 
-    过滤靠两条：带下划线，或非首位有大写（普通散文词两样都不占）；以及
-    后面还要在目标文件里查得到定义。两道都过才可能产生疑点。
+    过滤靠三条：
+
+    * 带下划线，或非首位有大写（普通散文词两样都不占）；
+    * 前面不是 `.`（`config_toml._build_pity`、`ctx.draw.is_featured` 这类
+      被别的模块或对象限定的名字，本来就不该在目标文件里有定义）；
+    * 不落在引用自己那段文字里。
+
+    这一路只产出「疑点」供人工确认，不改判定、不自动处置，所以宁可多留；
+    精度交给后面四道收窄。
     """
-    out = []
+    out: list[tuple[str, int]] = []
     for m in NAME_RE.finditer(text):
         if skip and skip[0] <= m.start() < skip[1]:
             continue
+        if m.start() > 0 and text[m.start() - 1] == ".":
+            continue
         tok = m.group(0)
         if "_" in tok or any(c.isupper() for c in tok[1:]):
-            out.append(tok)
+            out.append((tok, m.start()))
     return out
 
 
-def py_target_checks(lines: list[str], line_no: int,
-                     defs: dict[str, list[tuple[int, int]]],
-                     names: list[str], enclosing: str | None,
-                     strings: set[int], single_line: bool):
-    """目标侧校验：锚点落的地方是不是文中说的那一处。
+def looks_like_symbol(name: str) -> bool:
+    """「查无此名」这条判据要用的更严过滤。
 
-    两类判据：
-
-    * 文中点名的符号不覆盖目标行。符号搬家后行号没跟着改，是典型形态。
-      实测精度很高（手查 18 条中 17 条是真错位，唯一误报是邻句符号被算作
-      本条的名字，已由分句收窄处理）。
-    * 模块级锚点落在注释或空行上。只对模块级成立：符号内部的锚点，指纹是
-      整个符号，代码动了指纹就动；而模块级的指纹就是被锚的那一行本身，
-      锚在永不改动的行上等于没有记忆，错引用会一直显示为「未漂移」。
-
-    注释本身不是疑点。本项目里注释承载论证，被文档有意引用是常态，实测
-    「锚点是注释」单独出现时 17 条里只有 3 条是真错，故不单独报。范围锚点也
-    不报，只有单行锚点才要求那一行本身站得住。
-
-    返回 (疑点列表, 建议锚点)。
+    只认下划线开头的名字。放宽到「任何像标识符的记号」试过一次，噪声压倒
+    信号：实测报出的是 `config_toml`、`gacha_service`、`card_obtained`、
+    `cr_state_probs` 这一类模块名与字段名，它们本来就不该在目标文件里有定义，
+    疑点从 46 条涨到 93 条而几乎全是误报。散文里写下划线开头的名字，基本
+    就是在指该文件的私有符号（实测命中的 `_total_resource_gained` 属此类，
+    它是 P81 已删的函数）。
     """
-    checks: list[str] = []
-    suggest: str | None = None
-    if 1 <= line_no <= len(lines) and line_no not in strings and single_line:
-        text = lines[line_no - 1]
-        if enclosing is None and not text.strip():
-            checks.append("模块级单行锚点落在空行上（指纹永不变化）")
-        elif enclosing is None and COMMENT_ONLY.match(text):
-            checks.append("模块级单行锚点落在注释上（指纹永不变化）")
-    for nm in sorted(set(names)):
-        spans = defs.get(nm)
-        if not spans:
-            continue
-        if enclosing and (enclosing == nm or enclosing.startswith(nm + ".")
-                          or enclosing.endswith("." + nm)):
-            continue
-        if any(lo <= line_no <= hi for lo, hi in spans):
-            continue
-        lo, hi = min(spans)
-        checks.append(f"文中点名 `{nm}`，它不覆盖目标行（它在 {lo}-{hi}）")
-        if suggest is None:
-            suggest = f"{lo}-{hi}"
-        break
-    return checks, suggest
-
-
-def source_names(text: str, skip: tuple[int, int] | None) -> list[str]:
-    """引用所在整行里「像符号名」的记号。取整行而非所在单元格：
-
-    实测的硬错形态是表格行 `| 6 | _gdr_resource_per_card() | gdr.py:427 | ... |`，
-    点名的符号与引用分处相邻两格，按格切会把这一条漏掉。取整行必然更吵，
-    所以这一路只产出「疑点」供人工确认，不改判定、不自动处置。
-    """
-    return named_tokens(text, skip)
+    return len(name) >= 6 and name.startswith("_") and not name.isupper()
 
 
 SENT_BREAK = re.compile(r"[。！？；;\n]")
@@ -479,19 +520,89 @@ def clause_of(text: str, col: int) -> tuple[str, int]:
     「`BootstrapEngine`（`core/bootstrap.py:33`）已实现……`BootstrapResult` 可直接
     使用」，整行取名字会把后半句的 `BootstrapResult` 栽给前半句的引用。
     """
-    bounds = [(0, len(text))]
     spans = [(m.start(), m.end()) for m in SENT_BREAK.finditer(text)]
-    if spans:
-        bounds = []
-        prev = 0
-        for s, e in spans:
-            bounds.append((prev, s))
-            prev = e
-        bounds.append((prev, len(text)))
+    bounds = []
+    prev = 0
+    for s, e in spans:
+        bounds.append((prev, s))
+        prev = e
+    bounds.append((prev, len(text)))
     for s, e in bounds:
         if s <= col < e:
             return text[s:e], s
     return text, 0
+
+
+def py_target_checks(lines: list[str], span: tuple[int, int],
+                     defs: dict[str, list[tuple[int, int]]],
+                     names: list[tuple[str, int]], enclosing: str | None,
+                     strings: set[int], global_names: set[str]):
+    """目标侧校验，产出两层结论。
+
+    **门控层**（`checks`，不进迁移基线）只放精度高的判据：
+
+    * 模块级单行锚点落在空行或注释上。只对模块级成立：符号内部的锚点指纹是
+      整个符号、代码动了指纹就动，而模块级的指纹就是被锚的那一行本身，锚在
+      永不改动的行上等于没有记忆。注释本身不是疑点（本项目注释承载论证、
+      被有意引用是常态），范围锚点也不报。
+    * 文中点名的私有符号在目标文件里**通篇找不到**。符号被删或改名时是这样，
+      是漂移信号里最强的一种。
+    * 源与目标同文件、且引用位于字符串字面量里（测试数据被当成引用）。
+
+    **复核队列**（`queues`，抬高语义复核的命中率，不作为门控）：文中点名的
+    符号不覆盖目标行。这条单独量过精度只有约 54%，因为文档既会引定义处、
+    也会引使用处，而判据只能认出「不是定义处」。把它当门控会挡掉大量正确
+    引用（实测 22 条），当队列则正好：它把可疑的排到前面，由语义复核裁决。
+
+    队列这条的四道收窄，每一道都是拿误报换来的，缺一不可：
+
+    * 被引处原文里出现该名字就不报（引的就是它，如 `scope_slots`）；
+    * 句中只要有一个名字覆盖目标行、或与锚点所属符号同名，一律不报
+      （少了这道，一行三条引用会拿同一个名字连报三次，实测 19 条误报全出此）；
+    * 被别的模块限定的名字（`config_toml._build_pity`）在取名时就已排除；
+    * 取离引用最近的名字，而不是字典序第一个。
+
+    返回 (门控疑点, 复核队列, 建议锚点)。
+    """
+    line_no = span[0]
+    checks: list[str] = []
+    queues: list[str] = []
+    suggest: str | None = None
+
+    if (1 <= line_no <= len(lines) and line_no not in strings
+            and span[0] == span[1]):
+        text = lines[line_no - 1]
+        if enclosing is None and not text.strip():
+            checks.append("模块级单行锚点落在空行上（指纹永不变化）")
+        elif enclosing is None and COMMENT_ONLY.match(text):
+            checks.append("模块级单行锚点落在注释上（指纹永不变化）")
+
+    cand = [nm for nm, _ in names]
+    cited = " ".join(lines[max(0, span[0] - 1):span[1]])
+    if any(nm in cited for nm in cand):
+        return checks, queues, suggest
+    for nm in cand:
+        spans = defs.get(nm)
+        if not spans:
+            continue
+        if any(lo <= line_no <= hi for lo, hi in spans):
+            return checks, queues, suggest
+        if enclosing and (enclosing == nm or enclosing.startswith(nm + ".")
+                          or enclosing.endswith("." + nm)):
+            return checks, queues, suggest
+
+    for nm in cand:
+        if nm in defs:
+            lo, hi = min(defs[nm])
+            queues.append(f"文中点名 `{nm}`，它不覆盖目标行（它在 {lo}-{hi}）")
+            suggest = f"{lo}-{hi}"
+            return checks, queues, suggest
+
+    for nm in cand:
+        if looks_like_symbol(nm) and nm not in global_names:
+            checks.append(f"文中点名 `{nm}`，全仓库都没有这个名字")
+            break
+    return checks, queues, suggest
 
 
 def tag(version: str, payload: str) -> str:
@@ -557,6 +668,7 @@ def py_signal_lines(text: str) -> tuple[set[int], set[int]]:
 
 
 def scan_file(root: Path, rel: str, idx_in, idx_all, idx_ign, cfg: Config,
+              global_names: set[str],
               include_bare: bool = False) -> list[Ref]:
     try:
         text = (root / rel).read_text(encoding="utf-8", errors="replace")
@@ -600,7 +712,7 @@ def scan_file(root: Path, rel: str, idx_in, idx_all, idx_ign, cfg: Config,
         ref = Ref(src=rel, line=pos[0], col=pos[1], form=form, context=context,
                   raw=raw, target_raw=target_raw)
         finish(ref, root, idx_in, idx_all, idx_ign, cfg, lines, is_md, stdlib,
-               start, end)
+               global_names, start, end)
         refs.append(ref)
 
     for m in RE_PLAIN.finditer(text):
@@ -626,7 +738,7 @@ def scan_file(root: Path, rel: str, idx_in, idx_all, idx_ign, cfg: Config,
 
 
 def finish(ref: Ref, root: Path, idx_in, idx_all, idx_ign, cfg: Config, lines,
-           is_md, stdlib, start, end) -> None:
+           is_md, stdlib, global_names, start, end) -> None:
     reason = looks_external(ref.target_raw, cfg, stdlib)
     if reason:
         ref.status, ref.detail = "external", reason
@@ -649,7 +761,7 @@ def finish(ref: Ref, root: Path, idx_in, idx_all, idx_ign, cfg: Config, lines,
         return
 
     if ref.target.endswith(".py"):
-        tree = parse_py(root / ref.target)
+        tree = parse_py_cached(str(root / ref.target))
         if tree is None:
             ref.status = "unparsable"
             return
@@ -662,25 +774,44 @@ def finish(ref: Ref, root: Path, idx_in, idx_all, idx_ign, cfg: Config, lines,
             ref.symbol_fp = fingerprint_lines(tlines, ref.symbol_span, LINE_VERSION)
             if ref.status == "ok":
                 ref.status = "module_level"
-        # 文中点名的符号。只看引用所在那一句，并跳过引用自己那段文字，
-        # 免得把路径当成符号名、把邻句的符号栽给这条引用。
+        # 文中点名的符号。只看引用所在那一句、只看引用左侧，并跳过引用
+        # 自己那段文字（免得把路径当成符号名、把邻句或解释性提及的符号
+        # 栽给这条引用）。
         src_text = lines[ref.line - 1] if 0 < ref.line <= len(lines) else ""
         clause, base = clause_of(src_text, ref.col)
-        names = source_names(clause,
-                             (ref.col - base, ref.col - base + len(ref.raw)))
+        ref_col = ref.col - base
+        names = [(nm, col) for nm, col in named_tokens(
+            clause, (ref_col, ref_col + len(ref.raw))) if col < ref_col]
+        names.sort(key=lambda t: ref_col - t[1])
         defs = defined_symbols(tree)
-        ref.names = sorted({n for n in names if n in defs})
+        ref.names = sorted({nm for nm, _ in names if nm in defs})
         _, tstrings = py_signal_lines("\n".join(tlines))
-        ref.checks, ref.suggest = py_target_checks(
-            tlines, int(start), defs, ref.names, found[0] if found else None,
-            tstrings, want[0] == want[1])
+        ref.checks, ref.queues, ref.suggest = py_target_checks(
+            tlines, want, defs, names, found[0] if found else None,
+            tstrings, global_names)
+    elif ref.target.endswith(".md"):
+        # .md 目标也要有被引侧指纹，否则这类引用在迁移时写不出记忆。
+        # 此前只算了源文档的章节，字段名又像是指目标侧，两者混在一起。
+        tlines = read_lines(root / ref.target)
+        tsec = section_at(sections_of(tlines), int(start))
+        if tsec:
+            ref.target_section = tsec[3]
+            ref.target_section_span = (tsec[0], tsec[1])
+            ref.target_section_fp = fingerprint_lines(tlines,
+                                                      ref.target_section_span)
+
+    # 源与目标同文件、且引用位于字符串字面量里：多半是测试数据或文档字符串
+    # 里的举例，不是真引用。实测全库唯一一条明确的「代码字符串误判为引用」
+    # 就属这一类，而它此前落在基线内。
+    if ref.context == "string" and ref.src == ref.target:
+        ref.checks.append("疑非引用（源与目标同文件且位于字符串内）")
 
     if is_md:
         sec = section_at(sections_of(lines), ref.line)
         if sec:
-            ref.section = sec[3]
-            ref.section_span = (sec[0], sec[1])
-            ref.section_fp = fingerprint_lines(lines, ref.section_span)
+            ref.src_section = sec[3]
+            ref.src_section_span = (sec[0], sec[1])
+            ref.src_section_fp = fingerprint_lines(lines, ref.src_section_span)
 
 
 def excluded(rel: str, excludes: list[str]) -> bool:
@@ -731,10 +862,11 @@ def run_scan(root: Path, cfg: Config, include_bare: bool,
     idx_in = build_index(targets)
     idx_all = build_index(all_tracked)   # 含被排除者，用来识别「目标已移出语料」
     idx_ign = build_index(ignored)       # 被忽略但存在，用来识别「不在版本库里」
+    global_names = repo_defined_names(root, targets)
     refs: list[Ref] = []
     for rel in scan_set:
         refs.extend(scan_file(root, rel, idx_in, idx_all, idx_ign, cfg,
-                              include_bare))
+                              global_names, include_bare))
     refs.sort(key=lambda r: (r.src, r.line, r.col))
     for i, r in enumerate(refs):
         r.index = i
@@ -792,14 +924,21 @@ def render_text(refs: list[Ref], paths: list[str], generated: list[str],
 
     distinct = [r for r in refs if r.dup_of is None]
     base = [r for r in distinct if r.in_baseline]
-    flagged = [r for r in distinct
-               if r.status in ("ok", "module_level") and r.checks]
-    print(f"迁移基线：可进 {len(base)} 条；"
-          f"解析成功但有目标侧疑点 {len(flagged)} 条（需人工重锚）")
-    if flagged:
-        print("疑点分布：")
-        for k, v in sorted(Counter(c.split("（")[0] for r in flagged
-                                   for c in r.checks).items(), key=lambda kv: -kv[1]):
+    gated = [r for r in distinct if r.checks]
+    queued = [r for r in distinct
+              if r.status in ("ok", "module_level") and r.queues and not r.checks]
+    print(f"解析干净 {len([r for r in distinct if r.status in ('ok', 'module_level')])} 条："
+          f"其中门控级疑点 {len(gated)} 条（不进基线），"
+          f"复核队列命中 {len(queued)} 条")
+    print(f"**迁移基线 {len(base)} 条。注意这只表示确定性层面没发现问题，"
+          f"不等于锚点指对了。**")
+    for title, group in (("门控疑点分布：", gated), ("复核队列分布：", queued)):
+        if not group:
+            continue
+        print(title)
+        counter = Counter(c.split("（")[0] for r in group
+                          for c in (r.checks or r.queues))
+        for k, v in sorted(counter.items(), key=lambda kv: -kv[1]):
             print(f"  {k}  {v}")
     print()
 
@@ -815,6 +954,8 @@ def render_text(refs: list[Ref], paths: list[str], generated: list[str],
         print(f"      -> {tgt}  {sym}  {r.symbol_fp or ''}")
         for c in r.checks:
             print(f"      !! {c}" + (f"  建议锚点 {r.suggest}" if r.suggest else ""))
+        for c in r.queues:
+            print(f"      ?  {c}" + (f"  建议锚点 {r.suggest}" if r.suggest else ""))
 
 
 def cmd_scan(args) -> int:
@@ -826,12 +967,16 @@ def cmd_scan(args) -> int:
                                      args.include_generated)
 
     if args.format == "json":
+        # ensure_ascii=True 是刻意的：stdout 的编码不一定支持全部字符
+        #（Windows 上非 UTF-8 代码页时，文档原文里的 emoji 会让 print 抛
+        # UnicodeEncodeError），而失败模式很坏——重定向文件里留下半截 JSON。
+        # 纯 ASCII 输出在任何编码下都成立，中文以 \uXXXX 转义，机器照样读。
         print(json.dumps(
             {"root": str(root), "files_scanned": len(paths),
              "config_used": str(cfg_path) if cfg_path else None,
              "self_output_excluded": generated,
              "refs": [r.to_dict() for r in refs]},
-            ensure_ascii=False, indent=2, sort_keys=True))
+            ensure_ascii=True, indent=2, sort_keys=True))
         return 0
 
     print(f"配置：{cfg_path if cfg_path else '未使用（内置默认）'}")
@@ -924,7 +1069,9 @@ def cmd_sample(args) -> int:
         raw = r.raw.replace("|", "\\|")[:60]
         tgt = (r.target or f"未解析({r.detail})").replace("|", "\\|")
         sym = (r.symbol or ("模块级" if r.symbol_span else "-")).replace("|", "\\|")
-        chk = "；".join(r.checks).replace("|", "\\|") or "-"
+        chk = "；".join(f"门控：{c}" for c in r.checks)
+        chk += "；".join(("；" if chk else "") + f"队列：{c}" for c in r.queues)
+        chk = chk.replace("|", "\\|") or "-"
         if r.suggest:
             chk += f"（建议 {r.suggest}）"
         loc = f"{r.src}:{r.line}"
@@ -936,8 +1083,8 @@ def cmd_sample(args) -> int:
     missing = [s for s in buckets if got.get(s, 0) == 0]
     if missing:
         print(f"抽到 0 条的类别（样本外）：{missing}")
-    flagged = [r for r in picked if r.checks]
-    print(f"带目标侧疑点的样本：{len(flagged)} / {len(picked)}")
+    print(f"带门控疑点的样本：{len([r for r in picked if r.checks])} / {len(picked)}")
+    print(f"命中复核队列的样本：{len([r for r in picked if r.queues])} / {len(picked)}")
 
     if not args.detail:
         return 0
@@ -954,11 +1101,20 @@ def cmd_sample(args) -> int:
             print(f"- 目标指纹：`{r.symbol_fp}`")
         if r.names:
             print(f"- 本行点名且在目标文件内有定义的符号：{r.names}")
+        if r.src_section:
+            print(f"- 引用所在章节（源文档）：`{r.src_section}` "
+                  f"{list(r.src_section_span)}")
+        if r.target_section_fp:
+            print(f"- 被引侧章节指纹：`{r.target_section_fp}`"
+                  f"（`{r.target_section}` {list(r.target_section_span)}）")
         for c in r.checks:
-            print(f"- **目标侧疑点**：{c}"
+            print(f"- **门控疑点**：{c}"
                   + (f"，建议锚点 `{r.suggest}`" if r.suggest else ""))
-        if r.section:
-            print(f"- 所在章节：`{r.section}` {list(r.section_span)}")
+        for c in r.queues:
+            print(f"- 复核队列：{c}"
+                  + (f"，建议锚点 `{r.suggest}`" if r.suggest else ""))
+        if r.src_section:
+            print(f"- 所在章节：`{r.src_section}` {list(r.src_section_span)}")
         print("\n**引用所在处（箭头为引用行）**\n")
         print("```")
         print(fenced(read_lines(root / r.src), (max(1, r.line - 2), r.line + 2),
@@ -995,6 +1151,15 @@ def cmd_sample(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 文本输出里会带文档原文（含 emoji）。终端编码不支持时 print 会抛
+    # UnicodeEncodeError，所以让不可编码的字符退化为转义而不是崩掉；
+    # 换成别的仓库、别的终端时这条尤其重要。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
     p = argparse.ArgumentParser(prog="refcheck",
                                 description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)

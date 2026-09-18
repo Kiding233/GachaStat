@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """refcheck 阶段一：解析与指纹内核（纯读，零写入）。
 
-只做一件事：把仓库里现存的引用找出来，解析它们指向什么，算出提议范围的指纹，
-产出一份「迁移就绪报告」。
+只做两件事：
+
+1. 把仓库里现存的引用找出来，解析它们指向什么，算出提议范围的指纹，
+   产出「迁移就绪报告」（`scan`）。
+2. 按状态分层抽样，产出一份可复现的人工抽查清单（`sample`）。
 
 不做的事：
 
 * 不写任何文件。
 * 不判定漂移。漂移需要「记忆」才能存在，而记忆由迁移写入；阶段一还没有记忆可比。
 
-设计上刻意不含本项目的任何专有知识（不认 03-归档、不认 gacha_simulator），
-扫描范围由 --include / --exclude 给出，以便同一份代码能直接搬到别的仓库。
+设计上刻意不含任何单个项目的专有知识（不认 03-归档、不认 gacha_simulator），
+扫描范围、歧义裁决与例外全部来自可选的 `refcheck.toml`，以便同一份代码直接搬到别的仓库。
 
 用法：
-    python tools/refcheck/refcheck.py scan --root .
-    python tools/refcheck/refcheck.py scan --exclude 'docs/03-归档/**' --all
+    python tools/refcheck/refcheck.py scan --root . --all
     python tools/refcheck/refcheck.py scan --format json > report.json
+    python tools/refcheck/refcheck.py sample --n 20 --seed 20260918
 """
 
 from __future__ import annotations
@@ -26,37 +29,105 @@ import fnmatch
 import hashlib
 import io
 import json
+import random
 import re
 import subprocess
 import sys
 import tokenize
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# 引用形态。三种是历史包袱，迁移的目标格式不含行号，故此处只负责识别与解析。
+# 引用形态。三种都是历史包袱：迁移的目标格式不含行号，此处只负责识别与解析。
 # ---------------------------------------------------------------------------
 
-# 形式一：文档正文或代码注释里的 `path/to/file.py:123` 或 `:123-456`
 RE_PLAIN = re.compile(
     r"(?P<path>[A-Za-z0-9_][A-Za-z0-9_./\\-]*\.(?:py|md|toml|yaml|yml|json))"
     r":(?P<start>\d+)(?:\s*-\s*(?P<end>\d+))?"
 )
-
-# 形式二：markdown 链接目标里的 `path/to/file.py#L123` 或 `#L123-L456`
 RE_LINK = re.compile(r"\]\((?P<target>[^)\s]+)\)")
 RE_ANCHOR = re.compile(r"^(?P<path>[^#]+)#L(?P<start>\d+)(?:-L(?P<end>\d+))?$")
-
-# 形式三：无行号的裸文件引用，如 「见 `streaming.py`」。只记录，不解析行。
-RE_BARE = re.compile(
-    r"`(?P<path>[A-Za-z0-9_][A-Za-z0-9_./\\-]*\.(?:py|md))`"
-)
-
+RE_BARE = re.compile(r"`(?P<path>[A-Za-z0-9_][A-Za-z0-9_./\\-]*\.(?:py|md))`")
 HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<title>.+?)\s*$")
 
-CACHE_VERSION = "ast-v1"
+AST_VERSION = "ast-v1"
 SECTION_VERSION = "sec-v1"
 LINE_VERSION = "line-v1"
+
+DEFAULT_INCLUDE = ["*.md", "**/*.md", "*.py", "**/*.py"]
+DEFAULT_EXCLUDES = [
+    "**/.venv/**", "**/venv/**", "**/node_modules/**", "**/vendor/**",
+    "**/build/**", "**/dist/**", "**/__pycache__/**",
+]
+
+CONFIG_NAME = "refcheck.toml"
+
+
+# ---------------------------------------------------------------------------
+# 配置：每仓库唯一需要手工补的东西是歧义裁决
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Config:
+    include: list[str]
+    exclude: list[str]
+    alias: dict[str, str]                       # 歧义 basename -> 真实路径（全局兜底）
+    scoped: dict[str, dict[str, str]]           # 源文件 -> 该文件内的裁决
+    external: list[str]                         # 显式声明为仓库外的路径前缀
+
+    @staticmethod
+    def defaults() -> Config:
+        return Config(list(DEFAULT_INCLUDE), list(DEFAULT_EXCLUDES), {}, {}, [])
+
+
+def config_candidates(root: Path) -> list[Path]:
+    """配置的查找顺序：先仓库根，再工具目录。
+
+    两个位置都给是因为不同仓库对根目录的写入限制不同：本仓库的提交门控只允许
+    少数几个根级文件，故配置放在工具目录下；换一个不限制的仓库，放根目录更显眼。
+    """
+    return [root / CONFIG_NAME, Path(__file__).resolve().parent / CONFIG_NAME]
+
+
+def load_config(root: Path, explicit: str | None) -> tuple[Config, str, Path | None]:
+    """读配置，缺省则用默认。返回 (配置, 提示信息, 实际使用的配置文件)。
+
+    第三个返回值要显示出来：配置随工具目录一起复制，换仓库时会被带走，
+    而带错了配置的后果是排除范围与歧义裁决都错，且症状不明显。
+    """
+    cfg = Config.defaults()
+    if explicit:
+        path = Path(explicit)
+        if not path.exists():
+            return cfg, f"指定的配置 {explicit} 不存在", None
+    else:
+        found = [p for p in config_candidates(root) if p.exists()]
+        if not found:
+            return cfg, None, None
+        path = found[0]
+    try:
+        import tomllib
+    except ImportError:  # Python 3.10
+        return cfg, f"{path.name} 存在但本 Python 无 tomllib，配置未生效", path
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return cfg, f"{path.name} 解析失败（{exc}），配置未生效", path
+
+    scope = data.get("scope", {})
+    cfg.include = scope.get("include", cfg.include)
+    cfg.exclude = DEFAULT_EXCLUDES + list(scope.get("exclude", []))
+    resolve = data.get("resolve", {})
+    cfg.alias = dict(resolve.get("alias", {}))
+    cfg.external = list(resolve.get("external", []))
+    for item in resolve.get("scoped", []):
+        src = item.get("src")
+        if src:
+            cfg.scoped.setdefault(src.replace("\\", "/"), {}).update(
+                {k: v for k, v in item.items() if k != "src"})
+    return cfg, None, path
 
 
 # ---------------------------------------------------------------------------
@@ -68,34 +139,30 @@ LINE_VERSION = "line-v1"
 class Ref:
     """一条被识别出的引用。"""
 
-    src: str            # 出现引用的文件（相对 root）
-    line: int           # 1 起
-    col: int            # 0 起
-    form: str           # plain / link / bare
-    context: str        # prose / md-link / comment / string
-    raw: str            # 命中的原文
+    src: str
+    line: int
+    col: int
+    form: str            # plain / link / bare
+    context: str         # prose / md-link / comment / string / code
+    raw: str
     target_raw: str = ""
-    target: str | None = None       # 解析到的受控文件，未解析为 None
-    status: str = "unparsed"        # ok / file_not_found / ambiguous / module_level
+    target: str | None = None
+    status: str = "unparsed"
+    detail: str = ""     # 状态的原因（别名命中、标准库、多候选等）
     line_in_file: bool | None = None
-    symbol: str | None = None       # 目标的最近外层符号，模块级为 None
+    symbol: str | None = None
     symbol_span: tuple[int, int] | None = None
     symbol_fp: str | None = None
-    section: str | None = None      # 源文件为 markdown 时，所属标题
+    section: str | None = None
     section_span: tuple[int, int] | None = None
     section_fp: str | None = None
 
     def to_dict(self) -> dict:
-        d = {
-            "src": self.src,
-            "line": self.line,
-            "col": self.col,
-            "form": self.form,
-            "context": self.context,
-            "raw": self.raw,
-            "target_raw": self.target_raw,
-            "target": self.target,
-            "status": self.status,
+        return {
+            "src": self.src, "line": self.line, "col": self.col,
+            "form": self.form, "context": self.context, "raw": self.raw,
+            "target_raw": self.target_raw, "target": self.target,
+            "status": self.status, "detail": self.detail,
             "symbol": self.symbol,
             "symbol_span": list(self.symbol_span) if self.symbol_span else None,
             "symbol_fp": self.symbol_fp,
@@ -103,11 +170,10 @@ class Ref:
             "section_span": list(self.section_span) if self.section_span else None,
             "section_fp": self.section_fp,
         }
-        return d
 
 
 # ---------------------------------------------------------------------------
-# 仓库侧：受控文件与解析索引
+# 仓库侧
 # ---------------------------------------------------------------------------
 
 
@@ -124,30 +190,111 @@ def tracked_files(root: Path) -> list[str]:
     return sorted(p for p in out.split("\0") if p.strip())
 
 
+def ignored_files(root: Path) -> list[str]:
+    """被 .gitignore 排除、但磁盘上存在的文件。
+
+    这一档不可少：项目里真实存在「文档引用被忽略的脚本」这种情况
+    （本仓库的 scripts/profile_*.py 即是），把它们算成「文件不存在」会给出
+    错误的处置建议（去修引用），而正确处置是「纳管、声明为外部、或停止引用」。
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-o", "-i", "--exclude-standard", "-z"],
+        cwd=root, capture_output=True, text=True,
+        encoding="utf-8", errors="surrogateescape",
+    ).stdout
+    return sorted(p for p in out.split("\0") if p.strip())
+
+
 def build_index(paths: list[str]) -> dict[str, list[str]]:
-    """basename -> 全部同名候选，供消歧用。"""
     index: dict[str, list[str]] = {}
     for p in paths:
         index.setdefault(p.replace("\\", "/").split("/")[-1], []).append(p)
     return index
 
 
-def resolve_target(raw: str, index: dict[str, list[str]]) -> tuple[str | None, str]:
-    """把引用里写的路径解析成受控文件。返回 (路径, 状态)。"""
+def stdlib_names() -> frozenset[str]:
+    return frozenset(getattr(sys, "stdlib_module_names", frozenset()))
+
+
+def looks_external(raw: str, cfg: Config, stdlib: frozenset[str]) -> str:
+    """判断是否本就指向仓库外的东西。返回原因，否则空串。"""
+    posix = raw.replace("\\", "/").lstrip("./")
+    if any(posix.startswith(prefix) for prefix in cfg.external):
+        return "配置声明为外部"
+    parts = posix.split("/")
+    for seg in parts[:-1]:
+        if seg in stdlib:
+            return f"标准库 {seg}"
+    if len(parts) == 1 and parts[0][:-3] in stdlib:
+        return f"标准库 {parts[0][:-3]}"
+    return ""
+
+
+def line_count(path: Path) -> int:
+    try:
+        return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:
+        return -1
+
+
+def classify_target(raw: str, root: Path, idx_in: dict, idx_all: dict,
+                    idx_ign: dict, cfg: Config, src: str,
+                    want: tuple[int, int] | None):
+    """按一条阶梯给引用定性，每一档对应一种不同的处置。
+
+    分档的意义在于「处置方式不同」：ok 无需动作；out_of_scope 是范围配置问题；
+    untracked 是「文件不在版本库里」（纳管、声明为外部、或停止引用）；
+    file_not_found 才是真的引用失效。
+    """
     clean = raw.replace("\\", "/").lstrip("./")
-    if clean in index.get(clean.split("/")[-1], []):
-        return clean, "ok"
     base = clean.split("/")[-1]
-    cands = [p for p in index.get(base, []) if p.replace("\\", "/").endswith(clean)]
-    if len(cands) == 1:
-        return cands[0], "ok"
-    if not cands and len(index.get(base, [])) == 1:
-        return index[base][0], "ok"
-    return None, "ambiguous" if cands else "file_not_found"
+
+    scoped = cfg.scoped.get(src, {})
+    if base in scoped:
+        return scoped[base], "ok", "按源文件裁决"
+    if base in cfg.alias:
+        return cfg.alias[base], "ok", "按全局别名裁决"
+
+    tiers = ((idx_in, "ok"), (idx_all, "out_of_scope"), (idx_ign, "untracked"))
+    for idx, verdict in tiers:
+        if clean in idx.get(base, []):
+            return clean, verdict, ""
+        cands = [p for p in idx.get(base, [])
+                 if p.replace("\\", "/").endswith(clean)]
+        if len(cands) == 1:
+            return cands[0], verdict, ""
+        if not cands and len(idx.get(base, [])) == 1:
+            return idx[base][0], verdict, ""
+        if len(cands) > 1 or len(idx.get(base, [])) > 1:
+            pool = cands if len(cands) > 1 else idx[base]
+            return None, "ambiguous", describe_candidates(pool, root, want)
+
+    disk = root / clean
+    if disk.exists():
+        return None, "untracked", "磁盘有、版本库无（疑被 .gitignore 排除）"
+    return None, "file_not_found", ""
+
+
+def describe_candidates(cands: list[str], root: Path,
+                        want: tuple[int, int] | None) -> str:
+    """列出候选并标出「行号范围能否容纳」，这是人做裁决时最需要的一条判据。
+
+    空文件与行数不足的候选会被标出来，因为这两类是歧义噪声的主要来源。
+    """
+    parts = []
+    for c in sorted(cands):
+        n = line_count(root / c)
+        mark = ""
+        if n == 0:
+            mark = "空文件"
+        elif want and n < want[1]:
+            mark = f"容不下 {want[0]}-{want[1]}"
+        parts.append(f"{c}({n} 行{('，' + mark) if mark else ''})")
+    return f"{len(cands)} 个候选：" + " / ".join(parts)
 
 
 # ---------------------------------------------------------------------------
-# 代码侧：符号定位与指纹
+# 代码侧
 # ---------------------------------------------------------------------------
 
 
@@ -179,9 +326,9 @@ def symbol_at(tree: ast.AST, line: int):
 
 
 def fingerprint_node(node: ast.AST) -> str:
-    """归一化哈希。注释不在 AST 内，故不受格式变动影响；docstring 在，故其变更计入。"""
-    return tag(CACHE_VERSION, ast.dump(node, annotate_fields=False,
-                                       include_attributes=False))
+    """归一化哈希。注释不在 AST 内，故格式变动不影响；docstring 在，故其变更计入。"""
+    return tag(AST_VERSION, ast.dump(node, annotate_fields=False,
+                                     include_attributes=False))
 
 
 def tag(version: str, payload: str) -> str:
@@ -190,12 +337,11 @@ def tag(version: str, payload: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 文档侧：所属标题与指纹
+# 文档侧
 # ---------------------------------------------------------------------------
 
 
 def sections_of(lines: list[str]) -> list[tuple[int, int, int, str]]:
-    """返回 [(起行, 止行, 层级, 标题)]，1 起，止行含。"""
     heads = []
     for i, text in enumerate(lines, 1):
         m = HEADING.match(text)
@@ -222,7 +368,7 @@ def section_at(sections: list[tuple[int, int, int, str]], line: int):
 
 def fingerprint_lines(lines: list[str], span: tuple[int, int],
                       version: str = SECTION_VERSION) -> str:
-    """行范围指纹：空白归一化。行号不进哈希，故位移不触发。"""
+    """行范围指纹：空白归一化。行号不进哈希，故位置位移不触发。"""
     chunk = " ".join(" ".join(lines[span[0] - 1:span[1]]).split())
     return tag(version, chunk)
 
@@ -241,112 +387,104 @@ def py_signal_lines(text: str) -> tuple[set[int], set[int]]:
             if tok.type == tokenize.COMMENT:
                 comments.add(tok.start[0])
             elif tok.type == tokenize.STRING:
-                for row in range(tok.start[0], tok.end[0] + 1):
-                    strings.add(row)
+                strings.update(range(tok.start[0], tok.end[0] + 1))
     except (tokenize.TokenError, IndentationError, SyntaxError, ValueError):
         pass
     return comments, strings
 
 
-DEFAULT_EXCLUDES = [
-    "**/.venv/**", "**/venv/**", "**/node_modules/**", "**/vendor/**",
-    "**/build/**", "**/dist/**", "**/__pycache__/**",
-]
-
-
-def scan_file(root: Path, rel: str, index: dict[str, list[str]],
+def scan_file(root: Path, rel: str, idx_in, idx_all, idx_ign, cfg: Config,
               include_bare: bool = False) -> list[Ref]:
-    path = root / rel
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = (root / rel).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
 
     lines = text.splitlines()
     is_md = rel.endswith(".md")
+    stdlib = stdlib_names()
     refs: list[Ref] = []
 
     if is_md:
         link_spans = [(m.start(), m.end()) for m in RE_LINK.finditer(text)]
+        comments: set[int] = set()
+        strings: set[int] = set()
     else:
         comments, strings = py_signal_lines(text)
         link_spans = []
 
     def offset_to_pos(off: int) -> tuple[int, int]:
-        line = text.count("\n", 0, off) + 1
-        col = off - (text.rfind("\n", 0, off) + 1)
-        return line, col
+        return (text.count("\n", 0, off) + 1,
+                off - (text.rfind("\n", 0, off) + 1))
 
-    def context_of(pos: tuple[int, int], inside_link: bool, off: int) -> str:
+    def context_of(pos, inside_link: bool) -> str:
         if inside_link:
             return "md-link"
         if is_md:
             return "prose"
-        row = pos[0]
-        if row in comments:
+        if pos[0] in comments:
             return "comment"
-        if row in strings:
+        if pos[0] in strings:
             return "string"
         return "code"
 
     seen: set[tuple[int, int]] = set()
 
     def add(pos, form, context, raw, target_raw, start=None, end=None):
-        key = (pos[0], pos[1])
-        if key in seen:
+        if (pos[0], pos[1]) in seen:
             return
-        seen.add(key)
-        r = Ref(src=rel, line=pos[0], col=pos[1], form=form, context=context,
-                raw=raw, target_raw=target_raw)
-        finish(r, root, index, lines, is_md, start, end)
-        refs.append(r)
+        seen.add((pos[0], pos[1]))
+        ref = Ref(src=rel, line=pos[0], col=pos[1], form=form, context=context,
+                  raw=raw, target_raw=target_raw)
+        finish(ref, root, idx_in, idx_all, idx_ign, cfg, lines, is_md, stdlib,
+               start, end)
+        refs.append(ref)
 
     for m in RE_PLAIN.finditer(text):
         pos = offset_to_pos(m.start())
         inside = any(s <= m.start() < e for s, e in link_spans)
-        add(pos, "plain", context_of(pos, inside, m.start()), m.group(0),
+        add(pos, "plain", context_of(pos, inside), m.group(0),
             m.group("path"), m.group("start"), m.group("end"))
 
     for m in RE_LINK.finditer(text):
         inner = RE_ANCHOR.match(m.group("target"))
-        if not inner:
-            continue
-        pos = offset_to_pos(m.start())
-        add(pos, "link", "md-link", m.group(0), inner.group("path"),
-            inner.group("start"), inner.group("end"))
+        if inner:
+            add(offset_to_pos(m.start()), "link", "md-link", m.group(0),
+                inner.group("path"), inner.group("start"), inner.group("end"))
 
     if include_bare:
         for m in RE_BARE.finditer(text):
-            pos = offset_to_pos(m.start())
-            raw = m.group(0)
-            if ":" in raw:
+            if ":" in m.group(0):
                 continue
-            add(pos, "bare", context_of(pos, False, m.start()), raw, m.group("path"))
+            pos = offset_to_pos(m.start())
+            add(pos, "bare", context_of(pos, False), m.group(0), m.group("path"))
 
     return refs
 
 
-def finish(ref: Ref, root: Path, index, lines, is_md, start, end) -> None:
-    ref.target, ref.status = resolve_target(ref.target_raw, index)
-
-    if ref.form == "bare":
+def finish(ref: Ref, root: Path, idx_in, idx_all, idx_ign, cfg: Config, lines,
+           is_md, stdlib, start, end) -> None:
+    reason = looks_external(ref.target_raw, cfg, stdlib)
+    if reason:
+        ref.status, ref.detail = "external", reason
         return
-    if ref.target is None:
+
+    want = (int(start), int(end) if end else int(start))
+    ref.target, ref.status, ref.detail = classify_target(
+        ref.target_raw, root, idx_in, idx_all, idx_ign, cfg, ref.src, want)
+    if ref.form == "bare" or ref.target is None:
         return
 
-    total = None
-    if ref.target.endswith((".py", ".md")):
-        try:
-            total = len((root / ref.target).read_text(
-                encoding="utf-8", errors="replace").splitlines())
-        except OSError:
-            total = None
+    total = line_count(root / ref.target) if ref.target.endswith((".py", ".md")) else -1
     hi = int(end) if end else int(start)
-    ref.line_in_file = bool(total and int(start) <= total and hi <= total)
-    if total and not ref.line_in_file:
-        ref.status = "line_out_of_range"
+    if total >= 0:
+        ref.line_in_file = int(start) <= total and hi <= total
+        if not ref.line_in_file:
+            ref.status = "line_out_of_range"
+    if ref.line_in_file is False:
+        return
 
-    if ref.target.endswith(".py") and ref.line_in_file is not False:
+    if ref.target.endswith(".py"):
         tree = parse_py(root / ref.target)
         if tree is None:
             ref.status = "unparsable"
@@ -360,9 +498,10 @@ def finish(ref: Ref, root: Path, index, lines, is_md, start, end) -> None:
                 (root / ref.target).read_text(encoding="utf-8",
                                               errors="replace").splitlines(),
                 ref.symbol_span, LINE_VERSION)
-            ref.status = "module_level" if ref.status == "ok" else ref.status
+            if ref.status == "ok":
+                ref.status = "module_level"
 
-    if is_md and ref.line_in_file is not False:
+    if is_md:
         sec = section_at(sections_of(lines), ref.line)
         if sec:
             ref.section = sec[3]
@@ -370,81 +509,166 @@ def finish(ref: Ref, root: Path, index, lines, is_md, start, end) -> None:
             ref.section_fp = fingerprint_lines(lines, ref.section_span)
 
 
+def excluded(rel: str, excludes: list[str]) -> bool:
+    posix = rel.replace("\\", "/")
+    return any(fnmatch.fnmatch(posix, pat) for pat in excludes)
+
+
 def in_scope(rel: str, includes: list[str], excludes: list[str]) -> bool:
     posix = rel.replace("\\", "/")
     if not any(fnmatch.fnmatch(posix, pat) for pat in includes):
         return False
-    return not any(fnmatch.fnmatch(posix, pat) for pat in excludes)
+    return not excluded(rel, excludes)
 
 
-def cmd_scan(args) -> int:
-    root = Path(args.root).resolve()
-    excludes = DEFAULT_EXCLUDES + list(args.exclude)
+def run_scan(root: Path, cfg: Config, include_bare: bool):
+    """扫描集与解析集是两件事，别混。
+
+    * 扫描集：去哪里**找**引用（include globs 决定，例如只扫 .md 与 .py）
+    * 解析集：哪些文件算**合法目标**（全部受控文件减去显式排除）
+
+    早先把解析集也建成扫描集，后果是引用了 `pyproject.toml` 这种非扫描扩展名的
+    引用被误判成「范围之外」。
+    """
     all_tracked = tracked_files(root)
-    paths = [p for p in all_tracked if in_scope(p, args.include, excludes)]
-    index = build_index(all_tracked)
-
+    ignored = ignored_files(root)
+    targets = [p for p in all_tracked if not excluded(p, cfg.exclude)]
+    scan_set = [p for p in targets if in_scope(p, cfg.include, [])]
+    idx_in = build_index(targets)
+    idx_all = build_index(all_tracked)   # 含被排除者，用来识别「目标已移出语料」
+    idx_ign = build_index(ignored)       # 被忽略但存在，用来识别「不在版本库里」
     refs: list[Ref] = []
-    for rel in paths:
-        refs.extend(scan_file(root, rel, index, args.include_bare))
-
+    for rel in scan_set:
+        refs.extend(scan_file(root, rel, idx_in, idx_all, idx_ign, cfg,
+                              include_bare))
     refs.sort(key=lambda r: (r.src, r.line, r.col))
+    return refs, scan_set
 
-    if args.format == "json":
-        print(json.dumps(
-            {"root": str(root), "files_scanned": len(paths),
-             "refs": [r.to_dict() for r in refs]},
-            ensure_ascii=False, indent=2, sort_keys=True))
-        return 0
 
-    render_text(refs, paths, args)
-    return 0
+# ---------------------------------------------------------------------------
+# 输出
+# ---------------------------------------------------------------------------
 
 
 def render_text(refs: list[Ref], paths: list[str], args) -> None:
-    from collections import Counter
-
-    by_status = Counter(r.status for r in refs)
-    by_context = Counter(r.context for r in refs)
-    by_form = Counter(r.form for r in refs)
-
     print(f"扫描文件 {len(paths)} 个，命中引用 {len(refs)} 条\n")
-    print("按状态：")
-    for k, v in sorted(by_status.items(), key=lambda kv: -kv[1]):
-        print(f"  {k:18s} {v}")
-    print("\n按上下文（区分真引用与数据）：")
-    for k, v in sorted(by_context.items(), key=lambda kv: -kv[1]):
-        print(f"  {k:18s} {v}")
-    print("\n按形态：")
-    for k, v in sorted(by_form.items(), key=lambda kv: -kv[1]):
-        print(f"  {k:18s} {v}")
+    for title, counter in (
+        ("按状态：", Counter(r.status for r in refs)),
+        ("按上下文（区分真引用与数据）：", Counter(r.context for r in refs)),
+        ("按形态：", Counter(r.form for r in refs)),
+    ):
+        print(title)
+        for k, v in sorted(counter.items(), key=lambda kv: -kv[1]):
+            print(f"  {k:18s} {v}")
+        print()
 
     shown = refs if args.all else refs[: args.limit]
-    print(f"\n逐条（{'全部' if args.all else f'前 {args.limit} 条'}）：")
+    print(f"逐条（{'全部' if args.all else f'前 {args.limit} 条'}）：")
     for r in shown:
         tgt = r.target or f"<未解析: {r.target_raw}>"
         sym = r.symbol or ("模块级" if r.symbol_span else "-")
-        print(f"  {r.src}:{r.line}  [{r.context}/{r.form}/{r.status}]")
+        note = f"  [{r.detail}]" if r.detail else ""
+        print(f"  {r.src}:{r.line}  [{r.context}/{r.form}/{r.status}]{note}")
         print(f"      {r.raw[:80]}")
         print(f"      -> {tgt}  {sym}  {r.symbol_fp or ''}")
 
 
+def cmd_scan(args) -> int:
+    root = Path(args.root).resolve()
+    cfg, note, cfg_path = load_config(root, args.config)
+    if note:
+        print(f"注意：{note}", file=sys.stderr)
+    refs, paths = run_scan(root, cfg, args.include_bare)
+
+    if args.format == "json":
+        print(json.dumps(
+            {"root": str(root), "files_scanned": len(paths),
+             "config_used": str(cfg_path) if cfg_path else None,
+             "refs": [r.to_dict() for r in refs]},
+            ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    print(f"配置：{cfg_path if cfg_path else '未使用（内置默认）'}")
+    render_text(refs, paths, args)
+    return 0
+
+
+SAMPLE_ORDER = ["ok", "module_level", "external", "ambiguous",
+                "file_not_found", "line_out_of_range", "unparsable"]
+
+
+def cmd_sample(args) -> int:
+    """分层抽样，产出一份可复现的人工抽查清单。
+
+    分层的理由：纯随机抽样会几乎全是 ok，测不出误报；抽查要看的是各类
+    非 ok 项的判因对不对，以及 ok 项里有没有「解析成功但语义指错」的。
+    """
+    root = Path(args.root).resolve()
+    cfg, note, cfg_path = load_config(root, args.config)
+    if note:
+        print(f"注意：{note}", file=sys.stderr)
+    refs, _ = run_scan(root, cfg, args.include_bare)
+
+    rng = random.Random(args.seed)
+    buckets: dict[str, list[Ref]] = {}
+    for r in refs:
+        buckets.setdefault(r.status, []).append(r)
+
+    picked: list[Ref] = []
+    per = max(1, args.n // max(1, len([s for s in SAMPLE_ORDER if s in buckets])))
+    for status in SAMPLE_ORDER:
+        pool = sorted(buckets.get(status, []), key=lambda r: (r.src, r.line))
+        if not pool:
+            continue
+        take = min(per, len(pool), args.n - len(picked))
+        picked.extend(rng.sample(pool, take) if take else [])
+    rest = [r for r in refs if r not in picked]
+    rng.shuffle(rest)
+    picked.extend(rest[: max(0, args.n - len(picked))])
+    picked.sort(key=lambda r: (r.src, r.line))
+
+    print("# refcheck 人工抽查清单\n")
+    print(f"- 配置：`{cfg_path if cfg_path else '未使用（内置默认）'}`")
+    print(f"- 种子 `{args.seed}`，样本 {len(picked)} 条，取自 {len(refs)} 条引用")
+    print("- 判定口径：解析到的目标与范围**是否就是文中所指的那一处**")
+    print(f"- 命令：`python tools/refcheck/refcheck.py sample --n {args.n} "
+          f"--seed {args.seed}`\n")
+    print("| # | 位置 | 上下文 | 原文 | 解析到 | 所属符号/章节 | 判定 |")
+    print("|---|---|---|---|---|---|---|")
+    for i, r in enumerate(picked, 1):
+        raw = r.raw.replace("|", "\\|")[:60]
+        tgt = (r.target or f"未解析({r.detail})").replace("|", "\\|")
+        sym = (r.symbol or ("模块级" if r.symbol_span else "-")).replace("|", "\\|")
+        loc = f"{r.src}:{r.line}"
+        print(f"| {i} | `{loc}` | {r.context}/{r.form} | `{raw}` | "
+              f"`{tgt}` | {sym} | |")
+    print(f"\n统计：{dict(Counter(r.status for r in picked))}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="refcheck", description=__doc__.splitlines()[0])
+    p = argparse.ArgumentParser(prog="refcheck",
+                                description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("scan", help="扫描引用并产出迁移就绪报告（纯读）")
     s.add_argument("--root", default=".")
-    s.add_argument("--include", action="append",
-                   default=["*.md", "**/*.md", "*.py", "**/*.py"])
-    s.add_argument("--exclude", action="append", default=[])
+    s.add_argument("--config", default=None)
     s.add_argument("--format", choices=["text", "json"], default="text")
     s.add_argument("--limit", type=int, default=25)
     s.add_argument("--all", action="store_true")
     s.add_argument("--include-bare", action="store_true",
-                   help="连无行号的裸文件名引用（如 `streaming.py`）也计入；默认不计，"
+                   help="连无行号的裸文件名引用也计入；默认不计，"
                         "因为它会把普通文件名提及也算成引用")
     s.set_defaults(func=cmd_scan)
+
+    m = sub.add_parser("sample", help="分层抽样，产出可复现的人工抽查清单")
+    m.add_argument("--root", default=".")
+    m.add_argument("--config", default=None)
+    m.add_argument("--n", type=int, default=20)
+    m.add_argument("--seed", type=int, default=20260918)
+    m.add_argument("--include-bare", action="store_true")
+    m.set_defaults(func=cmd_sample)
 
     args = p.parse_args(argv)
     return args.func(args)

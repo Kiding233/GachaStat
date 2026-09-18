@@ -78,11 +78,18 @@ SECTION_VERSION = "sec-v1"
 LINE_VERSION = "line-v1"
 
 # 产出物里的标记。见 is_self_output()。
-SELF_MARKER = "refcheck:generated"
+# 要求写成 HTML 注释形态，且只认文件头几行：光认字面量的话，一段讨论这个
+# 标记的正文就会把**整份文档**静默移出扫描（本文件所在的计划正文里就写着
+# 这几个字，目前靠位置侥幸没被剔除）。
+SELF_MARKER = "<!-- refcheck:generated"
 # 行内标记：这一行是在**举例说明引用机制**，不是真引用。
 # 「以引用机制为题材的正文」与产出物同源（工件即语料），但它是正文、不是
 # 产出物，故只能按行标注。实测某计划文档自身有 4 条这样的示例引用。
-EXAMPLE_MARKER = "refcheck:example"
+# 要求写成 HTML 注释的完整形态：光认 `refcheck:example` 这几个字的话，
+# 一段**解释这个机制**的正文（就像本段）本身就会把自己那一行整行跳过。
+EXAMPLE_MARKER = "<!-- refcheck:example -->"
+# 「已删/已作废」线索只认点名符号前后这么远的范围。
+CUE_WINDOW = 30
 
 DEFAULT_INCLUDE = ["*.md", "**/*.md", "*.py", "**/*.py"]
 DEFAULT_EXCLUDES = [
@@ -94,7 +101,7 @@ CONFIG_NAME = "refcheck.toml"
 
 
 # ---------------------------------------------------------------------------
-# 配置：每仓库唯一需要手工补的东西是歧义裁决
+# 配置：每仓库要手工补两类东西——歧义裁决，以及「已删/已作废」措辞线索
 # ---------------------------------------------------------------------------
 
 
@@ -615,14 +622,22 @@ def py_target_checks(lines: list[str], span: tuple[int, int],
             checks.append("模块级单行锚点落在注释上（指纹永不变化）")
 
     cand = [nm for nm, _ in names]
-    if single:
-        cited = lines[line_no - 1] if 1 <= line_no <= len(lines) else ""
-        if any(nm in cited for nm in cand):
-            return checks, queues, suggest
+    # 「引的就是它」：被引处原文里出现该名字就不报。单行锚点看那一行，范围锚点
+    # 只看**头两行**。看整个范围会把「起点写早了、把定义整段包进去」这一整类
+    # 漂移无声吞掉（第三轮实测吞掉 6 条真错位），而头两行足够覆盖正当情形
+    # （第四轮实测：收窄后压掉 7 条误报、32 条真错位一条不丢）。
+    last = line_no if single else line_no + 1
+    cited = " ".join(lines[max(0, line_no - 1):last])
+    if any(nm in cited for nm in cand):
+        return checks, queues, suggest
     # 这一句在讲「某符号已删/已作废」时，它的锚点指的是历史，不是现状。
     # 门控与队列共用这条豁免：实测那类句子会让门控误报一次、队列误报一次
     # （被删符号在库里当然找不到；被作废的那一行锚点本来就不该指着现存代码）。
-    if any(cue and cue in clause for cue in deleted_cues):
+    # 线索只认点名符号**近旁**的，不认整句：词表里的「删除」「作废」都是泛用词，
+    # 一句「删除该分支会导致 X 失效，见 pity.py:NNN」若锚点其实是错的，
+    # 整句豁免会让它永远不被检查。
+    if any(cue and cue in clause[max(0, col - CUE_WINDOW):col + len(nm) + CUE_WINDOW]
+           for nm, col in names for cue in deleted_cues if cue):
         return checks, queues, suggest
     for nm in cand:
         spans = defs.get(nm)
@@ -878,12 +893,17 @@ def is_self_output(path: Path) -> bool:
     抽查稿本身就在被抽查的语料里，会把自己写进去的引用算成待迁移的存量，
     于是「为检查而生成的工件」反过来改变了被检查的对象。产出物带标记，
     扫描时按标记认出来并剔除。
+
+    只看文件头 8 行，不看「前若干字符」：产出物的标记恒在第一行，而用字符数
+    划界会让「正文里提到这个标记」的文档在标记上移时被整份剔除，且症状是
+    静默的（只在剔除清单里露出一行）。
     """
     try:
-        head = path.read_text(encoding="utf-8", errors="replace")[:4000]
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            head = [next(fh, "") for _ in range(8)]
     except OSError:
         return False
-    return SELF_MARKER in head
+    return any(SELF_MARKER in ln for ln in head)
 
 
 def run_scan(root: Path, cfg: Config, include_bare: bool,

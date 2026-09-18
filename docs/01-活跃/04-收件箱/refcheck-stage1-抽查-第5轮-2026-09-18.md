@@ -1,9 +1,9 @@
-<!-- <!-- refcheck:generated：本文件由 refcheck 产出，扫描时按标记自动剔除。-->
+<!-- refcheck:generated：本文件由 refcheck 产出，扫描时按标记自动剔除。-->
 
 # refcheck 人工抽查清单
 
 - 配置：`D:\Users\DELL\Desktop\gacha_simulator\抽卡模拟与分析程序\tools\refcheck\refcheck.toml`
-- 语料指纹：HEAD `11069d0fd13bbc45179e81c7eb316b097adae386`，414 个文件，去重后 269 条引用
+- 语料指纹：HEAD `76fc1bbee5db48c2e63059c027a84198234d97e3`，415 个文件，去重后 269 条引用
 - 种子 `20260918`，样本 24 条
 - 已剔除本工具自产清单 4 个：`docs/01-活跃/04-收件箱/refcheck-stage1-抽查-2026-09-18.md`、`docs/01-活跃/04-收件箱/refcheck-stage1-抽查-第2轮-2026-09-18.md`、`docs/01-活跃/04-收件箱/refcheck-stage1-抽查-第3轮-2026-09-18.md`、`docs/01-活跃/04-收件箱/refcheck-stage1-抽查-第4轮-2026-09-18.md`
 - 判定口径：解析到的目标与范围**是否就是文中所指的那一处**

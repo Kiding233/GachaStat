@@ -84,7 +84,7 @@ LINE_VERSION = "line-v1"
 SELF_MARKER = "<!-- refcheck:generated"
 # 行内标记：这一行是在**举例说明引用机制**，不是真引用。
 # 「以引用机制为题材的正文」与产出物同源（工件即语料），但它是正文、不是
-# 产出物，故只能按行标注。实测某计划文档自身有 4 条这样的示例引用。
+# 产出物，故只能按行标注。实测某计划文档自身有 15 条这样的示例引用。
 # 要求写成 HTML 注释的完整形态：光认 `refcheck:example` 这几个字的话，
 # 一段**解释这个机制**的正文（就像本段）本身就会把自己那一行整行跳过。
 EXAMPLE_MARKER = "<!-- refcheck:example -->"
@@ -212,9 +212,10 @@ class Ref:
         字段名刻意不叫 `in_baseline`：那个名字容易被下游读成「可信」或「已核对」，
         而它做不到这个承诺。
 
-        注意这只说明「确定性层面没发现问题」，**不等于锚点指对了**：独立
-        审查实测基线内仍有约三成锚点指向错误位置，而那些错没有任何确定性
-        判据能认出来。迁移本身才是锚点得以确认的环节，见计划 §九。
+        注意这只说明「确定性层面没发现问题」，**不等于锚点指对了**：两轮
+        独立审查实测（31 条与 50 条样本）基线内约三到四成锚点指向错误位置，
+        而那些错绝大多数没有确定性判据能认出来。迁移本身才是锚点得以确认的
+        环节，见计划 §九。
         """
         return self.status in ("ok", "module_level") and not self.checks
 
@@ -1118,7 +1119,7 @@ def cmd_sample(args) -> int:
     picked.extend(rest[: max(0, args.n - len(picked))])
     picked.sort(key=lambda r: (r.src, r.line))
 
-    print(f"<!-- {SELF_MARKER}：本文件由 refcheck 产出，扫描时按标记自动剔除。-->\n")
+    print(f"{SELF_MARKER}：本文件由 refcheck 产出，扫描时按标记自动剔除。-->\n")
     print("# refcheck 人工抽查清单\n")
     print(f"- 配置：`{cfg_path if cfg_path else '未使用（内置默认）'}`")
     print(f"- 语料指纹：HEAD `{git_head(root)}`，{len(paths)} 个文件，"

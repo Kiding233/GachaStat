@@ -19,10 +19,10 @@
   （文档既引定义处也引使用处，判据只认得出「不是定义处」），故只把可疑的排到
   前面，由语义复核裁决，不门控。
 
-**`in_baseline` 只表示「确定性层面没发现问题」，不等于锚点指对了。** 独立审查
-实测基线内仍有约三成锚点指向错误位置，而那些错没有任何确定性判据能认出来
-（十个硬错里只有三个被任一条判据命中）。锚点得以确认的环节是迁移本身：迁移
-要为每条引用写出正确范围，那一步必须做语义判断。详见计划 §九。
+**`no_deterministic_issue` 只表示「确定性层面没发现问题」，不等于锚点指对了。**
+独立审查两轮实测（31 条与 50 条样本）：约三到四成基线锚点指向错误位置，而那些
+错绝大多数没有确定性判据能认出来。锚点得以确认的环节是迁移本身：迁移要为每条
+引用写出正确范围，那一步必须做语义判断。详见计划 §九。
 
 已知覆盖缺口：无文件名的行号引用（`` `L3899` ``、`` `:609` `` 一类）完全不识别，
 实测本仓库约 65 处、11 个文件，占存量的近两成。这类引用的指称对象靠上下文
@@ -79,6 +79,10 @@ LINE_VERSION = "line-v1"
 
 # 产出物里的标记。见 is_self_output()。
 SELF_MARKER = "refcheck:generated"
+# 行内标记：这一行是在**举例说明引用机制**，不是真引用。
+# 「以引用机制为题材的正文」与产出物同源（工件即语料），但它是正文、不是
+# 产出物，故只能按行标注。实测某计划文档自身有 4 条这样的示例引用。
+EXAMPLE_MARKER = "refcheck:example"
 
 DEFAULT_INCLUDE = ["*.md", "**/*.md", "*.py", "**/*.py"]
 DEFAULT_EXCLUDES = [
@@ -101,10 +105,11 @@ class Config:
     alias: dict[str, str]                       # 歧义 basename -> 真实路径（全局兜底）
     scoped: dict[str, dict[str, str]]           # 源文件 -> 该文件内的裁决
     external: list[str]                         # 显式声明为仓库外的路径前缀
+    deleted_cues: list[str]                     # 「这个符号已删」的措辞线索（豁免用）
 
     @staticmethod
     def defaults() -> Config:
-        return Config(list(DEFAULT_INCLUDE), list(DEFAULT_EXCLUDES), {}, {}, [])
+        return Config(list(DEFAULT_INCLUDE), list(DEFAULT_EXCLUDES), {}, {}, [], [])
 
 
 def config_candidates(root: Path) -> list[Path]:
@@ -152,6 +157,7 @@ def load_config(root: Path, explicit: str | None) -> tuple[Config, str, Path | N
         if src:
             cfg.scoped.setdefault(src.replace("\\", "/"), {}).update(
                 {k: v for k, v in item.items() if k != "src"})
+    cfg.deleted_cues = list(data.get("checks", {}).get("deleted_cue", []))
     return cfg, None, path
 
 
@@ -193,8 +199,11 @@ class Ref:
     names: list[str] = field(default_factory=list)    # 文中点名且在目标文件里有定义的符号
 
     @property
-    def in_baseline(self) -> bool:
-        """能否进迁移基线：解析干净且无门控级疑点。
+    def no_deterministic_issue(self) -> bool:
+        """解析干净且无门控级疑点。
+
+        字段名刻意不叫 `in_baseline`：那个名字容易被下游读成「可信」或「已核对」，
+        而它做不到这个承诺。
 
         注意这只说明「确定性层面没发现问题」，**不等于锚点指对了**：独立
         审查实测基线内仍有约三成锚点指向错误位置，而那些错没有任何确定性
@@ -225,7 +234,7 @@ class Ref:
             "queues": list(self.queues),
             "suggest": self.suggest,
             "names": list(self.names),
-            "in_baseline": self.in_baseline,
+            "no_deterministic_issue": self.no_deterministic_issue,
         }
 
 
@@ -245,6 +254,21 @@ def tracked_files(root: Path) -> list[str]:
         encoding="utf-8", errors="surrogateescape", check=True,
     ).stdout
     return sorted(p for p in out.split("\0") if p.strip())
+
+
+def git_head(root: Path) -> str:
+    """当前 HEAD，写进抽查稿头部。
+
+    抽查稿自称「可复现」，但只记种子是不够的：语料是活的，同一份文档在两次
+    扫描之间就可能改行号（实测同一引用在两次扫描间从第 727 行走到第 728 行）。
+    记下 HEAD 与被扫描的规模，复现时才能判断「对不上」是工具变了还是语料变了。
+    """
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                              capture_output=True, text=True,
+                              check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "(取不到)"
 
 
 def ignored_files(root: Path) -> list[str]:
@@ -471,6 +495,11 @@ def defined_symbols(tree: ast.AST) -> dict[str, list[tuple[int, int]]]:
 NAME_RE = re.compile(r"(?<![A-Za-z0-9_])_?[A-Za-z][A-Za-z0-9_]{2,}(?![A-Za-z0-9_])")
 COMMENT_ONLY = re.compile(r"^\s*#")
 
+# 引用右侧多远以内的名字还算「这条引用的名字」。表格行会写成
+# 「| 序号 | 路径:行号 | 符号名(...) |」，名字在引用右侧紧邻一格；
+# 而句子右半段出现的符号多半是在解释被引代码里用了什么。
+RIGHT_WINDOW = 12
+
 
 def named_tokens(text: str, skip: tuple[int, int] | None) -> list[tuple[str, int]]:
     """挑出「像符号名」的记号，返回 (名字, 在本段内的列)。
@@ -536,7 +565,8 @@ def clause_of(text: str, col: int) -> tuple[str, int]:
 def py_target_checks(lines: list[str], span: tuple[int, int],
                      defs: dict[str, list[tuple[int, int]]],
                      names: list[tuple[str, int]], enclosing: str | None,
-                     strings: set[int], global_names: set[str]):
+                     strings: set[int], global_names: set[str],
+                     clause: str, deleted_cues: list[str]):
     """目标侧校验，产出两层结论。
 
     **门控层**（`checks`，不进迁移基线）只放精度高的判据：
@@ -545,32 +575,39 @@ def py_target_checks(lines: list[str], span: tuple[int, int],
       整个符号、代码动了指纹就动，而模块级的指纹就是被锚的那一行本身，锚在
       永不改动的行上等于没有记忆。注释本身不是疑点（本项目注释承载论证、
       被有意引用是常态），范围锚点也不报。
-    * 文中点名的私有符号在目标文件里**通篇找不到**。符号被删或改名时是这样，
-      是漂移信号里最强的一种。
+    * 文中点名的私有符号**全仓库**都找不到。符号被删或改名时是这样，是漂移
+      信号里最强的一种。注意判据是「全仓库」而不是「目标文件」：同一句话里
+      引了两个文件时，名字属于另一个文件是常态。文档以「已删除」的姿态提及
+      被删符号时必然命中，故按 `deleted_cues` 豁免（词表在配置里，核心不含
+      语言知识）。
     * 源与目标同文件、且引用位于字符串字面量里（测试数据被当成引用）。
 
     **复核队列**（`queues`，抬高语义复核的命中率，不作为门控）：文中点名的
-    符号不覆盖目标行。这条单独量过精度只有约 54%，因为文档既会引定义处、
-    也会引使用处，而判据只能认出「不是定义处」。把它当门控会挡掉大量正确
-    引用（实测 22 条），当队列则正好：它把可疑的排到前面，由语义复核裁决。
+    符号不覆盖目标行。这条单独量过精度只有约七成，因为文档既会引定义处、
+    也会引使用处，而判据只能认出「不是定义处」。当门控会挡掉大量正确引用，
+    当队列则正好。
 
-    队列这条的四道收窄，每一道都是拿误报换来的，缺一不可：
+    队列这条的收窄，每一道都拿代价换来的，**其中两道以真错位为代价**（第三轮
+    独立审查实测：`cited` 一处吞掉 6 条真错位，「只看引用左侧」吞掉 3 条）：
 
-    * 被引处原文里出现该名字就不报（引的就是它，如 `scope_slots`）；
+    * 被引处原文里出现该名字就不报（引的就是它，如 `scope_slots`）。**只对
+      单行锚点成立**：范围锚点常常「起点写早了、把定义整段包进去」，若对范围
+      也按子串匹配，这一整类漂移形态会被无声吞掉。
     * 句中只要有一个名字覆盖目标行、或与锚点所属符号同名，一律不报
-      （少了这道，一行三条引用会拿同一个名字连报三次，实测 19 条误报全出此）；
-    * 被别的模块限定的名字（`config_toml._build_pity`）在取名时就已排除；
-    * 取离引用最近的名字，而不是字典序第一个。
+      （少了这道，一行三条引用会拿同一个名字连报三次，实测 19 条误报全出此）。
+    * 被别的模块限定的名字（`config_toml._build_pity`）在取名时就已排除。
+    * 取离引用最近的名字，而不是字典序第一个；名字优先取引用左侧，右侧只收
+      紧邻的（`RIGHT_WINDOW`），因为表格行会写成「路径 | 符号名」。
 
     返回 (门控疑点, 复核队列, 建议锚点)。
     """
     line_no = span[0]
+    single = span[0] == span[1]
     checks: list[str] = []
     queues: list[str] = []
     suggest: str | None = None
 
-    if (1 <= line_no <= len(lines) and line_no not in strings
-            and span[0] == span[1]):
+    if 1 <= line_no <= len(lines) and line_no not in strings and single:
         text = lines[line_no - 1]
         if enclosing is None and not text.strip():
             checks.append("模块级单行锚点落在空行上（指纹永不变化）")
@@ -578,8 +615,14 @@ def py_target_checks(lines: list[str], span: tuple[int, int],
             checks.append("模块级单行锚点落在注释上（指纹永不变化）")
 
     cand = [nm for nm, _ in names]
-    cited = " ".join(lines[max(0, span[0] - 1):span[1]])
-    if any(nm in cited for nm in cand):
+    if single:
+        cited = lines[line_no - 1] if 1 <= line_no <= len(lines) else ""
+        if any(nm in cited for nm in cand):
+            return checks, queues, suggest
+    # 这一句在讲「某符号已删/已作废」时，它的锚点指的是历史，不是现状。
+    # 门控与队列共用这条豁免：实测那类句子会让门控误报一次、队列误报一次
+    # （被删符号在库里当然找不到；被作废的那一行锚点本来就不该指着现存代码）。
+    if any(cue and cue in clause for cue in deleted_cues):
         return checks, queues, suggest
     for nm in cand:
         spans = defs.get(nm)
@@ -603,7 +646,6 @@ def py_target_checks(lines: list[str], span: tuple[int, int],
             checks.append(f"文中点名 `{nm}`，全仓库都没有这个名字")
             break
     return checks, queues, suggest
-
 
 def tag(version: str, payload: str) -> str:
     digest = hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()
@@ -708,6 +750,8 @@ def scan_file(root: Path, rel: str, idx_in, idx_all, idx_ign, cfg: Config,
     def add(pos, form, context, raw, target_raw, start=None, end=None):
         if (pos[0], pos[1]) in seen:
             return
+        if 1 <= pos[0] <= len(lines) and EXAMPLE_MARKER in lines[pos[0] - 1]:
+            return
         seen.add((pos[0], pos[1]))
         ref = Ref(src=rel, line=pos[0], col=pos[1], form=form, context=context,
                   raw=raw, target_raw=target_raw)
@@ -774,21 +818,23 @@ def finish(ref: Ref, root: Path, idx_in, idx_all, idx_ign, cfg: Config, lines,
             ref.symbol_fp = fingerprint_lines(tlines, ref.symbol_span, LINE_VERSION)
             if ref.status == "ok":
                 ref.status = "module_level"
-        # 文中点名的符号。只看引用所在那一句、只看引用左侧，并跳过引用
-        # 自己那段文字（免得把路径当成符号名、把邻句或解释性提及的符号
+        # 文中点名的符号。只看引用所在那一句、只看引用紧邻的两侧，并跳过
+        # 引用自己那段文字（免得把路径当成符号名、把邻句或解释性提及的符号
         # 栽给这条引用）。
         src_text = lines[ref.line - 1] if 0 < ref.line <= len(lines) else ""
         clause, base = clause_of(src_text, ref.col)
         ref_col = ref.col - base
-        names = [(nm, col) for nm, col in named_tokens(
-            clause, (ref_col, ref_col + len(ref.raw))) if col < ref_col]
-        names.sort(key=lambda t: ref_col - t[1])
+        ref_end = ref_col + len(ref.raw)
+        names = [(nm, col) for nm, col in named_tokens(clause, (ref_col, ref_end))
+                 if col < ref_col or col - ref_end <= RIGHT_WINDOW]
+        names.sort(key=lambda t: ref_col - t[1] if t[1] < ref_col
+                   else t[1] - ref_end)
         defs = defined_symbols(tree)
         ref.names = sorted({nm for nm, _ in names if nm in defs})
         _, tstrings = py_signal_lines("\n".join(tlines))
         ref.checks, ref.queues, ref.suggest = py_target_checks(
             tlines, want, defs, names, found[0] if found else None,
-            tstrings, global_names)
+            tstrings, global_names, clause, cfg.deleted_cues)
     elif ref.target.endswith(".md"):
         # .md 目标也要有被引侧指纹，否则这类引用在迁移时写不出记忆。
         # 此前只算了源文档的章节，字段名又像是指目标侧，两者混在一起。
@@ -923,15 +969,15 @@ def render_text(refs: list[Ref], paths: list[str], generated: list[str],
         print()
 
     distinct = [r for r in refs if r.dup_of is None]
-    base = [r for r in distinct if r.in_baseline]
+    base = [r for r in distinct if r.no_deterministic_issue]
     gated = [r for r in distinct if r.checks]
     queued = [r for r in distinct
               if r.status in ("ok", "module_level") and r.queues and not r.checks]
     print(f"解析干净 {len([r for r in distinct if r.status in ('ok', 'module_level')])} 条："
           f"其中门控级疑点 {len(gated)} 条（不进基线），"
           f"复核队列命中 {len(queued)} 条")
-    print(f"**迁移基线 {len(base)} 条。注意这只表示确定性层面没发现问题，"
-          f"不等于锚点指对了。**")
+    print(f"**解析干净且无门控疑点 {len(base)} 条。注意这只表示确定性层面没发现问题，"
+          f"不等于锚点指对了（独立实测约三到四成锚点指错）。**")
     for title, group in (("门控疑点分布：", gated), ("复核队列分布：", queued)):
         if not group:
             continue
@@ -1027,8 +1073,8 @@ def cmd_sample(args) -> int:
     cfg, note, cfg_path = load_config(root, args.config)
     if note:
         print(f"注意：{note}", file=sys.stderr)
-    refs, _, generated = run_scan(root, cfg, args.include_bare,
-                                  args.include_generated)
+    refs, paths, generated = run_scan(root, cfg, args.include_bare,
+                                     args.include_generated)
     refs = [r for r in refs if r.dup_of is None]
 
     rng = random.Random(args.seed)
@@ -1055,8 +1101,9 @@ def cmd_sample(args) -> int:
     print(f"<!-- {SELF_MARKER}：本文件由 refcheck 产出，扫描时按标记自动剔除。-->\n")
     print("# refcheck 人工抽查清单\n")
     print(f"- 配置：`{cfg_path if cfg_path else '未使用（内置默认）'}`")
-    print(f"- 种子 `{args.seed}`，样本 {len(picked)} 条，"
-          f"取自去重后 {len(refs)} 条引用")
+    print(f"- 语料指纹：HEAD `{git_head(root)}`，{len(paths)} 个文件，"
+          f"去重后 {len(refs)} 条引用")
+    print(f"- 种子 `{args.seed}`，样本 {len(picked)} 条")
     if generated:
         print(f"- 已剔除本工具自产清单 {len(generated)} 个："
               + "、".join(f"`{p}`" for p in generated))

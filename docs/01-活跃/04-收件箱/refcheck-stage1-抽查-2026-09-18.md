@@ -1,3 +1,8 @@
+<!-- refcheck:generated：本文件由 refcheck 产出，扫描时按标记自动剔除。 -->
+<!-- 第一轮抽查，已被第二轮（refcheck-stage1-抽查-第2轮-2026-09-18.md）取代：
+     工具修掉四个机制缺陷并加了目标侧校验后，本轮的抽样口径与分母都变了，
+     稿中的复现命令不再产出这 20 条。保留作为第一轮结论的原始凭据。 -->
+
 # refcheck 人工抽查清单
 
 - 配置：`D:\Users\DELL\Desktop\gacha_simulator\抽卡模拟与分析程序\tools\refcheck\refcheck.toml`

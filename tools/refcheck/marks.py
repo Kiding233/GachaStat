@@ -777,6 +777,9 @@ def _count(issues: list[Issue]) -> dict[str, int]:
 BLOCKING = {
     "broken", "ambiguous", "orphan_segment", "orphan_decl", "unmatched_start",
     "unmatched_end", "dup_segment", "dup_decl", "role_conflict",
-    "decl_lost", "unparsable_mark", "fragment_missing", "drift",
+    # 注意：`drift` 不在此列——它是**边**的内部状态（ok/drift），不是会抛出的
+    # 问题状态；会抛的是 tgt_drift / src_drift。原先把它列在这里是死条目，
+    # 由 manual 的自检（阻断状态必须都在状态表里）抓出。
+    "decl_lost", "unparsable_mark", "fragment_missing",
     "tgt_drift", "src_drift", "mark_at_danger", "uid_in_archive",
 }

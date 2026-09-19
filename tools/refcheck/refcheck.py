@@ -100,6 +100,7 @@ CONFIG_NAME = "refcheck.toml"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import marks  # noqa: E402  （同目录，靠上面那行 sys.path）
+import manual  # noqa: E402
 import rebind  # noqa: E402
 import render  # noqa: E402
 
@@ -1550,6 +1551,18 @@ def cmd_uids(args) -> int:
     return 0
 
 
+def cmd_manual(args) -> int:
+    """打印给模型读的说明书。唯一权威在 manual.py 的表与散文里。"""
+    problems = manual.selfcheck()
+    if problems:
+        print("说明书自检未过（表与代码不一致）：")
+        for p in problems:
+            print(f"   {p}")
+        return 2
+    print(manual.brief() if args.brief else manual.text())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # 文本输出里会带文档原文（含 emoji）。终端编码不支持时 print 会抛
     # UnicodeEncodeError，所以让不可编码的字符退化为转义而不是崩掉；
@@ -1596,6 +1609,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dry-run", action="store_true",
                    help="只报哪些文件的视图会变，不落盘（时效性诊断）")
     r.set_defaults(func=cmd_render)
+
+    mn = sub.add_parser("manual", help="打印给模型读的说明书（纯读）")
+    mn.add_argument("--brief", action="store_true",
+                    help="精简版：只留两条禁令与命令清单，注入用")
+    mn.set_defaults(func=cmd_manual)
 
     u = sub.add_parser("uids", help="全库 uid 清单（发号用，纯读）")
     u.add_argument("--root", default=".")

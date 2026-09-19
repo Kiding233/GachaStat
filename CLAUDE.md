@@ -208,6 +208,10 @@ commit 被 H7 阻止 → `ruff check` 修复 · push 被 H9 阻止 → `pytest -
 
 三文件制：`模块.md` + `理论.md` + `05-笔记.md`（H4 自动维护）。计划文件含 META 头，全局约定见 `docs/00-meta/全局约定.md`，活跃计划见 `模块状态矩阵.md`。
 
+### 引用标记（refcheck）
+
+文档与代码之间的互引由双向标记承载（`tools/refcheck/`），漂移由工具检测。**要建引用、改动了被引内容、或提交前核对时，必须调用 `refcheck` skill**；说明书由工具自己打印（`python tools/refcheck/refcheck.py manual`），不在本文件复述。
+
 ### 文件删除规则
 
 **禁止擅自删除文件。** 需删除时：

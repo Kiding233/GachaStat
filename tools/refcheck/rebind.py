@@ -11,7 +11,7 @@
 
 * **必须带证据**（`--note`）。依据是 §八 的风险行「语义核对被橡皮图章」：
   核对的产物要能被人看见，否则「核对过了」只是一句话。证据与核对时的**基线
-  提交**写进机器区（`v=` / `ev=`）而不是渲染区——渲染区会被下次渲染覆盖，放
+  提交**写进机器区（`v=`）而不是渲染区——渲染区会被下次渲染覆盖，放
   那里等于丢；而钩子拼工单时明确要读「上次核对与证据」（§3.14）。`v` 记的是
   **当时的 HEAD**（承载这次核对的那个提交的父提交，提交前已知），不是日期：
   日期答不出「自上次核对以来改了什么」，基线提交能——`git diff <v>..HEAD --
@@ -72,7 +72,7 @@ def _field_value(fp: dict[str, str], peer_seg: str) -> str:
 
 def render_marker(mk: Mark, h: str, base: str, note: str) -> str:
     """按 FIELD_ORDER 重排机器区字段，保留已有的渲染区。"""
-    fields = {"h": h, "v": base, "ev": note}
+    fields = {"h": h, "v": base}
     body = f"{mk.label}：{mk.peer}#{mk.peer_seg}"
     for k in FIELD_ORDER:
         if fields.get(k):

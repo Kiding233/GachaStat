@@ -37,7 +37,7 @@ RANGE_CLOSE_RE = re.compile(r"^/e:(?P<uid>[^#]+)#(?P<seg>.*)$")
 # `ev` 核对结论摘要。**字段顺序有规范**（见 FIELD_ORDER），写回时按它写，
 # 这样 diff 稳定。
 DECL_HEAD_RE = re.compile(r"^(?P<label>[^：;]+)：(?P<peer>[^#;]+)#(?P<seg>[^;]*)$")
-FIELD_ORDER = ["h", "v", "ev"]
+FIELD_ORDER = ["h", "v"]
 
 # 字段值里不许出现这些字符：`;` 与 `|` 是分隔符，`<>` 会破坏标记边界。
 FIELD_FORBIDDEN = set(";|<>")
@@ -76,7 +76,6 @@ class Mark:
     h: dict[str, str] = field(default_factory=dict)
     verified: str = ""           # 核对时的基线提交（`v=`），钩子工单要读
     unknown_fields: list[str] = field(default_factory=list)
-    evidence: str = ""           # 核对结论摘要（`ev=`），钩子工单要读
     view: str = ""
     detail: str = ""             # 认不出来时的原因
     danger: str = ""             # 落在危险位置时的原因（围栏内 / 表格行内）
@@ -358,7 +357,7 @@ def _classify(rel: str, line: int, col: int, raw: str, body: str,
                     peer_seg=_seg(m.group("seg")),
                     h=_parse_h(fields.get("h", "")),
                     verified=fields.get("v", ""),
-                    evidence=fields.get("ev", ""), view=view,
+                    view=view,
                     unknown_fields=sorted(set(fields) - set(FIELD_ORDER)))
     return Mark(rel, line, col, raw, "unknown", detail=f"认不出的机器区：{body!r}")
 
@@ -705,6 +704,32 @@ def _drift_state(label: str) -> str:
 _CITED_SIDE = {"引用者", "描述者", "实现", "测试", "依据"}
 
 
+def uid_sightings(root: Path, paths: list[str]) -> dict[str, list[tuple[str, int]]]:
+    """扫出 uid 出现的位置（范围标记与声明里的对方 uid 都算）。
+
+    用途是**发号**：uid 必须全库唯一，而扫描集**不覆盖归档**，所以归档里的
+    uid 会被漏看，撞号要等到文档被恢复时才暴露。所以清单要扫**全库**——只认
+    uid、不算指纹，成本很低。
+    """
+    out: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for rel in paths:
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in MARK_RE.finditer(text):
+            line = text[:m.start()].count("\n") + 1
+            body = m.group("body") or ""
+            head, _, tail = body.partition(";")
+            if mm := RANGE_OPEN_RE.match(head) or RANGE_CLOSE_RE.match(head):
+                if head.startswith("/"):
+                    continue          # 闭标记与开标记同 uid，不重复记
+                out[mm.group("uid")].append((rel, line))
+            elif mm := DECL_HEAD_RE.match(head):
+                out[mm.group("peer")].append((rel, line))
+    return out
+
+
 def _pick(group: list[Range], seg: str) -> Range | None:
     for r in group:
         if r.seg == seg:
@@ -745,5 +770,5 @@ BLOCKING = {
     "broken", "ambiguous", "orphan_segment", "orphan_decl", "unmatched_start",
     "unmatched_end", "dup_segment", "dup_decl", "role_conflict",
     "decl_lost", "unparsable_mark", "fragment_missing", "drift",
-    "tgt_drift", "src_drift", "mark_at_danger",
+    "tgt_drift", "src_drift", "mark_at_danger", "uid_in_archive",
 }

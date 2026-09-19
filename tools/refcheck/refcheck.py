@@ -1271,6 +1271,21 @@ def cmd_check(args) -> int:
 
     rep = marks.derive(root, scan_set)
     issues, stats = rep.issues, rep.stats
+    # 撞号判定要**覆盖归档**：扫描集不含它们，所以归档里的同名 uid 看不见，
+    # 而撞号的代价是几年后恢复某份文档时突然冒 ambiguous。撞上算阻断
+    # （换一个随机 id 零成本，漏掉的代价极高）。
+    own_dir = Path(__file__).resolve().parent
+    outside_files = [p for p in all_tracked
+                     if not in_scope(p, cfg.include, cfg.exclude)
+                     and own_dir not in (root / p).resolve().parents]
+    if outside_files:
+        seen = marks.uid_sightings(root, outside_files)
+        for uid in sorted(set(rep.ranges_by_uid) & set(seen)):
+            where = seen[uid][0]
+            issues.append(marks.Issue(
+                "uid_in_archive", f"uid={uid}",
+                f"扫描范围外的文件里也有这个 uid（{where[0]}:{where[1]}）。"
+                f"那份文件被恢复时就会撞成 ambiguous，请换一个 id"))
     blocking = rep.blocking
     if args.format == "json":
         print(json.dumps({"config_used": str(cfg_path) if cfg_path else None,
@@ -1306,7 +1321,7 @@ def _ticket(rep, files):
         rng = rep.ranges_by_uid.get(mk.uid)
         if not rng or rng[0].path not in files:
             continue
-        if not (mk.verified or mk.evidence):
+        if not mk.verified:
             continue
         out.append((mk, mk.uid))
     return out
@@ -1384,7 +1399,8 @@ def cmd_diag(args) -> int:
         print(f"   ! {i.as_line()}")
     for mk, uid in _ticket(rep, files):
         print(f"   · {mk.path}:{mk.line}  关系 {uid}  上次核对 "
-              f"{mk.verified or '(未记录)'}  证据 {mk.evidence or '(无)'}")
+              f"{mk.verified or '(未记录)'}"
+              f"  （核对证据按设计记在提交信息里，不在标记里）")
     if not inside:
         print("   （闭包内无阻断项）")
     return 1 if inside else 0
@@ -1481,6 +1497,59 @@ def cmd_rebind(args) -> int:
     return 0
 
 
+def cmd_uids(args) -> int:
+    """全库 uid 清单：发号用。
+
+    uid 必须**全库唯一**，而扫描集不覆盖归档，所以归档里的 uid 会被漏看、
+    撞号要等到文档被恢复时才暴露。故本命令扫**全库**（含归档与回收站），
+    只认 uid、不算指纹。
+
+    按设计不发号命令：建关系就是编辑文本，模型自己从清单里挑即可（§3.14）。
+    但撞号要能被抓住——见 `check` 的 `uid_in_archive`。
+    """
+    root = Path(args.root).resolve()
+    cfg, note, cfg_path = load_config(root, args.config)
+    if note:
+        print(f"注意：{note}", file=sys.stderr)
+    all_tracked = tracked_files(root)
+    scan_set = [p for p in all_tracked if in_scope(p, cfg.include, cfg.exclude)]
+    outside = [p for p in all_tracked
+               if not in_scope(p, cfg.include, cfg.exclude)
+               and not excluded(p, cfg.exclude)]
+    # 跳过工具自身的目录：里面有标记语法的**格式串与文档字符串**（例如
+    # `f"uid={uid}"`），盘点它们等于把工具的源码当数据。工具知道自己的家在哪，
+    # 所以这条不需要项目知识。
+    own = Path(__file__).resolve().parent
+    readable = [p for p in all_tracked
+                if own not in (root / p).resolve().parents]
+    seen = marks.uid_sightings(root, readable)
+    if args.format == "json":
+        print(json.dumps({"config_used": str(cfg_path) if cfg_path else None,
+                          "uids": {u: [list(x) for x in v]
+                                   for u, v in sorted(seen.items())},
+                          "in_scope": sorted(
+                              u for u, v in seen.items()
+                              if any(p in set(scan_set) for p, _ in v)),
+                          "outside_scope": sorted(
+                              u for u, v in seen.items()
+                              if any(p in set(outside) for p, _ in v))},
+                         ensure_ascii=True, indent=2, sort_keys=True))
+        return 0
+    print(f"全库 uid 共 {len(seen)} 个（扫 {len(all_tracked)} 个文件，"
+          f"含归档与回收站）")
+    for uid in sorted(seen):
+        locs = seen[uid]
+        where = ", ".join(f"{p}:{ln}" for p, ln in locs[:3])
+        more = f" 等 {len(locs)} 处" if len(locs) > 3 else ""
+        flag = "  ** 在扫描范围之外（归档/回收站）**" if any(
+            p in set(outside) for p, _ in locs) else ""
+        print(f"   {uid:<28} {where}{more}{flag}")
+    print("")
+    print("发号：从上面挑一个没出现过的值即可（设计不发号命令，见 §3.14）；"
+          "撞号由 check 抓。")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # 文本输出里会带文档原文（含 emoji）。终端编码不支持时 print 会抛
     # UnicodeEncodeError，所以让不可编码的字符退化为转义而不是崩掉；
@@ -1527,6 +1596,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dry-run", action="store_true",
                    help="只报哪些文件的视图会变，不落盘（时效性诊断）")
     r.set_defaults(func=cmd_render)
+
+    u = sub.add_parser("uids", help="全库 uid 清单（发号用，纯读）")
+    u.add_argument("--root", default=".")
+    u.add_argument("--config", default=None)
+    u.add_argument("--format", choices=["text", "json"], default="text")
+    u.set_defaults(func=cmd_uids)
 
     d = sub.add_parser("diag", help="关系图诊断：闭包 + 环 + 模拟提交判定（纯读）")
     d.add_argument("--root", default=".")

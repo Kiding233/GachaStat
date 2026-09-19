@@ -103,6 +103,32 @@ class Issue:
         return f"[{self.state}] {self.where}  {self.detail}"
 
 
+@dataclass
+class Edge:
+    """一条无向的关系边。两端各是一个范围，各自落在某个文件里。"""
+
+    a_uid: str
+    a_path: str
+    b_uid: str
+    b_path: str
+    label: str
+    state: str          # ok / drift / 未配对
+    at: str             # 声明所在位置，报错时用
+
+
+@dataclass
+class Report:
+    """一次对账的全部产物。诊断命令的三种视图都从它生成。"""
+
+    issues: list[Issue]
+    stats: dict
+    edges: list[Edge]
+
+    @property
+    def blocking(self) -> list[Issue]:
+        return [i for i in self.issues if i.state in BLOCKING]
+
+
 # ---------------------------------------------------------------------------
 # 扫描
 # ---------------------------------------------------------------------------
@@ -375,7 +401,7 @@ def _make_range(root: Path, uid: str, seg: str, start: Mark,
 # ---------------------------------------------------------------------------
 
 
-def derive(root: Path, paths: list[str]) -> tuple[list[Issue], dict]:
+def derive(root: Path, paths: list[str]) -> Report:
     """跑一遍对账，返回 (问题列表, 统计)。"""
     marks = scan_marks(root, paths)
     ranges, issues = build_ranges(root, marks)
@@ -406,6 +432,7 @@ def derive(root: Path, paths: list[str]) -> tuple[list[Issue], dict]:
                                 f"{sorted(files)}（多段应共处一文件）"))
 
     decls = [m for m in marks if m.kind == "decl"]
+    edges: list[Edge] = []
     # 每条声明的「本方范围」= 在文本上包含它的那个范围
     owner: dict[int, Range | None] = {}
     for mk in decls:
@@ -471,6 +498,8 @@ def derive(root: Path, paths: list[str]) -> tuple[list[Issue], dict]:
             continue
         state = "ok" if want == peer.fp else "drift"
         rels.append((mk, peer, want, state))
+        edges.append(Edge(mk.uid, mk.path, mk.peer, peer.path, mk.label,
+                          state, f"{mk.path}:{mk.line}"))
         if state == "drift":
             # 漂移报在哪一侧，由**这份声明自己站在哪一端**决定，而站在哪一端
             # 由标签自报（§3.2.4 的互逆对）。引用侧持有被引侧的指纹，故被引侧
@@ -504,7 +533,73 @@ def derive(root: Path, paths: list[str]) -> tuple[list[Issue], dict]:
         "ok": sum(1 for *_, s in rels if s == "ok"),
         "states": _count(issues),
     }
-    return issues, stats
+    return Report(issues, stats, edges)
+
+
+# ---------------------------------------------------------------------------
+# 诊断：闭包、环、模拟提交判定
+# ---------------------------------------------------------------------------
+
+
+def adjacency(edges: list[Edge]) -> dict[str, set[str]]:
+    """文件级的无向邻接表。图建在**文件**上而不是 uid 上：要回答的问题是
+    「改了这个文件会牵动哪些文件」，而一个文件里可以有几十个范围。"""
+    adj: dict[str, set[str]] = defaultdict(set)
+    for e in edges:
+        if e.a_path == e.b_path:
+            continue
+        adj[e.a_path].add(e.b_path)
+        adj[e.b_path].add(e.a_path)
+    return adj
+
+
+def closure(edges: list[Edge], seeds: set[str]) -> set[str]:
+    """从种子文件沿关系扩张的连通闭包。
+
+    设计里叫「沿关系扩张连通闭包」（§3.9.1），钩子用它决定「这一提交牵动
+    什么」。注意这是一个**可计算**的东西，而「传染」（改了 A 就必须改 B）是
+    语义判断，算不出来；工具能做的只是把这个集合摆全，省掉「改了一圈才发现
+    是环」这一种浪费。
+    """
+    adj = adjacency(edges)
+    seen = set(seeds)
+    stack = list(seeds)
+    while stack:
+        cur = stack.pop()
+        for nxt in adj.get(cur, ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return seen
+
+
+def cycles(edges: list[Edge], nodes: set[str]) -> list[list[str]]:
+    """找出节点集合内的回边（有环即报一条，不枚举所有环）。
+
+    设计里早记过一条事实：**环在本项目很可能是常态而非例外**（文档引代码、
+    代码注释引文档正是现行做法）。所以这里的目的不是消除环，而是让改的人
+    **提前看到**它在环里，而不是改完一圈才发现。
+    """
+    adj = adjacency(edges)
+    out: list[list[str]] = []
+    color: dict[str, int] = {}
+
+    def dfs(node: str, path: list[str]) -> None:
+        color[node] = 1
+        for nxt in sorted(adj.get(node, ())):
+            if nxt not in nodes:
+                continue
+            if color.get(nxt) == 1:
+                k = path.index(nxt) if nxt in path else 0
+                out.append(path[k:] + [nxt])
+            elif color.get(nxt, 0) == 0:
+                dfs(nxt, path + [nxt])
+        color[node] = 2
+
+    for n in sorted(nodes):
+        if color.get(n, 0) == 0:
+            dfs(n, [n])
+    return out
 
 
 def _drift_state(label: str) -> str:

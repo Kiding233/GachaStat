@@ -1242,8 +1242,9 @@ def cmd_check(args) -> int:
         want = {x.strip().replace("\\", "/") for x in args.changed.split(",")}
         scan_set = [p for p in scan_set if p.replace("\\", "/") in want]
 
-    issues, stats = marks.derive(root, scan_set)
-    blocking = [i for i in issues if i.state in marks.BLOCKING]
+    rep = marks.derive(root, scan_set)
+    issues, stats = rep.issues, rep.stats
+    blocking = rep.blocking
     if args.format == "json":
         print(json.dumps({"config_used": str(cfg_path) if cfg_path else None,
                           "stats": stats, "blocking": len(blocking),
@@ -1265,6 +1266,73 @@ def cmd_check(args) -> int:
         mark = "!" if i.state in marks.BLOCKING else " "
         print(f" {mark} {i.as_line()}")
     return 1 if blocking else 0
+
+
+def cmd_diag(args) -> int:
+    """关系图诊断：闭包 + 环 + 模拟提交判定，一次算完，三种视图。
+
+    给「我这一改会牵动什么」这个问题用的，也是钩子判定的内核。**纯读**：
+    它不做渲染、不写盘；渲染只有钩子与显式 `render` 才做，否则 agent 随口
+    调一次诊断就把工作区改脏了。
+
+    为什么不只给图：图本身不可行动。「这些文件连在一起」不说明任何该做的
+    事，可行动的是「提交时会被报什么」，所以两者必须一起给——它们是同一次
+    计算的两个视图，不是两个命令。
+    """
+    root = Path(args.root).resolve()
+    cfg, note, cfg_path = load_config(root, args.config)
+    if note:
+        print(f"注意：{note}", file=sys.stderr)
+    all_tracked = tracked_files(root)
+    targets = [p for p in all_tracked if not excluded(p, cfg.exclude)]
+    scan_set = [p for p in targets if in_scope(p, cfg.include, [])]
+    scan_set = [p for p in scan_set if not is_self_output(root / p)]
+
+    rep = marks.derive(root, scan_set)
+    seeds = ({x.strip().replace("\\", "/") for x in args.changed.split(",")}
+             if args.changed else set())
+    nodes = marks.closure(rep.edges, seeds) if seeds else {
+        p for p in scan_set}
+    loops = marks.cycles(rep.edges, nodes)
+    inside = [i for i in rep.blocking
+              if any(i.where.startswith(n + ":") or i.where == n
+                     for n in nodes)] if seeds else rep.blocking
+
+    if args.format == "json":
+        print(json.dumps({
+            "config_used": str(cfg_path) if cfg_path else None,
+            "seeds": sorted(seeds), "stats": rep.stats,
+            "nodes": sorted(nodes),
+            "edges": [{"a": e.a_path, "a_uid": e.a_uid, "b": e.b_path,
+                       "b_uid": e.b_uid, "label": e.label, "state": e.state,
+                       "at": e.at} for e in rep.edges],
+            "cycles": loops,
+            "would_block": [{"state": i.state, "where": i.where,
+                             "detail": i.detail} for i in inside],
+        }, ensure_ascii=True, indent=2, sort_keys=True))
+        return 1 if inside else 0
+
+    print(f"配置：{cfg_path if cfg_path else '未使用（内置默认）'}")
+    if seeds:
+        print(f"起点 {len(seeds)} 个文件；闭包 {len(nodes)} 个节点")
+    else:
+        print(f"未给 --changed，按全库报：{len(nodes)} 个文件，"
+              f"{len(rep.edges)} 条关系")
+    print("")
+    if loops:
+        print(f"环 {len(loops)} 处（本项目中很可能是常态，不是错误；"
+              f"列出来是为了让改的人提前知道）:")
+        for cyc in loops[:6]:
+            print("   " + " -> ".join(cyc))
+    else:
+        print("环：无")
+    print("")
+    print(f"模拟提交判定：{len(inside)} 条会被报出")
+    for i in inside:
+        print(f"   ! {i.as_line()}")
+    if not inside:
+        print("   （闭包内无阻断项）")
+    return 1 if inside else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1294,6 +1362,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="不剔除本工具自产的清单文件；默认剔除，"
                         "否则清单里的引用会把自己算进存量")
     s.set_defaults(func=cmd_scan)
+
+    d = sub.add_parser("diag", help="关系图诊断：闭包 + 环 + 模拟提交判定（纯读）")
+    d.add_argument("--root", default=".")
+    d.add_argument("--config", default=None)
+    d.add_argument("--format", choices=["text", "json"], default="text")
+    d.add_argument("--changed", default=None,
+                   help="起点文件（逗号分隔）；缺省按全库报")
+    d.set_defaults(func=cmd_diag)
 
     c = sub.add_parser("check", help="对账：扫标记、配关系、派生状态（纯读）")
     c.add_argument("--root", default=".")

@@ -9,9 +9,19 @@
 ## 用法
 
 ```
+# 阶段一：存量盘点（纯读）
 python tools/refcheck/refcheck.py scan   --root .                  # 人读报告
 python tools/refcheck/refcheck.py scan   --root . --format json    # 机器读
 python tools/refcheck/refcheck.py sample --root . --n 24 --detail  # 抽查稿
+
+# 标记系统：对账与诊断（纯读）
+python tools/refcheck/refcheck.py check  --root .                  # 扫标记、配关系、派生状态
+python tools/refcheck/refcheck.py diag   --root . --changed a.md,b.py
+                                                                  # 闭包 + 环 + 模拟提交判定
+
+# 渲染（**会写盘**）
+python tools/refcheck/refcheck.py render --root . --dry-run        # 时效性诊断：只报哪些视图会变
+python tools/refcheck/refcheck.py render --root .                  # 真写
 ```
 
 ## 搬到别的仓库要做什么
@@ -67,6 +77,20 @@ python tools/refcheck/refcheck.py sample --root . --n 24 --detail  # 抽查稿
 
 这两处没有做成配置项，是因为本项目自己有一条纪律「一个有界的例外清单优于 N 个
 开关」。判断是：**换语料时改这两个常量，比让每个仓库都面对两个额外的旋钮更省。**
+
+## 标记（v2）与两条危险位置
+
+标记语法与状态机见计划 §3.2 / §3.10。实现里两条容易踩的：
+
+- **标记自身落在代码围栏内或表格行内 = 错误**（报错拒绝写入）。围栏的理由是
+  **内容保真**（围栏里要么是示例、要么是被引用的代码，会被照抄；往里写任何
+  会变的东西就不忠实）；表格行的理由是**结构冲突**（标记里的 `|` 会被 GFM
+  当成单元格分隔符，插进去后面的格就错位）。
+- **但「范围覆盖围栏或整张表」是正常用法**：标记贴在它们外面即可，声明放在
+  开标记之后，于是声明既在自己的范围之内、又不在围栏/表格里。指纹会剥离
+  全部标记，所以声明那段文字不影响范围指纹。
+- 要给围栏里的语法示例脱敏，用 `<!-- refcheck:example -->`（单行）或
+  `<!-- refcheck:example:start -->` … `:end`（一段）。
 
 ## 已知覆盖缺口
 

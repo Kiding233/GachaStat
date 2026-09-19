@@ -100,6 +100,7 @@ CONFIG_NAME = "refcheck.toml"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import marks  # noqa: E402  （同目录，靠上面那行 sys.path）
+import render  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1335,6 +1336,59 @@ def cmd_diag(args) -> int:
     return 1 if inside else 0
 
 
+def cmd_render(args) -> int:
+    """渲染：把派生出的视图写回渲染区。**这是第一个会写盘的命令。**
+
+    `--dry-run` 就是设计里说的「时效性诊断」：算出哪些文件的视图会变，不落盘。
+
+    渲染是**无条件全局**的（计划 §九）：视图的输出是全局事实，而按闭包收窄
+    会让闭包外的过期视图一直显示 ok、把真实的漂移盖住。所以这里不接种子集，
+    只按「状态是否真的变了」决定写什么。
+    """
+    root = Path(args.root).resolve()
+    cfg, note, cfg_path = load_config(root, args.config)
+    if note:
+        print(f"注意：{note}", file=sys.stderr)
+    all_tracked = tracked_files(root)
+    targets = [p for p in all_tracked if not excluded(p, cfg.exclude)]
+    scan_set = [p for p in targets if in_scope(p, cfg.include, [])]
+    scan_set = [p for p in scan_set if not is_self_output(root / p)]
+
+    edits, refusals, rep = render.plan(root, scan_set)
+    stale = sorted({e.path for e in edits})
+
+    if args.dry_run:
+        print(f"配置：{cfg_path if cfg_path else '未使用（内置默认）'}")
+        print(f"时效性诊断（dry-run，未落盘）：{len(edits)} 处视图过期，"
+              f"涉及 {len(stale)} 个文件")
+        for p in stale:
+            n = sum(1 for e in edits if e.path == p)
+            print(f"   {p}  {n} 处")
+        _report_refusals(refusals)
+        return 0
+
+    written = render.apply(root, edits)
+    print(f"渲染完成：改写 {sum(written.values())} 处视图，"
+          f"涉及 {len(written)} 个文件")
+    for p, n in sorted(written.items()):
+        print(f"   {p}  {n} 处")
+    if not written:
+        print("   （没有视图需要更新）")
+    _report_refusals(refusals)
+    return 0
+
+
+def _report_refusals(refusals) -> None:
+    if not refusals:
+        return
+    print("")
+    print(f"危险位置拒绝写入 {len(refusals)} 处：")
+    for r in refusals[:20]:
+        print(f"   {r.path}:{r.line}  {r.why}")
+    if len(refusals) > 20:
+        print(f"   （还有 {len(refusals) - 20} 处）")
+
+
 def main(argv: list[str] | None = None) -> int:
     # 文本输出里会带文档原文（含 emoji）。终端编码不支持时 print 会抛
     # UnicodeEncodeError，所以让不可编码的字符退化为转义而不是崩掉；
@@ -1362,6 +1416,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="不剔除本工具自产的清单文件；默认剔除，"
                         "否则清单里的引用会把自己算进存量")
     s.set_defaults(func=cmd_scan)
+
+    r = sub.add_parser("render", help="渲染：把视图写回渲染区（会写盘）")
+    r.add_argument("--root", default=".")
+    r.add_argument("--config", default=None)
+    r.add_argument("--dry-run", action="store_true",
+                   help="只报哪些文件的视图会变，不落盘（时效性诊断）")
+    r.set_defaults(func=cmd_render)
 
     d = sub.add_parser("diag", help="关系图诊断：闭包 + 环 + 模拟提交判定（纯读）")
     d.add_argument("--root", default=".")

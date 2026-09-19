@@ -70,6 +70,7 @@ class Mark:
     h: dict[str, str] = field(default_factory=dict)
     view: str = ""
     detail: str = ""             # 认不出来时的原因
+    danger: str = ""             # 落在危险位置时的原因（围栏内 / 表格行内）
     off_start: int = 0           # 在文件里的绝对偏移。切片与包含判定都用它，
     off_end: int = 0             # 不按行号：同一行里可以并排好几段
 
@@ -123,6 +124,9 @@ class Report:
     issues: list[Issue]
     stats: dict
     edges: list[Edge]
+    decls: list[Mark] = field(default_factory=list)
+    ranges_by_uid: dict[str, list[Range]] = field(default_factory=dict)
+    root: Path | None = None
 
     @property
     def blocking(self) -> list[Issue]:
@@ -192,6 +196,7 @@ def scan_marks(root: Path, paths: list[str]) -> list[Mark]:
         except OSError:
             continue
         is_md = rel.endswith(".md")
+        lines = text.splitlines()
         fenced = fence_lines(text) if is_md else set()
         skip = example_lines(text) if is_md else set()
         for m in MARK_RE.finditer(text):
@@ -201,9 +206,10 @@ def scan_marks(root: Path, paths: list[str]) -> list[Mark]:
             # 往往就写在围栏里，那正是它该在的地方。
             if line in skip:
                 continue
-            if line in fenced:
-                out.append(Mark(rel, line, col, m.group(0), "fenced",
-                                detail="标记落在代码围栏内（示例，不是真标记）",
+            danger = _danger_at(lines, line, fenced)
+            if danger:
+                out.append(Mark(rel, line, col, m.group(0), "danger",
+                                detail=danger, danger=danger,
                                 off_start=m.start(), off_end=m.end()))
                 continue
             mk = _classify(rel, line, col, m.group(0),
@@ -246,9 +252,9 @@ def fence_lines(text: str) -> set[int]:
     标记读进来，报出 `dup_segment` / `orphan_decl` 这类假问题。实测本仓库
     14 个标记全部落在计划自己的语法示例代码块里，`check` 报的阻断全是假的。
 
-    注意与**表格**的区别：表格里的标记是正常用法（文档大量用表格列引用），
-    只有「往表格里写渲染区」才被拒绝。围栏与表格在 §3.10 里被并列，但行为
-    不同，不能一起处理。
+    注意与**表格**的区别：表格里**标记自身落在行内**也是危险位置（标记里的
+    `|` 会被当成单元格分隔符），但**范围覆盖一整张表**是正常用法（标记贴在
+    表外）。判据只看标记自己的位置。
 
     四空格缩进的代码块（非围栏）**不算**：那里面通常是要被引用的代码片段，
     标记落在其中是否为错误，本期不定。
@@ -296,6 +302,67 @@ def example_lines(text: str) -> set[int]:
         if inside or EXAMPLE_MARK in line:
             out.add(i)
     return out
+
+
+def _danger_at(lines: list[str], line: int, fenced: set[int]) -> str:
+    """标记自身是否落在危险位置（§3.10）。返回原因，否则空串。
+
+    两处，各有机械理由，不是洁癖：
+
+    * **代码围栏内**：围栏里的内容要么是示例、要么是被引用/被讨论的代码，
+      读者与工具会照抄。往里写任何**会变**的东西（视图随状态重写），这段
+      就再也不是它声称的那段内容。这是**内容保真**，不是可见性问题。
+    * **表格行内**：标记里的 `|` 会被 GFM 当成单元格分隔符，一个标记插进去，
+      它后面那些格就错位或被丢掉。这条是硬的结构冲突。
+
+    判据只看**标记自身**所处的位置，不看范围覆盖到哪里：范围覆盖一整张表
+    或整段围栏是**正常用法**（标记贴在它们外面）。
+    """
+    if line in fenced:
+        return "标记落在代码围栏内（内容会被照抄，写入会破坏保真）"
+    if 1 <= line <= len(lines) and TABLE_ROW_RE.match(lines[line - 1]):
+        return "标记落在表格行内（标记里的 `|` 会被当成单元格分隔符）"
+    return ""
+
+
+TABLE_ROW_RE = re.compile(r"^\s*\|.*\|")
+
+
+def symbol_for_span(text: str, lo: int, hi: int) -> str | None:
+    """包住该行的最内层函数/类的限定名。用于**视图的最短定位形式**。
+
+    视图优先放符号名而不是行号（§3.10 F5：「`pity.py:1258` 或符号名即可」），
+    理由不只是短：**行号会随上方代码移动而变**，于是每次插入几行都会让视图
+    重写、把一堆无关文件标脏；符号名不随行号移动，正是这套设计要消灭的
+    churn。所以能用符号名的地方一律用符号名。
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    sig: list[tuple[int, int, str]] = []
+    stack: list[tuple[ast.AST, str]] = [(tree, "")]
+    while stack:
+        node, prefix = stack.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef)):
+                name = prefix + child.name
+                sig.append((child.lineno, child.end_lineno or child.lineno,
+                            name))
+                stack.append((child, name + "."))
+            else:
+                stack.append((child, prefix))
+    # 先找完整包住 [lo, hi] 的最内层；找不到就退到「包住起点」的最内层
+    for want_full in (True, False):
+        best: tuple[int, str] | None = None
+        for a, b, name in sig:
+            if a <= lo and (b >= hi if want_full else b >= lo):
+                if best is None or b - a < best[0]:
+                    best = (b - a, name)
+        if best:
+            return best[1]
+    return None
 
 
 def _classify(rel: str, line: int, col: int, raw: str, body: str,
@@ -410,17 +477,14 @@ def derive(root: Path, paths: list[str]) -> Report:
         if mk.kind == "unknown":
             issues.append(Issue("unparsable_mark", f"{mk.path}:{mk.line}",
                                 mk.detail))
-    # 围栏内的标记：报成一类，且**不参与**配对与状态派生（它们是示例）。
-    fenced = [m for m in marks if m.kind == "fenced"]
-    if fenced:
-        files = sorted({m.path for m in fenced})
-        issues.append(Issue(
-            "mark_in_fence", f"{files[0]}" + (f" 等 {len(files)} 个文件"
-                                              if len(files) > 1 else ""),
-            f"{len(fenced)} 个标记落在代码围栏内（示例不是真标记）。"
-            f"§3.10 把围栏内定为危险位置，故这是错误；"
-            f"要让示例不被扫到，改用 `<!-- refcheck:example -->` 标注那一行"))
-    marks = [m for m in marks if m.kind != "fenced"]
+    # 落在危险位置的标记：**逐条**报出（要说清是哪一行，聚合起来就没法改了），
+    # 且不参与配对与状态派生。
+    for m in [x for x in marks if x.kind == "danger"]:
+        issues.append(Issue("mark_at_danger", f"{m.path}:{m.line}",
+                            f"{m.danger}。§3.10 规定危险位置报错拒绝写入；"
+                            f"要让示例不被扫到，改用 "
+                            f"`<!-- refcheck:example -->` 标注那一行"))
+    marks = [m for m in marks if m.kind != "danger"]
 
     by_uid: dict[str, list[Range]] = ranges
     # uid 出现在多处（多段）是正常的；同一 uid 的同一段出现在两个文件才是歧义
@@ -533,7 +597,7 @@ def derive(root: Path, paths: list[str]) -> Report:
         "ok": sum(1 for *_, s in rels if s == "ok"),
         "states": _count(issues),
     }
-    return Report(issues, stats, edges)
+    return Report(issues, stats, edges, decls, dict(by_uid), root)
 
 
 # ---------------------------------------------------------------------------
@@ -655,5 +719,5 @@ BLOCKING = {
     "broken", "ambiguous", "orphan_segment", "orphan_decl", "unmatched_start",
     "unmatched_end", "dup_segment", "dup_decl", "role_conflict",
     "decl_lost", "unparsable_mark", "fragment_missing", "drift",
-    "tgt_drift", "src_drift", "mark_in_fence",
+    "tgt_drift", "src_drift", "mark_at_danger",
 }

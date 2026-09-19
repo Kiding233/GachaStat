@@ -99,6 +99,8 @@ DEFAULT_EXCLUDES = [
 
 CONFIG_NAME = "refcheck.toml"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 # ---------------------------------------------------------------------------
 # 配置：每仓库要手工补两类东西——歧义裁决，以及「已删/已作废」措辞线索
@@ -1218,6 +1220,51 @@ def cmd_sample(args) -> int:
     return 0
 
 
+def cmd_check(args) -> int:
+    """对账：从磁盘现状派生全部关系的状态。
+
+    这是设计里说的**核心原语**（计划 §3.14）：幂等、无状态、谁都能调，
+    钩子只是闹钟。它只读，不渲染、不写盘。
+    """
+    import marks
+
+    root = Path(args.root).resolve()
+    cfg, note, cfg_path = load_config(root, args.config)
+    if note:
+        print(f"注意：{note}", file=sys.stderr)
+    all_tracked = tracked_files(root)
+    targets = [p for p in all_tracked if not excluded(p, cfg.exclude)]
+    scan_set = [p for p in targets if in_scope(p, cfg.include, [])]
+    scan_set = [p for p in scan_set if not is_self_output(root / p)]
+    if args.changed:
+        want = {x.strip().replace("\\", "/") for x in args.changed.split(",")}
+        scan_set = [p for p in scan_set if p.replace("\\", "/") in want]
+
+    issues, stats = marks.derive(root, scan_set)
+    blocking = [i for i in issues if i.state in marks.BLOCKING]
+    if args.format == "json":
+        print(json.dumps({"config_used": str(cfg_path) if cfg_path else None,
+                          "stats": stats, "blocking": len(blocking),
+                          "issues": [{"state": i.state, "where": i.where,
+                                      "detail": i.detail} for i in issues]},
+                         ensure_ascii=True, indent=2, sort_keys=True))
+        return 1 if blocking else 0
+
+    print(f"配置：{cfg_path if cfg_path else '未使用（内置默认）'}")
+    print(f"对账 {stats['files']} 个文件：标记 {stats['marks']} 个，"
+          f"范围 {stats['ranges']} 个，声明 {stats['decls']} 条，"
+          f"关系 {stats['relations']} 条（ok {stats['ok']}）")
+    if not issues:
+        print("无问题。")
+        return 0
+    print("")
+    print(f"问题 {len(issues)} 条（其中阻断 {len(blocking)} 条）：")
+    for i in issues:
+        mark = "!" if i.state in marks.BLOCKING else " "
+        print(f" {mark} {i.as_line()}")
+    return 1 if blocking else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # 文本输出里会带文档原文（含 emoji）。终端编码不支持时 print 会抛
     # UnicodeEncodeError，所以让不可编码的字符退化为转义而不是崩掉；
@@ -1245,6 +1292,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="不剔除本工具自产的清单文件；默认剔除，"
                         "否则清单里的引用会把自己算进存量")
     s.set_defaults(func=cmd_scan)
+
+    c = sub.add_parser("check", help="对账：扫标记、配关系、派生状态（纯读）")
+    c.add_argument("--root", default=".")
+    c.add_argument("--config", default=None)
+    c.add_argument("--format", choices=["text", "json"], default="text")
+    c.add_argument("--changed", default=None,
+                   help="只报与这些文件有关的关系（逗号分隔）；缺省全库")
+    c.set_defaults(func=cmd_check)
 
     m = sub.add_parser("sample", help="分层抽样，产出可复现的人工抽查清单")
     m.add_argument("--root", default=".")

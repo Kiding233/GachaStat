@@ -543,6 +543,14 @@ def derive(root: Path, paths: list[str]) -> Report:
                 "broken", f"{mk.path}:{mk.line}",
                 f"对方 uid `{mk.peer}` 存在，但没有段 `{mk.peer_seg}`"))
             continue
+        if not mk.h:
+            # 新建的关系还没有记忆。这**不是错**，是「尚未核对」——独立状态、
+            # 不阻断。原先把它落进下面的 fragment_missing（那是多段时缺某一项
+            # 的错），症状是刚建好的关系一提交就被自己的门控拒掉。
+            issues.append(Issue(
+                "unverified", f"{mk.path}:{mk.line}",
+                "这条关系还没有记忆（`h` 为空）。跑 `rebind` 核对并写下基线"))
+            continue
         want = mk.h.get(mk.peer_seg) or mk.h.get("*")
         if want is None:
             issues.append(Issue(

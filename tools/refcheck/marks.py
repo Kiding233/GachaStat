@@ -74,7 +74,7 @@ class Mark:
     peer: str = ""
     peer_seg: str = ""
     h: dict[str, str] = field(default_factory=dict)
-    verified: str = ""           # 上次核对时间（`v=`），钩子工单要读
+    verified: str = ""           # 核对时的基线提交（`v=`），钩子工单要读
     unknown_fields: list[str] = field(default_factory=list)
     evidence: str = ""           # 核对结论摘要（`ev=`），钩子工单要读
     view: str = ""
@@ -595,26 +595,53 @@ def derive(root: Path, paths: list[str]) -> Report:
 
 
 def adjacency(edges: list[Edge]) -> dict[str, set[str]]:
-    """文件级的无向邻接表。图建在**文件**上而不是 uid 上：要回答的问题是
-    「改了这个文件会牵动哪些文件」，而一个文件里可以有几十个范围。"""
+    """关系图。**节点是 uid**，不是文件。
+
+    只有这一张图。「改这个文件牵动哪些文件」是它**投影到路径**的结果（见
+    `files_of`），不是另一张图。两张图并存是错误土壤：我一度在 `rebind` 里
+    拿 uid 去文件级的环里找，守卫因此永远不触发（样例测试当场抓出）。
+    """
     adj: dict[str, set[str]] = defaultdict(set)
     for e in edges:
-        if e.a_path == e.b_path:
-            continue
-        adj[e.a_path].add(e.b_path)
-        adj[e.b_path].add(e.a_path)
+        adj[e.a_uid].add(e.b_uid)
+        adj[e.b_uid].add(e.a_uid)
     return adj
 
 
-def closure(edges: list[Edge], seeds: set[str]) -> set[str]:
-    """从种子文件沿关系扩张的连通闭包。
+def node_label(rep: Report, uid: str) -> str:
+    """节点怎么写给人看：`路径:行号`，多段时带上段标签。"""
+    rs = rep.ranges_by_uid.get(uid)
+    if not rs:
+        return uid
+    r = rs[0]
+    tail = f"#{r.seg}" if len(rs) > 1 or r.seg != "*" else ""
+    return f"{r.path}:{r.open_line}{tail}"
+
+
+def files_of(rep: Report, uids: set[str]) -> set[str]:
+    """把 uid 集合投影成文件集合。"""
+    out = set()
+    for uid in uids:
+        for r in rep.ranges_by_uid.get(uid, []):
+            out.add(r.path)
+    return out
+
+
+def uids_in_files(rep: Report, paths: set[str]) -> set[str]:
+    """反过来：文件集合 → 落在其中的 uid 集合。种子从文件给时要先过这一步。"""
+    want = {p.replace("\\", "/") for p in paths}
+    return {uid for uid, rs in rep.ranges_by_uid.items()
+            if any(r.path.replace("\\", "/") in want for r in rs)}
+
+
+def closure(adj: dict[str, set[str]], seeds: set[str]) -> set[str]:
+    """从种子沿关系扩张的连通闭包。
 
     设计里叫「沿关系扩张连通闭包」（§3.9.1），钩子用它决定「这一提交牵动
     什么」。注意这是一个**可计算**的东西，而「传染」（改了 A 就必须改 B）是
     语义判断，算不出来；工具能做的只是把这个集合摆全，省掉「改了一圈才发现
     是环」这一种浪费。
     """
-    adj = adjacency(edges)
     seen = set(seeds)
     stack = list(seeds)
     while stack:
@@ -624,17 +651,6 @@ def closure(edges: list[Edge], seeds: set[str]) -> set[str]:
                 seen.add(nxt)
                 stack.append(nxt)
     return seen
-
-
-def adjacency_by_uid(edges: list[Edge]) -> dict[str, set[str]]:
-    """uid 级的无向邻接表。判「这条关系在不在环上」必须用 uid 图，不能用
-    文件图：一个文件里可以有几十个范围，文件级的环会把不相干的关系也算进去。
-    """
-    adj: dict[str, set[str]] = defaultdict(set)
-    for e in edges:
-        adj[e.a_uid].add(e.b_uid)
-        adj[e.b_uid].add(e.a_uid)
-    return adj
 
 
 def cycles(adj: dict[str, set[str]], nodes: set[str]) -> list[list[str]]:
@@ -671,10 +687,13 @@ def _drift_state(label: str) -> str:
     引用侧的声明记的是**被引侧**的指纹，被引侧变了 → `tgt_drift`；
     被引侧的声明记的是**引用侧**的指纹，引用侧变了 → `src_drift`。
     站在哪一端由标签自报，所以这张表就是 `REL_PAIRS` 的用法。
+    按被引文件的扩展名去猜是错的——按语言猜不出角色（我第一版就是那么写的，
+    结果 `src_drift` 永不出现）。
     """
     return "tgt_drift" if PAIR_OF.get(label) in _CITED_SIDE else "src_drift"
 
 
+# 这些标签表示「本端是被引侧」（§3.2.4 互逆对的后一项）
 _CITED_SIDE = {"引用者", "描述者", "实现", "测试", "依据"}
 
 

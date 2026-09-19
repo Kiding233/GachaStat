@@ -260,12 +260,34 @@ def tracked_files(root: Path) -> list[str]:
 
     必须用 -z 而不是按行切：git 默认对含非 ASCII 的路径做八进制转义并整体加引号，
     那样返回的字符串既匹配不上 glob，也打不开文件，症状是这些文件被静默跳过。
+    **不是 git 仓库时退化为目录遍历**，而不是抛异常：工具要能在一份解压出来的
+    源码目录上跑（设计目标有「零第三方依赖也能退化为可用」一条）。实测非 git
+    目录下 `check` / `diag` 直接崩，而症状是**静默无输出**——CalledProcessError
+    走到 stderr、stdout 一片空白，看起来像「没问题」。
     """
-    out = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True,
-        encoding="utf-8", errors="surrogateescape", check=True,
-    ).stdout
-    return sorted(p for p in out.split("\0") if p.strip())
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True,
+            encoding="utf-8", errors="surrogateescape", check=True,
+        ).stdout
+        return sorted(p for p in out.split("\0") if p.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return _walk_files(root)
+
+
+def _walk_files(root: Path) -> list[str]:
+    """目录遍历兜底：非 git 仓库时用。跳过隐藏目录与常见构建产物。"""
+    skip = {".git", ".venv", "venv", "node_modules", "__pycache__",
+            ".recycle_bin", ".mypy_cache", ".pytest_cache", "dist", "build"}
+    out: list[str] = []
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if any(part in skip for part in rel.parts):
+            continue
+        out.append(rel.as_posix())
+    return sorted(out)
 
 
 def git_head(root: Path) -> str:
@@ -290,11 +312,14 @@ def ignored_files(root: Path) -> list[str]:
     （本仓库的 scripts/profile_*.py 即是），把它们算成「文件不存在」会给出
     错误的处置建议（去修引用），而正确处置是「纳管、声明为外部、或停止引用」。
     """
-    out = subprocess.run(
-        ["git", "ls-files", "-o", "-i", "--exclude-standard", "-z"],
-        cwd=root, capture_output=True, text=True,
-        encoding="utf-8", errors="surrogateescape",
-    ).stdout
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-o", "-i", "--exclude-standard", "-z"],
+            cwd=root, capture_output=True, text=True,
+            encoding="utf-8", errors="surrogateescape", check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return []
     return sorted(p for p in out.split("\0") if p.strip())
 
 
@@ -1270,6 +1295,23 @@ def cmd_check(args) -> int:
     return 1 if blocking else 0
 
 
+def _ticket(rep, files):
+    """工单素材：闭包内**已被核对过**的声明，附上次核对与证据。
+
+    §3.14 要求钩子的失败输出能说清「上次核对与证据」。这两样只存在于机器区，
+    所以只能由这里读出来——渲染区是纯输出、会被覆盖，不能当数据源。
+    """
+    out = []
+    for mk in rep.decls:
+        rng = rep.ranges_by_uid.get(mk.uid)
+        if not rng or rng[0].path not in files:
+            continue
+        if not (mk.verified or mk.evidence):
+            continue
+        out.append((mk, mk.uid))
+    return out
+
+
 def cmd_diag(args) -> int:
     """关系图诊断：闭包 + 环 + 模拟提交判定，一次算完，三种视图。
 
@@ -1291,47 +1333,58 @@ def cmd_diag(args) -> int:
     scan_set = [p for p in scan_set if not is_self_output(root / p)]
 
     rep = marks.derive(root, scan_set)
-    seeds = ({x.strip().replace("\\", "/") for x in args.changed.split(",")}
-             if args.changed else set())
-    nodes = marks.closure(rep.edges, seeds) if seeds else {
-        p for p in scan_set}
-    loops = marks.cycles(marks.adjacency(rep.edges), nodes)
-    inside = [i for i in rep.blocking
-              if any(i.where.startswith(n + ":") or i.where == n
-                     for n in nodes)] if seeds else rep.blocking
+    # 只有一张图，节点是 uid。「改这个文件牵动哪些文件」是它投影到路径的结果。
+    adj = marks.adjacency(rep.edges)
+    if args.changed:
+        seeds = {x.strip().replace("\\", "/") for x in args.changed.split(",")}
+        nodes = marks.closure(adj, marks.uids_in_files(rep, seeds))
+    else:
+        seeds = set()
+        nodes = set(rep.ranges_by_uid)
+    files = marks.files_of(rep, nodes)
+    loops = marks.cycles(adj, nodes)
+    inside = ([i for i in rep.blocking
+               if any(i.where.startswith(f + ":") for f in files)]
+              if args.changed else rep.blocking)
 
     if args.format == "json":
         print(json.dumps({
             "config_used": str(cfg_path) if cfg_path else None,
             "seeds": sorted(seeds), "stats": rep.stats,
-            "nodes": sorted(nodes),
+            "nodes": sorted(marks.node_label(rep, u) for u in nodes),
+            "files": sorted(files),
             "edges": [{"a": e.a_path, "a_uid": e.a_uid, "b": e.b_path,
                        "b_uid": e.b_uid, "label": e.label, "state": e.state,
                        "at": e.at} for e in rep.edges],
-            "cycles": loops,
+            "cycles": [[marks.node_label(rep, u) for u in c] for c in loops],
             "would_block": [{"state": i.state, "where": i.where,
                              "detail": i.detail} for i in inside],
+            "ticket": _ticket(rep, files),
         }, ensure_ascii=True, indent=2, sort_keys=True))
         return 1 if inside else 0
 
     print(f"配置：{cfg_path if cfg_path else '未使用（内置默认）'}")
     if seeds:
-        print(f"起点 {len(seeds)} 个文件；闭包 {len(nodes)} 个节点")
+        print(f"起点 {len(seeds)} 个文件；闭包 {len(nodes)} 个范围，"
+              f"落在 {len(files)} 个文件里")
     else:
-        print(f"未给 --changed，按全库报：{len(nodes)} 个文件，"
+        print(f"未给 --changed，按全库报：{len(nodes)} 个范围，"
               f"{len(rep.edges)} 条关系")
     print("")
     if loops:
         print(f"环 {len(loops)} 处（本项目中很可能是常态，不是错误；"
               f"列出来是为了让改的人提前知道）:")
         for cyc in loops[:6]:
-            print("   " + " -> ".join(cyc))
+            print("   " + " -> ".join(marks.node_label(rep, u) for u in cyc))
     else:
         print("环：无")
     print("")
     print(f"模拟提交判定：{len(inside)} 条会被报出")
     for i in inside:
         print(f"   ! {i.as_line()}")
+    for mk, uid in _ticket(rep, files):
+        print(f"   · {mk.path}:{mk.line}  关系 {uid}  上次核对 "
+              f"{mk.verified or '(未记录)'}  证据 {mk.evidence or '(无)'}")
     if not inside:
         print("   （闭包内无阻断项）")
     return 1 if inside else 0

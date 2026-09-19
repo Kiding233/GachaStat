@@ -10,9 +10,12 @@
 记忆**：错锚点的指纹自洽，此后永远检测不出来。所以它比 `render` 严得多：
 
 * **必须带证据**（`--note`）。依据是 §八 的风险行「语义核对被橡皮图章」：
-  核对的产物要能被人看见，否则「核对过了」只是一句话。证据与核对时间写进
-  机器区（`v=` / `ev=`）而不是渲染区——渲染区会被下次渲染覆盖，放那里等于丢；
-  而钩子拼工单时明确要读「上次核对时间与证据」（§3.14）。
+  核对的产物要能被人看见，否则「核对过了」只是一句话。证据与核对时的**基线
+  提交**写进机器区（`v=` / `ev=`）而不是渲染区——渲染区会被下次渲染覆盖，放
+  那里等于丢；而钩子拼工单时明确要读「上次核对与证据」（§3.14）。`v` 记的是
+  **当时的 HEAD**（承载这次核对的那个提交的父提交，提交前已知），不是日期：
+  日期答不出「自上次核对以来改了什么」，基线提交能——`git diff <v>..HEAD --
+  <被引文件>` 就是那个答案。
 * **环上拦住**。§3.16：成环时必须先把环上各端表述**一起定稿**再逐条 `rebind`，
   否则逐条处理会互相推翻。所以本关系若在环上，除非显式 `--allow-cycle`，否则拒绝。
 * **顺序无关**。写 `h` 不改变任何指纹：声明落在自己的范围之内，而指纹先剥
@@ -21,14 +24,32 @@
 
 from __future__ import annotations
 
-import datetime
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from marks import (FIELD_FORBIDDEN, FIELD_ORDER, Mark, Report,
-                   adjacency_by_uid, cycles, derive)
+                   adjacency, cycles, derive)
 
 MARK_HEAD = "<|"
+
+
+def _base_commit(root: Path) -> str:
+    """核对时的基线提交（当时的 HEAD）。
+
+    用 HEAD 而不是「本次提交的哈希」：后者在提交之前不知道（鸡生蛋）。而 HEAD
+    是承载这次核对的那个提交的**父提交**，提交前就已知，语义也正是「我对哪一版
+    树做了这次核对」。
+
+    不是 git 仓库就返回空串——`v` 是**便利字段**，缺了判定照样工作（`h` 才是
+    正确性载体），这样保住设计里「不依赖 git 历史也能退化为可用」。
+    """
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              cwd=root, capture_output=True, text=True,
+                              check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
 
 
 @dataclass
@@ -49,9 +70,9 @@ def _field_value(fp: dict[str, str], peer_seg: str) -> str:
     return fp.get(peer_seg) or fp.get("*") or ""
 
 
-def render_marker(mk: Mark, h: str, date: str, note: str) -> str:
+def render_marker(mk: Mark, h: str, base: str, note: str) -> str:
     """按 FIELD_ORDER 重排机器区字段，保留已有的渲染区。"""
-    fields = {"h": h, "v": date, "ev": note}
+    fields = {"h": h, "v": base, "ev": note}
     body = f"{mk.label}：{mk.peer}#{mk.peer_seg}"
     for k in FIELD_ORDER:
         if fields.get(k):
@@ -79,7 +100,7 @@ def plan(root: Path, paths: list[str], uid: str, note: str,
     # 判环必须用 **uid 图**，不能用文件图：一个文件里可以有几十个范围，
     # 文件级的环会把不相干的关系也报进来。（我第一版就是拿 uid 去文件级
     # 的环里找，永远找不到，守卫等于没有——样例测试当场抓出。）
-    adj = adjacency_by_uid(rep.edges)
+    adj = adjacency(rep.edges)
     reach = {uid}
     stack = [uid]
     while stack:
@@ -95,7 +116,7 @@ def plan(root: Path, paths: list[str], uid: str, note: str,
                     f"§3.16 要求成环时先把环上各端表述一起定稿再逐条 verify，"
                     f"确已定稿请加 --allow-cycle"], rep
 
-    date = datetime.date.today().isoformat()
+    base = _base_commit(root)
     edits: list[RebindEdit] = []
     for mk in decls:
         peer_ranges = rep.ranges_by_uid.get(mk.peer, [])
@@ -108,7 +129,7 @@ def plan(root: Path, paths: list[str], uid: str, note: str,
         else:
             h = peer_ranges[0].fp
         edits.append(RebindEdit(mk.path, mk.line, mk.raw,
-                                render_marker(mk, h, date, note), note))
+                                render_marker(mk, h, base, note), note))
     return edits, [], rep
 
 

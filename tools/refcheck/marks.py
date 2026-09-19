@@ -717,8 +717,16 @@ def uid_sightings(root: Path, paths: list[str]) -> dict[str, list[tuple[str, int
             text = (root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        is_md = rel.endswith(".md")
+        # 与真标记的判定保持一致：标为示例的行、以及围栏内的，都不算。
+        # 否则一段语法示例会把 `A`/`B`/`C` 这些**示例 id** 盘进清单，而它们
+        # 不是任何被占用的名字——与「工具不把自己的源码当数据」是同一条道理。
+        skip = example_lines(text) if is_md else set()
+        fenced = fence_lines(text) if is_md else set()
         for m in MARK_RE.finditer(text):
             line = text[:m.start()].count("\n") + 1
+            if line in skip or line in fenced:
+                continue
             body = m.group("body") or ""
             head, _, tail = body.partition(";")
             if mm := RANGE_OPEN_RE.match(head) or RANGE_CLOSE_RE.match(head):

@@ -5,8 +5,12 @@
 
 * **只写渲染区**，机器区一个字不动。视图是纯输出，手改会被下次渲染覆盖，
   因此它不是第二真相源（§3.2.6）。
-* **逐字节比对，相同则整文件不写**（§3.10）。视图显示的是状态而非哈希，是
-  阶跃函数，所以写入次数与**状态跳变次数**成正比、与编辑次数无关。
+* **逐字节比对，相同则整文件不写**（§3.10）。视图里两个字段的**变动频率不同**：
+  状态只在跳变时变，而定位符（行号）会随上方代码移动而变。所以准确的措辞是
+  **写入次数与「状态跳变次数 + 定位符移动次数」成正比**，而 §3.10 原文只说
+  了「与状态跳变次数成正比、与编辑次数无关」——那句对状态成立、对定位符不成立。
+  定位符移动**不是正确性事件**（指纹不动、状态不变），所以它引起的那次重写
+  只是刷新显示，原样提交即可。
 * **危险位置拒绝写入，不硬写**（§3.10）：标记自身落在代码围栏内或表格行内
   时拒绝。理由机械且具体：标记里的 `|` 会被 GFM 当成单元格分隔符，写进去
   表格结构就散了；围栏里则是内容保真问题。
@@ -22,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from marks import Mark, Report, derive, symbol_for_span
+from marks import Mark, Report, derive
 
 @dataclass
 class Edit:
@@ -64,9 +68,9 @@ def desired_view(rep: Report, mk: Mark, all_paths: list[str]) -> str:
     状态名取自这份声明**自己那一端**的判定（引用侧报 tgt_drift、被引侧报
     src_drift），与机器区里的 `h` 无关——视图放判定结论，不放哈希。
 
-    定位形式**符号优先**：能落到符号名就用符号名，否则才退到
-    `basename:行号`。行号会随上方代码移动而变，用它当视图会让每次插入几行
-    都触发一批视图重写，等于把设计要消灭的 churn 从记忆搬到视图上。
+    定位**用行号**：让行号自动更新本来就是这套设计的初衷之一（「代码改了，
+    行号引用要跟着更新」）。行号变了不改变指纹、不改变漂移状态，所以视图
+    因它重写**不是正确性事件**，只是把显示刷新一次——原样提交即可。
     """
     peer = next((e for e in rep.edges
                  if e.a_uid == mk.uid and e.b_uid == mk.peer
@@ -74,24 +78,12 @@ def desired_view(rep: Report, mk: Mark, all_paths: list[str]) -> str:
     if peer is None:
         # 没有配对的边（对方扫不到等）：视图仍要如实说
         return f"({mk.peer}#{mk.peer_seg};broken)"
-    loc = locator(rep, mk, all_paths)
-    state = "ok" if peer.state == "ok" else "tgt_drift"
-    return f"({loc};{state})"
-
-
-def locator(rep: Report, mk: Mark, all_paths: list[str]) -> str:
     rng = next((r for r in rep.ranges_by_uid.get(mk.peer, [])
                 if r.seg == mk.peer_seg), None)
-    if rng is None:
-        return f"{mk.peer}#{mk.peer_seg}"
-    if rng.path.endswith(".py") and rep.root is not None:
-        text = (rep.root / rng.path).read_text(encoding="utf-8",
-                                              errors="replace")
-        # 用**内容区间**找所属符号：标记行自己不在 AST 里
-        sym = symbol_for_span(text, rng.open_line + 1, rng.close_line - 1)
-        if sym:
-            return f"{Path(rng.path).name}::{sym}"
-    return short_locator(rng.path, rng.span[0], all_paths)
+    loc = (short_locator(rng.path, rng.span[0], all_paths)
+           if rng else f"{mk.peer}#{mk.peer_seg}")
+    state = "ok" if peer.state == "ok" else "tgt_drift"
+    return f"({loc};{state})"
 
 
 def rewrite_marker(mk: Mark, view: str) -> str:

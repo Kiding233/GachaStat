@@ -328,43 +328,6 @@ def _danger_at(lines: list[str], line: int, fenced: set[int]) -> str:
 TABLE_ROW_RE = re.compile(r"^\s*\|.*\|")
 
 
-def symbol_for_span(text: str, lo: int, hi: int) -> str | None:
-    """包住该行的最内层函数/类的限定名。用于**视图的最短定位形式**。
-
-    视图优先放符号名而不是行号（§3.10 F5：「`pity.py:1258` 或符号名即可」），
-    理由不只是短：**行号会随上方代码移动而变**，于是每次插入几行都会让视图
-    重写、把一堆无关文件标脏；符号名不随行号移动，正是这套设计要消灭的
-    churn。所以能用符号名的地方一律用符号名。
-    """
-    try:
-        tree = ast.parse(text)
-    except (SyntaxError, ValueError):
-        return None
-    sig: list[tuple[int, int, str]] = []
-    stack: list[tuple[ast.AST, str]] = [(tree, "")]
-    while stack:
-        node, prefix = stack.pop()
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                  ast.ClassDef)):
-                name = prefix + child.name
-                sig.append((child.lineno, child.end_lineno or child.lineno,
-                            name))
-                stack.append((child, name + "."))
-            else:
-                stack.append((child, prefix))
-    # 先找完整包住 [lo, hi] 的最内层；找不到就退到「包住起点」的最内层
-    for want_full in (True, False):
-        best: tuple[int, str] | None = None
-        for a, b, name in sig:
-            if a <= lo and (b >= hi if want_full else b >= lo):
-                if best is None or b - a < best[0]:
-                    best = (b - a, name)
-        if best:
-            return best[1]
-    return None
-
-
 def _classify(rel: str, line: int, col: int, raw: str, body: str,
               view: str) -> Mark:
     body = body.strip()

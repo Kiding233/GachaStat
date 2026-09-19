@@ -1,27 +1,32 @@
 # refcheck
 
-把仓库里现存的「文档引用代码」的行号型引用找出来、解析、分类，产出一份存量盘点与一份可复现的抽查稿。
-纯读，零写入，零第三方依赖（Python 3.10+；3.11 以下无 `tomllib`，配置不生效但工具仍可跑）。
+仓库里「文档与代码互相指路」的引用管理工具。两块，一块纯读、一块带写：
 
-**它不是漂移检测器。** 漂移需要「记忆」才能存在，而记忆由迁移写入；盘点阶段还没有记忆可比。
+* **存量盘点**（阶段一迁移用）：把行号型旧引用找出来、解析、分类，产出盘点与抽查稿。**纯读**。
+* **标记系统**（v2）：双向标记 + 内容指纹，对账出漂移、渲染视图、把现状认作新基线。
+  其中 `render` 写渲染区、`rebind` 写记忆，**只有这两个命令会动盘**。
+
+零第三方依赖（Python 3.10+；3.11 以下无 `tomllib`，配置不生效但工具仍可跑）。
+
+**盘点这一半不是漂移检测器。** 漂移需要「记忆」才能存在，而记忆按标记写入；盘点阶段还没有记忆可比。
 它也不判定「锚点指对了没有」，理由见下面「它做不到什么」。
 
 ## 用法
 
+**命令清单不在这里枚举**，由工具自己打印：枚举必然与实现脱节，本节原先就漏了
+`rebind` / `uids` / `manual` 三个命令。
+
 ```
-# 阶段一：存量盘点（纯读）
+python tools/refcheck/refcheck.py manual           # 全文：命令、字段、状态与动作、流程
+python tools/refcheck/refcheck.py manual --brief   # 精简版
+```
+
+阶段一的存量盘点（纯读，迁移用）：
+
+```
 python tools/refcheck/refcheck.py scan   --root .                  # 人读报告
 python tools/refcheck/refcheck.py scan   --root . --format json    # 机器读
 python tools/refcheck/refcheck.py sample --root . --n 24 --detail  # 抽查稿
-
-# 标记系统：对账与诊断（纯读）
-python tools/refcheck/refcheck.py check  --root .                  # 扫标记、配关系、派生状态
-python tools/refcheck/refcheck.py diag   --root . --changed a.md,b.py
-                                                                  # 闭包 + 环 + 模拟提交判定
-
-# 渲染（**会写盘**）
-python tools/refcheck/refcheck.py render --root . --dry-run        # 时效性诊断：只报哪些视图会变
-python tools/refcheck/refcheck.py render --root .                  # 真写
 ```
 
 ## 搬到别的仓库要做什么
@@ -123,6 +128,19 @@ python tools/refcheck/refcheck.py render --root .                  # 真写
   拿它去套别名会把「文件本就在别处」的错引用悄悄改写成另一个文件的正确路径。
 - **`--format json` 输出纯 ASCII。** 非 UTF-8 终端下 `ensure_ascii=False` 会抛
   `UnicodeEncodeError`，而失败模式很坏：重定向文件里留下半截 JSON。
+- **讨论标记语法的正文不限于代码围栏。** 实测踩到：`.claude/skills/` 下一个 skill 的
+  YAML `description` 里写了标记的形状（用来提示何时该想起这套东西），而 `.claude/**`
+  在扫描范围内，于是那份文件被自己的工具报成 `unparsable_mark` 并**阻断提交**。正文里
+  要出现标记形状时，同样按「按行 `<!-- refcheck:example -->`」脱敏。
+- **`A -> B -> A` 不是环。** 这是一张无向图，每一条边都能这样走回来；早先的实现把它算成
+  环，于是「文档引代码、代码引文档」这一对（本工具的核心用法）**永远在环上**，`rebind`
+  对它一律拒绝，逼人天天加 `--allow-cycle`，守卫从此是橡皮图章。判环时跳过「来时的那条
+  边」，真正的环（长度 ≥3）照样会被找到。
+- **显示层只能有一份正文。** 每条问题的「意思」与「下一步动作」原先既写在状态表里、又以
+  另一种措辞写在代码的 `Issue` 里，两处无门控地各自演化（自检抓到的实例：状态 `drift`
+  是死条目、`unknown_field` 显示说阻断而门控不拦）。现改为：代码只写实例事实
+  （`Issue.facts`），意思与动作一律查表拼上；自检再加一条**单向弱门**（表里的整句不得
+  出现在代码里），它抓逐字抄、抓不到改写，弱在哪写在函数注释里。
 
 ## 给 agent 用的提示词要点
 

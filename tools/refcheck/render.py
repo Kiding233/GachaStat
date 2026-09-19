@@ -110,7 +110,7 @@ def plan(root: Path, paths: list[str]) -> tuple[list[Edit], list[Refusal], Repor
     all_paths = [p.replace("\\", "/") for p in paths]
     edits: list[Edit] = []
     # 危险位置上的标记已被 derive 排除在配对之外，这里只把它们原样报出来
-    refusals = [Refusal(*i.where.rsplit(":", 1), i.detail)
+    refusals = [Refusal(*i.where.rsplit(":", 1), i.facts)
                 for i in rep.issues if i.state == "mark_at_danger"]
     for mk in rep.decls:
         want = desired_view(rep, mk, all_paths)

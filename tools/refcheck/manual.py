@@ -5,12 +5,14 @@
 状态会随实现变；写成文档就会与代码脱节，而脱节的说明书比没有更坏（它让人以为
 覆盖到了）。所以：
 
-* **三张表**（`COMMANDS` / `FIELD_DOC` / `STATE_DOC`）是散落知识的收敛处，
-  代码里原有的判断文字也应当以它们为准；
+* **三张表**（`COMMANDS` / `FIELD_DOC` / `STATE_DOC`）是散落知识的收敛处。它们
+  不是「也抄了一份」，而是**唯一正文**：`STATE_DOC` 的意思与动作由
+  `Issue.as_line()` 现查现拼，代码里只留实例事实（`Issue.facts`）。判据分界是
+  「这类错是什么意思、该怎么办」归表，「这一条具体是什么」归代码。
 * **流程散文**（`WORKFLOW`）无法生成，是唯一手写的部分——放这里，与它描述的
   行为在同一个提交里改；
-* 表与代码的一致性有**自检**（见 `selfcheck`）：状态表漏了 `BLOCKING` 里的
-  状态就报出来。缺自检的话，「收成表」只是把散落换了个地方。
+* 表与代码的一致性有**自检**（见 `selfcheck`）：状态表与阻断集**双向**对齐，
+  且表里的整句不得出现在代码里（单向弱门，`prose_leaks` 里写明它弱在哪）。
 
 分发形态：skill 只做**触发器**（`description` 讲何时该想起它 + 一句「先跑
 `manual`」），正文放这里。不生成 skill 正文副本——副本要多一道保鲜机制，
@@ -18,6 +20,8 @@
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # 表一：命令。读写的区分是唯一能防事故的东西——随口跑一次 render 就改了工作区
@@ -67,6 +71,8 @@ FIELD_DOC: dict[str, tuple[str, str, str]] = {
 
 STATE_DOC: dict[str, tuple[str, str, bool]] = {
     # 状态: (意思, 下一步动作, 是否阻断)
+    # 这两栏是**通用判断**的唯一正文。代码里的 Issue.facts 只许写实例事实，
+    # 显示时由 Issue.as_line() 把这里的句子拼上去（见 selfcheck 里的单向门）。
     "ok": ("两侧指纹相符", "无需动作", False),
     "unverified": ("关系已建立但还没有记忆（`h` 为空）",
                    "跑 `rebind` 核对并写下基线", False),
@@ -75,29 +81,46 @@ STATE_DOC: dict[str, tuple[str, str, bool]] = {
                   "或确认现状正确后跑 `rebind`", True),
     "src_drift": ("**引用侧**变了（被引侧记的指纹对不上）",
                   "同上，注意这次漂移显示在被引侧", True),
-    "fragment_missing": ("多段时的段集合少项", "补齐段标记，或改 `h` 的映射", True),
-    "broken": ("对方 uid 全库扫不到", "对方被删或改了 id：补回，或拆掉这条关系", True),
-    "ambiguous": ("同一 uid 出现在多处", "换 id（见 `uids`），保证全库唯一", True),
+    "fragment_missing": ("`h` 里没有对方这个段（多段时映射少一项）",
+                         "补齐段标记，或改 `h` 的映射", True),
+    "broken": ("对方不存在（uid 全库扫不到，或对方没有这个段）",
+               "对方被删或改了 id：补回，或拆掉这条关系", True),
+    "ambiguous": ("同一 uid 的段分散在多个文件（多段应共处一文件）",
+                  "把多段合到同一个文件，或换 id（见 `uids`）", True),
     "uid_in_archive": ("扫描范围外的文件（归档/回收站）里也有这个 uid",
                        "换一个 id。否则那份文件被恢复时会撞成 ambiguous", True),
     "orphan_segment": ("有范围标记，但全库没有任何声明指向它",
                        "补一条声明，或删掉范围标记", True),
-    "orphan_decl": ("声明不在任何范围之内",
-                    "把声明挪进它自己的范围里（标记贴外层、声明放在开标记之后）",
-                    True),
+    "orphan_decl": ("声明不在任何范围标记之内",
+                    "把声明放进它自己的范围里（标记贴外层、"
+                    "声明放在开标记之后）", True),
     "unmatched_start": ("开标记没有闭标记", "补闭标记，或删开标记", True),
-    "unmatched_end": ("闭标记没有开标记（或闭在开之前）", "补开标记，或删闭标记", True),
-    "dup_segment": ("同一范围内同一段标签出现两次", "改段标签，或合并成一段", True),
-    "dup_decl": ("同一范围内有两条指向同一对方段的声明", "删掉多余的那条", True),
+    "unmatched_end": ("闭标记没有可配对的开标记（次序颠倒，或开标记在另一个"
+                      "文件：范围不能跨文件）", "补开标记，或删闭标记", True),
+    "dup_segment": ("同一范围内同一段标签出现多次", "改段标签，或合并成一段",
+                    True),
+    "dup_decl": ("同一范围内有多条指向同一对方段的声明", "只留一条，删掉多余",
+                 True),
     "role_conflict": ("两端的标签不构成已知的互逆对",
                       "把两端改用同一对（如一头 `规格` 另一头 `实现`）", True),
-    "unparsable_mark": ("像标记但解析不了（多半是打错了）", "按 §3.2 的语法改对", True),
-    "mark_at_danger": ("标记落在危险位置（代码围栏内或表格行内）",
+    "unparsable_mark": ("像标记但解析不了（多半是打错了）",
+                        "按 §3.2 的语法改对", True),
+    "mark_at_danger": ("标记落在危险位置，围栏内的内容会被照抄、写入会破坏"
+                       "保真，表格行内的 `|` 会被当成单元格分隔符",
                        "把标记挪到围栏/表格外面；示例改用 "
                        "`<!-- refcheck:example -->` 标注", True),
     "unknown_field": ("机器区里有认不出的字段（键名写错会静默失效）",
                       "改成 `h` 或 `v`，或删掉", True),
 }
+
+
+def explain(state: str, blocking: bool = False) -> tuple[str, str, bool]:
+    """查一条状态的（意思, 动作, 是否阻断）。显示层唯一的正文来源。
+
+    查不到时返回空意思与空动作，并沿用调用方给的阻断判断（这样新加状态忘了
+    写表时，输出会缺一段而不是谎报，同时自检会把它报出来）。
+    """
+    return STATE_DOC.get(state, ("", "", blocking))
 
 # 设计里定义但当前实现未产出的状态，列此备查，避免被当成「漏了」
 RESERVED_STATES = {"decl_lost": "承载声明的段被删，其余段无人看守（G4，未实现）"}
@@ -148,17 +171,61 @@ WORKFLOW = """\
 """
 
 
+def _norm(text: str) -> str:
+    """去掉标点与空白后再比。只做归一化，不做语义判断。"""
+    drop = set(" \t　`，。、：；！？（）()「」『』·*|'\"")
+    return "".join(ch for ch in text if ch not in drop)
+
+
+def prose_leaks() -> list[str]:
+    """表里的句子不许出现在代码里（**单向**门）。
+
+    为什么是这个方向：正文的唯一来源是本表，代码只提供实例事实。于是「代码里
+    出现了表里的句子」等价于「有人在代码里重述了通用判断」，而那正是两份正文
+    各自演化的起点。
+
+    这是**弱门**，得说清它弱在哪：它抓逐字抄（归一化后仍逐字），抓不到改写过的
+    重述。留着它是因为实测里两处重复恰好都是逐字抄来的（`unverified` 的「跑
+    `rebind` 核对并写下基线」、`orphan_segment` 的「有范围标记，但全库没有任何
+    声明指向它」），而逐字抄是退化的第一步。抓不到的那部分只能靠审查，这不是
+    缺陷：本工具对一切语义问题都是这个处境（确定性层判不了锚点对错，那里也是
+    靠独立抽查）。
+    """
+    here = Path(__file__).resolve().parent
+    mine = Path(__file__).name
+    src: dict[str, str] = {}
+    for p in sorted(here.glob("*.py")):
+        if p.name != mine:
+            src[p.name] = _norm(p.read_text(encoding="utf-8"))
+    hits = []
+    for st, (what, action, _) in STATE_DOC.items():
+        for kind, sentence in (("意思", what), ("动作", action)):
+            n = _norm(sentence)
+            if len(n) < 8:              # 太短的短语（如「补闭标记」）不判
+                continue
+            for name, text in src.items():
+                if n in text:
+                    hits.append(f"`{st}` 的{kind}整句出现在 {name} 里：{sentence}")
+    return hits
+
+
 def selfcheck() -> list[str]:
     """表与代码的一致性自检。
 
-    「把散落收成表」若不校验，只是把散落换了个地方。这里查两件：
-    阻断状态是否都在状态表里；命令表是否覆盖了 CLI 实际的子命令。
+    「把散落收成表」若不校验，只是把散落换了个地方。这里查三件：
+    阻断状态是否都在状态表里，状态表里标阻断的是否真的在阻断集里（两个方向，
+    单查一个方向时另一方向的错会静默），以及代码里有没有重述表里的句子。
     """
     from marks import BLOCKING
     problems = []
     for st in sorted(BLOCKING):
         if st not in STATE_DOC and st not in RESERVED_STATES:
             problems.append(f"状态 `{st}` 在 BLOCKING 里但不在 STATE_DOC 里")
+    for st, (_, _, block) in STATE_DOC.items():
+        if block and st not in BLOCKING:
+            problems.append(f"状态 `{st}` 在 STATE_DOC 里标了阻断，"
+                            f"但它不在 BLOCKING 里（显示与门控会不一致）")
+    problems.extend(prose_leaks())
     return problems
 
 

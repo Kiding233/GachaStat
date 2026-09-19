@@ -104,12 +104,36 @@ class Range:
 
 @dataclass
 class Issue:
+    """一条问题。
+
+    `facts` 只许写**实例事实**：哪一行、现值是什么、期望是什么、数量、涉及谁。
+    「这类错是什么意思」与「该怎么办」是 `manual.STATE_DOC` 的职责，显示时由
+    它拼上（见 `as_line`）。字段名叫 `facts` 而不叫 `detail`：名字是防「又写成
+    散文」最便宜的一道门槛。通用判断写在两处必然各自演化（一处改了另一处不改，
+    读者就会看到两句互相矛盾的话），本工具治的就是这个病，自己身上不该有。
+
+    自检里那道单向门（`manual.prose_leaks`）就是查这条纪律的。
+    """
+
     state: str
     where: str
-    detail: str
+    facts: str
 
     def as_line(self) -> str:
-        return f"[{self.state}] {self.where}  {self.detail}"
+        """人读的形式：状态 + 通用判断（现查表）+ 实例事实 + 下一步动作（现查表）。
+
+        通用判断一律现查，所以那段正文只有一份，不可能与表脱节。延迟 import 是
+        为了避免模块层互相引用（`manual` 只在 selfcheck 里用 marks）。
+        """
+        import manual
+        what, action, block = manual.explain(self.state, self.state in BLOCKING)
+        head = f"[{self.state}]" + ("（阻断）" if block else "")
+        line = f"{head} {self.where}"
+        if what:
+            line += f"  {what}"
+        if self.facts:
+            line += f"：{self.facts}"
+        return f"{line}\n    → {action}" if action else line
 
 
 @dataclass
@@ -327,9 +351,9 @@ def _danger_at(lines: list[str], line: int, fenced: set[int]) -> str:
     或整段围栏是**正常用法**（标记贴在它们外面）。
     """
     if line in fenced:
-        return "标记落在代码围栏内（内容会被照抄，写入会破坏保真）"
+        return "落点=代码围栏内"
     if 1 <= line <= len(lines) and TABLE_ROW_RE.match(lines[line - 1]):
-        return "标记落在表格行内（标记里的 `|` 会被当成单元格分隔符）"
+        return "落点=表格行内"
     return ""
 
 
@@ -399,21 +423,20 @@ def build_ranges(root: Path, marks: list[Mark]) -> tuple[dict, list[Issue]]:
             key = (mk.uid, mk.seg)
             if not open_stack[key]:
                 issues.append(Issue("unmatched_end", f"{mk.path}:{mk.line}",
-                                    f"闭标记 `<|/e:{mk.uid}#{mk.seg}|>` 没有"
-                                    f"对应的开标记"))
+                                    f"闭标记 `<|/e:{mk.uid}#{mk.seg}|>`"))
                 continue
             start = open_stack[key].pop()
             if start.path != mk.path:
                 issues.append(Issue(
                     "unmatched_end", f"{mk.path}:{mk.line}",
-                    f"开标记在另一个文件（{start.path}:{start.line}）；"
-                    f"范围不能跨文件"))
+                    f"闭标记 `<|/e:{mk.uid}#{mk.seg}|>`；"
+                    f"开标记在 {start.path}:{start.line}"))
                 continue
             ranges[mk.uid].append(_make_range(root, mk.uid, mk.seg, start, mk))
     for (uid, seg), stack in open_stack.items():
         for mk in stack:
             issues.append(Issue("unmatched_start", f"{mk.path}:{mk.line}",
-                                f"开标记 `<|e:{uid}#{seg}|>` 没有对应的闭标记"))
+                                f"开标记 `<|e:{uid}#{seg}|>`"))
     # 同一 uid 同一段标签出现两次
     for uid, group in ranges.items():
         seen = defaultdict(int)
@@ -423,7 +446,7 @@ def build_ranges(root: Path, marks: list[Mark]) -> tuple[dict, list[Issue]]:
             if n > 1:
                 issues.append(Issue(
                     "dup_segment", f"uid={uid}",
-                    f"段标签 `{seg}` 在同一范围内出现 {n} 次"))
+                    f"段标签 `{seg}`；出现 {n} 次"))
     for uid, group in ranges.items():
         group.sort(key=lambda r: (r.path, r.open_line))
     return ranges, issues
@@ -445,6 +468,12 @@ def _make_range(root: Path, uid: str, seg: str, start: Mark,
     return r
 
 
+def _span_text(rng: Range) -> str:
+    """行号区间写成 `6` 或 `6-9`（单行的范围不写成 `6-6`）。"""
+    a, b = rng.span
+    return f"{a}" if a == b else f"{a}-{b}"
+
+
 # ---------------------------------------------------------------------------
 # 状态派生
 # ---------------------------------------------------------------------------
@@ -463,15 +492,12 @@ def derive(root: Path, paths: list[str]) -> Report:
             # 「参数键名即契约」：认不出的字段要喊出来，否则键名写错会静默失效
             issues.append(Issue(
                 "unknown_field", f"{mk.path}:{mk.line}",
-                f"机器区里有不认识的字段 {sorted(mk.unknown_fields)}；"
-                f"已知字段是 {FIELD_ORDER}。键名写错会静默失效，故报出"))
+                f"认不出 {sorted(mk.unknown_fields)}；"
+                f"已知字段是 {FIELD_ORDER}"))
     # 落在危险位置的标记：**逐条**报出（要说清是哪一行，聚合起来就没法改了），
     # 且不参与配对与状态派生。
     for m in [x for x in marks if x.kind == "danger"]:
-        issues.append(Issue("mark_at_danger", f"{m.path}:{m.line}",
-                            f"{m.danger}。§3.10 规定危险位置报错拒绝写入；"
-                            f"要让示例不被扫到，改用 "
-                            f"`<!-- refcheck:example -->` 标注那一行"))
+        issues.append(Issue("mark_at_danger", f"{m.path}:{m.line}", m.danger))
     marks = [m for m in marks if m.kind != "danger"]
 
     by_uid: dict[str, list[Range]] = ranges
@@ -480,8 +506,7 @@ def derive(root: Path, paths: list[str]) -> Report:
         files = {r.path for r in group}
         if len(files) > 1 and len(group) > 1:
             issues.append(Issue("ambiguous", f"uid={uid}",
-                                f"同一 uid 的范围跨 {len(files)} 个文件："
-                                f"{sorted(files)}（多段应共处一文件）"))
+                                f"跨 {len(files)} 个文件：{sorted(files)}"))
 
     decls = [m for m in marks if m.kind == "decl"]
     edges: list[Edge] = []
@@ -494,10 +519,7 @@ def derive(root: Path, paths: list[str]) -> Report:
     for mk in decls:
         own = owner[id(mk)]
         if own is None:
-            issues.append(Issue(
-                "orphan_decl", f"{mk.path}:{mk.line}",
-                "声明不在任何范围标记之内，且没有写全两端；"
-                "认不出它声明的是哪一段"))
+            issues.append(Issue("orphan_decl", f"{mk.path}:{mk.line}", ""))
             continue
         declared[(own.uid, own.seg)].append(mk)
         mk.uid = own.uid
@@ -514,7 +536,8 @@ def derive(root: Path, paths: list[str]) -> Report:
         if len(group) > 1:
             issues.append(Issue(
                 "dup_decl", f"{group[0].path}:{group[0].line}",
-                f"同一范围内有 {len(group)} 条指向同一对方段的声明"))
+                f"对方段={group[0].peer}#{group[0].peer_seg}；"
+                f"条数={len(group)}"))
 
     rels = []
     for mk in decls:
@@ -523,8 +546,7 @@ def derive(root: Path, paths: list[str]) -> Report:
         peer_ranges = by_uid.get(mk.peer)
         if not peer_ranges:
             issues.append(Issue(
-                "broken", f"{mk.path}:{mk.line}",
-                f"对方 uid `{mk.peer}` 在全库扫不到"))
+                "broken", f"{mk.path}:{mk.line}", f"对方uid={mk.peer}"))
             continue
         # 关系种类必须构成已知的一对
         peer_decls = [d for d in decls
@@ -533,28 +555,25 @@ def derive(root: Path, paths: list[str]) -> Report:
         if peer_labels and PAIR_OF.get(mk.label) not in peer_labels:
             issues.append(Issue(
                 "role_conflict", f"{mk.path}:{mk.line}",
-                f"本端标 `{mk.label}`，对端标 {sorted(peer_labels)}；"
-                f"两者不构成已知的互逆对"))
+                f"本端={mk.label}；对端={sorted(peer_labels)}"))
         # 存的是「对方」的指纹，故拿对方的当前指纹来比
         peer = _pick(peer_ranges, mk.peer_seg)
         if peer is None:
             issues.append(Issue(
                 "broken", f"{mk.path}:{mk.line}",
-                f"对方 uid `{mk.peer}` 存在，但没有段 `{mk.peer_seg}`"))
+                f"对方uid={mk.peer}；缺的段={mk.peer_seg}"))
             continue
         if not mk.h:
             # 新建的关系还没有记忆。这**不是错**，是「尚未核对」——独立状态、
             # 不阻断。原先把它落进下面的 fragment_missing（那是多段时缺某一项
             # 的错），症状是刚建好的关系一提交就被自己的门控拒掉。
-            issues.append(Issue(
-                "unverified", f"{mk.path}:{mk.line}",
-                "这条关系还没有记忆（`h` 为空）。跑 `rebind` 核对并写下基线"))
+            issues.append(Issue("unverified", f"{mk.path}:{mk.line}", ""))
             continue
         want = mk.h.get(mk.peer_seg) or mk.h.get("*")
         if want is None:
             issues.append(Issue(
                 "fragment_missing", f"{mk.path}:{mk.line}",
-                f"`h` 里没有段 `{mk.peer_seg}`（有的是 {sorted(mk.h)}）"))
+                f"缺的段={mk.peer_seg}；`h` 里有的是 {sorted(mk.h)}"))
             continue
         state = "ok" if want == peer.fp else "drift"
         rels.append((mk, peer, want, state))
@@ -567,8 +586,8 @@ def derive(root: Path, paths: list[str]) -> Report:
             # `src_drift`。按被引文件的扩展名去猜是错的——按语言猜不出角色。
             issues.append(Issue(
                 _drift_state(mk.label), f"{mk.path}:{mk.line}",
-                f"记的是 `{want}`，对方（{peer.path}:{peer.span[0]}-"
-                f"{peer.span[1]}）现在是 `{peer.fp}`"))
+                f"记的是 `{want}`；对方 {peer.path}:{_span_text(peer)} "
+                f"现在是 `{peer.fp}`"))
 
     # 有范围但没有**任何**声明 → 没有记忆，什么也检查不了，属错误而非退化。
     # 注意「有声明」有两条路径：声明写在自己里面，或者**对端有一条声明指着
@@ -581,8 +600,7 @@ def derive(root: Path, paths: list[str]) -> Report:
             continue
         r = by_uid[uid][0]
         issues.append(Issue(
-            "orphan_segment", f"{r.path}:{r.span[0]}-{r.span[1]}",
-            f"uid `{uid}` 有范围标记，但全库没有任何声明指向它"))
+            "orphan_segment", f"{r.path}:{_span_text(r)}", f"uid={uid}"))
 
     stats = {
         "files": len(paths),
@@ -661,30 +679,37 @@ def closure(adj: dict[str, set[str]], seeds: set[str]) -> set[str]:
 
 
 def cycles(adj: dict[str, set[str]], nodes: set[str]) -> list[list[str]]:
-    """找出节点集合内的回边（有环即报一条，不枚举所有环）。
+    """找出节点集合内的环（有环即报一条，不枚举所有环）。
 
     设计里早记过一条事实：**环在本项目很可能是常态而非例外**（文档引代码、
     代码注释引文档正是现行做法）。所以这里的目的不是消除环，而是让改的人
     **提前看到**它在环里，而不是改完一圈才发现。
+
+    **长度为 2 的不算环**（`A -> B -> A`）。这是一张无向图，所以每一条边都能
+    这样走回来；若把它算成环，那么「文档引代码、代码引文档」这一对（本工具的
+    核心用法）永远在环上，`rebind` 就会对它一律拒绝，逼人天天加
+    `--allow-cycle`——守卫从此是橡皮图章。实测抓到：一对正常的双向引用在
+    `rebind` 时被拒，而它的两条声明本身毫无问题。所以 DFS 要跳过「来时的那条
+    边」，这是无向图上的标准做法，真正的环（长度 ≥3）照样会被找到。
     """
     out: list[list[str]] = []
     color: dict[str, int] = {}
 
-    def dfs(node: str, path: list[str]) -> None:
+    def dfs(node: str, path: list[str], parent: str | None) -> None:
         color[node] = 1
         for nxt in sorted(adj.get(node, ())):
-            if nxt not in nodes:
+            if nxt not in nodes or nxt == parent:
                 continue
             if color.get(nxt) == 1:
                 k = path.index(nxt) if nxt in path else 0
                 out.append(path[k:] + [nxt])
             elif color.get(nxt, 0) == 0:
-                dfs(nxt, path + [nxt])
+                dfs(nxt, path + [nxt], node)
         color[node] = 2
 
     for n in sorted(nodes):
         if color.get(n, 0) == 0:
-            dfs(n, [n])
+            dfs(n, [n], None)
     return out
 
 
@@ -774,6 +799,10 @@ def _count(issues: list[Issue]) -> dict[str, int]:
 # 写下时都确认过对面存在，因此错误态不会成批产生，不需要留报告通道。
 # 原先阶段四写的「新增 broken 阻断提交，存量出报告」是「机械迁移」时代的
 # 残留，那个前提已经作废。
+#
+# 这个集合与 manual.STATE_DOC 的第三栏**双向**对齐，由 manual.selfcheck 校验：
+# 两个方向都要查，只查一个方向时另一方向的错会静默（下面 `unknown_field` 那条
+# 就是这么被抓出来的）。
 BLOCKING = {
     "broken", "ambiguous", "orphan_segment", "orphan_decl", "unmatched_start",
     "unmatched_end", "dup_segment", "dup_decl", "role_conflict",
@@ -782,4 +811,9 @@ BLOCKING = {
     # 由 manual 的自检（阻断状态必须都在状态表里）抓出。
     "decl_lost", "unparsable_mark", "fragment_missing",
     "tgt_drift", "src_drift", "mark_at_danger", "uid_in_archive",
+    # `unknown_field` 原先只写在状态表里标着阻断，却没进这个集：显示说「阻断」、
+    # 门控不拦，正是两份正文不一致。由自检的**反向**检查（表里标阻断的必须真在
+    # 阻断集里）抓出。判它是阻断：键名写错会让那一项静默失效，而失效的若是 `h`，
+    # 这条关系就变成「没有记忆」却看不出任何异常。
+    "unknown_field",
 }

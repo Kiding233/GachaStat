@@ -1285,14 +1285,12 @@ def cmd_check(args) -> int:
             where = seen[uid][0]
             issues.append(marks.Issue(
                 "uid_in_archive", f"uid={uid}",
-                f"扫描范围外的文件里也有这个 uid（{where[0]}:{where[1]}）。"
-                f"那份文件被恢复时就会撞成 ambiguous，请换一个 id"))
+                f"另有 {where[0]}:{where[1]}"))
     blocking = rep.blocking
     if args.format == "json":
         print(json.dumps({"config_used": str(cfg_path) if cfg_path else None,
                           "stats": stats, "blocking": len(blocking),
-                          "issues": [{"state": i.state, "where": i.where,
-                                      "detail": i.detail} for i in issues]},
+                          "issues": [_issue_json(i) for i in issues]},
                          ensure_ascii=True, indent=2, sort_keys=True))
         return 1 if blocking else 0
 
@@ -1373,8 +1371,7 @@ def cmd_diag(args) -> int:
                        "b_uid": e.b_uid, "label": e.label, "state": e.state,
                        "at": e.at} for e in rep.edges],
             "cycles": [[marks.node_label(rep, u) for u in c] for c in loops],
-            "would_block": [{"state": i.state, "where": i.where,
-                             "detail": i.detail} for i in inside],
+            "would_block": [_issue_json(i) for i in inside],
             "ticket": _ticket(rep, files),
         }, ensure_ascii=True, indent=2, sort_keys=True))
         return 1 if inside else 0
@@ -1449,13 +1446,26 @@ def cmd_render(args) -> int:
     return 0
 
 
+def _issue_json(issue) -> dict:
+    """JSON 视图里的一条问题：与 `Issue.as_line()` 同源，含表里的通用判断。
+
+    带上 `what`/`action` 是为了让 JSON 消费方（钩子拼工单）不必自己去查表，
+    也就不会再抄一份正文。
+    """
+    what, action, _ = manual.explain(issue.state)
+    return {"state": issue.state, "where": issue.where, "facts": issue.facts,
+            "what": what, "action": action}
+
+
 def _report_refusals(refusals) -> None:
     if not refusals:
         return
     print("")
     print(f"危险位置拒绝写入 {len(refusals)} 处：")
     for r in refusals[:20]:
-        print(f"   {r.path}:{r.line}  {r.why}")
+        # 复用同一条显示路径：状态 → 表里的意思与动作 + 这里的实例事实
+        print("   " + marks.Issue("mark_at_danger", f"{r.path}:{r.line}",
+                                  r.why).as_line())
     if len(refusals) > 20:
         print(f"   （还有 {len(refusals) - 20} 处）")
 

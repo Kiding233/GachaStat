@@ -82,12 +82,10 @@ LINE_VERSION = "line-v1"
 # 标记的正文就会把**整份文档**静默移出扫描（本文件所在的计划正文里就写着
 # 这几个字，目前靠位置侥幸没被剔除）。
 SELF_MARKER = "<!-- refcheck:generated"
-# 行内标记：这一行是在**举例说明引用机制**，不是真引用。
+# 行内示例标记的两种写法在 marks.example_lines()：单行 `<!-- refcheck:example -->`，
+# 或 `<!-- refcheck:example:start --> … <!-- refcheck:example:end -->` 一段。
 # 「以引用机制为题材的正文」与产出物同源（工件即语料），但它是正文、不是
-# 产出物，故只能按行标注。实测某计划文档自身有 15 条这样的示例引用。
-# 要求写成 HTML 注释的完整形态：光认 `refcheck:example` 这几个字的话，
-# 一段**解释这个机制**的正文（就像本段）本身就会把自己那一行整行跳过。
-EXAMPLE_MARKER = "<!-- refcheck:example -->"
+# 产出物，故只能靠标注。实测某计划文档自身有 15 条这样的示例引用。
 # 「已删/已作废」线索只认点名符号前后这么远的范围。
 CUE_WINDOW = 30
 
@@ -100,6 +98,8 @@ DEFAULT_EXCLUDES = [
 CONFIG_NAME = "refcheck.toml"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import marks  # noqa: E402  （同目录，靠上面那行 sys.path）
 
 
 # ---------------------------------------------------------------------------
@@ -739,6 +739,7 @@ def scan_file(root: Path, rel: str, idx_in, idx_all, idx_ign, cfg: Config,
     is_md = rel.endswith(".md")
     stdlib = stdlib_names()
     refs: list[Ref] = []
+    skip_example = marks.example_lines(text) if is_md else set()
 
     if is_md:
         link_spans = [(m.start(), m.end()) for m in RE_LINK.finditer(text)]
@@ -768,7 +769,10 @@ def scan_file(root: Path, rel: str, idx_in, idx_all, idx_ign, cfg: Config,
     def add(pos, form, context, raw, target_raw, start=None, end=None):
         if (pos[0], pos[1]) in seen:
             return
-        if 1 <= pos[0] <= len(lines) and EXAMPLE_MARKER in lines[pos[0] - 1]:
+        # 标为示例的行整行跳过。两种写法：单行 `<!-- refcheck:example -->`，
+        # 或一段 start/end 区域。区域形式是必需的：展示标记语法的代码块里
+        # 逐行插标记会把示例本身弄脏。
+        if pos[0] in skip_example:
             return
         seen.add((pos[0], pos[1]))
         ref = Ref(src=rel, line=pos[0], col=pos[1], form=form, context=context,
@@ -1226,8 +1230,6 @@ def cmd_check(args) -> int:
     这是设计里说的**核心原语**（计划 §3.14）：幂等、无状态、谁都能调，
     钩子只是闹钟。它只读，不渲染、不写盘。
     """
-    import marks
-
     root = Path(args.root).resolve()
     cfg, note, cfg_path = load_config(root, args.config)
     if note:

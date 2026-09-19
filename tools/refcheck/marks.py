@@ -165,9 +165,21 @@ def scan_marks(root: Path, paths: list[str]) -> list[Mark]:
             text = (root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        is_md = rel.endswith(".md")
+        fenced = fence_lines(text) if is_md else set()
+        skip = example_lines(text) if is_md else set()
         for m in MARK_RE.finditer(text):
             line = text.count("\n", 0, m.start()) + 1
             col = m.start() - (text.rfind("\n", 0, m.start()) + 1)
+            # 标为示例的行整行不算标记，且这条判定要在 fenced 之前：示例
+            # 往往就写在围栏里，那正是它该在的地方。
+            if line in skip:
+                continue
+            if line in fenced:
+                out.append(Mark(rel, line, col, m.group(0), "fenced",
+                                detail="标记落在代码围栏内（示例，不是真标记）",
+                                off_start=m.start(), off_end=m.end()))
+                continue
             mk = _classify(rel, line, col, m.group(0),
                            m.group("body") or "", m.group("view") or "")
             mk.off_start, mk.off_end = m.start(), m.end()
@@ -179,6 +191,8 @@ def scan_marks(root: Path, paths: list[str]) -> list[Mark]:
             if MARK_RE.match(text, i):
                 continue
             line = text.count("\n", 0, i) + 1
+            if line in skip:
+                continue
             col = i - (text.rfind("\n", 0, i) + 1)
             out.append(Mark(rel, line, col, text[i:i + 40], "unknown",
                             detail=f"像标记但解析不了：{text[i:i + 40]!r}",
@@ -192,6 +206,69 @@ def _starts(text: str, needle: str) -> list[int]:
     while i != -1:
         out.append(i)
         i = text.find(needle, i + 1)
+    return out
+
+
+FENCE_RE = re.compile(r"^ {0,3}(?P<fence>```+|~~~+)")
+
+
+def fence_lines(text: str) -> set[int]:
+    """markdown 代码围栏覆盖的行号（含围栏行自身）。
+
+    **标记落在围栏内是错误**（§3.10 的危险位置）：围栏里是**示例**，不是真
+    标记。没有这一层时，一段展示标记语法的代码块会把里面的 `<|e:A#*|>` 当真
+    标记读进来，报出 `dup_segment` / `orphan_decl` 这类假问题。实测本仓库
+    14 个标记全部落在计划自己的语法示例代码块里，`check` 报的阻断全是假的。
+
+    注意与**表格**的区别：表格里的标记是正常用法（文档大量用表格列引用），
+    只有「往表格里写渲染区」才被拒绝。围栏与表格在 §3.10 里被并列，但行为
+    不同，不能一起处理。
+
+    四空格缩进的代码块（非围栏）**不算**：那里面通常是要被引用的代码片段，
+    标记落在其中是否为错误，本期不定。
+    """
+    out: set[int] = set()
+    marker: str | None = None
+    for i, line in enumerate(text.splitlines(), 1):
+        m = FENCE_RE.match(line)
+        if marker is None:
+            if m:
+                marker = m.group("fence")[0] * 3
+                out.add(i)
+            continue
+        out.add(i)
+        if m and m.group("fence")[0] == marker[0] and len(m.group("fence")) >= 3:
+            marker = None
+    return out
+
+
+EXAMPLE_MARK = "<!-- refcheck:example -->"
+EXAMPLE_START = "<!-- refcheck:example:start -->"
+EXAMPLE_END = "<!-- refcheck:example:end -->"
+
+
+def example_lines(text: str) -> set[int]:
+    """被明确标注为「这是示例」的行号。
+
+    两种写法：单行 `<!-- refcheck:example -->`，或一段
+    `<!-- refcheck:example:start -->` … `<!-- refcheck:example:end -->`。
+
+    区域形式是必需的：展示标记语法的**代码块**里，逐行插单行标记会把示例
+    本身弄脏，而它恰恰是最需要排除的一类（实测本仓库 14 个标记全在计划
+    自己的语法示例里）。要求完整 HTML 注释形态、且**精确字面量匹配**：
+    只认那几个字的话，一段解释这个标记的正文会把自己整段静默跳过。
+    """
+    out: set[int] = set()
+    inside = False
+    for i, line in enumerate(text.splitlines(), 1):
+        if EXAMPLE_START in line:
+            inside = True
+        if EXAMPLE_END in line:
+            inside = False
+            out.add(i)
+            continue
+        if inside or EXAMPLE_MARK in line:
+            out.add(i)
     return out
 
 
@@ -307,6 +384,17 @@ def derive(root: Path, paths: list[str]) -> tuple[list[Issue], dict]:
         if mk.kind == "unknown":
             issues.append(Issue("unparsable_mark", f"{mk.path}:{mk.line}",
                                 mk.detail))
+    # 围栏内的标记：报成一类，且**不参与**配对与状态派生（它们是示例）。
+    fenced = [m for m in marks if m.kind == "fenced"]
+    if fenced:
+        files = sorted({m.path for m in fenced})
+        issues.append(Issue(
+            "mark_in_fence", f"{files[0]}" + (f" 等 {len(files)} 个文件"
+                                              if len(files) > 1 else ""),
+            f"{len(fenced)} 个标记落在代码围栏内（示例不是真标记）。"
+            f"§3.10 把围栏内定为危险位置，故这是错误；"
+            f"要让示例不被扫到，改用 `<!-- refcheck:example -->` 标注那一行"))
+    marks = [m for m in marks if m.kind != "fenced"]
 
     by_uid: dict[str, list[Range]] = ranges
     # uid 出现在多处（多段）是正常的；同一 uid 的同一段出现在两个文件才是歧义
@@ -472,5 +560,5 @@ BLOCKING = {
     "broken", "ambiguous", "orphan_segment", "orphan_decl", "unmatched_start",
     "unmatched_end", "dup_segment", "dup_decl", "role_conflict",
     "decl_lost", "unparsable_mark", "fragment_missing", "drift",
-    "tgt_drift", "src_drift",
+    "tgt_drift", "src_drift", "mark_in_fence",
 }

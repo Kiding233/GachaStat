@@ -32,9 +32,15 @@ MARK_RE = re.compile(r"<\|(?P<body>[^|<>]*)\|(?:\((?P<view>[^<>]*)\))?>")
 
 RANGE_OPEN_RE = re.compile(r"^e:(?P<uid>[^#]+)#(?P<seg>.*)$")
 RANGE_CLOSE_RE = re.compile(r"^/e:(?P<uid>[^#]+)#(?P<seg>.*)$")
-# 声明：<标签>：<对方uid>#<段>;h=<指纹>。标签里不含 `：` 与 `;`。
-DECL_RE = re.compile(
-    r"^(?P<label>[^：;]+)：(?P<peer>[^#;]+)#(?P<seg>[^;]*);h=(?P<h>.+)$")
+# 声明：`<标签>：<对方uid>#<段>[;<k>=<v>…]`，字段以 `;` 分隔。
+# 第一段是「标签 + 对方」，其余是键值字段：`h` 记忆、`v` 上次核对时间、
+# `ev` 核对结论摘要。**字段顺序有规范**（见 FIELD_ORDER），写回时按它写，
+# 这样 diff 稳定。
+DECL_HEAD_RE = re.compile(r"^(?P<label>[^：;]+)：(?P<peer>[^#;]+)#(?P<seg>[^;]*)$")
+FIELD_ORDER = ["h", "v", "ev"]
+
+# 字段值里不许出现这些字符：`;` 与 `|` 是分隔符，`<>` 会破坏标记边界。
+FIELD_FORBIDDEN = set(";|<>")
 
 # 关系标签词表（§3.2.4）。两端必须构成已知的一对，否则 `role_conflict`。
 REL_PAIRS = [
@@ -68,6 +74,9 @@ class Mark:
     peer: str = ""
     peer_seg: str = ""
     h: dict[str, str] = field(default_factory=dict)
+    verified: str = ""           # 上次核对时间（`v=`），钩子工单要读
+    unknown_fields: list[str] = field(default_factory=list)
+    evidence: str = ""           # 核对结论摘要（`ev=`），钩子工单要读
     view: str = ""
     detail: str = ""             # 认不出来时的原因
     danger: str = ""             # 落在危险位置时的原因（围栏内 / 表格行内）
@@ -331,17 +340,26 @@ TABLE_ROW_RE = re.compile(r"^\s*\|.*\|")
 def _classify(rel: str, line: int, col: int, raw: str, body: str,
               view: str) -> Mark:
     body = body.strip()
+    head, _, tail = body.partition(";")
+    rest = [x for x in tail.split(";") if x.strip()] if tail else []
     if m := RANGE_OPEN_RE.match(body):
         return Mark(rel, line, col, raw, "open",
                     uid=m.group("uid"), seg=_seg(m.group("seg")), view=view)
     if m := RANGE_CLOSE_RE.match(body):
         return Mark(rel, line, col, raw, "close",
                     uid=m.group("uid"), seg=_seg(m.group("seg")), view=view)
-    if m := DECL_RE.match(body):
+    if m := DECL_HEAD_RE.match(head):
+        fields = {}
+        for item in rest:
+            k, _, v = item.partition("=")
+            fields[k.strip()] = v.strip()
         return Mark(rel, line, col, raw, "decl", label=m.group("label").strip(),
                     peer=m.group("peer").strip(),
-                    peer_seg=_seg(m.group("seg")), h=_parse_h(m.group("h")),
-                    view=view)
+                    peer_seg=_seg(m.group("seg")),
+                    h=_parse_h(fields.get("h", "")),
+                    verified=fields.get("v", ""),
+                    evidence=fields.get("ev", ""), view=view,
+                    unknown_fields=sorted(set(fields) - set(FIELD_ORDER)))
     return Mark(rel, line, col, raw, "unknown", detail=f"认不出的机器区：{body!r}")
 
 
@@ -353,6 +371,8 @@ def _seg(text: str) -> str:
 def _parse_h(text: str) -> dict[str, str]:
     """`h` 的两种写法：单个指纹，或「对方段标签 → 指纹」的映射。"""
     t = text.strip()
+    if not t:
+        return {}
     if t.startswith("{") and t.endswith("}"):
         out = {}
         for item in t[1:-1].split(","):
@@ -440,6 +460,12 @@ def derive(root: Path, paths: list[str]) -> Report:
         if mk.kind == "unknown":
             issues.append(Issue("unparsable_mark", f"{mk.path}:{mk.line}",
                                 mk.detail))
+        elif mk.kind == "decl" and mk.unknown_fields:
+            # 「参数键名即契约」：认不出的字段要喊出来，否则键名写错会静默失效
+            issues.append(Issue(
+                "unknown_field", f"{mk.path}:{mk.line}",
+                f"机器区里有不认识的字段 {sorted(mk.unknown_fields)}；"
+                f"已知字段是 {FIELD_ORDER}。键名写错会静默失效，故报出"))
     # 落在危险位置的标记：**逐条**报出（要说清是哪一行，聚合起来就没法改了），
     # 且不参与配对与状态派生。
     for m in [x for x in marks if x.kind == "danger"]:
@@ -600,14 +626,24 @@ def closure(edges: list[Edge], seeds: set[str]) -> set[str]:
     return seen
 
 
-def cycles(edges: list[Edge], nodes: set[str]) -> list[list[str]]:
+def adjacency_by_uid(edges: list[Edge]) -> dict[str, set[str]]:
+    """uid 级的无向邻接表。判「这条关系在不在环上」必须用 uid 图，不能用
+    文件图：一个文件里可以有几十个范围，文件级的环会把不相干的关系也算进去。
+    """
+    adj: dict[str, set[str]] = defaultdict(set)
+    for e in edges:
+        adj[e.a_uid].add(e.b_uid)
+        adj[e.b_uid].add(e.a_uid)
+    return adj
+
+
+def cycles(adj: dict[str, set[str]], nodes: set[str]) -> list[list[str]]:
     """找出节点集合内的回边（有环即报一条，不枚举所有环）。
 
     设计里早记过一条事实：**环在本项目很可能是常态而非例外**（文档引代码、
     代码注释引文档正是现行做法）。所以这里的目的不是消除环，而是让改的人
     **提前看到**它在环里，而不是改完一圈才发现。
     """
-    adj = adjacency(edges)
     out: list[list[str]] = []
     color: dict[str, int] = {}
 

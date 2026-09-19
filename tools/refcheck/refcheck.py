@@ -100,6 +100,7 @@ CONFIG_NAME = "refcheck.toml"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import marks  # noqa: E402  （同目录，靠上面那行 sys.path）
+import rebind  # noqa: E402
 import render  # noqa: E402
 
 
@@ -1294,7 +1295,7 @@ def cmd_diag(args) -> int:
              if args.changed else set())
     nodes = marks.closure(rep.edges, seeds) if seeds else {
         p for p in scan_set}
-    loops = marks.cycles(rep.edges, nodes)
+    loops = marks.cycles(marks.adjacency(rep.edges), nodes)
     inside = [i for i in rep.blocking
               if any(i.where.startswith(n + ":") or i.where == n
                      for n in nodes)] if seeds else rep.blocking
@@ -1389,6 +1390,44 @@ def _report_refusals(refusals) -> None:
         print(f"   （还有 {len(refusals) - 20} 处）")
 
 
+def cmd_rebind(args) -> int:
+    """把当前内容认作新基线：写回两侧的 `h`，并记下核对时间与证据。
+
+    **这是整套东西里唯一改变判定结果的写操作。** 别的写入要么只读、要么只动
+    渲染区（下次渲染覆盖）；只有它动机器区的 `h`，跑错了就把错误的范围冻进
+    记忆（错锚点的指纹自洽，此后永远检测不出来）。故必须带证据，且环上拦住。
+    """
+    root = Path(args.root).resolve()
+    cfg, note, cfg_path = load_config(root, args.config)
+    if note:
+        print(f"注意：{note}", file=sys.stderr)
+    all_tracked = tracked_files(root)
+    targets = [p for p in all_tracked if not excluded(p, cfg.exclude)]
+    scan_set = [p for p in targets if in_scope(p, cfg.include, [])]
+    scan_set = [p for p in scan_set if not is_self_output(root / p)]
+
+    edits, refusals, rep = rebind.plan(root, scan_set, args.rel, args.note,
+                                       args.allow_cycle)
+    if refusals:
+        print("拒绝 rebind：")
+        for r in refusals:
+            print(f"   {r}")
+        return 1
+    if args.dry_run:
+        print(f"dry-run（未落盘）：会写 {len(edits)} 处")
+        for e in edits:
+            print(f"   {e.path}:{e.line}")
+            print(f"      旧 {e.old}")
+            print(f"      新 {e.new}")
+        return 0
+    written = rebind.apply(root, edits)
+    print(f"rebind 完成：改写 {sum(written.values())} 处声明")
+    for p, n in sorted(written.items()):
+        print(f"   {p}  {n} 处")
+    print("提示：视图随之过时，跑 `render` 刷新。")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # 文本输出里会带文档原文（含 emoji）。终端编码不支持时 print 会抛
     # UnicodeEncodeError，所以让不可编码的字符退化为转义而不是崩掉；
@@ -1416,6 +1455,18 @@ def main(argv: list[str] | None = None) -> int:
                    help="不剔除本工具自产的清单文件；默认剔除，"
                         "否则清单里的引用会把自己算进存量")
     s.set_defaults(func=cmd_scan)
+
+    rb = sub.add_parser("rebind", help="把当前内容认作新基线（写盘，唯一改判定的写操作）")
+    rb.add_argument("--root", default=".")
+    rb.add_argument("--config", default=None)
+    rb.add_argument("--rel", required=True,
+                    help="关系 id：该关系任一侧范围的 uid")
+    rb.add_argument("--note", required=True,
+                    help="核对证据（一句话）。必须给：核对产物要能被人看见")
+    rb.add_argument("--allow-cycle", action="store_true",
+                    help="确已在环上把各端表述一起定稿（§3.16）")
+    rb.add_argument("--dry-run", action="store_true")
+    rb.set_defaults(func=cmd_rebind)
 
     r = sub.add_parser("render", help="渲染：把视图写回渲染区（会写盘）")
     r.add_argument("--root", default=".")

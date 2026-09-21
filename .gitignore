@@ -27,7 +27,9 @@ results.json
 # 临时脚本
 benchmark_chart.py
 test_*.html
-profile_*.py
+# profile_*.py 于 2026-09-22 删除（P83 §6.0 2a/2b/2f）：三份 profile 脚本是「待接管的
+# 资产」而非临时脚本，裸模式会让它们永远进不了库（正是 P83 §一 问题 2 的成因），
+# 也会让将来任何同名文件被静默忽略。已核实全仓仅 scripts/ 下 3 个文件命中。
 
 #垃圾箱
 .recycle_bin

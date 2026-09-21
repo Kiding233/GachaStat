@@ -28,8 +28,9 @@ from common import read_hook_input, get_main_repo_root
 ALLOWED_DIRS = [
     "gacha_simulator/", "docs/", "config/", ".claude/",
     "tests/", "scripts/", "tools/", ".recycle_bin/",
+    "benchmarks/",
     "pyproject.toml", "CLAUDE.md", "CONTRIBUTING.md", "project.md",
-    "README.md", "LICENSE", "GachaStat.spec",
+    "README.md", "LICENSE", "GachaStat.spec", ".gitignore",
 ]
 
 

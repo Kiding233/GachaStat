@@ -14,7 +14,7 @@ export const meta = {
     { title: 'Gate', detail: '阶段 3：可行性门控——6 项深度检查' },
     { title: 'Audit', detail: '阶段 4：代码审计——逐条映射 + 全链条逻辑检查' },
     { title: 'Matrix Sync', detail: '阶段 5：矩阵同步——对比计划元数据 ↔ 模块状态矩阵' },
-    { title: 'Summary', detail: '汇总输出——追加审查记录到计划文件' },
+    { title: 'Summary', detail: '汇总输出——追加审查记录到计划文件 + 产出收件箱报告（H1 注入通道）' },
   ],
 }
 
@@ -574,6 +574,10 @@ META status → 矩阵显示:
 // ═══════════════════════════════════════════════════════════════
 
 const planFilePath = Array.isArray(args) ? args[0] : (args || null)
+// 审查日期：workflow 脚本禁用 Date.now()/new Date()（会破坏 resume 缓存），
+// 故日期走 args[1] 传入（确定性、可 resume）；未传时由 agent 用其上下文
+// 中的当前真实日期填写。用法: /workflow plan-review "<path>" "<YYYY-MM-DD>"
+const argsDate = Array.isArray(args) && args[1] ? String(args[1]) : ''
 if (!planFilePath) {
   log('用法: /workflow plan-review "docs/01-活跃/panels/{模块}/P{n} {名称}.md"')
   throw new Error('缺少计划文件路径参数')
@@ -1141,12 +1145,21 @@ log(`累计问题: ${seenIssueKeys.size} 个 | 退回次数: ${totalBacktracks}/
 log('═══════════════════════════════════════')
 
 // 追加审查记录到计划文件
-const reviewDate = '2026-06-11'  // 由 harness 的 argless Date 限制——实际运行时用当前日期
+// 日期：优先取 args[1]；未传则要求 agent 用其上下文中的当前真实日期填写。
+// （原实现硬编码 '2026-06-11' 并附注「实际运行时用当前日期」，但该动作从未实施，
+//   导致每次审查都盖同一个错误日期。2026-09-21 修复。）
+const reviewDate = argsDate
+const dateLine = reviewDate
+  ? `本次审查日期为 **${reviewDate}**（由 args 传入），直接使用。`
+  : '本次审查日期请使用**你上下文中的当前真实日期**（格式 YYYY-MM-DD），**不得使用占位符或照抄示例**。'
+const dateToken = reviewDate || 'YYYY-MM-DD'
 await agent(
   `Read 打开 ${planFilePath}，在文件末尾「自动化审查记录」章节（若存在则追加新条目，否则创建该章节）追加本次审查摘要：
 
+${dateLine}
+
 <details>
-<summary>第 N 次审查（${reviewDate}）——P38 工作流自动化</summary>
+<summary>第 N 次审查（${dateToken}）——P38 工作流自动化</summary>
 
 - 复杂度: ${classification.complexity} | 变更性质: ${classification.change_nature}
 - 阶段 1 影响面: ${allImpactFindings.length} 个发现
@@ -1162,3 +1175,57 @@ await agent(
 )
 
 log('审查记录已追加到计划文件')
+
+// ── 产出收件箱报告（H1 注入通道）─────────────────────────────
+// 背景：CLAUDE.md 记载本流水线「产出 04-收件箱/peer-review-{plan}-{date}.md，
+// H1 SessionStart 自动注入」，而 H1（.claude/hooks/inject_state.py:168-181）
+// 硬编码只从 04-收件箱/ 读 peer-review-*.md。仅把摘要追加进计划文件，等于该
+// 通道对后续会话不可见——实施者打开计划能看到，但任何新会话的自动注入看不到。
+// 故在此补产报告文件。（2026-09-21 修复）
+const reportPath = `docs/01-活跃/04-收件箱/peer-review-P${classification.plan_identity.p_number}-${dateToken}.md`
+const reportResult = await agent(
+  `写出本次计划审查报告到 ${reportPath}（新建文件；若该路径已存在则整体重写）。
+
+${dateLine}
+
+报告对象计划文件：${planFilePath}
+流水线：plan-review 五阶段对抗验证
+
+**数据来源（必须先 Read，不得凭空编造）：**
+1. Read ${planFilePath}，重点读末尾的「## ⚠ 自动化审查阻塞项」与「## 自动化审查记录」两节，以及正文中所有标了「⚠ 待人工裁决」的位置
+2. 必要时 Read 计划中提及的相关源文件以核对行号
+
+**本 run 的实测数据（直接引用，不得改动数值）：**
+- 阶段 1 影响面扇出：${allImpactFindings.length} 个发现
+- 阶段 2 对抗循环：${totalRounds} 轮，${dryRounds >= 2 ? '收敛' : '熔断（未满足连续 2 轮 dry）'}
+- 阶段 3 可行性门控：6 项检查
+- 累计问题：${seenIssueKeys.size} 个 | 退回阶段 2 次数：${totalBacktracks}/${globalBacktrackLimit}
+
+**报告结构（Markdown，参照 04-收件箱 既有 peer-review-*.md 的风格）：**
+
+# peer-review — P${classification.plan_identity.p_number} <计划中文名>
+> 审查日期 | 流水线 | 计划文件 | 结论（一句话）
+
+## 流水线执行
+表格六行：0 分类 / 1 影响面扇出 / 2 对抗循环 / 3 可行性门控 / 4 代码审计 / 5 矩阵同步，
+每行给「结果（✅/⚠️/🛑）」与「产出」。
+
+## 阻塞项与未闭合缺口
+逐条列出「⚠ 自动化审查阻塞项」章节的条目，保留其问题描述与子项编号，标注哪些已修、哪些仍待处置。
+
+## 待人工裁决清单
+把正文所有「⚠ 待人工裁决」位置列成表格：位置（章节或行号）| 待裁决内容 | 计划采用项 | 备选项。
+若多处待裁决属同一取舍的不同侧面，用一段话点明其共同形态。
+
+## 对计划编写方法的教训
+从阻塞项与审计发现中归纳可复用的教训（例如「声明了某样东西但 §6.0 无执行单元承接」这类反复出现的形态）。
+**若归纳不出，写「无」——不得为凑结构而编造。**
+
+**要求：** 只写计划文件与代码中可核实的内容；不得编造未经验证的结论；所有数值须与上面给出的实测数据一致；对未核实的内容显式标注「待确认」。返回 { written: true, path: "<实际写入路径>" }。`,
+  { label: 'review-report-writer', phase: 'Summary', schema: { type: "object", properties: { written: { type: "boolean" }, path: { type: "string" } }, required: ["written"] } }
+)
+if (reportResult && reportResult.written) {
+  log(`收件箱报告已写出: ${reportResult.path || reportPath}`)
+} else {
+  log('⚠ 收件箱报告写出失败——H1 注入通道将看不到本次审查')
+}

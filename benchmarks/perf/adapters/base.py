@@ -1,0 +1,247 @@
+"""适配器契约与公共层。
+
+**契约形态以本模块为唯一口径**（P83 §6.0 `1e-1`）：`2d`（`inline`）/ `3a`（`gui-qt`）
+/ `5a`（`webui`）均消费本模块。
+
+三层分工：
+
+1. **本模块（公共层）**：`run(plan)` 的重复测量循环与中位数归一
+2. **各适配器**：实现 `_run_once(plan)` 这一条**单次驱动**——建起路径环境、把
+   `Plan` 翻译成该路径的输入、在正确的进程/线程边界上挂计时、以该路径自己的
+   方式等待结束、归一成 `SingleRun`
+3. **内核**（`plan` / `record` / `stage`）：只管「测什么、怎么算」
+
+**约束 A：适配器不得新写驱动，只能修复或包装已有入口。** 判别式：任何一个适配器
+如果需要「先写个脚本来跑」，说明它设计错了。
+
+`collector` 是**如实申报**字段（§3.4）：它记录本适配器**是否真的**向
+`run_batch_parallel` 传 `on_result`，平台不因它改变驱动方式。填错不会让路径真的
+带上收集器，只会让报告说谎——故它是适配器契约，由 T3 契约测试断言。
+"""
+
+from __future__ import annotations
+
+import logging
+import statistics
+import uuid
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import ClassVar, Dict, List, Optional, Tuple, Type
+
+from benchmarks.perf.plan import Plan
+from benchmarks.perf.record import (
+    EnvFingerprint,
+    FuncStat,
+    ResourceStats,
+    RunResult,
+    SamplesMeta,
+)
+
+__all__ = [
+    'Adapter',
+    'SingleRun',
+    'AdapterUnavailable',
+    'AdapterError',
+    'ADAPTERS',
+    'register_adapter',
+    'get_adapter',
+    'load_adapters',
+    'new_run_id',
+    'utc_timestamp',
+    'DOWNGRADE_THRESHOLD_SECONDS',
+]
+
+logger = logging.getLogger(__name__)
+
+#: 预估墙钟超过该值即降为 1 次重复并置 `repeats_downgraded`（§3.5）。
+DOWNGRADE_THRESHOLD_SECONDS = 30.0
+
+
+class AdapterError(RuntimeError):
+    """适配器运行失败。"""
+
+
+class AdapterUnavailable(AdapterError):
+    """本环境跑不了这条路径（如无 PyQt6）。
+
+    **不是错误，是能力缺失**——调用方应跳过而非报错（§二 G2：四条路径各有适配器
+    即可，不要求每条都在每个环境里可跑）。
+    """
+
+
+@dataclass
+class SingleRun:
+    """一次单次驱动产出的全部读数。
+
+    不含 `repeats` / `wall_median` / `wall_samples` / `repeats_downgraded` 四项——
+    那是重复测量循环的产物，由公共层填（§3.5 的政策归属 `1e-1` 的公共层）。
+    """
+
+    wall: float
+    stages: Dict[str, float] = field(default_factory=dict)
+    resources: ResourceStats = field(default_factory=ResourceStats)
+    functions: Optional[List[FuncStat]] = None
+    samples_meta: Optional[SamplesMeta] = None
+    return_compact: Optional[bool] = None
+    not_comparable: bool = False
+    run_id: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)
+
+
+def new_run_id() -> str:
+    """本次 run 的标识。
+
+    §3.8 D3 要求 `profile_dir` 落到 `<profile_dir>/<run_id>/`，以隔离同一进程内
+    多次 `run_batch_parallel` 调用（no_draw 基线重跑不得混入主模拟的剖面）。
+    """
+    return uuid.uuid4().hex[:12]
+
+
+def utc_timestamp() -> str:
+    """记录用时间戳（UTC，秒精度）。"""
+    return datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+
+class Adapter(ABC):
+    """一条测量路径。"""
+
+    #: 路径标识，写入每条 `RunResult.path`（§3.2 约束 C：路径是一等维度）。
+    name: ClassVar[str] = ''
+
+    #: 是否用户真实走的路径（`inline` 为 `False`，其余为 `True`）。
+    is_user_path: ClassVar[bool] = True
+
+    #: 如实申报：本适配器是否真的向 `run_batch_parallel` 传 `on_result`（§3.4）。
+    collector: ClassVar[bool] = False
+
+    #: 本路径**结构上不产出**的段（§3.5 末表：`cli` 无分发器）。
+    #: 传给 `normalize_stages(..., absent_by_design=...)`，使其与「应收未收」可区分。
+    absent_stages: ClassVar[Tuple[str, ...]] = ()
+
+    #: 硬超时（秒）。**绝不无超时等待**（§3.10 判定边界第 3 条）。
+    timeout_seconds: ClassVar[float] = 3600.0
+
+    @abstractmethod
+    def available(self) -> bool:
+        """本环境能否跑这条路径。**缺依赖时返回 `False` 而非报错。**"""
+
+    @abstractmethod
+    def _run_once(self, plan: Plan) -> SingleRun:
+        """单次驱动。各适配器实现本方法，只此一处体现路径差异。"""
+
+    # ── 公共层：重复测量 ─────────────────────────────────
+
+    def run(self, plan: Plan) -> RunResult:
+        """按 `Plan.repeats` 重复单次驱动，归一为一条 `RunResult`。
+
+        政策（§3.5）：
+
+        - 收集各次原始墙钟到 `wall_samples`，取**中位数**写 `wall_median`
+        - **预估墙钟超 30 秒时降为 1 次**并把 `repeats_downgraded` 置 `True`
+          （首次运行兼任试跑，用它的墙钟乘 `repeats` 作预估）
+        - 阶段分解与资源计数取**首次**运行的产出——它们是确定性量、零噪声，
+          重复测量只为压墙钟噪声，对确定性量没有意义（§3.5）
+        """
+        if not self.available():
+            raise AdapterUnavailable(f'{self.name} 适配器在本环境不可用（available() 为 False）')
+
+        planned = max(1, int(plan.repeats))
+        first = self._run_once(plan)
+        samples: List[float] = [first.wall]
+        downgraded = False
+
+        if planned > 1:
+            if first.wall * planned > DOWNGRADE_THRESHOLD_SECONDS:
+                downgraded = True
+                logger.info(
+                    '%s：预估墙钟 %.1fs 超过 %.0fs，repeats 由 %d 降为 1',
+                    self.name, first.wall * planned, DOWNGRADE_THRESHOLD_SECONDS, planned,
+                )
+            else:
+                for _ in range(planned - 1):
+                    samples.append(self._run_once(plan).wall)
+
+        warnings = list(first.warnings)
+        if downgraded:
+            warnings.append(
+                f'repeats 由 {planned} 降为 1：预估墙钟 {first.wall * planned:.1f}s 超过 '
+                f'{DOWNGRADE_THRESHOLD_SECONDS:.0f}s（§3.5）。该记录不得作为基线'
+                '（建基线强制 repeats >= 3）。'
+            )
+
+        return RunResult(
+            run_id=first.run_id or new_run_id(),
+            timestamp=utc_timestamp(),
+            path=self.name,
+            is_user_path=self.is_user_path,
+            fingerprint=EnvFingerprint.capture(self._qt_qpa_platform(first)),
+            plan=plan,
+            repeats=len(samples),
+            wall_median=statistics.median(samples),
+            wall_samples=list(samples),
+            repeats_downgraded=downgraded,
+            stages=dict(first.stages),
+            single=None,  # grain='single' 本期未实现（§3.3）
+            functions=first.functions,
+            resources=first.resources,
+            return_compact=first.return_compact,
+            samples_meta=first.samples_meta,
+            not_comparable=first.not_comparable or plan.grain == 'function',
+            warnings=warnings,
+        )
+
+    def _qt_qpa_platform(self, run: SingleRun) -> Optional[str]:
+        """本次运行的 `QT_QPA_PLATFORM` 取值（§3.11）。
+
+        非 Qt 路径恒为 `None`。Qt 路径由适配器在 `SingleRun.warnings` 之外另经
+        ``qt_qpa_platform`` 语义上报——基类默认从环境变量取，子类可覆写。
+        """
+        return None
+
+
+# ── 适配器注册表 ─────────────────────────────────────────
+
+ADAPTERS: Dict[str, Type[Adapter]] = {}
+
+
+def register_adapter(cls: Type[Adapter]) -> Type[Adapter]:
+    """注册一个适配器类（按 `cls.name` 索引）。重名即报错。"""
+    if not cls.name:
+        raise ValueError(f'{cls.__name__} 未声明 name')
+    existing = ADAPTERS.get(cls.name)
+    if existing is not None and existing is not cls:
+        raise ValueError(f'适配器名 {cls.name!r} 已被 {existing.__name__} 占用')
+    ADAPTERS[cls.name] = cls
+    return cls
+
+
+def get_adapter(name: str) -> Adapter:
+    """按路径名取适配器实例。未注册即报错并列出已注册者。"""
+    load_adapters()
+    try:
+        return ADAPTERS[name]()
+    except KeyError:
+        raise AdapterError(
+            f'未注册的路径 {name!r}；已注册：{sorted(ADAPTERS)}'
+        ) from None
+
+
+def load_adapters() -> Dict[str, Type[Adapter]]:
+    """导入四条路径的适配器模块（已导入过的为 no-op）。
+
+    四个模块随阶段 1 / 2 / 3 / 5 先后落地，故此处对**尚不存在的模块**静默跳过：
+    它服务的是「阶段 1 只有 `cli` 一条路径」这一中间态。缺失情况由调用方按需
+    检查（`get_adapter` 对未注册的路径会报错并列出已注册者），不是静默容忍。
+    """
+    for module in (
+        'benchmarks.perf.adapters.cli',
+        'benchmarks.perf.adapters.inline',
+        'benchmarks.perf.adapters.gui_qt',
+        'benchmarks.perf.adapters.webui',
+    ):
+        try:
+            __import__(module)
+        except ImportError as exc:  # 该阶段的适配器尚未落地
+            logger.debug('适配器模块 %s 尚不可导入：%s', module, exc)
+    return ADAPTERS

@@ -2,7 +2,7 @@
 
 # P64 保底状态机引擎——Tracker + Modifier 双层纯函数架构
 
-> 日期：2026-08-24（2026-09-16 补三条强制约束 + §3.1.5 形式化 + target_featured 反例；**2026-09-18 事实同步**：全量行号刷新至 P81 清理后的代码 + GUI 两处事实修正 + legacy 迁移描述更新；**同日裁决 P82 并入的三项**：接线 / 保留 priority / 顺序两层定性，见 §1.5；**2026-09-21 概率操作乘法化 + 状态可见性裁决**：§3.1.5 重写为乘性因子版 + §3.1.2 D20 分布空间归属 + §3.9 S8 实施方案 + §3.10 状态可见性与 G3 真实建模 + S8/S9 子块；跨保底读状态裁决为不纳入；G15 按「精确建模原则」重估为缺口；**同日增补三项架构改进**：§3.11 表达能力与边界、§3.12 组合正确性验收、§3.13 不变式运行时校验 + S10/S11 子块；**§3.14 Modifier 骨架化与条件独立**（7 类收敛为 3 骨架，含 R/F 等价性实测）+ S12 子块） | 状态：设计中（2026-08-23 初版 → 2026-08-24 双层纯函数重建）
+> 日期：2026-08-24（2026-09-16 补三条强制约束 + §3.1.5 形式化 + target_featured 反例；**2026-09-18 事实同步**：全量行号刷新至 P81 清理后的代码 + GUI 两处事实修正 + legacy 迁移描述更新；**同日裁决 P82 并入的三项**：接线 / 保留 priority / 顺序两层定性，见 §1.5；**2026-09-21 概率操作乘法化 + 状态可见性裁决**：§3.1.5 重写为乘性因子版 + §3.1.2 D20 分布空间归属 + §3.9 S8 实施方案 + §3.10 状态可见性与 G3 真实建模 + S8/S9 子块；跨保底读状态裁决为不纳入；G15 按「精确建模原则」重估为缺口；**同日增补三项架构改进**：§3.11 表达能力与边界、§3.12 组合正确性验收、§3.13 不变式运行时校验 + S10/S11 子块；**§3.14 条件外置**（条件提为独立对象 + ConditionalModifier 包装器；三方案比较与 R/F 等价性实测）+ S12 子块） | 状态：设计中（2026-08-23 初版 → 2026-08-24 双层纯函数重建）
 > 触发：P56 审查发现的「触发器 × 选择器 × 拓扑 × 效果」四维抽象 + 组合爆炸。**2026-08-24 设计重建**：用户追问「最优雅架构」，从领域本质重新理解保底 → 提出 Tracker + Modifier + Lifecycle 三元组纯函数架构；用户裁决命名 Tracker+Modifier。
 > 依赖：P55✅（counter 驱动正交分解 + deltas 展开）+ P56✅（6 个事件驱动类 + Flag/Counter/_redistribute_scope + LifecycleConfig，作为等价性基准）
 > 合并：**P82（保底管道顺序接通）于 2026-09-16 并入本计划**，见 §1.5；其结论直接影响 §1.3 的 G5 项与 §3.6 的 priority 设计，P82 文件已归档
@@ -236,7 +236,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 
 #### 3.1.2 Modifier（修正器）—— `(State, BaseDistribution) -> Distribution`
 
-> **2026-09-21 修订**：本表的组织方式已由 **§3.14** 修订（条件独立成维 + 效果骨架化，7 个类收敛为 3 个骨架）。本表保留作历史形态与术语索引，实施以 §3.14 为准。
+> **2026-09-21 修订**：本表已由 **§3.14** 修订（**条件外置**：触发条件从各 Modifier 内部提出为独立的 Condition 对象，效果实现不变）。本表保留作历史形态与术语索引，实施以 §3.14 为准。
 
 Modifier 是 pure 函数（除 InterceptModifier 显式依赖 RNG）：给定当前状态和基础分布，返回修正后分布。**实现形态为乘性因子向量**（§3.1.5.1）：每个 Modifier 产出一个因子 `m`，链式应用即逐元素相乘再归一化。「列表顺序」因此退化为**因子求值的先后**，不再是可交换性的来源（可交换性由 §3.1.5.5 的判据决定）。语义上全部复用 `_redistribute_scope` 的「scope 内重分配」。
 
@@ -927,74 +927,115 @@ class InvariantChecker:
 
 ---
 
-### 3.14 Modifier 骨架化与条件独立（2026-09-21 新增）
+### 3.14 条件外置（2026-09-21 新增）
 
-> **本节是对 §3.1.2 Modifier 表的修订**，不改变其语义，只改变组织方式：把「条件」从各 Modifier 内部提出来，并把可参数化的效果收敛到少数骨架上。§3.1.2 的表格保留作历史形态，实施以本节为准。
+> **本节是对 §3.1.2 Modifier 表的修订**：把「条件」从各 Modifier 内部提出来成为独立对象，**效果部分保持不变**。§3.1.2 的表格保留作历史形态与术语索引，实施以本节为准。
+>
+> **方案取舍**：本轮在三种方案中选定「只拆条件」。另两种（保持现状、彻底骨架化）的比较见 3.14.5。
 
-#### 3.14.1 观察：Force 类 Modifier 的效果是同一个
+#### 3.14.1 问题：条件散落在 Modifier 内部
 
-§3.1.2 表里五个 `Force*` Modifier 的「效果」列**完全相同**——都是「把 scope 内总量导向某个目标集合」，差别全在「何时生效」和「给谁」。而 §3.1.5.4 的构造表早已用三元表达式写出这个结构（`hard` 的算子 = `c ≥ τ ? F : id`），只是条件留在了 Modifier 内部。
+§3.1.2 表里 Modifier 的「触发条件」列各不相同（`state[flag] == True` / `counter >= threshold` / `fate 就绪` / 恒真），且都写在类的 `factor` 方法里。后果有三：
 
-#### 3.14.2 设计：三类骨架
+- **条件不可组合**：要表达「两个前提同时成立才触发」必须写新类
+- **条件不可单测**：测判断逻辑要构造完整 Modifier 与上下文
+- **G14 要写新类**：战双命运池的「counter ≥ 随机阈值 T」与「counter ≥ 常数」形状不同，按现状须新增一个 Modifier
 
+而 §3.1.5.4 的构造表早已把结构写成三元表达式（`hard` 的算子 = `c ≥ τ ? F : id`），那个条件部分就是这里要提出来的东西。
+
+#### 3.14.2 设计：条件作为包装器
+
+**不改 Modifier 的效果实现**，只把内部的 `if` 换成一层包装：
+
+```python
+class ConditionalModifier:
+    """给内层 Modifier 加触发条件；条件不成立时返回 None（恒等）。"""
+    def __init__(self, modifier, condition):
+        self._mod, self._cond = modifier, condition
+
+    def factor(self, ctx, view, dist, readonly):
+        if not self._cond.test(ctx, view, dist):
+            return None
+        return self._mod.factor(ctx, view, dist, readonly)
 ```
-Modifier = (Condition, scope_fn, target_fn, ratio_fn)      ← 骨架一：RedistributeModifier
+
+各 Modifier 去掉内部判断，只剩因子计算。以 `ForceFeaturedModifier` 为例：
+
+```python
+class ForceFeaturedModifier:
+    """把 scope 内总量占满 featured 组。何时生效由外层条件决定。"""
+    def __init__(self, scope):
+        self._scope = scope
+
+    def factor(self, ctx, view, dist, readonly):
+        return factor_redistribute(dist, ctx.draw.scope_cards[self._scope],
+                                   ctx.draw.featured_cards[self._scope], 1.0)
 ```
 
-四个参数分别回答：**何时动手**（Condition）、**在哪个范围**（scope）、**给谁**（target）、**给多少**（ratio）。后三个是 `_fn` 因为它们的值可能依赖当前状态（如软保底的 ratio 随 counter 增长、G3 的 target 随持有变化）。
+preset 组装时套上条件：
 
-| 骨架 | 形态 | 覆盖 |
-|------|------|------|
-| **`RedistributeModifier`** | `(Condition, scope_fn, target_fn, ratio_fn)` | rotating 的 guaranteed、targeted 的必中、G1 必歪、G3 UP 保护、soft 的 boost、BaseRatio 兜底（**6 种形态**） |
-| **`OverrideModifier`** | `(Condition, target_fn, exempt_fn)` | hard 的必出（**1 种**，理由见 3.14.3） |
-| **`InterceptModifier`** | `(condition, base_rate, state_probs)` | CR 的随机拦截（消费随机数，单列） |
+```python
+_preset_rotating = dict(
+    trackers=[FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")],
+    modifiers=[
+        ConditionalModifier(ForceFeaturedModifier("ssr"), FlagCondition("guaranteed")),
+        BaseRatioModifier("ssr"),                    # 无条件
+    ],
+    flags={"guaranteed": False},
+)
+```
 
-参数表（`RedistributeModifier`）：
-
-| 形态 | scope | target | ratio |
-|------|-------|--------|-------|
-| rotating guaranteed / targeted 必中 | 本稀有度组 | featured 组（或定轨卡） | `1.0` |
-| G1 必歪 | 本稀有度组 | 非 UP 组 | `1.0` |
-| G3 UP 保护 | 本稀有度组 | `UP ∩ 未拥有` | `1.0` |
-| soft boost | **源集 ∪ 目标集** | 目标组 | `(T + βQ)/(T + Q)` |
-| BaseRatio 兜底 | 本稀有度组 | featured 组 | 当前比例（恒等） |
+| Modifier（保留） | 因子计算 | 组装时的条件 |
+|---|---|---|
+| `ForceFeaturedModifier` | 占满 featured 组 | `FlagCondition('guaranteed')` |
+| `ForceNonFeaturedModifier`（G1） | 占满非 UP 组 | `FlagCondition('forced_loss')` |
+| `ForceSelectedModifier` | 占满定轨卡 / 子集 | `Or(FlagCondition('guaranteed'), FateReadyCondition(τ))` |
+| `ForceNotOwnedModifier`（G3） | 占满「UP ∩ 未拥有」 | `Always()` |
+| `ThresholdForceModifier`（hard） | **F 语义**（见 3.14.3） | `CounterCondition('counter', τ)` |
+| `BoostModifier`（soft） | `factor_redistribute(scope=源集∪目标集, ratio=(T+βQ)/(T+Q))` | `Always()` |
+| `BaseRatioModifier` | 按当前比例（恒等） | `Always()` |
+| `InterceptModifier`（CR） | 随机拦截 | **例外，见下** |
 
 **Condition 类族**（纯读，无副作用）：`Always` / `Flag` / `Counter`（≥ 阈值）/ `FateReady` / `Ratio`（某组占比 ≥ r）/ `Owned`（持有数 == n）/ `RandomThreshold`（G14：counter ≥ 随机阈值）；组合子 `And` / `Or` / `Not`（与 `stop_condition` 的树形结构同构）。
 
-**不进 TOML**：Condition 作为代码级 building block，与 P69 的复合策略同构（`_strategy_key = None` 哨兵）。依据是 §3.7 已裁决的「`type="custom"` 完全声明式 TOML 状态机不实现（过度设计）」——把条件暴露到 TOML 等于推翻该裁决，且需另建条件语法、GUI 编辑器与 round-trip 测试。
+**`InterceptModifier` 是唯一例外**：它的「条件」要消费全局 `random`（H4 协议：`cr_base_rate` 与 `cr_state_probs` 两处掷骰），而 `ConditionalModifier` 要求条件纯读。故它保持内部判断并单列，理由写入实现注释。
 
-#### 3.14.3 等价性验证（2026-09-21 实跑，写入本节作依据）
+**不进 TOML**：Condition 作为代码级 building block，与 P69 的复合策略同构（`_strategy_key = None` 哨兵）。依据是 §3.7 已裁决的「`type="custom"` 完全声明式 TOML 状态机不实现（过度设计）」。
 
-**R 类：完全等价，无需附加前提。**
+#### 3.14.3 等价性依据（2026-09-21 实跑）
+
+本方案**不改任何因子的计算路径**，只改「何时调用它」（判断从类内部移到包装器，求值时机相同）。故等价性是结构性保证，以下是 `factor_redistribute` 的正确性实测，供 S8 与本节共用。
+
+**R 类（单槽目标）：与现行逐卡一致，无需附加前提。**
 
 ```
 场景：scope=(ssr, ssr_featured)，featured=(up)，base=(0.005, 0.004, 0.05, 0.941)
 对比：现行（_redistribute_scope 槽位级 + banner 的 scale_factors 还原） vs 卡级 factor_redistribute
 
-ratio=1.0 : 现行 {ssr_featured:0.009, ssr:0.0, sr:0.05, r:0.941}   新 同  ✓
-ratio=0.5 : 现行 {ssr_featured:0.0045, ssr:0.0045, ...}            新 同  ✓
-ratio=0.25: 现行 {ssr_featured:0.00225, ssr:0.00675, ...}          新 同  ✓
+ratio=1.0 : 现行 {ssr_featured:0.009, ssr:0.0, sr:0.05, r:0.941}      新 同  ✓
+ratio=0.5 : 现行 {ssr_featured:0.0045, ssr:0.0045, ...}               新 同  ✓
+ratio=0.25: 现行 {ssr_featured:0.00225, ssr:0.00675, ...}             新 同  ✓
 （逐卡差异 < 1e-15）
 ```
 
-原因：R 类的目标恒为**单槽**（`featured_slots` 每稀有度只有一个槽；`_resolve_selected_slots` 亦返回单槽元组）。单槽时不存在「槽间分配」这一层，槽内无论按基础权重还是按当前比例都退化为同一个式子。
+原因：R 类的目标恒为**单槽**（`compute_scope_mappings` 每稀有度只生成一个 featured 槽；`_resolve_selected_slots` 亦返回单槽元组）。单槽时不存在「槽间分配」这一层，槽内无论按基础权重还是按当前比例都退化为同一个式子。
 
-**F 类（hard）：不等价，必须独立骨架。**
+**F 类（hard）：与 R 不等价，其因子计算不可复用 `factor_redistribute`。**
 
 ```
 hard(scope='ssr') 触发时，现行输出 {ssr_featured: 1.0, ssr: 0.0, sr: 0.0, r: 0.0}
-若改用 R_1 表达             →     {ssr_featured: 0.009, ssr: 0.0, sr: 0.05, r: 0.941}
+若改用 R_1                         →  {ssr_featured: 0.009, ssr: 0.0, sr: 0.05, r: 0.941}
 ```
 
-差异是本质的，不是精度问题：`R_1` 只让**scope 内部**重新分配（SSR 总量仍是 0.9%），而 `hard` 要求**全局占满**（SSR 占 100%）。在按比例抽样下前者根本不是「必出」。
+差 100 倍，非精度问题：`R_1` 只让 **scope 内部**重新分配（SSR 总量仍 0.9%），`hard` 要求**全局占满**（SSR 占 100%）。按比例抽样下前者根本不是「必出」。
 
-F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① **范围**是全池置零加更高稀有度豁免（`hard(scope='sr')` 实测 Σ=1.009 ≠ 1，保留 SSR 原值）；② **槽间**按基础权重分配（`target_featured=False` 时目标含两个槽），而 R 类在卡级下按当前比例。第 ② 点在「槽间比例 = 基础权重比例」时与旧实现一致，但该不变量会被 R 操作破坏（如 `R_1(featured)` 把非 featured 槽清零），故不能依赖。
+F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① 范围是**全池置零 + 更高稀有度豁免**（`hard(scope='sr')` 实测 Σ=1.009 ≠ 1，SSR 原值被保留）；② **槽间**按基础权重分配（`target_featured=False` 时目标含两个槽），而 R 类在卡级下按当前比例。第 ② 点在「槽间比例 = 基础权重比例」时与旧实现一致，但该不变量会被 R 操作破坏（如 `R_1(featured)` 把非 featured 槽清零），故不能依赖。
 
-**结论**：`OverrideModifier` 须按「全池置零 + 目标按基础权重占满 + 豁免集合还原」独立实现，不复用 `factor_redistribute`。
+**结论**：`ThresholdForceModifier` 保留自己的 F 语义实现，不改为 `factor_redistribute` 调用。这是本方案与「彻底骨架化」的关键差别（3.14.5）。
 
 #### 3.14.4 Condition 与 EventMatch 的分工（命名区分）
 
-系统里有两处判断，**不合并**，且在命名上分开以免误读为「同一概念的两份实现」：
+系统里有两处判断，**不合并**，且在命名上分开以免被误读为「同一概念的两份实现」：
 
 | | **Condition**（本节的） | **EventMatch**（Tracker 侧，不新增抽象） |
 |---|---|---|
@@ -1004,19 +1045,43 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① **范�
 
 不可合并的技术原因：抽后那一刻 `PityContext.current` 是空字典（[pity.py:1355](gacha_simulator/core/pity.py#L1355) 构造时传 `current={}`），分布参数在抽后无意义。强行统一会得到 `test(ctx, view, dist=None, event=None)` 的万能谓词，读者须先判断时机才知道哪些参数有效。
 
-#### 3.14.5 修订范围
+#### 3.14.5 方案取舍：为什么只拆条件
+
+本轮在三种方案间比较（第四种「拆到最碎」因概念数超过收益未纳入）：
+
+| 维度 | A 保持现状 | **B 只拆条件（选中）** | C 彻底骨架化 |
+|------|-----------|----------------------|-------------|
+| 代码单元 | 7 类 | 7 类 + 条件族 + 1 包装器 | 3 骨架 + 条件族 |
+| 读者需理解的概念 | 1（Modifier） | 2（Modifier、Condition） | 3（+ 四参数） |
+| 新增机制成本 | 写一个新类 | 写一个类**或**一个条件 | 给一组参数 |
+| **等价性风险** | 无 | **低**（因子代码一行不动） | 中（因子代码重写，需逐类重验） |
+| 条件的可组合 / 可单测 | ✗ | ✓ | ✓ |
+| G14 落位 | 要写新类 | 换一个 Condition | 换一个 Condition |
+| preset 声明长度 | 短 | 中 | 长 |
+| 声明可读性 | 类名即语义 | 好（类名 + 条件） | 中（须查参数表） |
+| 消除「仅 target 不同」的类间重复 | ✗ | ✗ | ✓ |
+
+**B 与 C 的收益差距只在最后一行**：`ForceFeatured` / `ForceNonFeatured` / `BaseRatio` 三者只差一个 target，C 会合并它们，B 保留。而这一重复是**既有的**，非拆条件所引入。
+
+**C 的代价**在「等价性风险」一行：它要重写每类的因子计算并逐类重验。2026-09-21 的审查已证明这类重写容易引入静默错误（`factor_redistribute` 的 `ratio=1` 分支即为实例，且未被既有测试捕获）。
+
+**选 B 的理由**：收益 ÷ 风险最优。它拿到了条件外置的全部实质收益（G14 可扩展、条件可组合可单测、触发时机显式化），代价仅一层包装器，且因子路径不动、无需重验。
+
+**不封死 C**：将来若「仅 target 不同」的重复确实碍事，可在条件已外置的基础上再合并内层，那时只动一件事。
+
+#### 3.14.6 修订范围
 
 | 位置 | 改动 |
 |------|------|
-| §3.1.2 | Modifier 表标注「已由 §3.14 修订」；新增 Condition 类族清单 |
-| §3.2 | preset 映射表改为「(骨架, Condition, scope/target/ratio)」形式 |
-| §3.3 | G1 inverse preset 改用 `RedistributeModifier` + `FlagCondition` |
-| §3.4 | 软保底改用 `RedistributeModifier`（scope = 源集 ∪ 目标集） |
-| §3.10.4 | G3 改用 `RedistributeModifier` + `Always` + 动态 target_fn |
+| §3.1.2 | Modifier 表标注「已由 §3.14 修订」；新增 Condition 类族清单；各 Modifier 去掉内部条件判断 |
+| §3.2 | preset 映射表补「组装时的条件」一列 |
+| §3.3 | G1 inverse preset 用 `ConditionalModifier(ForceNonFeatured, FlagCondition('forced_loss'))` |
+| §3.4 | 软保底去掉内部条件（`Always`），ratio 仍按 3.14.2 表 |
+| §3.10.4 | G3 用 `ConditionalModifier(ForceNotOwned, Always())` |
 | §四 | 新增 `core/pity_condition.py`（Condition 类族，~80 行） |
 | §七 | GATE 加 S12 |
 
-**风险**：① Condition 必须纯读无副作用（由 §3.13 不变式校验覆盖）；② `InterceptModifier` 消费随机数，是唯一带副作用的 Modifier，须单列并注明理由（H4 协议）；③ `RandomThresholdCondition`（G14）需在状态中持久化随机阈值，属 Tracker 侧的扩展，与条件本身正交。
+**风险**：① Condition 必须纯读无副作用（由 §3.13 的不变式校验覆盖）；② `RandomThresholdCondition`（G14）需在状态中持久化随机阈值，属 Tracker 侧的扩展，与条件本身正交；③ 包装器多一层对象，preset 声明变长（见 3.14.5 的可读性行）。
 
 ---
 
@@ -1025,7 +1090,7 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① **范�
 | 文件 | 改动类型 | 说明 |
 |------|---------|------|
 | `core/pity_tracker.py` | **新增** | Tracker 家族（CounterTracker/FlagTracker/StreakTracker/FateTracker）+ Lifecycle（AlwaysActive/OnceActive/DependentActive）（~120 行） |
-| `core/pity_condition.py` | **新增**（**S12**） | Condition 类族（7 个内置 + 3 个组合子），纯读无副作用（~80 行） |
+| `core/pity_condition.py` | **新增**（**S12**） | Condition 类族（7 个内置 + 3 个组合子），纯读无副作用；配套 `ConditionalModifier` 包装器（~80 行） |
 | `core/pity_modifier.py` | **新增** | Modifier 家族（BoostModifier/ForceFeaturedModifier/ForceNonFeaturedModifier/ForceSelectedModifier/InterceptModifier/ThresholdForceModifier/BaseRatioModifier）（~150 行）。**S8**：实现形态切换为乘性因子向量（§3.1.5.1） |
 | `core/pool.py` | 修改（**S8**） | 删除 `aggregate_probs_by_rarity`（[pool.py:244](gacha_simulator/core/pool.py#L244)，唯一调用点在 banner）+ `core/__init__.py` 导出行；`compute_scope_mappings` 改造为只产出卡集合 |
 | `core/worst_impact.py` | 修改（**S8**） | 第二处 `PoolPitySpec` 构造点去掉硬编码槽位名（[worst_impact.py:506-548](gacha_simulator/core/worst_impact.py#L506-L548)） |
@@ -1099,7 +1164,7 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① **范�
 
 ## 七、GATE 任务分解
 
-> G16 独立 2 子块 + P82 接线独立 2 子块 + 主线 12 子块（含全量 preset 化、S8 概率操作乘法化、S9 状态可见性与 G3、S10 组合验收、S11 不变式校验、S12 Modifier 骨架化），共 16 子块；G16 与 P82 接线均独立先行，不占 P64 主线。
+> G16 独立 2 子块 + P82 接线独立 2 子块 + 主线 12 子块（含全量 preset 化、S8 概率操作乘法化、S9 状态可见性与 G3、S10 组合验收、S11 不变式校验、S12 条件外置），共 16 子块；G16 与 P82 接线均独立先行，不占 P64 主线。
 
 ### GATE-1 任务清单（checkbox）
 
@@ -1135,11 +1200,11 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① **范�
   - [ ] S10-1 不变式性质测试：随机组合零件，断言归一性 / 非负性 / 因子合法性 / 状态键合法 / 确定性（§3.12.1）
   - [ ] S10-2 合法组合判据 + 构造期检查（与 `_validate_behaviors` 同层，§3.12.2）
 - [ ] S11 **不变式运行时校验**（方案见 **§3.13**）：可开关的 `InvariantChecker`，覆盖分布 / 状态 / 因子 / 生命周期四层；生产关闭
-- [ ] S12 **Modifier 骨架化与条件独立**（方案见 **§3.14**）：
+- [ ] S12 **条件外置**（方案见 **§3.14**）：
   - [ ] S12-1 `core/pity_condition.py`：Condition 类族（`Always`/`Flag`/`Counter`/`FateReady`/`Ratio`/`Owned`/`RandomThreshold` + `And`/`Or`/`Not`）
-  - [ ] S12-2 `RedistributeModifier` 骨架 + 6 种形态参数化（§3.14.2 表）
-  - [ ] S12-3 `OverrideModifier`（hard 的 F，按 §3.14.3 的结论独立实现，不复用 `factor_redistribute`）
-  - [ ] S12-4 验收：R 类 6 种形态与现行逐卡一致（§3.14.3 的比值三例）；`OverrideModifier` 与现行 `HardPityBehavior` 逐卡一致（含 `scope='sr'` 的 Σ≠1 情形）
+  - [ ] S12-2 `ConditionalModifier` 包装器 + 各 Modifier 去掉内部条件判断（效果实现**不动**）
+  - [ ] S12-3 `InterceptModifier` 保持内部判断（消费随机数，不适用纯读条件），理由写入实现注释
+  - [ ] S12-4 验收：条件不成立时返回 `None`（恒等）与改前的内部判断逐场一致；`ThresholdForceModifier` 的 F 语义保持（不得改为 `factor_redistribute`，依 §3.14.3）；`RandomThresholdCondition`（G14）专项
 
 ### GATE-5 回滚策略
 

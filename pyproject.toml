@@ -30,6 +30,11 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-timeout>=2.0",
+    # 性能分析平台的资源读数设施（P83 §3.4「资源测量设施与依赖登记」）
+    # 用途：规则 5 的可用物理内存 / 规则 11 的 RSS 峰值 / §3.11 第 7 段的进程树 CPU
+    # 进 [dev] 而非运行期依赖：benchmarks/ 是开发侧测量资产，不进发布产物。
+    # 注意 webui/api.py:503 的软 import 不随之收紧为硬依赖（二者互不推导）。
+    "psutil>=5.9",
 ]
 
 [tool.pytest.ini_options]

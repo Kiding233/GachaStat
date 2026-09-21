@@ -12,7 +12,9 @@ from __future__ import annotations   # P58（ISSUE-303）：dataclass 字段注�
 
 import fnmatch
 import logging
+import pickle                                    # P83 §3.5：三元组字节数口径
 import random
+import time                                      # P83 §3.5：阶段计时（受 collect_perf 门控）
 import traceback
 from typing import Dict, Any, Optional, Callable
 from multiprocessing import Pool as MPPool
@@ -32,15 +34,30 @@ logger = logging.getLogger(__name__)
 class BatchResult:
     """批量模拟结果容器——向后兼容 list 接口，同时携带 worker 提取数据。"""
 
-    __slots__ = ('results', 'extraction', 'warnings')
+    # P83（`1e-4`）：新增 packet_bytes / stage_times 两槽。**__slots__ 与 __init__ 必须
+    # 同批改**——只加槽不改构造签名则新槽永不被赋值、__slots__ 下访问即 AttributeError
+    # （同 warnings 槽当年的处置）。两槽**只在 collect_perf=True 时被赋值**，默认关闭
+    # 时保持空 list / 空 dict，且不做任何序列化、不取任何阶段计时。
+    __slots__ = ('results', 'extraction', 'warnings', 'packet_bytes', 'stage_times')
 
-    def __init__(self, results, extraction=None, warnings=None):
+    def __init__(self, results, extraction=None, warnings=None,
+                 packet_bytes=None, stage_times=None):
         self.results = results if results is not None else []
         self.extraction = extraction
         # P79（阶段 3）：零进度 / 迭代预算耗尽告警的父进程载体。槽与构造签名必须
         # 同批改——只加槽不改 __init__ 则新槽永不被赋值、__slots__ 下访问即
         # AttributeError。
         self.warnings = warnings if warnings is not None else []
+        # P83 §3.5：三元组序列化字节数（每次模拟一项），口径
+        # len(pickle.dumps((compact, extraction, warnings)))。**当回归判据用，不当
+        # 绝对开销读。**
+        self.packet_bytes = packet_bytes if packet_bytes is not None else []
+        # P83 §3.5：三段耗时（pool_start / simulate / extract）。单进程与 mp_failed
+        # 路径记 pool_start=0.0 并在报告中标注「本路径无进程池」；且这两条路径的
+        # 逐次提取与模拟调用同处一个 for 循环、循环体内无法按段切分，故逐次提取
+        # 计入 simulate，extract 只含循环结束后的父进程合并——**跨路径的
+        # simulate / extract 比值不可直接比较**。
+        self.stage_times = stage_times if stage_times is not None else {}
 
     def __getitem__(self, i):
         return self.results[i]
@@ -370,6 +387,35 @@ def _wk_run_single(args):
 
 
 # --- 公共批量模拟接口 ---
+
+def _packet_size(compact, extraction, warnings) -> int:
+    """三元组序列化长度——P83 §3.5 的字节数口径。
+
+    量的是**整个三元组**而非只量 compact：`extraction` 包内含
+    `heatmap_ach_bins` / `heatmap_res_bins` 两个长度等于本次抽卡次数的数组，是唯一
+    随抽数增长的传输分量（P12 的 Phase 1.5 砍掉 93% 所针对的正是它），只量 compact
+    会正好漏掉它。另：**不可把各分量各自序列化后相加当总量**——实测分项之和
+    1996 KB > 整体 1688 KB（118%），pickle 的 memo 在同一次序列化内共享重复对象引用。
+
+    **只在 collect_perf=True 时调用**：一次约 1688 KB 的序列化不是零成本操作，
+    而 gui-qt / webui 每完成一次主模拟都要再跑一次 no_draw 基线，默认记录即构成
+    测量者效应。
+    """
+    return len(pickle.dumps((compact, extraction, warnings)))
+
+
+def _stage_times(collect_perf: bool, pool_start: float, simulate: float,
+                 extract: float) -> dict:
+    """三段耗时的统一构造。
+
+    未开启采集时返回**空 dict**——**不假装采到了三个 0**：「没采」与「采到 0」是
+    两回事，前者应记为未采集（归一后由 `WARN_STAGES_NOT_COLLECTED` 标注）。
+    """
+    if not collect_perf:
+        return {}
+    return {'pool_start': pool_start, 'simulate': simulate, 'extract': extract}
+
+
 def run_batch_parallel(
     env: SimulationEnv,
     target_specs: Dict[str, int],
@@ -381,12 +427,18 @@ def run_batch_parallel(
     strategy_key: str = '',
     strategy_params: Optional[dict] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    collect_perf: bool = False,
 ) -> 'BatchResult':
     """批量并行模拟。
 
     env: 模拟环境（池、保底、资源等静态配置）。
     target_specs / initial_resources: 每次模拟的动态参数。
     strategy_key / strategy_params: 可为空，为空时使用 env 中的默认值。
+    collect_perf: P83 §3.5 的 opt-in 门控（默认 False 即今日行为）。开启时
+        `BatchResult` 的 packet_bytes / stage_times 两槽才被赋值；**关闭时两槽
+        保持空、`pickle.dumps` 一次都不调用、阶段计时一个都不取**。之所以用显式
+        参数而非环境变量：开关可事后从调用点判断，不引入进程全局隐式状态。
+        `cli.py --perf-json` 是它的唯一开启者。
     """
     if strategy_key:
         env.strategy_key = strategy_key
@@ -400,6 +452,14 @@ def run_batch_parallel(
     # 统一累加到此，在各自的终点写入 BatchResult.warnings——兜底路径正是 MPPool
     # 异常时 GUI / WebUI 主模拟实际走的路径，漏汇总即静默丢失告警。
     warnings_acc: list = []
+
+    # P83（`1e-4`）：两槽的载体与三段计时。**全部受 collect_perf 门控**——关闭时
+    # packet_bytes 恒为空 list、stage_times 恒为空 dict、pickle.dumps 零调用、
+    # 阶段计时零采集，即三条产品路径的默认行为与改动前逐项一致。
+    packet_bytes_acc: list = []
+    pool_start_sec = 0.0
+    simulate_sec = 0.0
+    extract_sec = 0.0
 
     if max_workers <= 1:
         # 单进程路径：直接调用 _run_single，同时本地提取
@@ -416,6 +476,8 @@ def run_batch_parallel(
         results = [] if on_result is None else None
         extraction_packets = []
         n_failed = 0
+        # 本路径无进程池，故 pool_start 记 0.0（报告据此标注「本路径无进程池」）
+        _sim_started = time.perf_counter() if collect_perf else 0.0
         for i in range(num_simulations):
             s = seed + i if seed >= 0 else random.randint(0, 999999)
             try:
@@ -431,7 +493,13 @@ def run_batch_parallel(
                     pass
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
-                warnings_acc.extend(getattr(result, 'warnings', []) or [])
+                sim_warnings = list(getattr(result, 'warnings', []) or [])
+                warnings_acc.extend(sim_warnings)
+                if collect_perf:
+                    # 三元组落地处。口径与 _wk_run_single 的返回值逐项对应：
+                    # 单进程路径不设 env.return_compact，故首分量恒为 compact 本体
+                    # （与 MPPool 路径在 return_compact=True 下一致）。
+                    packet_bytes_acc.append(_packet_size(result, ext_pkt, sim_warnings))
             if on_result is not None:
                 if result is not None:
                     on_result(result)
@@ -444,14 +512,24 @@ def run_batch_parallel(
                     n_failed += 1
             if progress_callback:
                 progress_callback(i + 1, num_simulations)
+        if collect_perf:
+            # 逐次提取与模拟调用同处一个 for 循环、循环体内无法按段切分，故逐次
+            # 提取的耗时计入 simulate（§3.5 的口径例外）。
+            simulate_sec = time.perf_counter() - _sim_started
         if n_failed > 0:
             logging.warning("%s/%s simulations failed", n_failed, num_simulations)
+        _extract_started = time.perf_counter() if collect_perf else 0.0
         merged_ext = merge_extraction_packets(
             extraction_packets,
             heatmap_config={'n_heatmap_bins': getattr(env, 'n_heatmap_bins', 50), 'max_keep': 200},
         ) if extraction_packets else None
+        if collect_perf:
+            extract_sec = time.perf_counter() - _extract_started
         return BatchResult(results if on_result is None else [], merged_ext,
-                           warnings=warnings_acc)
+                           warnings=warnings_acc,
+                           packet_bytes=packet_bytes_acc,
+                           stage_times=_stage_times(collect_perf, pool_start_sec,
+                                                    simulate_sec, extract_sec))
 
     seeds = [seed + i if seed >= 0 else random.randint(0, 999999) for i in range(num_simulations)]
     tasks = [(s, initial_resources) for s in seeds]
@@ -467,11 +545,16 @@ def run_batch_parallel(
     for _retry in range(3):  # workers=N, N/2, N/4
         workers = max(1, max_workers // (2 ** _retry))
         try:
+            _pool_started = time.perf_counter() if collect_perf else 0.0
             with MPPool(
                 processes=workers,
                 initializer=_wk_init,
                 initargs=(env, target_specs),
             ) as mp_pool:
+                if collect_perf:
+                    # 进程池构造到就绪（含 initializer 执行完毕）
+                    pool_start_sec = time.perf_counter() - _pool_started
+                    _sim_started = time.perf_counter()
                 results = [] if on_result is None else None
                 extraction_packets = []
                 n_failed = 0
@@ -488,6 +571,11 @@ def run_batch_parallel(
                     if warns:
                         warnings_acc.extend(warns)
 
+                    if collect_perf:
+                        # 三元组落地处：worker 返回值即三元组本体，逐项对应
+                        # _wk_run_single 的 (compact_or_None, extraction, warnings)。
+                        packet_bytes_acc.append(_packet_size(compact, ext_pkt, list(warns)))
+
                     if on_result is not None:
                         if compact is not None:
                             on_result(compact)
@@ -501,13 +589,16 @@ def run_batch_parallel(
 
                     if progress_callback:
                         progress_callback(i + 1, num_simulations)
+                if collect_perf:
+                    # 本路径的提取在 worker 内，父进程侧只有下方的收尾合并，
+                    # 故 simulate 不含逐次提取（与单进程 / mp_failed 的口径不同）。
+                    simulate_sec = time.perf_counter() - _sim_started
                 if n_failed > 0:
                     logging.warning("%s/%s simulations failed", n_failed, num_simulations)
             break
         except Exception as e:
             ename = type(e).__name__
             if workers > 1:
-                import time
                 logging.warning("%s，以 workers=%s 重试…", ename, max(1, workers // 2))
                 time.sleep(0.5)
                 continue
@@ -537,6 +628,9 @@ def run_batch_parallel(
         results = [] if on_result is None else None
         extraction_packets = []
         n_failed = 0
+        # 本路径无进程池，pool_start 记 0.0（同单进程路径）
+        pool_start_sec = 0.0
+        _sim_started = time.perf_counter() if collect_perf else 0.0
         for idx in range(num_simulations):
             s = seeds[idx]
             try:
@@ -557,15 +651,24 @@ def run_batch_parallel(
                     results.append(compact)
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
-                warnings_acc.extend(getattr(compact, 'warnings', []) or [])
+                sim_warnings = list(getattr(compact, 'warnings', []) or [])
+                warnings_acc.extend(sim_warnings)
+                if collect_perf:
+                    # 三元组落地处（本路径 compact 恒非 None，与单进程路径同型）
+                    packet_bytes_acc.append(_packet_size(compact, ext_pkt, sim_warnings))
             else:
                 n_failed += 1
             if progress_callback:
                 progress_callback(idx + 1, num_simulations)
+        if collect_perf:
+            # 同单进程路径：逐次提取与模拟调用同处一个 for 循环，逐次提取计入
+            # simulate，extract 只含循环结束后的父进程合并。
+            simulate_sec = time.perf_counter() - _sim_started
         if n_failed > 0:
             logging.warning("%s/%s simulations failed (single-process fallback)", n_failed, num_simulations)
 
     # 合并 worker / 单进程提取结果
+    _extract_started = time.perf_counter() if collect_perf else 0.0
     merged_extraction = None
     if extraction_packets:
         from gacha_simulator.core.streaming import merge_extraction_packets
@@ -576,8 +679,14 @@ def run_batch_parallel(
         )
 
     raw_results = results if on_result is None else []
+    if collect_perf:
+        extract_sec = time.perf_counter() - _extract_started
+
     # 统一终点：兼作 MPPool 与 mp_failed 兜底的汇合点
-    return BatchResult(raw_results, merged_extraction, warnings=warnings_acc)
+    return BatchResult(raw_results, merged_extraction, warnings=warnings_acc,
+                       packet_bytes=packet_bytes_acc,
+                       stage_times=_stage_times(collect_perf, pool_start_sec,
+                                                simulate_sec, extract_sec))
 
 
 class SimulationEnvBuilder:

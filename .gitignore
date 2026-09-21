@@ -25,11 +25,18 @@ Thumbs.db
 results.json
 
 # 临时脚本
-benchmark_chart.py
+scripts/benchmark_chart.py
 test_*.html
+# 2026-09-22：benchmark_chart.py 加目录限定（P83 §3.6 定死块）——裸模式会误伤任意层级
+# 的同名文件；加限定是「收窄」而非放宽，匹配面只会变小。
+# test_*.html 保持裸模式：全仓无该文件、也无代码写它，落点无法核实，按「若确在根级则
+# 保持原样」处置（P83 §3.6）。
 # profile_*.py 于 2026-09-22 删除（P83 §6.0 2a/2b/2f）：三份 profile 脚本是「待接管的
 # 资产」而非临时脚本，裸模式会让它们永远进不了库（正是 P83 §一 问题 2 的成因），
 # 也会让将来任何同名文件被静默忽略。已核实全仓仅 scripts/ 下 3 个文件命中。
+
+# 性能分析平台运行产物（P83 §3.6）
+benchmarks/runs/
 
 #垃圾箱
 .recycle_bin

@@ -54,6 +54,7 @@ __all__ = [
     'set_memory_query',
     'get_memory_query',
     'injected_memory_query',
+    'suspended_memory_check',
     'N_MAX_NO_COLLECTOR',
     'N_MAX_WITH_COLLECTOR',
     'MEM_BASE_GB',
@@ -160,6 +161,21 @@ def injected_memory_query(fn: Callable[[], float]) -> Iterator[None]:
         yield
     finally:
         _MEMORY_QUERY = previous
+
+
+@contextmanager
+def suspended_memory_check() -> Iterator[None]:
+    """临时让规则 5 放行——**仅用于重建历史记录里的 `Plan`**。
+
+    读一条历史 `RunResult` 需要重建它携带的 `Plan`，而规则 5 判的是「**现在**
+    这台机器能不能跑」，与「**当时**跑了什么」无关。低内存时读不了历史基线是
+    荒谬的，且会让 `1f` 的比值比对随机器负载随机失败。
+
+    故为记录读取提供这个**显式命名**的逃生口。除记录重建外不得使用——它绕过
+    的是防 OOM 的硬规则，误用即等于取消规则 5。
+    """
+    with injected_memory_query(lambda: float('inf')):
+        yield
 
 
 # ── Plan ─────────────────────────────────────────────────
@@ -395,6 +411,19 @@ def _allows_none(hint: Any) -> bool:
     return False
 
 
+def _unwrap_optional(hint: Any) -> Any:
+    """把 `Optional[X]` / `X | None` 解包为 `X`（多成员 `Union` 原样返回）。
+
+    不解包则 `hint is int` 一类的判定会全部落空——`Optional[int]` 既不是 `int`
+    也不是 `bool`，于是 `chunksize` 的类型校验会静默退化为「照单全收」。
+    """
+    if get_origin(hint) in (Union, types.UnionType):
+        args = tuple(a for a in get_args(hint) if a is not type(None))
+        if len(args) == 1:
+            return args[0]
+    return hint
+
+
 def _coerce_field(name: str, value: Any, hint: Any) -> Any:
     """按**解析后的真实类型**校验。非法值报错，不做隐式转换。"""
     if value is None:
@@ -402,6 +431,7 @@ def _coerce_field(name: str, value: Any, hint: Any) -> Any:
             return None
         raise ValueError(f'Plan.{name} 不接受 None（字段类型 {hint}）')
 
+    hint = _unwrap_optional(hint)
     origin = get_origin(hint)
     if origin in (dict, Dict):
         if not isinstance(value, Mapping):

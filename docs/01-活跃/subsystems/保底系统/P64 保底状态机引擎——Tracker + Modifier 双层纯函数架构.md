@@ -2,7 +2,7 @@
 
 # P64 保底状态机引擎——Tracker + Modifier 双层纯函数架构
 
-> 日期：2026-08-24（2026-09-16 补三条强制约束 + §3.1.5 形式化 + target_featured 反例；**2026-09-18 事实同步**：全量行号刷新至 P81 清理后的代码 + GUI 两处事实修正 + legacy 迁移描述更新；**同日裁决 P82 并入的三项**：接线 / 保留 priority / 顺序两层定性，见 §1.5；**2026-09-21 概率操作乘法化 + 状态可见性裁决**：§3.1.5 重写为乘性因子版 + §3.1.2 D20 分布空间归属 + §3.9 S8 实施方案 + §3.10 状态可见性与 G3 真实建模 + S8/S9 子块；跨保底读状态裁决为不纳入；G15 按「精确建模原则」重估为缺口；**同日增补三项架构改进**：§3.11 表达能力与边界、§3.12 组合正确性验收、§3.13 不变式运行时校验 + S10/S11 子块；**§3.14 条件外置**（条件提为独立对象 + ConditionalModifier 包装器；三方案比较与 R/F 等价性实测）+ S12 子块） | 状态：设计中（2026-08-23 初版 → 2026-08-24 双层纯函数重建）
+> 日期：2026-08-24（2026-09-16 补三条强制约束 + §3.1.5 形式化 + target_featured 反例；**2026-09-18 事实同步**：全量行号刷新至 P81 清理后的代码 + GUI 两处事实修正 + legacy 迁移描述更新；**同日裁决 P82 并入的三项**：接线 / 保留 priority / 顺序两层定性，见 §1.5；**2026-09-21 概率操作乘法化 + 状态可见性裁决**：§3.1.5 重写为乘性因子版 + §3.1.2 D20 分布空间归属 + §3.9 S8 实施方案 + §3.10 状态可见性与 G3 真实建模 + S8/S9 子块；跨保底读状态裁决为不纳入；G15 按「精确建模原则」重估为缺口；**同日增补三项架构改进**：§3.11 表达能力与边界、§3.12 组合正确性验收、§3.13 不变式运行时校验 + S10/S11 子块；**§3.14 条件外置**（条件提为独立对象 + ConditionalModifier 包装器；三方案比较与 R/F 等价性实测）+ S12 子块；**2026-09-22 GATE 加里程碑划分**：M1（S1–S7 + S10 + S11，口径「与旧类逐场一致」）/ M2（S8 + S9 + S12，口径「与 M1 产物容差一致」），M1 结束为暂停与交付点，计划文件不拆分） | 状态：设计中（2026-08-23 初版 → 2026-08-24 双层纯函数重建）
 > 触发：P56 审查发现的「触发器 × 选择器 × 拓扑 × 效果」四维抽象 + 组合爆炸。**2026-08-24 设计重建**：用户追问「最优雅架构」，从领域本质重新理解保底 → 提出 Tracker + Modifier + Lifecycle 三元组纯函数架构；用户裁决命名 Tracker+Modifier。
 > 依赖：P55✅（counter 驱动正交分解 + deltas 展开）+ P56✅（6 个事件驱动类 + Flag/Counter/_redistribute_scope + LifecycleConfig，作为等价性基准）
 > 合并：**P82（保底管道顺序接通）于 2026-09-16 并入本计划**，见 §1.5；其结论直接影响 §1.3 的 G5 项与 §3.6 的 priority 设计，P82 文件已归档
@@ -1164,9 +1164,15 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① 范围�
 
 ## 七、GATE 任务分解
 
-> G16 独立 2 子块 + P82 接线独立 2 子块 + 主线 12 子块（含全量 preset 化、S8 概率操作乘法化、S9 状态可见性与 G3、S10 组合验收、S11 不变式校验、S12 条件外置），共 16 子块；G16 与 P82 接线均独立先行，不占 P64 主线。
+> **里程碑划分（2026-09-22）**：主线 12 子块按**验收口径**分为两段。**M1（S1–S7 + S10 + S11）** 证明「重构未退化」并交付带保障的统一架构，口径为「与旧类逐场一致」；**M2（S8 + S9 + S12）** 做表达力扩展，口径为「与 M1 产物容差 1e-12 一致」。M1 结束是一个明确的暂停与交付点，故**不拆分为独立计划文件**（避免约 370 行的跨文件搬移与由此产生的长期引用同步成本）。
+>
+> 共 16 子块：G16 独立 2 + P82 接线独立 2 + 主线 12。**G16 与 P82 接线均独立先行，不占 P64 主线，也不属任何一个里程碑。**
+>
+> **执行顺序**：独立先行块 → M1 → M2。
 
 ### GATE-1 任务清单（checkbox）
+
+#### 独立先行块（不属里程碑，可先于 M1 完成）
 
 **G16 独立先行（独立 commit，~1 人时——GUI 需新建 reset 控件，非改下拉）**
 - [ ] G16-1 `_should_reset` 加 `never` 分支 + PityDef/config_toml reset 枚举 + GUI **新建 reset 控件**（含「永不重置」）
@@ -1176,6 +1182,8 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① 范围�
 - [ ] P82-1 `PityEngine` 独立排序视图（`self._pool_order` 于 behavior 构造后预计算）+ `get_behaviors_for_pool()` 改为消费排序视图，`PoolPitySpec.pity_names` 保持 TOML 顺序不动
 - [ ] P82-2 基线固化 + 等价对照：接线前用固定种子跑 `config.toml` 与既有测试配置固化 `CompactResult` 快照，接线后同种子重跑逐字段对比，差异归因到敏感集合；确认 `draw_pity_names` 输出串不变
 
+#### M1：核心重构与保障（S1–S7 + S10 + S11）
+
 **主线：Tracker + Modifier 统一骨架（~10 人时）**
 - [ ] S1 新建 `core/pity_tracker.py`：Tracker 家族（CounterTracker/FlagTracker/StreakTracker/FateTracker）+ Lifecycle（AlwaysActive/OnceActive/DependentActive）。**须实现 §3.1.1 的 N1 双段接口**（`advance` 仅供 `CounterTracker` 在 before_draw 推进，`StreakTracker` 的 `cr_counter` 不适用；`commit` 落重置与翻转，且须处理 `deactivate_on_early_hit` 的跳过重置例外）与 **M4 的 `did_reset`**（统一为「本次是否回到初始状态」，counter 家族 `featured` 分支保留无 scope 门控的不对称）
 - [ ] S2 新建 `core/pity_modifier.py`：Modifier 家族（BoostModifier/ForceFeaturedModifier/ForceNonFeaturedModifier/ForceSelectedModifier/InterceptModifier/ThresholdForceModifier/BaseRatioModifier）
@@ -1184,6 +1192,16 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① 范围�
 - [ ] S5 preset 映射：全部 10 个类型 preset 化 + 等价性测试（旧 vs 新，固定种子逐场，含 `cr_state_probs` 中间值用例 H4）+ 三条强制约束的专项断言（N1 触发抽数 / M4 did_fire 三类语义 / H4 短路条件下随机数消费次数）
 - [ ] S6 G1 `rotating_inverse` + G5 `priority`（PityDef priority + _resolve_order 排序）+ GachaService 定轨识别适配（H1，`isinstance` → `_btype` 判断）+ config_toml 拒绝分支移除（H3）+ GUI `_PITY_TYPES` 硬编码列表追加新 type
 - [ ] S7 GUI round-trip 验收（含 `_PITY_TYPES` 追加）+ 手册示例 + pytest 全量
+
+**保障层（与核心同批完成，否则核心缺验收与守门手段）**
+- [ ] S10 **组合正确性验收**（方案见 **§3.12**）：
+  - [ ] S10-1 不变式性质测试：随机组合零件，断言归一性 / 非负性 / 因子合法性 / 状态键合法 / 确定性（§3.12.1）
+  - [ ] S10-2 合法组合判据 + 构造期检查（与 `_validate_behaviors` 同层，§3.12.2）
+- [ ] S11 **不变式运行时校验**（方案见 **§3.13**）：可开关的 `InvariantChecker`，覆盖分布 / 状态 / 因子 / 生命周期四层；生产关闭
+
+> **M1 完成标志**：全部 10 个类型与旧类**逐场一致**（§六 主线口径）；G1 / G5 可用；GUI round-trip 通过；组合验收（S10）与不变式校验（S11）到位。**此时架构已统一且带保障，项目处于可交付状态**；M2 尚未开始不影响可用性。
+#### M2：表达力扩展（S8 + S9 + S12；依赖 M1 完成）
+
 - [ ] S8 **概率操作路径重构**（方案见 **§3.9**，声明见 §3.1.2 D20，数学形式见 §3.1.5）：
   - [ ] S8-1 Modifier 接口改为 `factor(...) -> Optional[因子向量]`，`_apply_factor` 做归一化（§3.9.2）
   - [ ] S8-2 管道改传卡级分布：`banner.py` 删除 `aggregate_probs_by_rarity` 调用与 `scale_factors` 还原段（§3.9.1）
@@ -1196,21 +1214,21 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① 范围�
   - [ ] S9-2 `PityDef.reads` + `ExternalView` + 配置层白名单校验（§3.10.2）
   - [ ] S9-3 `ForceNotOwnedModifier` 新零件 + G3 配置示例 + 手册 §7.3 缺口归属更正（§3.10.4）
   - [ ] S9-4 验收：§六 的 S9 口径三条 + G3 专项三条
-- [ ] S10 **组合正确性验收**（方案见 **§3.12**）：
-  - [ ] S10-1 不变式性质测试：随机组合零件，断言归一性 / 非负性 / 因子合法性 / 状态键合法 / 确定性（§3.12.1）
-  - [ ] S10-2 合法组合判据 + 构造期检查（与 `_validate_behaviors` 同层，§3.12.2）
-- [ ] S11 **不变式运行时校验**（方案见 **§3.13**）：可开关的 `InvariantChecker`，覆盖分布 / 状态 / 因子 / 生命周期四层；生产关闭
 - [ ] S12 **条件外置**（方案见 **§3.14**）：
   - [ ] S12-1 `core/pity_condition.py`：Condition 类族（`Always`/`Flag`/`Counter`/`FateReady`/`Ratio`/`Owned`/`RandomThreshold` + `And`/`Or`/`Not`）
   - [ ] S12-2 `ConditionalModifier` 包装器 + 各 Modifier 去掉内部条件判断（效果实现**不动**）
   - [ ] S12-3 `InterceptModifier` 保持内部判断（消费随机数，不适用纯读条件），理由写入实现注释
   - [ ] S12-4 验收：条件不成立时返回 `None`（恒等）与改前的内部判断逐场一致；`ThresholdForceModifier` 的 F 语义保持（不得改为 `factor_redistribute`，依 §3.14.3）；`RandomThresholdCondition`（G14）专项
 
+> **M2 完成标志**：卡级管道与 **M1 产物**容差 1e-12 一致（§六 S8 口径）；单卡定向与 G3 专项通过（§六 S9 口径）；条件外置后触发行为与 M1 产物一致（S12-4）。
+
 ### GATE-5 回滚策略
 
 - **回滚单元**：G16 独立；主线整体一次回滚（全量 preset 化不分阶段，保留旧类到等价性测试通过为止）
 - **等价性测试失败**：立即停止主线，保留失败 preset 为「未迁移」，回退 registry 到该 preset 指向旧类
 - **G16**：独立 commit，与 P64 主线完全解耦，可随时 cherry-pick 或 revert
+- **里程碑暂停点（2026-09-22 新增）**：**M1 结束是一个明确的暂停/交付点**——此时架构已统一、行为与旧类一致、保障层到位。M2 可随时暂停或延后，不影响 M1 交付物的可用性
+- **M2 的回滚单元**：S8 + S9 + S12 整体（S9 依赖 S8；S12 与 S8 同属概率操作路径改造，分开回滚会让 §3.9 的组件处置表与 §3.14 的条件外置处于不一致状态）
 - **发布前**：主线完成后一次性移除旧保底类（无历史包袱原则，`RELEASED=False`）
 
 ---

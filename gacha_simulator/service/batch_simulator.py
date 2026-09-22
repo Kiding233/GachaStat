@@ -702,6 +702,20 @@ def run_batch_parallel(
         mp_failed = True
 
     if mp_failed:
+        # P83 §3.8 D9：**路径降级标注**。plan 声明了 function 档（调用方已把
+        # profile_enabled 置真）而运行落到 mp_failed 兜底路径时，剖面**必然**缺失
+        # ——本路径不经过 `_wk_run_single`（D2.1 的三路径表），开闭窗口无从生效。
+        # 故经 BatchResult.warnings 通道把它记下来，使读的人能区分
+        # 「路径降级导致 function 档不适用」与「剖析器坏了」（D7 的四条）。
+        # 文案**必须与 D7 的「剖析故障」不同**——两者都软降级、都记 warnings，
+        # 但成因不同。该可区分性由 T4c 断言（`6e`）。
+        if getattr(env, 'profile_enabled', False):
+            warnings_acc.append(
+                '路径降级：plan 声明了 function 档（profile_enabled 为真），但本次运行'
+                '落到 mp_failed 兜底路径——该路径不经过 _wk_run_single，采样窗口无从生效，'
+                '剖面必然缺失。**此为路径降级，不是剖析故障**（P83 §3.8 D9）。'
+            )
+
         # 单进程兜底：直接在当前线程循环调用 _run_single，不 spawn 子进程
         # 需要手动初始化 extractor（Pool 路径由 _wk_init 完成）
         from gacha_simulator.core.streaming import WorkerLocalExtractor

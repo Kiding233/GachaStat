@@ -97,7 +97,8 @@ from benchmarks.perf.profilers.stage import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['GuiQtAdapter', 'pyqt_available', 'parse_importtime', 'STARTUP_JSON_ENV']
+__all__ = ['GuiQtAdapter', 'pyqt_available', 'qt_argv', 'parse_importtime',
+           'STARTUP_JSON_ENV']
 
 #: 本路径**结构上不产出**的段：产品侧没有回传通道，这几段在 GUI 进程内发生但不外流。
 #: 报告据此标注「本路径不产出该段」，**不得留空静默跳过**（§3.5 末表的口径）。
@@ -166,6 +167,22 @@ WARN_STARTUP_NOT_A_PARTITION = (
 """每次启动测量都随记录带出——**该口径不写在报告里，读的人会把八段相加当总时长**。"""
 
 
+def qt_argv() -> List[str]:
+    """构造 `QApplication` 用的 argv。**规则 6 的第一条：必须非空。**
+
+    从测试或脚本里调起时 `sys.argv` 可能是 `[]`（pytest 有 argv，但 `python -c` 的
+    调用方常传空列表），而**空 argv 下 QtWebEngine 初始化失败、进程以 `0xC0000409`
+    终止**——2026-09-17 之前八次探针全部失败都是这一个原因，不是环境限制。
+    故这里补一个占位，保证永不交空列表出去。
+
+    独立成函数是为了**可测**：空 argv 的复现要能把 `sys.argv` 清空后再构造
+    `QApplication`，而 Qt 的 `QApplication` 在同一进程里只允许一个实例（第二次构造
+    会拿到既有实例），故「行为级」断言会退化成空断言——这条规则必须有一条直接的、
+    不依赖 Qt 单例语义的断言。
+    """
+    return list(sys.argv) or ['benchmarks.perf']
+
+
 def pyqt_available() -> bool:
     """本环境有没有 PyQt6。**缺依赖时返回 `False` 而非报错**（§3.9 T3 的 `available()` 约定）。"""
     return importlib.util.find_spec('PyQt6') is not None
@@ -231,10 +248,7 @@ class GuiQtAdapter(Adapter):
 
         # 必须在 QApplication 之前——QtWebEngine 要求共享 OpenGL 上下文
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
-        # sys.argv 可能为空（从测试/脚本里调起时），补一个占位以**保证非空**
-        # ——空 argv 正是此前八次探针全失败的原因（0xC0000409）
-        argv = list(sys.argv) or ['benchmarks.perf']
-        app = QApplication.instance() or QApplication(argv)
+        app = QApplication.instance() or QApplication(qt_argv())
         return app
 
     def _build_window(self, plan: Plan) -> Tuple[Any, Any]:

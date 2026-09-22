@@ -423,7 +423,7 @@ class TestStartupIsExemptFromAutoDowngrade:
                          repeats=repeats, n=10, workers=2)
 
     def test_startup_keeps_its_repeats(self, make_plan):
-        adapter = _StubAdapter(wall=20.0)          # 20 x 3 = 60s，远超 30s 阈值
+        adapter = _StubAdapter(wall=30.0)          # 30 x 3 = 90s，远超阈值
         result = adapter.run(self._plan(make_plan, 'startup', 3))
         assert adapter.calls == 3
         assert result.repeats == 3
@@ -431,7 +431,7 @@ class TestStartupIsExemptFromAutoDowngrade:
 
     def test_simulation_still_downgrades(self, make_plan):
         """对照组：同一条启发式对 `simulation` 照常生效，豁免只限 `startup`。"""
-        adapter = _StubAdapter(wall=20.0)
+        adapter = _StubAdapter(wall=30.0)
         result = adapter.run(self._plan(make_plan, 'simulation', 3))
         assert adapter.calls == 1
         assert result.repeats == 1 and result.repeats_downgraded is True
@@ -440,10 +440,10 @@ class TestStartupIsExemptFromAutoDowngrade:
         """豁免的**目的**：不加这条，启动测量永远建不了基线。"""
         from benchmarks.perf.report import BaselineGateError, register_baseline
 
-        startup = _StubAdapter(wall=20.0).run(self._plan(make_plan, 'startup', 3))
+        startup = _StubAdapter(wall=30.0).run(self._plan(make_plan, 'startup', 3))
         register_baseline('startup-baseline', startup, root=tmp_path)   # 不抛即通过
 
-        simulation = _StubAdapter(wall=20.0).run(self._plan(make_plan, 'simulation', 3))
+        simulation = _StubAdapter(wall=30.0).run(self._plan(make_plan, 'simulation', 3))
         with pytest.raises(BaselineGateError):
             register_baseline('sim-down', simulation, root=tmp_path)
 

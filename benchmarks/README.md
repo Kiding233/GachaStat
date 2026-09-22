@@ -126,8 +126,40 @@ benchmarks/
 ## 六、怎么跑
 
 ```bash
+# 首次建基线（建基线须 repeats >= 3，否则拒绝入库）
+python -m benchmarks.perf run --plan <plan.json> --baseline <name> --register
+
 # G1：一条命令产出「配置 X 在路径 P 上对比基线 B 的比值」
 python -m benchmarks.perf run --plan <plan.json> --baseline <name>
 ```
 
-`plan.json` 是 `Plan.to_dict()` 的形态，读取器为 `Plan.from_dict()`：缺省键取字段默认值，**未知键与非法值以非零退出码报错**（不静默忽略——「参数键名即契约」是本库一贯口径）。
+`plan.json` 是 `Plan.to_dict()` 的形态，读取器为 `Plan.from_dict()`：缺省键取字段默认值，**未知键与非法值以非零退出码报错**（不静默忽略——「参数键名即契约」是本库一贯口径）。**薄壳不自行定义输入规格**，它只做「读文件 → `Plan.from_dict()` → 跑 plan → 格式化」。
+
+**退出码：** `0` 正常；`2` 用法错误 / `plan.json` 非法 / 安全协议拒绝 / 缺基线；`3` 该路径在本环境不可用；`4` 适配器运行失败。
+
+**`run` 的输出**（`--quiet` 只留结论行）：
+
+```
+本次记录：path=cli / n=100 / workers=2 / seed=42 / strategy=smart
+  配置：config/config.toml（plan.json: ...）
+  墙钟中位数：1.234s（repeats=3，样本 3 个）
+  机器类别：17+cores_Windows 11 / QT_QPA_PLATFORM=（本路径不适用）
+  阶段：config_load=0.005s，env_build=0.001s，pool_start=0.587s，simulate=0.159s，extract=0.001s
+  ⚠ 2 条告警：
+    - 本路径不产出该段：dispatch（分发）
+    - 本期不采集：subject=simulation 的 RSS 峰值（P83 §3.3）
+
+本次（cli / 17+cores_Windows 11） vs 基线 g1-smoke：
+  总墙钟比值（本次 / 基线）：1.012
+  三元组字节数比值：1.000（代理指标，当回归判据用、不当绝对开销读）
+  阶段比值：
+    config_load  1.004
+    env_build    0.998
+    pool_start   1.021
+    simulate     1.008
+    extract      1.000
+
+结论：配置 config/config.toml 在路径 cli 上对比基线 g1-smoke 的总墙钟比值 = 1.012
+```
+
+> **样例的采集时点：** 上面是**格式样例**，其数值以本机一次真实运行为准，在 `1i`（G1 闭环的验收处）落地时逐字替换为当次实跑的输出。之所以不在此处凭空填写：G1 的验收证据必须是真实输出，而这台机器当时可用内存低于规则 5 的 2.0 GB 下限，门控按设计拒绝了运行。

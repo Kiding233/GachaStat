@@ -128,10 +128,14 @@ class EnvFingerprint:
     python: str = ''
     code_version: str = ''
     qt_qpa_platform: Optional[str] = None
-    """本次 `QT_QPA_PLATFORM` 取值（§3.11）。
+    """本次 `QT_QPA_PLATFORM` 取值（§3.11）。**可比性维度**，三种状态各有含义：
 
-    **可比性维度**：`simulation` 路径用 `offscreen`、`startup` 路径用真实
-    `windows` 平台，两者不可混比。`None` 表示「未记录」。
+    - 具体取值（`'offscreen'` / `'windows'`）——Qt 路径的实际平台。`simulation` 用
+      `offscreen`、`startup` 用真实 `windows`，两者不可混比
+    - `''`（空串）——**本路径不适用**：`cli` / `inline` 不是 Qt 路径，没有这个变量。
+      必须是一个**确定值**：若用 `None` 表示「不适用」，比对侧会把它读成「未记录」
+      从而判不可比，`cli` 基线将**永久不可比**，G1 直接失效
+    - `None`——**未记录**（该字段出现之前的老记录，或捕获失败）
     """
 
     @classmethod

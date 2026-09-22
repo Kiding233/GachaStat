@@ -194,10 +194,14 @@ class Adapter(ABC):
     def _qt_qpa_platform(self, run: SingleRun) -> Optional[str]:
         """本次运行的 `QT_QPA_PLATFORM` 取值（§3.11）。
 
-        非 Qt 路径恒为 `None`。Qt 路径由适配器在 `SingleRun.warnings` 之外另经
-        ``qt_qpa_platform`` 语义上报——基类默认从环境变量取，子类可覆写。
+        **默认返回空串，表示「本路径不适用」**——`cli` / `inline` 不是 Qt 路径，没有
+        这个变量。这里**不能返回 `None`**：`None` 的语义是「未记录」，比对侧据此判
+        不可比，而 `qt_qpa_platform` 是可比性维度之一，于是 `cli` 基线会**永久不可比**、
+        G1（回答「这次改动有没有变慢」）直接失效。空串是一个确定值，同路径内恒相等。
+
+        Qt 路径的适配器（`gui-qt` / 启动测量）覆写本方法，报出真实平台。
         """
-        return None
+        return ''
 
 
 # ── 适配器注册表 ─────────────────────────────────────────

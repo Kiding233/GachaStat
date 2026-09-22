@@ -217,6 +217,15 @@ class CliAdapter(Adapter):
         warnings.extend(resource_warnings)
 
         functions = _parse_functions(payload.get('functions'), warnings)
+        if functions is None and plan.profile_enabled:
+            # D7：`--perf-json` 的载荷只有定死的五项，剖析降级的**成因文案装不下**，
+            # 被测进程只能把它打到 stderr（那正是 `--perf-json` 之外的通道）。此处记
+            # 一条指向 stderr 的说明，使 `RunResult.warnings` 里至少能看出「请求了
+            # 剖析但没拿到函数级统计」以及**该去哪儿看成因**——而不是留一个无声的 None。
+            warnings.append(
+                '已请求剖析（plan.profile_enabled）但未取到函数级统计：'
+                '被测进程的 stderr 里有具体成因（§3.8 D7）。'
+            )
 
         return SingleRun(
             wall=wall,

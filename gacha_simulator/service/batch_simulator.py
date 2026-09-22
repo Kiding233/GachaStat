@@ -95,6 +95,17 @@ class SimulationEnv:
     strategy_params: Dict[str, Any] = dc_field(default_factory=dict)
     stop_condition: Any = None
     return_compact: bool = True
+    # P83 §3.8 D1（`6a` 的四字段，2026-09-21 裁决采保守解：声明随 `1e-2` 在阶段 1
+    # 落地——`1e-2` 即向 env 写这四个字段，而 SimulationEnv 是普通 dataclass，写未
+    # 声明字段会**静默生效而不报错**，该缺口不会在执行时自我暴露，故须显式声明）。
+    # 全部带默认值以保持跨进程 pickle 兼容（照 return_compact / n_heatmap_bins 模式）。
+    # **注入点是「调用方在拿到 env 之后直接赋值」，不经 builder 的显式 keyword 表**：
+    # from_config_store 与 from_dict 都以显式 keyword 列表构造 env，两张表内均无
+    # profile_*——落在 builder 上是行不通的。
+    profile_enabled: bool = False           # 总开关
+    profile_dir: str = ''                   # run 级 profile 目录（<--profile-dir>/<run_id>）；空则不落盘
+    profile_skip: int = 2                   # 前 N 次调用不采样（warmup）
+    profile_count: int = 50                 # **每个 worker 进程各自**采样多少次后关闭（per-worker，非本次 plan 的总量）
     card_overflow_map: Dict[str, list] = dc_field(default_factory=dict)  # ← P63
     # P61（Ph6，ISSUE-011）：Banner 构造定义——from_config_store 填充 List[Banner]
     # （与 pools 同对象）。_run_single 每次从它（或 pools）深拷贝重建，隔离 Banner

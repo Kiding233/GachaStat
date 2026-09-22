@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(message)s')
@@ -33,6 +34,22 @@ def _fallback_target_ids(store) -> list:
     return []
 
 
+def _write_perf_json(path, **payload) -> bool:
+    """写 P83 的性能载荷。失败只警告不中断（D7：测量失败不得伤及被测对象）。
+
+    载荷字段**定死为五项**（§3.5，AUDIT-BREAK-3）：`stages` / `packet_bytes` /
+    `stage_times` / `run_id` / `functions`。后两项是 `cli` 路径 `function` 档闭合链
+    的必经环节——适配器进程与被测进程不是同一个，合并结果只能经此回传。
+    """
+    try:
+        with open(path, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        return True
+    except OSError as exc:
+        print(f"警告：--perf-json 写入失败（{path}）：{exc}", file=sys.stderr)
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description='GachaStat CLI')
     parser.add_argument('-c', '--config', default=None,
@@ -56,6 +73,17 @@ def main():
         help='输出格式：simple=基础统计JSON, full=含extraction完整数据')
     parser.add_argument('--no-progress', action='store_true',
         help='禁用进度条输出')
+    # P83（1e-2）：opt-in 的性能数据通道。**默认全部关闭，关闭时行为与改动前逐项一致**
+    # （既不采集也不序列化）。开关用显式参数而非环境变量：可事后从调用点判断本次是否
+    # 采集，不引入进程全局隐式状态（同 P83 §3.8 D1 否决环境变量的方向）。
+    parser.add_argument('--perf-json', default=None, metavar='PATH',
+        help='把阶段计时与三元组序列化字节数写成 JSON（P83 §3.5）。不设置则不采集')
+    parser.add_argument('--profile-dir', default=None, metavar='PATH',
+        help='开启 cProfile 采样并落到 <PATH>/<run_id>/（P83 §3.8）。不设置则不作任何剖析')
+    parser.add_argument('--profile-skip', type=int, default=2, metavar='N',
+        help='前 N 次调用不采样（warmup，默认 2）')
+    parser.add_argument('--profile-count', type=int, default=50, metavar='K',
+        help='每个 worker 各自采样多少次后关闭（默认 50，per-worker 语义）')
     parser.add_argument('--migrate', action='store_true',
         help='检查 TOML 是否为新格式（旧 [[pools]] 格式已不支持自动迁移，见 P61）')
     parser.add_argument('--version', action='version',
@@ -63,6 +91,16 @@ def main():
 
     args = parser.parse_args()
 
+    # P83（1e-2）：阶段计时的采集点之一。`cli.py` 的 `main()` 是两个边界的唯一观察者
+    # （配置加载、env 构建）——后四段发生在 run_batch_parallel 函数体内。**只有
+    # --perf-json 设置时才取时刻**，默认路径上不引入任何计时调用。
+    perf_stages = {}
+    # P83 §3.8 D3：run_id 由「运行 run_batch_parallel 的那一个进程」生成。对 cli 路径
+    # 而言就是本进程——适配器进程与被测的 `python -m gacha_simulator.cli` 不是同一个
+    # 进程，故 run_id 与合并结果只能经 --perf-json 回传（AUDIT-BREAK-3）。
+    # **--profile-dir 未设置时 run_id 为 None**（如实标注，不伪造）。
+    run_id = uuid.uuid4().hex[:12] if args.profile_dir else None
+    _t_config = time.perf_counter() if args.perf_json else 0.0
     if args.config:
         # 用户指定 TOML 路径
         store = load_toml(args.config)
@@ -70,6 +108,8 @@ def main():
         # 无参数 → 加载打包默认 config.toml
         default_toml = os.path.join(get_config_dir(), 'config.toml')
         store = load_toml(default_toml)
+    if args.perf_json:
+        perf_stages['config_load'] = time.perf_counter() - _t_config
 
     # P61（Ph4 / ISSUE-004）：--migrate 依赖已移除的 _build_pools/_migrated_from_legacy
     # （旧 [[pools]] 格式自动迁移随 P61 一次性迁移完成，不再支持）。
@@ -114,7 +154,35 @@ def main():
         strategy_key = getattr(store, 'strategy_key', 'smart') or 'smart'
         strategy_params = store.strategy_params
 
+    _t_env = time.perf_counter() if args.perf_json else 0.0
     env = SimulationEnvBuilder.from_config_store(store)
+    if args.perf_json:
+        perf_stages['env_build'] = time.perf_counter() - _t_env
+
+    # P83 §3.8 D1：`--profile-*` 转成 env 四字段。**注入点是「调用方在拿到 env 之后
+    # 直接赋值」，不经 SimulationEnvBuilder 的显式 keyword 表**——from_config_store
+    # 与 from_dict 都以显式 keyword 列表构造 env，两张表内均无 profile_*，把字段只
+    # 声明在 SimulationEnv 而指望 builder 承载它，结果会是 profile_enabled 恒取默认
+    # False、cProfile 静默不开。**顺序是硬要求：先设字段、再调 run_batch_parallel**
+    # ——在 run_batch_parallel 内部设置无效，彼时 env 已 pickle 给 worker。
+    if args.profile_dir:
+        env.profile_enabled = True
+        # profile_dir 取 **run 级目录**（<--profile-dir>/<run_id>）：D3 要求 run 级子
+        # 目录以隔离同一进程内的多次 run_batch_parallel 调用（no_draw 基线重跑不得
+        # 混入主模拟的剖面），而 worker 侧只有这一个字段可用，故把 run_id 折进它的
+        # 取值——`6b` 写入与 `6c` 扫描都以 env.profile_dir 为准，两侧口径一致。
+        env.profile_dir = os.path.join(args.profile_dir, run_id or '')
+        env.profile_skip = args.profile_skip
+        env.profile_count = args.profile_count
+        # D3：父进程在本次 run_batch_parallel 开始前生成 run 级子目录。
+        # D7：目录不可写**一律软降级**——绝不因剖析失败导致模拟失败。
+        try:
+            os.makedirs(env.profile_dir, exist_ok=True)
+        except OSError as exc:
+            print(f"警告：profile 目录不可写（{env.profile_dir}）：{exc}——本次不做剖析",
+                  file=sys.stderr)
+            env.profile_enabled = False
+            env.profile_dir = ''
 
     print("=" * 50)
     print("GachaStat CLI")
@@ -157,12 +225,28 @@ def main():
         progress_callback=_cli_progress if not args.no_progress else None,
         strategy_key=strategy_key,
         strategy_params=strategy_params,
+        # P83 §3.5：只有 --perf-json 才开启采集。关闭时两槽保持空、pickle.dumps
+        # 零调用、阶段计时零采集。
+        collect_perf=bool(args.perf_json),
     )
     print()  # progress line 换行
 
     elapsed = time.time() - start_time
 
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
+
+    if args.perf_json:
+        # `functions` 由 `6c` 的父进程 pstats 合并填充；本项（1e-2）尚无合并实现，
+        # 故恒为 None——**如实标注，不伪造**（§3.5：--profile-dir 未设置时 functions
+        # 与 run_id 均为 None）。
+        _write_perf_json(
+            args.perf_json,
+            stages=perf_stages,
+            packet_bytes=list(getattr(batch_result, 'packet_bytes', []) or []),
+            stage_times=dict(getattr(batch_result, 'stage_times', {}) or {}),
+            run_id=run_id,
+            functions=None,
+        )
 
     # P61（ISSUE-003）：无 [[targets]] 时兜底目标取 banner 段拼 _ssr（模块级函数，可测）
     actual_target_ids = _fallback_target_ids(store)

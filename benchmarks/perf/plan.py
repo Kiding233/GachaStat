@@ -14,13 +14,24 @@
 | D8 | `profile_count > 500`（per-worker 上限） |
 | D2.1 | `grain='function'` 且 `workers <= 1`（只有 MPPool 路径经过 `_wk_run_single`） |
 | §3.3 | `grain='single'`——本期未实现，声明即调用方编程错误 |
+| §3.11 | `subject='startup'` 落到本期无落点的路径 / 档位（`3e`，见下） |
 
 规则 1 与规则 4 的上限**互不包含**：若规则 1 沿用规则 4 的 1600，其拒绝集合会
 成为规则 4 的真子集，而事故量级（60000 无收集器）恰好落在放行区间内。
 
-`subject='startup'` 时 `n` / `workers` / `chunksize` / `strategy_key` / `seed`
-一律被忽略，故**规则 1 与规则 4 不适用**（决策 34）；**规则 5 与 D8 仍然适用**
-——启动测量驱动的正是 `gui-qt` 冷进程，是四条路径中最吃内存的形态。
+`subject='startup'` 时 `STARTUP_IGNORED_FIELDS`（`n` / `workers` / `chunksize` /
+`strategy_key` / `seed`）一律被忽略，故**规则 1 与规则 4 不适用**（决策 34）；
+**规则 5 与 D8 仍然适用**——启动测量驱动的正是 `gui-qt` 冷进程，是四条路径中最
+吃内存的形态。
+
+**`startup` 的落点边界（`3e`，2026-09-22 定）：** 「被忽略」是一回事，「被忽略之后
+还有没有人认领」是另一回事。`subject` 在三轴模型里与 `path` / `grain` 正交，故
+`startup × cli` 一类组合在字段层面是可构造的；而本期只有 `3f-1` 认领了
+`startup × gui-qt`（§3.11「适用范围：首个交付覆盖 `gui-qt`」，且 `cli` / `webui` 的
+启动测量被明写为**两个独立增量**、不在本计划内）。若放行，入口薄壳会按 `plan.path`
+派发到 `CliAdapter` 并**照常产出一条带 `subject='startup'` 的记录**——报告会把一次
+普通的 cli 模拟说成启动测量，这是「报告说谎」，比拒绝更坏。故按 `grain='single'`
+的同一处置（声明了平台不实现的组合即调用方编程错误）在 `validate()` 内拒绝。
 """
 
 from __future__ import annotations
@@ -61,6 +72,8 @@ __all__ = [
     'MEM_PER_WORKER_GB',
     'MEM_GUI_QT_EXTRA_GB',
     'PROFILE_COUNT_MAX',
+    'STARTUP_IGNORED_FIELDS',
+    'STARTUP_PATHS',
 ]
 
 # ── 枚举域 ────────────────────────────────────────────────
@@ -70,6 +83,23 @@ PATHS = ('cli', 'gui-qt', 'webui', 'inline')
 GRAINS = ('batch', 'stage', 'function')
 #: 已在档位表中声明、但本期无任何子任务承接的粒度（P83 §3.3）。
 NOT_IMPLEMENTED_GRAINS = ('single',)
+
+#: `subject='startup'` 下**一律被忽略**的字段（P83 §3.11、决策 34）。
+#:
+#: **本常量是这条语义的唯一真值源**：`validate()` 的分支、`memory_requirement_gb()`
+#: 的取值、以及 `ignored_fields()` 全部读它，避免「文档说五个、代码认三个」这类
+#: 漂移。启动测量的被测对象是**一次冷进程启动**，与配置里的模拟规模、进程池宽度、
+#: 随机种子、策略选择都无关——这五项因此不参与该次测量。
+#:
+#: `strategy_key` 虽被忽略，**仍是必填字段**（`Plan.from_dict()` 只对带默认值的键
+#: 允许缺省）。填什么不影响读数，但填了不等于它生效——这是刻意的：把「必填」与
+#: 「生效」两件事分开，胜过让一个被忽略的字段悄悄变成可选而无人察觉。
+STARTUP_IGNORED_FIELDS = ('n', 'workers', 'chunksize', 'strategy_key', 'seed')
+
+#: `subject='startup'` 在本期**有落点**的路径（P83 §3.11「适用范围：首个交付覆盖
+#: `gui-qt`」）。`cli` / `webui` 的启动测量是独立增量、不在本计划 43 项内，故不在
+#: 此列；组合落在列外时 `validate()` 拒绝，理由见模块 docstring 末段。
+STARTUP_PATHS = ('gui-qt',)
 
 # ── 安全协议数值（唯一口径 P83 §3.4「规则 1 / 4 / 5 的具体数值」） ──
 #
@@ -206,6 +236,13 @@ class Plan:
 
     # —— 三轴 ——
     subject: str = 'simulation'
+    """测什么：`'simulation'` 是一次批量模拟，`'startup'` 是一次冷进程启动。
+
+    取 `'startup'` 时 `STARTUP_IGNORED_FIELDS` 五个字段一律被忽略
+    （`ignored_fields()` 可查），且只在本期有落点的路径上可构造——边界与理由见
+    模块 docstring 末段与 `_validate_startup()`。
+    """
+
     path: str = 'cli'
     grain: str = 'stage'
 
@@ -252,6 +289,7 @@ class Plan:
         `memory_query` 显式传入时优先于全局注入点，便于单点覆盖。
         """
         self._validate_shape()
+        self._validate_startup()
         self._validate_profile_rules()
         self._validate_n_limits()
         self._validate_memory(memory_query)
@@ -290,6 +328,49 @@ class Plan:
         if self.profile_skip < 0:
             raise ValueError(f'Plan.profile_skip 必须 >= 0，收到 {self.profile_skip}')
 
+    # `subject='startup'` 的语义与落点边界（`3e`）
+    def ignored_fields(self) -> tuple:
+        """本次 plan 下**被忽略**的字段名（`subject='startup'` 时为
+        `STARTUP_IGNORED_FIELDS`，否则为空）。
+
+        供消费者（`3f-1` 的适配器、报告格式化）在**不重抄规则**的前提下知道
+        「哪些因子对本条记录无意义」——例如因子扫描在 `startup` 下扫 `n`，产出的
+        各格读数必然相同，读的人需要能看出这一点而不是以为扫描生效了。
+        """
+        return STARTUP_IGNORED_FIELDS if self.subject == 'startup' else ()
+
+    def _validate_startup(self) -> None:
+        """`startup` 变体的落点边界（`3e`）。
+
+        只拒**本期无落点**的组合，不拒有落点的：`startup × gui-qt × stage`
+        （`3f-1`）与 `startup × gui-qt × batch`（只要总墙钟）都放行。
+        """
+        if self.subject != 'startup':
+            return
+        if self.path not in STARTUP_PATHS:
+            raise ValueError(
+                f"Plan.subject='startup' 本期只在路径 {STARTUP_PATHS} 上有落点，"
+                f'收到 path={self.path!r}（P83 §3.11「适用范围」：首个交付覆盖 gui-qt；'
+                'cli / webui 的启动测量是独立增量、不在本计划 43 项内）。'
+                '放行本条会让入口薄壳按 plan.path 派发到该路径的适配器并照常产出一条'
+                "带 subject='startup' 的记录——报告会把一次普通模拟说成启动测量。"
+                '补上该路径须先定义它自己的启动分段并登记到 §四。'
+            )
+        if self.grain == 'function':
+            raise ValueError(
+                "Plan.subject='startup' 不支持 grain='function'：function 档的落点是"
+                '「围绕单次 _run_single 的开闭窗口」（§3.8 D2），而启动测量测的是一次'
+                '冷进程启动，进程内没有 worker 池、也没有 _wk_run_single 调用点。'
+                '该组合本期无任何采集落点，声明即调用方编程错误。'
+            )
+        if self.profile_enabled:
+            raise ValueError(
+                "Plan.subject='startup' 不支持 profile_enabled=True：§3.8 D1 的四字段"
+                '注入通道落在 run_batch_parallel 的 worker 路径上，而 main.py 的冷'
+                '子进程根本不经过它。该组合本期无任何采集落点；要测启动期热点须先'
+                '定义它自己的采集通道（§3.11 的 8 段只有计时，无函数级统计）。'
+            )
+
     # D8 / D2.1
     def _validate_profile_rules(self) -> None:
         if self.profile_count < 1:
@@ -310,7 +391,8 @@ class Plan:
     # 规则 1 / 4
     def _validate_n_limits(self) -> None:
         if self.subject == 'startup':
-            # 决策 34：startup 下 n / workers 被忽略，规则 1 与 4 的对象不存在。
+            # 决策 34：startup 下 n / workers 被忽略（STARTUP_IGNORED_FIELDS），
+            # 规则 1 与 4 的对象不存在。
             return
         if self.collector:
             if self.n > N_MAX_WITH_COLLECTOR:
@@ -330,13 +412,20 @@ class Plan:
     def memory_requirement_gb(self) -> float:
         """本次 plan 的内存余量下限（GB）。
 
-        `gui-qt` 按 `workers = 1` 计并另加 0.5 GB；`subject='startup'` 取
-        `workers = 1`（它驱动的正是 `gui-qt` 冷进程，不因 `n` / `workers` 被
-        忽略而豁免）。
+        两条特例都由「本形态必然驱动一个 GUI 冷进程」推出，故合并为一个谓词：
+
+        - `gui-qt` 路径：`MainWindow` 显示后 412 MB + 10 个 Chromium 子进程
+        - `subject='startup'`：它驱动的**正是** `gui-qt` 冷进程（§3.11），
+          `n` / `workers` 被忽略并不意味着内存需求变小——实测那次启动 RSS 峰值
+          368 MB、10 个 Chromium 子进程，是四条路径中最吃内存的形态。豁免它
+          等于在唯一需要该防线的场景关掉防线。
+
+        两者都按 `workers = 1` 计并另加 `MEM_GUI_QT_EXTRA_GB`。
         """
-        effective_workers = 1 if (self.subject == 'startup' or self.path == 'gui-qt') else self.workers
+        gui_like = self.subject == 'startup' or self.path == 'gui-qt'
+        effective_workers = 1 if gui_like else self.workers
         required = max(MEM_BASE_GB, effective_workers * MEM_PER_WORKER_GB)
-        if self.path == 'gui-qt':
+        if gui_like:
             required += MEM_GUI_QT_EXTRA_GB
         return required
 
@@ -485,6 +574,18 @@ class PlanGrid:
         if unknown:
             raise ValueError(
                 f'PlanGrid.factors 含未知字段 {unknown}；合法字段为 {list(PLAN_FIELD_NAMES)}'
+            )
+        ignored = sorted(set(self.factors) & set(self.base.ignored_fields()))
+        if ignored:
+            # `startup` 下扫被忽略的字段，展开出的每一格读数必然相同（它们不参与
+            # 这次测量），但每格都要真起一次冷进程——扫描看起来生效了、实际只是
+            # 把同一次测量重复 N 遍。这与 `single` 档同属「声明了不生效的东西」，
+            # 故同样在入口处拒绝而不是产出一堆相同读数等人去发现。
+            raise ValueError(
+                f'PlanGrid.factors 含 {ignored}，而这些字段在 subject='
+                f'{self.base.subject!r} 下被忽略（{STARTUP_IGNORED_FIELDS}）——'
+                '展开出的各格读数必然相同，扫描看起来生效、实际只是重复同一次测量。'
+                '请从 factors 中去掉这些字段。'
             )
         for name, values in self.factors.items():
             if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):

@@ -205,7 +205,7 @@ class TestDecision34StartupExemption:
 
     def test_rule_d8_still_applies(self, make_plan):
         with pytest.raises(SafetyRuleError, match='D8'):
-            make_plan(subject='startup', profile_count=PROFILE_COUNT_MAX + 1)
+            make_plan(subject='startup', path='gui-qt', profile_count=PROFILE_COUNT_MAX + 1)
 
     def test_startup_memory_uses_one_worker(self, make_plan):
         """startup 按 `workers=1` 计（`n` / `workers` 被忽略），再按 gui-qt 另加 0.5。"""

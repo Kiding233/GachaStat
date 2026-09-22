@@ -91,8 +91,16 @@ class TestComparabilityGate:
         assert comparison.stage_ratios == {}
 
     def test_different_subject_produces_no_ratios(self, make_result):
-        comparison = compare(make_result(subject='startup'), make_result(subject='simulation'))
+        """两侧同为 `gui-qt`，**只差 `subject`**——把 `path` 也一并变掉的话，本条就
+        分不清不可比是哪一个维度造成的了（`path` 本身也是可比性维度）。
+
+        `subject='startup'` 的 `path` 只能是 `gui-qt`（`3e` 的落点边界），故这条
+        也是该组合的现实形态。
+        """
+        comparison = compare(make_result(subject='startup', path='gui-qt'),
+                             make_result(subject='simulation', path='gui-qt'))
         assert not comparison.comparable and comparison.wall_ratio is None
+        assert any('subject' in r for r in comparison.reasons)
 
     def test_unrecorded_dimension_is_not_reported_as_difference(self, make_result):
         """「未记录」不是「不同」——静默判不等会让读报告的人去查不存在的差异。"""

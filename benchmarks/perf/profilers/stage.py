@@ -22,6 +22,11 @@
 extractor 合并 / 分发。**不是每条路径都有同一个六段全集**——`cli` 没有分发器，
 故它的 `dispatch` 段缺失属事实而非缺口；报告须**显式标注**「本路径不产出该段」，
 **不得留空静默跳过**（同 §3.13 短段豁免的处置口径）。
+
+**启动测量另有一张八段词汇表**（`STARTUP_STAGES`，§3.11）：解释器启动 / Qt 栈
+import / `QApplication` 构造 / 主模块 import / 主窗口构造 / 窗口可见 / 启动工作
+完成 / 图表可用。它与六段**不是同一组分段**，两者不可互认也不可混比；值一律是
+**每段耗时**（理由见该常量的注释）。
 """
 
 from __future__ import annotations
@@ -34,6 +39,8 @@ from benchmarks.perf.record import ResourceStats
 __all__ = [
     'STAGES',
     'STAGE_LABELS',
+    'STARTUP_STAGES',
+    'STARTUP_STAGE_LABELS',
     'PRODUCT_STAGE_KEYS',
     'WARN_BYTES_UNAVAILABLE',
     'WARN_RSS_NOT_COLLECTED',
@@ -62,6 +69,47 @@ STAGE_LABELS: Dict[str, str] = {
     'simulate': '模拟',
     'extract': 'extractor 合并',
     'dispatch': '分发',
+}
+
+#: **启动测量的八段词汇表**（§3.11），顺序即时间线顺序。
+#:
+#: 与六段模拟词汇表**不是同一组分段**：`cli` / `webui` 的启动段没有
+#: `QApplication` / `MainWindow` / Chromium 子进程，`gui-qt` 的启动段也没有
+#: 「进程池启动」与「模拟」。两者不可混比，故各自成表。
+#:
+#: **值一律是「每段耗时」（相邻时刻之差），不是累计时刻。** §3.11 的实测数据
+#: 以时刻呈现（窗口可见 2.3s / 启动完成 6.5s / 图表可用 8.2s，均自进程创建起算），
+#: 但 `report.py` 的比值与占比都按耗时算——把累计时刻塞进 `stages`，占比会变成
+#: 「该时刻占启动总时长的比例」，是另一个量且读起来像耗时。
+#:
+#: **但这八段不是一份划分（2026-09-22 实施时查明的口径，`3f-1`）：** 第 1 / 3 / 5 /
+#: 6 / 7 / 8 段由**成对时刻**相减得来，彼此互斥、前缀和即「到该段结束为止的累计
+#: 时刻」；第 2 段（Qt 栈 import）与第 4 段（主模块 import）却是 **`-X importtime`
+#: 给出的独立测量**，量的是「这一组模块导入一共花了多久」，其时间窗**与第 1 / 3 / 5
+#: 段重叠**（`main.py` 的 Qt 导入与 `MainWindow` 导入同在一处，且 importtime 的
+#: cumulative 天然含子模块）。故：**八段之和不等于总启动时间**，`report.py` 的
+#: 「阶段占比」对启动测量无「占时间线的百分比」这一解释。比值（本次/基线，逐段）
+#: 不受影响——「Qt 导入是不是变慢了」正是本测量要回答的问题之一。
+STARTUP_STAGES: Tuple[str, ...] = (
+    'interpreter_start',
+    'qt_import',
+    'app_construct',
+    'main_import',
+    'window_construct',
+    'window_visible',
+    'work_complete',
+    'charts_ready',
+)
+
+STARTUP_STAGE_LABELS: Dict[str, str] = {
+    'interpreter_start': '解释器启动',
+    'qt_import': 'Qt 栈 import',
+    'app_construct': 'QApplication 构造',
+    'main_import': '主模块 import',
+    'window_construct': '主窗口构造',
+    'window_visible': '窗口可见',
+    'work_complete': '启动工作完成',
+    'charts_ready': '图表可用',
 }
 
 #: 产品侧 `BatchResult.stage_times` 使用的键 → 本词汇表。三者同名，但显式列出
@@ -94,8 +142,11 @@ WARN_STAGES_NOT_COLLECTED = '本路径未采集阶段计时（collect_perf=False
 
 
 def stage_label(stage: str) -> str:
-    """段的显示名（中文），未登记的段名回退为原名。"""
-    return STAGE_LABELS.get(stage, stage)
+    """段的显示名（中文），未登记的段名回退为原名。
+
+    两张词汇表的键集不相交，故合并查表安全（不必由调用方声明用的是哪一张）。
+    """
+    return STARTUP_STAGE_LABELS.get(stage) or STAGE_LABELS.get(stage, stage)
 
 
 # ── 阶段计时归一 ─────────────────────────────────────────
@@ -105,11 +156,15 @@ def normalize_stages(
     raw: Optional[Mapping[str, float]],
     *,
     absent_by_design: Sequence[str] = (),
+    vocabulary: Sequence[str] = STAGES,
 ) -> Tuple[Dict[str, float], List[str]]:
     """把路径侧收集到的原始阶段计时归一为 `RunResult.stages`。
 
-    `raw` 的键必须是 `PRODUCT_STAGE_KEYS` 或六段词汇表内的名字——**未知键报错**，
+    `raw` 的键必须是 `PRODUCT_STAGE_KEYS` 或**所给词汇表**内的名字——**未知键报错**，
     不静默丢弃（键名即契约；静默丢弃会让一段计时悄悄消失而报告照常产出）。
+
+    `vocabulary` 默认六段模拟词汇表；启动测量传 `STARTUP_STAGES`（§3.11 的八段）。
+    **两张表不可互认**：`startup` 的键落进六段表必是键名写错，反之亦然。
 
     `absent_by_design` 声明**本路径结构上不产出**的段（如 `cli` 传
     `('dispatch',)`）。这类缺失记为 `WARN_STAGE_ABSENT`；其余缺失记为
@@ -119,14 +174,15 @@ def normalize_stages(
     按路径归因的告警：**不假装六段都在**。
     """
     warnings: List[str] = []
+    vocabulary = tuple(vocabulary)
 
     if raw is None:
         return {}, [WARN_STAGES_NOT_COLLECTED]
 
-    unknown = sorted(set(raw) - set(STAGES))
+    unknown = sorted(set(raw) - set(vocabulary))
     if unknown:
         raise ValueError(
-            f'阶段计时含未知段名 {unknown}；合法段名为 {list(STAGES)}'
+            f'阶段计时含未知段名 {unknown}；合法段名为 {list(vocabulary)}'
             '（产品侧 stage_times 的键须先经 PRODUCT_STAGE_KEYS 映射）'
         )
 
@@ -134,11 +190,11 @@ def normalize_stages(
     if negative:
         raise ValueError(f'阶段计时出现负值 {negative}——计时口径有误')
 
-    stages = {name: float(raw[name]) for name in STAGES if name in raw}
+    stages = {name: float(raw[name]) for name in vocabulary if name in raw}
 
     declared_absent = set(absent_by_design)
-    undeclared = sorted(set(STAGES) - set(stages) - declared_absent)
-    for name in sorted(declared_absent & (set(STAGES) - set(stages))):
+    undeclared = sorted(set(vocabulary) - set(stages) - declared_absent)
+    for name in sorted(declared_absent & (set(vocabulary) - set(stages))):
         warnings.append(WARN_STAGE_ABSENT.format(stage=f'{name}（{stage_label(name)}）'))
     for name in undeclared:
         warnings.append(WARN_STAGE_MISSING.format(stage=f'{name}（{stage_label(name)}）'))

@@ -22,7 +22,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import statistics
+import subprocess
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
@@ -52,12 +54,36 @@ __all__ = [
     'new_run_id',
     'utc_timestamp',
     'DOWNGRADE_THRESHOLD_SECONDS',
+    'kill_process_tree',
 ]
 
 logger = logging.getLogger(__name__)
 
 #: 预估墙钟超过该值即降为 1 次重复并置 `repeats_downgraded`（§3.5）。
 DOWNGRADE_THRESHOLD_SECONDS = 30.0
+
+
+def kill_process_tree(pid: int) -> None:
+    """杀掉整棵进程树（规则 3）。
+
+    **Windows 上杀父不杀子**：`multiprocessing` 的 worker、QtWebEngine 的
+    Chromium 子进程都会在父进程死后残留，故必须经 `taskkill /T` 递归。本函数是
+    `cli` 与 `gui-qt` 共用的收尾动作，置此以免两份实现悄悄漂移（两处漏一处就是
+    一台机器上残留一堆进程，且只在超时路径上偶发）。
+
+    **幂等**：进程已退出时 `taskkill` 返回非零，此处吞掉——收尾动作不该让整次
+    测量失败（同 §3.8 D7 的方向）。
+    """
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'],
+                       capture_output=True, check=False)
+        return
+    import signal  # pragma: no cover - 本项目只在 Windows 上跑
+
+    try:  # pragma: no cover - 同上
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except OSError:
+        pass
 
 
 class AdapterError(RuntimeError):
@@ -89,6 +115,17 @@ class SingleRun:
     not_comparable: bool = False
     run_id: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
+    qt_qpa_platform: Optional[str] = None
+    """本次运行的 `QT_QPA_PLATFORM` 取值，**由适配器显式报出**（`3f-1` 加入）。
+
+    `None` = 由公共层的 `_qt_qpa_platform()` 决定（默认空串，Qt 路径覆写）。
+    设了值则直接写进 `EnvFingerprint`。
+
+    为何需要这个字段：启动测量驱动的是**独立冷子进程**，平台是父进程通过
+    `Popen(env=...)` 给它的（`startup` 跑真实 `windows`、`simulation` 跑
+    `offscreen`），父进程的 `os.environ` 里根本没有这个变量——若沿用「读本进程
+    环境变量」的取法，`startup` 的记录会报出一个与本机实况无关的值。
+    """
 
 
 @contextmanager
@@ -176,8 +213,21 @@ class Adapter(ABC):
         samples: List[float] = [first.wall]
         downgraded = False
 
+        # `subject='startup'` **不参与自动降级**（2026-09-22 定）。三条理由：
+        # ① 启动的单次代价是固定成本（冷进程 + 10 个 Chromium 子进程，实测 8-10s），
+        #    `repeats` 缩不了它，降级省不下什么；
+        # ② 该启发式防的是「`n` 填大了导致一条 plan 跑很久」，而 `startup` 下 `n` /
+        #    `workers` 本就**被忽略**（`plan.STARTUP_IGNORED_FIELDS`），这条风险不存在；
+        # ③ 一旦降级，`register_baseline` 的 `repeats >= 3` 会拒绝入库——**启动测量
+        #    将永远无法建立基线**，而「启动有没有变慢」正是 G6 要回答的问题。
+        # 重复次数仍由调用方经 `Plan.repeats` 显式控制，不因此失控。
+        # **豁免的是「降级」这一动作，不是整个重复循环**——外层的 `planned > 1` 仍须
+        # 照常跑满 repeats，否则豁免会变成「静默只跑一次」。
+        exempt_from_downgrade = plan.subject == 'startup'
         if planned > 1:
-            if first.wall * planned > DOWNGRADE_THRESHOLD_SECONDS:
+            over_budget = (not exempt_from_downgrade
+                           and first.wall * planned > DOWNGRADE_THRESHOLD_SECONDS)
+            if over_budget:
                 downgraded = True
                 logger.info(
                     '%s：预估墙钟 %.1fs 超过 %.0fs，repeats 由 %d 降为 1',
@@ -201,7 +251,10 @@ class Adapter(ABC):
             timestamp=utc_timestamp(),
             path=self.name,
             is_user_path=self.is_user_path,
-            fingerprint=EnvFingerprint.capture(self._qt_qpa_platform(first)),
+            fingerprint=EnvFingerprint.capture(
+                first.qt_qpa_platform if first.qt_qpa_platform is not None
+                else self._qt_qpa_platform(first)
+            ),
             plan=plan,
             repeats=len(samples),
             wall_median=statistics.median(samples),

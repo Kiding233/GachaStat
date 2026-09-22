@@ -355,6 +355,18 @@ class ChartWebView(QWebEngineView):
     def has_chart(self, key: str) -> bool:
         return key in self._chart_keys
 
+    def is_loaded(self) -> bool:
+        """本视图此刻是否就绪（骨架页与 plotly.js 均已加载完成）。
+
+        只读查询入口，供 P83 启动测量轮询「图表可用」那一刻（§3.11 第 8 段）。
+        **`_loaded` 保持私有**：对外需要的是「此刻是否就绪」这个事实，不是把内部
+        字段升格为公开 API（后者会让任何外部代码都能写它）。
+
+        注意本值**运行期可由 True 变回 False**（`closeEvent` 里置回），故调用方
+        不得以「某次取到 True」当完成判据，须按连续多次为准（同 §3.11 第 8 段）。
+        """
+        return bool(self._loaded)
+
     # ── 内部方法 ──────────────────────────────────────────────────
 
     def _get_plotly_js_url(self) -> str:
@@ -456,3 +468,19 @@ class ChartWebView(QWebEngineView):
     def closeEvent(self, event):
         self._loaded = False
         super().closeEvent(event)
+
+
+def views_ready(*views) -> bool:
+    """一组 `ChartWebView` 是否**全部**就绪（P83 §3.11 第 8 段）。
+
+    面板级 `charts_ready()` 的统一实现。集中在一处的理由：六个面板各写一遍
+    同一段循环，迟早会出现「有的用 `all`、有的用 `any`」这类口径分裂，而两者
+    在读数上表现为「图表可用」时刻差了 7 秒且无从察觉。
+
+    返回 `False` 的情形有两种，都属未就绪：**有一个视图没就绪**，或**一个视图都
+    没有**（后者是调用方漏传，不是「全部就绪」）。
+    """
+    known = [view for view in views if view is not None]
+    if not known:
+        return False
+    return all(view.is_loaded() for view in known)

@@ -1384,3 +1384,16 @@ class PlanSearchPanel(QWidget):
             remove_spin.setValue(1.0)
             remove_spin.setSingleStep(0.1)
             self.weight_table.setCellWidget(i, 2, remove_spin)
+    def charts_ready(self) -> bool:
+        """本面板持有的全部图表是否就绪（P83 §3.11 第 8 段「图表可用」）。
+
+        只读查询，供启动测量轮询；**不得以「某次取到 True」当完成判据**——
+        `ChartWebView.closeEvent` 会把就绪状态置回 False，判据须为连续多次
+        （见 §3.11 第 8 段第 3 条）。
+        """
+        # 三个 ChartWebView 分落在三个结果页里（本面板自身不持有），故聚合面
+        # 是「页 → 图表」两层（P83 §3.11 第 8 段）。
+        from .chart_webview import views_ready
+        return views_ready(self.resource_page.chart_view,
+                           self.target_page.chart_view,
+                           self.pareto_page.chart_view)

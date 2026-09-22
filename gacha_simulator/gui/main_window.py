@@ -507,6 +507,23 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(2)
         self.status_bar.showMessage(f"模拟完成，共 {len(aggregate_data)} 次模拟，已存入: {actual_name}")
 
+    def charts_ready(self) -> bool:
+        """全部 `ChartWebView` 是否就绪（P83 §3.11 第 8 段「图表可用」）。
+
+        **本窗口自身不持有任何 `ChartWebView`**——它持有的是面板（`self.result_store`
+        与十次 `addTab`），10 个图表实例分落在 6 个面板文件里。故聚合只能对面板求
+        与，且必须逐面板问，不能在本类里枚举图表控件（P83 §3.11 第 8 段的采集纪律
+        第 1 条：一个按「MainWindow 持有 10 个 ChartWebView」实现的聚合入口，交出
+        的是恒 False 或 AttributeError）。
+
+        只读查询，不改任何既有行为。调用方**不得以某次取到 True 当完成判据**——
+        面板内的 `ChartWebView.closeEvent` 会把就绪状态置回 False。
+        """
+        panels = (self.analysis_panel, self.comparison_analysis_panel,
+                  self.plan_search_panel, self.process_analysis_panel,
+                  self.retreat_panel, self.worst_impact_panel)
+        return all(panel.charts_ready() for panel in panels)
+
     def _load_dataset_for_analysis(self, name: str):
         """从 ResultStore 加载数据集到所有分析面板"""
         ds = self.result_store.get(name)

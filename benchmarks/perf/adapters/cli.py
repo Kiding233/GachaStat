@@ -35,6 +35,7 @@ from benchmarks.perf.adapters.base import (
     Adapter,
     AdapterError,
     SingleRun,
+    kill_process_tree,
     new_run_id,
     register_adapter,
 )
@@ -184,7 +185,7 @@ class CliAdapter(Adapter):
         try:
             stdout, stderr = proc.communicate(timeout=self.timeout_seconds)
         except subprocess.TimeoutExpired:
-            _kill_tree(proc.pid)
+            kill_process_tree(proc.pid)
             proc.communicate()
             raise AdapterError(
                 f'cli 路径超过硬超时 {self.timeout_seconds:.0f}s，已按规则 3 杀掉整棵进程树'
@@ -299,13 +300,3 @@ def _parse_functions(raw: Any, warnings: List[str]) -> Optional[List[FuncStat]]:
             raise AdapterError(f'functions[{index}] 形态不符：{exc}') from exc
     return stats or None
 
-
-def _kill_tree(pid: int) -> None:
-    """杀掉整棵进程树（规则 3：Windows 杀父不杀子）。"""
-    if os.name == 'nt':
-        subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'],
-                       capture_output=True, check=False)
-    else:  # pragma: no cover - 本项目只在 Windows 上跑
-        import signal
-
-        os.killpg(os.getpgid(pid), signal.SIGKILL)

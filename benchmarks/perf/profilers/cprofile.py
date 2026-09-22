@@ -39,11 +39,21 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'WorkerProfiler',
     'PROFILE_FILE_SUFFIX',
+    'WORKER_MARKER_PREFIX',
+    'WORKER_MARKER_SUFFIX',
     'merge_profiles',
 ]
 
 #: profile 文件后缀。文件名含 pid——同机多 worker 各自落盘，不含 pid 会互相覆盖。
 PROFILE_FILE_SUFFIX = '.prof'
+
+#: 每个 worker 一份的**自报标记**文件名（不含 pid 时会被覆盖，故构造时拼 pid）。
+#: 用途：T4 需要一个**在 worker 侧**的断言（AUDIT-BREAK-8① 指出只断言父进程侧的
+#: `env.profile_enabled` 覆盖不到「四字段未随 pickle 到达 worker」这一断裂）。而
+#: Windows spawn 下父进程对模块做的 monkeypatch 到不了 worker，故让 worker 自己把
+#: 「本进程看到了什么」写下来——该文件的存在本身即证明本 worker 构造出了采样器。
+WORKER_MARKER_PREFIX = '_worker-'
+WORKER_MARKER_SUFFIX = '.meta.json'
 
 
 class WorkerProfiler:
@@ -64,6 +74,7 @@ class WorkerProfiler:
         self._profiler: Optional[cProfile.Profile] = None
         self._dumped_files = 0
         self._disabled_reason: Optional[str] = None
+        self._marker_written = False
 
     # ── 判定 ─────────────────────────────────────────────
 
@@ -124,6 +135,8 @@ class WorkerProfiler:
             yield
             return
 
+        self._write_marker()
+
         profiler = cProfile.Profile()
         try:
             profiler.enable()
@@ -149,6 +162,30 @@ class WorkerProfiler:
             # 没有机会执行（§3.8 D2 的实证依据）。逐次落盘同时把这两种失效都消掉——
             # 已完成的部分已经在磁盘上。采样上限（`count`）仍由 `_in_window` 约束。
             self._dump(index)
+
+    def _write_marker(self) -> None:
+        """写一份本 worker 的自报标记（每个 worker 一次）。
+
+        记录的是「**本 worker 进程**按收到的字段构造出了采样器」——文件存在即证明
+        `env` 的四字段确实随 pickle 到达了 worker，而不只是父进程侧看着对。
+        写入失败静默跳过：它只是诊断产物，不该影响剖析或模拟（D7 的方向）。
+        """
+        if self._marker_written:
+            return
+        self._marker_written = True
+        import json
+
+        target = os.path.join(
+            self.profile_dir,
+            f'{WORKER_MARKER_PREFIX}{os.getpid()}{WORKER_MARKER_SUFFIX}',
+        )
+        try:
+            Path(self.profile_dir).mkdir(parents=True, exist_ok=True)
+            with open(target, 'w', encoding='utf-8') as handle:
+                json.dump({'pid': os.getpid(), 'skip': self.skip,
+                           'count': self.count, 'label': self.label}, handle)
+        except OSError:
+            pass
 
     def _dump(self, index: int) -> None:
         """把一个采样调用的剖面落盘（D3：结果走文件，不走返回通道）。"""

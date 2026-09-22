@@ -89,11 +89,18 @@ class ResourceStats:
 
 @dataclass
 class SamplesMeta:
-    """`py-spy` 采样的元信息。"""
+    """`py-spy` 采样的元信息。
+
+    `profiles` 是 2026-09-22 由 `4b` 补入的：该行要求解析产出含「profile 数」，而
+    本类此前只有 duration / samples / errors 三项。补入后 `02-实施.md` §4 的
+    `samples_meta` 一行须同步（已回写）。py-spy 正常只写一个 profile，故默认 1；
+    **`0` 表示「没有任何可解析的 sampled profile」**，与默认值不同义。
+    """
 
     duration: Optional[float] = None
     samples: Optional[int] = None
     errors: List[str] = field(default_factory=list)
+    profiles: int = 1
 
 
 @dataclass

@@ -110,3 +110,28 @@ requires_real_run = pytest.mark.skipif(
     not perf_tests_enabled(),
     reason=f'需起真实进程池，默认不跑；设 {PERF_TESTS_ENV}=1 启用（§3.9）',
 )
+
+
+# ── 共用的 AST 助手 ────────────────────────────────────────
+
+def call_arguments(source: str, callee: str) -> str:
+    """取出 `callee(...)` 的实参文本（按括号配平）。
+
+    供 T3 的「申报值与驱动代码相符」类断言使用——**必须能处理多行调用与嵌套括号**，
+    否则会把 `run_batch_parallel(...)` 的实参截断，断言随之失真。
+    """
+    import re
+
+    match = re.search(re.escape(callee) + r'\s*\(', source)
+    if match is None:
+        raise AssertionError(f'源码中找不到 {callee}( 的调用')
+    start = match.end() - 1
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == '(':
+            depth += 1
+        elif source[index] == ')':
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    raise AssertionError(f'{callee}( 的括号未配平')

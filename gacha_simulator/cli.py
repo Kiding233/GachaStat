@@ -9,6 +9,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(message)s')
 
@@ -16,8 +17,64 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from gacha_simulator._version import __version__  # noqa: E402
 from gacha_simulator.core.config_toml import load_toml  # noqa: E402
+from gacha_simulator.core.strategy import STRATEGY_REGISTRY  # noqa: E402
+from gacha_simulator.core.strategy_loader import load_plugin_strategies  # noqa: E402
 from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
 from gacha_simulator.paths import get_config_dir  # noqa: E402
+
+
+def _strategy_choices() -> list:
+    """`--strategy` 的合法取值：注册表内**非 internal** 的全部键（P83 `1e-3`）。
+
+    只排除 `internal=True`，**不排除禁用项**——生成 choices 时禁用集合尚不可知
+    （`[plugins].disabled` 不是 `load_toml` 施加的，且 parser 构造还在 `load_toml`
+    之前）。禁用项改由 `_reject_disabled_strategy()` 在 `load_toml` 之后显式拒绝。
+    """
+    return [key for key, meta in STRATEGY_REGISTRY.items() if not meta.internal]
+
+
+def _read_disabled_plugins(config_path: Optional[str]) -> list:
+    """只读地取本次配置的 `[plugins].disabled`。
+
+    **不调用 `_build_plugins(raw, store)`**：后者会把 `STRATEGY_REGISTRY` 中对应条目
+    的 `meta.disabled` 置 `True`（全局注册表副作用），而这条 CLI 进程紧接着就要跑
+    模拟，污染注册表会改变 `create_strategy()` 的守卫行为与后续 `--strategy` 语义。
+    取法（调用方自行重读文件）与 `gui/main_window.py:232-233` 同型，但**只读比对**。
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python < 3.11
+        import tomli as tomllib
+
+    path = config_path or os.path.join(get_config_dir(), 'config.toml')
+    try:
+        with open(path, 'rb') as handle:
+            data = tomllib.load(handle)
+    except OSError:
+        return []
+    plugins = data.get('plugins') or {}
+    return [str(item) for item in (plugins.get('disabled') or [])]
+
+
+def _reject_disabled_strategy(strategy: Optional[str], config_path: Optional[str]) -> None:
+    """禁用项校验（P83 `1e-3` 第 3 步）。
+
+    **语义差别须写明**：「禁用」从「不作为合法取值被 argparse 接受」降级为「被接受
+    后由本步显式拒绝」——生成 choices 时禁用集合尚不可知（parser 构造在 `load_toml`
+    之前）。故错误信息由本步给出，并须含被禁用的 key 与 `[plugins].disabled` 出处。
+    """
+    if not strategy:
+        return
+    disabled = _read_disabled_plugins(config_path)
+    if strategy in disabled:
+        print(
+            f"错误：策略 {strategy!r} 已在本次配置的 [plugins].disabled 中被禁用，"
+            f"不能用于 --strategy。\n"
+            f"  出处：{config_path or '默认 config.toml'} 的 [plugins] 段 disabled 列表\n"
+            f"  当前禁用项：{disabled}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 def _fallback_target_ids(store) -> list:
@@ -51,6 +108,14 @@ def _write_perf_json(path, **payload) -> bool:
 
 
 def main():
+    # P83（1e-3 第 1 步）：**先 load_plugin_strategies()、后构造 parser**。
+    # 顺序是硬要求：STRATEGY_REGISTRY 由 @register_strategy 装饰器副作用填充，插件键
+    # 只在 load_plugin_strategies 之后才存在，而 argparse 的 choices 在构造时就要求
+    # 取值确定。它只依赖 paths.get_strategies_dir()、不依赖配置。
+    # 默认路径副作用（如实登记，不得写成「零默认行为变化」）：每次 CLI 启动多一次插件
+    # 目录扫描与插件模块导入。插件目录不存在时返回 0 并记 debug 日志，不报错。
+    load_plugin_strategies()
+
     parser = argparse.ArgumentParser(description='GachaStat CLI')
     parser.add_argument('-c', '--config', default=None,
                         help='TOML 配置文件路径（默认：打包 config.toml）')
@@ -61,10 +126,13 @@ def main():
     parser.add_argument('-s', '--seed', type=int, default=42, help='Random seed')
     parser.add_argument('-o', '--output', default='results.json', help='Output file')
     parser.add_argument('--no-pity', action='store_true', help='Disable pity system')
+    # P83（1e-3 第 2 步）：choices 由 STRATEGY_REGISTRY 动态生成（只排除 internal）。
+    # 原为字面量七键，其中没有 no_draw（它本身已注册，只是没进列表），也不含插件
+    # 目录动态注册的键——「不抽卡基线」与「插件策略」两个因子因而无法经产品入口表达。
     parser.add_argument('--strategy', default=None,
-        choices=['smart', 'pool_quota', 'pity_reserve', 'target_hunting',
-                 'stop_on_target', 'fixed_count', 'draw_target'],
-        help='抽卡策略（默认：使用 config.toml 中指定的策略，回退 smart）')
+        choices=_strategy_choices(),
+        help='抽卡策略（默认：使用 config.toml 中指定的策略，回退 smart）。'
+             '取值由策略注册表动态生成，含 no_draw 与已加载的插件键')
     parser.add_argument('--strategy-params', default=None,
         help='策略参数，JSON 字符串。例：\'{"desire_weights": {"A": 1.5}, "miss_cost": 0.8}\' '
              '（仅当 --strategy 显式指定时生效；若未指定，使用 config.toml 中的策略参数）')
@@ -110,6 +178,10 @@ def main():
         store = load_toml(default_toml)
     if args.perf_json:
         perf_stages['config_load'] = time.perf_counter() - _t_config
+
+    # P83（1e-3 第 3 步）：禁用项在 load_toml 之后校验——生成 choices 时禁用集合尚
+    # 不可知（该段不是 load_toml 施加的，且 parser 构造在它之前）。
+    _reject_disabled_strategy(args.strategy, args.config)
 
     # P61（Ph4 / ISSUE-004）：--migrate 依赖已移除的 _build_pools/_migrated_from_legacy
     # （旧 [[pools]] 格式自动迁移随 P61 一次性迁移完成，不再支持）。

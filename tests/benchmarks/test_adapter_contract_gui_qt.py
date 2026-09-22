@@ -311,6 +311,11 @@ class TestRealRunContract:
 
         给一点时间：`psutil.kill()` 是异步的（`TerminateProcess` 返回不等于进程已消失），
         立刻断言会把「正在死」误判成「不死」。等它真的消失才作数，**上限内不消失即失败**。
+
+        **枚举本身要容忍进程在枚举过程中消失**：`children()` 拿到快照与读 `name()`
+        之间有窗口，正在退出的子进程会在这中间变成 `NoSuchProcess`——不接住它就会
+        把「正在正常回收」报成失败（实测出现过一次偶发红）。判据只关心「还在不在」，
+        读不到名字的进程按「已不在」处理。
         """
         import time
 
@@ -319,8 +324,19 @@ class TestRealRunContract:
         get_adapter('gui-qt').run(plan)
 
         def leftovers():
-            return [c.name() for c in psutil.Process().children(recursive=True)
-                    if 'QtWebEngineProcess' in (c.name() or '')]
+            alive = []
+            try:
+                children = psutil.Process().children(recursive=True)
+            except psutil.Error:
+                return []
+            for child in children:
+                try:
+                    name = child.name() or ''
+                except psutil.Error:            # 采样窗口内退出了——那就是已回收
+                    continue
+                if 'QtWebEngineProcess' in name:
+                    alive.append(name)
+            return alive
 
         deadline = time.perf_counter() + 10.0
         while leftovers() and time.perf_counter() < deadline:

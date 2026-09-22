@@ -107,6 +107,34 @@ def _write_perf_json(path, **payload) -> bool:
         return False
 
 
+def _merge_profile_functions(profile_dir):
+    """在**本进程内**合并本 run 的 cProfile 剖面（P83 §3.8 D3 / AUDIT-BREAK-8②）。
+
+    返回 `(functions, warnings)`：`functions` 为 `[{name, ncalls, tottime, cumtime}, …]`
+    或 `None`；`warnings` 为软降级成因（D7）。
+
+    **必须在「运行 run_batch_parallel 的那一个进程」内调用**：`cli` 的 `run_id` 由本
+    进程生成，适配器进程既不知道目录名也扫不到它，故合并结果只能经 `--perf-json` 回传。
+
+    **惰性 + 可失败的导入**：`benchmarks/` 是开发侧测量资产、不进发布产物，
+    做成模块级硬 import 会让发布产物在 import 期就崩；而剖析只是可选设施，
+    缺失时不产剖面即可（§3.8 D7：测量设施不得影响模拟本身）。
+    """
+    if not profile_dir:
+        return None, []
+    try:
+        from benchmarks.perf.profilers.cprofile import merge_profiles
+    except Exception as exc:
+        return None, [f'剖析合并设施不可用（benchmarks/ 未随产物分发）：{exc}']
+    rows, warnings = merge_profiles(profile_dir)
+    if rows is None:
+        return None, warnings
+    return [
+        {'name': name, 'ncalls': ncalls, 'tottime': tottime, 'cumtime': cumtime}
+        for name, ncalls, tottime, cumtime in rows
+    ], warnings
+
+
 def main():
     # P83（1e-3 第 1 步）：**先 load_plugin_strategies()、后构造 parser**。
     # 顺序是硬要求：STRATEGY_REGISTRY 由 @register_strategy 装饰器副作用填充，插件键
@@ -308,16 +336,20 @@ def main():
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
 
     if args.perf_json:
-        # `functions` 由 `6c` 的父进程 pstats 合并填充；本项（1e-2）尚无合并实现，
-        # 故恒为 None——**如实标注，不伪造**（§3.5：--profile-dir 未设置时 functions
-        # 与 run_id 均为 None）。
+        # `functions` 由本进程内的 pstats 合并填充（`6c`）。`--profile-dir` 未设置时
+        # `functions` 与 `run_id` 均为 None——**如实标注，不伪造**（§3.5）。
+        functions, merge_warnings = _merge_profile_functions(
+            getattr(env, 'profile_dir', '') if getattr(env, 'profile_enabled', False) else None
+        )
+        for warning in merge_warnings:
+            print(f"警告：{warning}", file=sys.stderr)
         _write_perf_json(
             args.perf_json,
             stages=perf_stages,
             packet_bytes=list(getattr(batch_result, 'packet_bytes', []) or []),
             stage_times=dict(getattr(batch_result, 'stage_times', {}) or {}),
             run_id=run_id,
-            functions=None,
+            functions=functions,
         )
 
     # P61（ISSUE-003）：无 [[targets]] 时兜底目标取 banner 段拼 _ssr（模块级函数，可测）

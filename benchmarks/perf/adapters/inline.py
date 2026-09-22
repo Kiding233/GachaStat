@@ -35,6 +35,8 @@ from benchmarks.perf.adapters.base import (
     register_adapter,
 )
 from benchmarks.perf.plan import Plan
+from benchmarks.perf.profilers.cprofile import merge_profiles
+from benchmarks.perf.record import FuncStat
 from benchmarks.perf.profilers.stage import (
     map_product_stage_times,
     normalize_resources,
@@ -131,11 +133,26 @@ class InlineAdapter(Adapter):
         )
         warnings.extend(resource_warnings)
 
+        # `6c` 的父进程侧合并：本路径在**本进程内**跑 run_batch_parallel，故 run_id 的
+        # 生成点与合并点同进程（§3.8 D3 那张表的第一行），直接填进 RunResult 即可，
+        # 不需要跨进程回传。
+        rows, merge_warnings = merge_profiles(
+            getattr(env, 'profile_dir', '') if getattr(env, 'profile_enabled', False) else ''
+        )
+        warnings.extend(merge_warnings)
+        # `merge_profiles` 给的是四元组，`RunResult.functions` 要的是 `FuncStat`——
+        # 直接塞元组会让序列化往返失败（`from_dict` 会把元组当 `FuncStat` 去读）。
+        functions = (
+            [FuncStat(name=name, ncalls=ncalls, tottime=tottime, cumtime=cumtime)
+             for name, ncalls, tottime, cumtime in rows]
+            if rows else None
+        )
+
         return SingleRun(
             wall=wall,
             stages=stages,
             resources=resources,
-            functions=None,                     # `6c` 的父进程侧合并填充
+            functions=functions,
             return_compact=True,                # 本路径不设 env.return_compact，取默认 True
             run_id=run_id,
             warnings=warnings,

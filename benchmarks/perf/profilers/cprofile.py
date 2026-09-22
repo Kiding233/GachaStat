@@ -1,6 +1,4 @@
-"""`cProfile` 在 worker 侧的注入原语（`6b`）。
-
-父进程侧的合并（`6c`）将作为同模块的另一个函数加入——本项只交付 worker 侧的开闭窗口。
+"""`cProfile` 层：worker 侧注入原语（`6b`） + 父进程侧合并（`6c`）。
 
 **全平台唯一改动模拟热路径默认行为的地方**就在这里——它落在 `_wk_run_single` 内，
 而 `_wk_run_single` 是 MPPool 路径上每次模拟的必经之处。
@@ -34,13 +32,14 @@ import logging
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     'WorkerProfiler',
     'PROFILE_FILE_SUFFIX',
+    'merge_profiles',
 ]
 
 #: profile 文件后缀。文件名含 pid——同机多 worker 各自落盘，不含 pid 会互相覆盖。
@@ -169,3 +168,64 @@ class WorkerProfiler:
             return
         self._dumped_files += 1
         self._profiler = None
+
+
+# ── 父进程侧合并（`6c`） ──────────────────────────────────
+
+
+def merge_profiles(profile_dir: str) -> Tuple[Optional[List[tuple]], List[str]]:
+    """扫描**本 run 的 profile 目录**并把 `pstats` 合并为函数级统计。
+
+    返回 `(functions, warnings)`：`functions` 为
+    `[(name, ncalls, tottime, cumtime), …]`（调用方转成 `FuncStat`），
+    扫描不到或解析失败时返回 `(None, [成因])`。
+
+    **只扫传入的那一个目录**——即 `<profile_dir>/<run_id>/`。不要扫父目录：产品路径上
+    `gui-qt` 与 `webui` 在每次主模拟之后都会再跑一次 `run_batch_parallel` 抽不卡基线，
+    共用父目录会把那些调用的调用链混进本次剖面（§3.8 D3）。
+
+    **须在「运行 `run_batch_parallel` 的那一个进程」内调用**（AUDIT-BREAK-8②）：
+    `cli` 路径上 `run_id` 由被测子进程生成，适配器进程既不知道目录名也扫不到它，
+    故合并结果只能经 `--perf-json` 回传。
+
+    三条软降级成因**彼此可区分**（D7 四条「剖析故障」 + 文件缺失一条）：
+    目录不存在 / 目录内无 `.prof` 文件（worker 可能被 `terminate()` 提前终止）/
+    单个文件解析失败（记为 warning，其余继续合并）。
+    """
+    import pstats
+
+    warnings: List[str] = []
+    if not profile_dir:
+        return None, ['未指定 profile 目录——本次不做合并']
+
+    directory = Path(profile_dir)
+    if not directory.is_dir():
+        return None, [f'profile 目录不存在（{profile_dir}）——本次不做合并']
+
+    files = sorted(directory.glob(f'*{PROFILE_FILE_SUFFIX}'))
+    if not files:
+        return None, [
+            f'profile 目录内没有任何 {PROFILE_FILE_SUFFIX} 文件（{profile_dir}）——'
+            'worker 可能在采样窗口结束前被 terminate() 提前终止，剖面不可得（§3.8 D7）'
+        ]
+
+    stats = None
+    for path in files:
+        try:
+            if stats is None:
+                stats = pstats.Stats(str(path))
+            else:
+                stats.add(str(path))
+        except Exception as exc:
+            warnings.append(f'pstats 解析或合并失败（{path.name}）：{exc}（§3.8 D7）')
+
+    if stats is None:
+        return None, warnings or ['所有 profile 文件都解析失败（§3.8 D7）']
+
+    rows: List[tuple] = []
+    for (filename, line, func), (cc, nc, tt, ct, _callers) in stats.stats.items():
+        rows.append((f'{filename}:{line}({func})', int(nc), float(tt), float(ct)))
+    rows.sort(key=lambda row: (-row[2], row[0]))
+    if not rows:
+        warnings.append('合并后的 pstats 内没有任何函数条目（§3.8 D7）')
+    return rows, warnings

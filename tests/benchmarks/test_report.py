@@ -183,3 +183,46 @@ class TestReportText:
         text = format_comparison(compare(current, baseline), current=current,
                                  baseline=baseline)
         assert '代理指标' in text
+
+
+class TestRepeatsDowngradedPropagation:
+    """`repeats_downgraded` 的传播（§3.9 T1）——它既要在比对侧可见，也要挡住基线登记。"""
+
+    def test_visible_on_the_record(self, make_result):
+        assert make_result(repeats=1, repeats_downgraded=True).repeats_downgraded is True
+        assert make_result().repeats_downgraded is False
+
+    def test_survives_serialization(self, make_result):
+        from benchmarks.perf.record import RunResult
+        record = make_result(repeats=1, repeats_downgraded=True)
+        assert RunResult.from_dict(record.to_dict()).repeats_downgraded is True
+
+    def test_blocks_baseline_registration(self, tmp_path, make_result):
+        with pytest.raises(BaselineGateError, match='repeats_downgraded'):
+            register_baseline('d', make_result(repeats=1, repeats_downgraded=True), root=tmp_path)
+
+    def test_comparison_still_works(self, make_result):
+        """降级记录不是「不可比」——它只是不能当基线。比值照出。"""
+        comparison = compare(make_result(repeats=1, repeats_downgraded=True, wall=1200.0),
+                             make_result(wall=1000.0))
+        assert comparison.wall_ratio == pytest.approx(1.2)
+
+
+class TestReturnCompactIsAComparabilityDimension:
+    """§3.5：`return_compact` 不同则字节数不可比——**不得把两个取值直接作比值**。
+
+    `return_compact=False` 时三元组首分量为 `None`（GUI 抽卡面板与 WebUI 在跑主模拟前
+    置 `False`），`packet_bytes` 因而不含 `compact`，故 `gui-qt` / `webui` 的字节数
+    **天然小于** `cli`。
+    """
+
+    def test_different_values_are_incomparable(self, make_result):
+        comparison = compare(make_result(return_compact=True), make_result(return_compact=False))
+        assert not comparison.comparable
+        assert comparison.byte_ratio is None and comparison.wall_ratio is None
+        assert any('return_compact' in r for r in comparison.reasons)
+
+    def test_same_value_is_comparable(self, make_result):
+        comparison = compare(make_result(return_compact=False, wall=1200.0),
+                             make_result(return_compact=False, wall=1000.0))
+        assert comparison.comparable and comparison.wall_ratio == pytest.approx(1.2)

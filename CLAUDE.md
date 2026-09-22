@@ -26,6 +26,12 @@ gacha_simulator/
 │               #   QComboBox/QAbstractSpinBox 滚轮并转发至外层 ScrollArea
 ├── config/     # 配置文件（TOML 格式，单文件 config.toml）
 └── visualization/  # matplotlib 中文字体
+
+benchmarks/     # 开发侧性能测量资产（P83）——**不进发布产物**，定位同 py-spy
+                #   perf/ 测量内核（plan/record/report/`__main__` 薄壳）
+                #   perf/adapters/ 四路径适配器：cli / gui-qt / webui / inline
+                #   perf/profilers/ stage.py + cprofile.py（worker 侧注入）+ pyspy.py
+                #   测试不在本树内，在 tests/benchmarks/；硬规则见 benchmarks/README.md
 ```
 
 **核心数据流：** `ConfigStore → SimulationEnvBuilder → SimulationEnv → GachaService(banners, strategy, stop_cond) → run_simulation(CompactCollector) → CompactResult → SharedResultCollector`。单一模式：`CompactResult`（O(1) 内存，`to_dict()`/`from_dict()` 序列化）；逐抽明细路径已由 P81（2026-09-17）删除。**P61：** 配置单位为 Banner（`[[banner]]`，内含多 Pool + Lifecycle 规则），`store.pools` 为只读展平视图；GachaService 构造桥对 `List[Pool]`/`List[Banner]` 双型收纳为运行时 `self._banners`；`env.pools` 承载 `List[Banner]`（深拷贝隔离跨模拟状态）。

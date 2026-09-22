@@ -251,6 +251,50 @@ _wk_env: Optional[SimulationEnv] = None
 _wk_target_set = None
 _wk_extractor = None
 _wk_return_compact = True
+# P83（`6b`）：worker 侧的 cProfile 采样窗口控制器。`None` 表示不采样（默认）。
+_wk_profiler = None
+
+
+def _load_worker_profiler():
+    """惰性导入 `benchmarks/` 的 worker 侧剖析原语（P83 §3.8 `6b`）。
+
+    **为什么必须是惰性 + 可失败的导入**：`benchmarks/` 是**开发侧测量资产、不进发布
+    产物**（同 `py-spy` 的定位），打包构建下它根本不存在。若做成模块级硬 import，
+    发布产物会在 import 期就崩——而剖析只是可选设施，**绝不因测量设施缺失而影响
+    模拟本身**（§3.8 D7）。导入失败时返回 `None`，`profile_enabled` 即便为真也不采样，
+    与默认关闭同效。
+    """
+    try:
+        from benchmarks.perf.profilers.cprofile import WorkerProfiler
+    except Exception as exc:  # pragma: no cover - 打包构建下必然走到这里
+        logging.debug('worker 侧剖析原语不可用（benchmarks/ 未随产物分发）：%s', exc)
+        return None
+    return WorkerProfiler
+
+
+def _make_worker_profiler(env: SimulationEnv):
+    """按 `env` 的四字段造一个采样窗口控制器；不采样时返回 `None`。
+
+    一律用 `getattr` 读四字段：`6a` 单独 revert 后本函数落默认值而非抛
+    `AttributeError`（同 P79 `2b` 的 `getattr(store, 'stop_condition', None)` 处置）。
+    """
+    if not getattr(env, 'profile_enabled', False):
+        return None
+    directory = getattr(env, 'profile_dir', '') or ''
+    if not directory:
+        return None
+    cls = _load_worker_profiler()
+    if cls is None:
+        return None
+    try:
+        return cls(
+            profile_dir=directory,
+            skip=int(getattr(env, 'profile_skip', 2)),
+            count=int(getattr(env, 'profile_count', 50)),
+        )
+    except Exception as exc:  # pragma: no cover - 构造失败不该影响模拟
+        logging.warning('采样窗口构造失败，已停用剖析：%s', exc)
+        return None
 
 
 def _build_target_set(card_defs, target_specs):
@@ -275,9 +319,13 @@ def _build_target_set(card_defs, target_specs):
 
 def _wk_init(env: SimulationEnv, target_specs: Dict[str, int] = None):
     """子进程 initializer——将 SimulationEnv 注入子进程全局变量，预构建不可变数据。"""
-    global _wk_env, _wk_target_set, _wk_extractor, _wk_return_compact
+    global _wk_env, _wk_target_set, _wk_extractor, _wk_return_compact, _wk_profiler
     _wk_env = env
     _wk_return_compact = getattr(env, 'return_compact', True)
+    # P83（`6b`）：**只建控制器，不在这里 enable()**。`Pool.__exit__` 走 `terminate()`
+    # （本机 Python 3.12.5 源码核验），进程级 enable 的收尾本就不可靠；真正的开闭
+    # 窗口在 `_wk_run_single` 内围绕单次 `_run_single` 调用。
+    _wk_profiler = _make_worker_profiler(env)
 
     # 不在此处预导入 gacha_simulator.core / .service。
     # Windows spawn 下每个 worker 同时执行 initializer，若预导入
@@ -399,7 +447,14 @@ def _wk_run_single(args):
     """
     seed, initial_resources = args
     try:
-        compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
+        # P83（`6b`）：开闭窗口**围绕单次 `_run_single` 调用**（§3.8 D2）。窗口在
+        # `profiler is None`（默认）时完全不介入，故不采样时的热路径与改动前逐项一致。
+        # 剖面结果经 `dump_stats` 走文件，**不改变下面四条 return 的 arity**。
+        if _wk_profiler is None:
+            compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
+        else:
+            with _wk_profiler.window():
+                compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
     except Exception:
         traceback.print_exc()
         return (None, None, [])

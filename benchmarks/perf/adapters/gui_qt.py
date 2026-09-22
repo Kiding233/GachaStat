@@ -532,6 +532,13 @@ class GuiQtAdapter(Adapter):
                 '与依赖锚点的 6 段本次不可得。成因是**回传通道未启用**，不是采集点故障。'
             )
 
+        if observed.get('charts_ready_error'):
+            warnings.append(
+                '第 8 段「图表可用」不可得：被测进程轮询 MainWindow.charts_ready() 时抛错'
+                f'（{observed["charts_ready_error"]}）——八处只读访问器链条有断点，'
+                '不是「图表一直没就绪」。'
+            )
+
         raw = self._startup_segments(observed, hook, warnings)
         stages, stage_warnings = normalize_stages(
             raw,
@@ -673,6 +680,12 @@ class GuiQtAdapter(Adapter):
                     # 系统级），故这里存绝对值、拼段时再与父进程的时刻相减。
                     observed['charts_ready_abs'] = float(charts)
                     break
+                error = (payload or {}).get('charts_ready_error')
+                if error:
+                    # 「一直不就绪」与「访问器坏了」是两件事。被测进程已停表并报出
+                    # 成因，父进程就别再等——八处只读访问器的失败不该伪装成超时。
+                    observed['charts_ready_error'] = str(error)
+                    break
                 # 钩子不在（产品侧未落地或未启用）就别等——第 8 段不可能来。有钩子但
                 # 还没就绪时给一段宽限，**不为一个可能永远不来的段把整次测量拖到硬超时**。
                 grace = _STARTUP_CHARTS_GRACE_SECONDS if payload is not None else 0.0
@@ -728,26 +741,52 @@ class GuiQtAdapter(Adapter):
                 if value is not None:
                     raw[key] = value
 
-        # 第 6 段：窗口可见时刻 − 主窗口构造结束时刻。两端不同源（一个是父进程侧的
-        # 相对时长，一个是子进程侧的绝对时钟），须先经 spawn 时刻换算到同一根轴。
+        # ── 第 6 / 7 / 8 段：三个「时刻」按**观测到的先后**切分 ──
+        #
+        # 三者的名义顺序是「可见 → 启动工作完成 → 图表可用」（§3.11 的 1-8 排列），
+        # 但**实测会出现顺序颠倒**：2026-09-22 本机实测，图表在 2.29s 就绪，而整棵
+        # 进程树到 3.14s 才安静下来——「图表能看了」与「后台不再忙了」本来是两条
+        # 独立的线，没有固定先后（同机 2026-09-18 的读数则是先完成、后就绪）。
+        #
+        # 故按观测顺序相减、把每个时长记在**较晚那个时刻**的段上，并在顺序颠倒时记
+        # 一条告警。若按名义顺序硬减，颠倒时得到的是负值、只能整段丢弃——那会把一个
+        # 真实存在且可测的时刻变成「永远不可得」，而读的人还以为那段有问题。
+        #
+        # 各时刻先换算到**同一根轴**（父进程的 `perf_counter`）：父进程侧的量是相对
+        # spawn 的时长，子进程侧的量是绝对时钟值，两者相差一个 `spawn_at`。
+        charts = _as_float(observed.get('charts_ready_abs'))
         visible = observed.get('window_visible')
         window_end = construct_end.get('window_construct')
-        if visible is not None and window_end is not None and spawn_at is not None:
-            value = _positive((spawn_at + visible) - window_end, warnings, 'window_visible')
-            if value is not None:
-                raw['window_visible'] = value
+        marks: List[Tuple[str, float]] = []
+        if window_end is not None:
+            # 锚点：第 6 段的起点是「主窗口构造结束」，它本身不是一段。
+            marks.append(('_window_construct_end', window_end))
+        if visible is not None and spawn_at is not None:
+            marks.append(('window_visible', spawn_at + visible))
+        if 'work_complete' in observed and spawn_at is not None:
+            marks.append(('work_complete', spawn_at + observed['work_complete']))
+        if charts is not None:
+            marks.append(('charts_ready', charts))
+        marks.sort(key=lambda item: item[1])
 
-        # 第 7 段：与第 6 段同理，锚在「窗口可见」这一刻上（纯父进程侧，无钩子也能算）
-        if 'window_visible' in observed and 'work_complete' in observed:
-            raw['work_complete'] = max(0.0, observed['work_complete'] - observed['window_visible'])
-
-        # 第 8 段：子进程回传的 `charts_ready` 是绝对时钟值，与父进程同源
-        charts = _as_float(observed.get('charts_ready_abs'))
-        if charts is not None and 'work_complete' in observed and spawn_at is not None:
-            value = _positive(charts - (spawn_at + observed['work_complete']), warnings,
-                              'charts_ready')
+        for (_, prev_at), (name, at) in zip(marks, marks[1:]):
+            if name.startswith('_'):
+                continue
+            value = _positive(at - prev_at, warnings, name)
             if value is not None:
-                raw['charts_ready'] = value
+                raw[name] = value
+
+        observed_order = [name for name, _ in marks if not name.startswith('_')]
+        nominal_order = [name for name in ('window_visible', 'work_complete', 'charts_ready')
+                         if name in observed_order]
+        if observed_order != nominal_order:
+            warnings.append(
+                '启动段的观测顺序与 §3.11 的名义顺序不同：观测到 '
+                f'{" → ".join(observed_order)}，名义为 {" → ".join(nominal_order)}。'
+                '段值因此按**观测顺序**相减（每个时长记在较晚那个时刻的段上）——'
+                '「窗口可见」「启动工作完成」「图表可用」三件事没有固定先后，'
+                '把其中两件当成有前后关系会算出负值并整段丢弃。'
+            )
 
         # 口径注记随记录带出——**不写进报告的话，读的人会把八段相加当总启动时间**。
         warnings.append(WARN_STARTUP_NOT_A_PARTITION)

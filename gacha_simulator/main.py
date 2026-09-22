@@ -13,7 +13,115 @@ if parent_dir not in sys.path:
 # 移入 __main__ 护卫后，worker 进程 __name__ 为 'gacha_simulator.main'，
 # 不会触发这些导入，仅加载轻量的 sys/os 路径配置。
 
+# ── 启动打点（opt-in，P83 `3f-2`）────────────────────────────────────────
+#
+# 供性能平台的启动测量取「进程内才能观察」的那几段（§3.11 的 1 / 3 / 5 / 8）。
+# **默认关闭**：只有环境变量指向一个路径时才打点，未设置时本节的每个调用点都只
+# 是一次 `is not None` 判断——零文件 I/O、零 Qt 调用、零行为变化（§8.2 的成立前提）。
+#
+# 环境变量名与 `benchmarks/perf/adapters/gui_qt.py` 的 `STARTUP_JSON_ENV` **同名**，
+# 两侧各写一份字面量：产品代码不得 import `benchmarks/`（那是开发侧资产、不进发布
+# 产物），跨这条边界的东西只能靠契约名对齐。**改一处必须同时改另一处。**
+#
+# 为何这里可以用环境变量（§3.8 D1 否决过环境变量）：D1 针对的是**长期存活的适配器
+# 进程**——在它进程内设环境变量会泄漏影响后续用例。启动打点是**一次性冷子进程**，
+# 子进程即用即灭、不污染任何人，且产物是文件而非进程内状态。
+_STARTUP_TIMELINE_ENV = 'GACHASTAT_STARTUP_TIMELINE'
+
+
+def _probe_now():
+    """打点用的时钟。
+
+    与父进程**同源**：Windows 上 `perf_counter()` 走 QPC（系统级、非进程级），
+    故父进程可以直接把它与自己记下的时刻相减。换平台后该前提须重新验证——
+    消费侧有一条合理性检查会在不同源时判该段不可得，而不是写进一个荒谬数字。
+    """
+    import time
+
+    return time.perf_counter()
+
+
+def _probe_write(path, payload):
+    """把打点写成 JSON。
+
+    **先写临时文件再原子替换**：读方（父进程）在轮询同一个路径，直接覆写会让它
+    有机会读到半截文件。
+
+    **落盘时机是硬要求**（§3.11）：本函数在段 5 记录完成后**立即**被调用，flush 与
+    `fsync` 都做掉。**不得**推迟到事件循环退出、窗口关闭或收尾清理阶段——本文件
+    的收尾是 `os._exit()`，它绕过缓冲区刷新与 `atexit`，推迟就等于永远写不出来。
+
+    **任何异常一律吞掉**：打点失败不得改变退出码、不得让产品行为发生变化；后果只是
+    没有 JSON，父进程按软降级口径逐段标注「本段不可得」。
+    """
+    try:
+        import json
+        import os
+
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _probe_install_charts_ready(window, payload, path):
+    """段 8「图表可用」：轮询 `MainWindow.charts_ready()`，就绪后回写打点文件。
+
+    **判据是连续 3 次（间隔 200ms）都就绪**，不是「某次取到 True」——`ChartWebView`
+    的 `closeEvent` 会把就绪状态置回 `False`，单次取值不足以当完成（§3.11 第 8 段
+    的第 3 条）。
+
+    观察只能落在被测进程自己身上：就绪状态是**本进程内的对象状态**，父进程无法对它
+    做方法调用，而规则 9 又要求冷进程——故父进程是消费者、本函数是生产者。
+
+    读取异常时**记下成因并停表**（不重试）：八处只读访问器是本平台最新、最脆的一环，
+    「一直不就绪」与「访问器坏了」是两件事，父进程据此区分。
+    """
+    try:
+        from PyQt6.QtCore import QTimer
+    except Exception:  # pragma: no cover - PyQt6 已在本文件上方导入成功才会走到这
+        return
+
+    state = {'streak': 0, 'timer': None}
+
+    def _tick():
+        try:
+            ready = bool(window.charts_ready())
+        except Exception as exc:
+            payload['charts_ready_error'] = f'{type(exc).__name__}: {exc}'
+            if state['timer'] is not None:
+                state['timer'].stop()
+            _probe_write(path, payload)
+            return
+        state['streak'] = state['streak'] + 1 if ready else 0
+        if state['streak'] < 3:
+            return
+        if state['timer'] is not None:
+            state['timer'].stop()
+        payload['charts_ready'] = _probe_now()
+        _probe_write(path, payload)
+
+    # **必须给 parent**（`QTimer(window)`），不能只把引用存进局部/闭包：定时器与
+    # 回调之间只有一条「state ← _tick 的闭包 ← 信号连接 ← timer ← state」的**环**，
+    # 没有外部根可达，Python 的 gc 可以整个回收掉它——回收了就不再有 tick，而**表
+    # 面上没有任何错误**（实测踩到：段 8 永不出现、父进程等满宽限后报「该段未采集」）。
+    # 交给 Qt 持有（parent = 窗口）后生命周期与窗口一致。
+    timer = QTimer(window)
+    timer.timeout.connect(_tick)
+    timer.start(200)
+    state['timer'] = timer
+
+
 if __name__ == '__main__':
+    # 段 1 的锚点：这一行就是「脚本首行」，与父进程的 spawn 时刻相减即解释器启动耗时。
+    # 未设置打点环境变量时 `_probe` 恒为 None，下面每个打点都是一次布尔判断。
+    _probe_path = os.environ.get(_STARTUP_TIMELINE_ENV) or ''
+    _probe = {'pid': os.getpid(), 'origin': _probe_now()} if _probe_path else None
+
     # os._exit 绕过 C++ 析构会触发 Qt 内部清理警告
     # （QDxgiVSyncService / QThreadStorage），抑制之。
     os.environ.setdefault('QT_LOGGING_RULES', '*.warning=false')
@@ -32,7 +140,11 @@ if __name__ == '__main__':
     _ICON_PATH = get_resource('app_icon.png')
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    if _probe is not None:
+        _probe['app_construct_start'] = _probe_now()          # 段 3 起
     app = QApplication(sys.argv)
+    if _probe is not None:
+        _probe['app_construct_end'] = _probe_now()            # 段 3 止
     from gacha_simulator.gui.wheel_blocker import GlobalWheelBlocker
     app.installEventFilter(GlobalWheelBlocker(app))
     app.setApplicationName("GachaStat")
@@ -121,7 +233,16 @@ if __name__ == '__main__':
     except Exception:
         pass
 
+    if _probe is not None:
+        _probe['window_construct_start'] = _probe_now()       # 段 5 起
     window = MainWindow()
+    if _probe is not None:
+        _probe['window_construct_end'] = _probe_now()         # 段 5 止
+        # **立即落盘**（§3.11 的 flush 纪律）：本文件收尾是 os._exit()，它绕过缓冲区
+        # 刷新与 atexit——推迟到事件循环退出或窗口关闭就等于永远写不出来。
+        _probe_write(_probe_path, _probe)
+        # 段 8 起表：就绪状态只能在本进程内观察，故轮询装在这里而非父进程。
+        _probe_install_charts_ready(window, _probe, _probe_path)
     window.show()
 
     # ── Ps03：Ctrl+R 重启快捷键（开发调试用）──

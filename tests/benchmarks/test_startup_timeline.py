@@ -12,6 +12,8 @@
 
 import json
 import os
+import re
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +38,8 @@ from benchmarks.perf.profilers.stage import (
 )
 from benchmarks.perf.adapters.base import Adapter, SingleRun
 from tests.benchmarks.conftest import requires_real_run
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: 一条 `-X importtime` 的真实输出片段（取自本机 `import gacha_simulator.gui`）。
 _IMPORTTIME_SAMPLE = """\
@@ -281,15 +285,31 @@ class TestSegmentAssembly:
         assert 'interpreter_start' not in segments
         assert any('interpreter_start' in w for w in warnings)
 
-    def test_charts_ready_before_work_complete_is_degraded(self):
-        """第 7 段（整棵进程树 CPU 归零）实测可能**晚于**第 8 段——那时段 8 会算出
-        非正值。此处只保证不写荒谬数字；该观测顺序问题记在 `04-问题.md`。"""
+    def test_order_inversion_is_reordered_not_dropped(self):
+        """第 8 段（图表可用）实测可能**早于**第 7 段（整棵进程树 CPU 归零）。
+
+        2026-09-22 本机实测就是如此：图表 2.29s 就绪，进程树到 3.14s 才安静。
+        两件事没有固定先后，故按**观测顺序**相减——按名义顺序硬减会算出负值、
+        只能整段丢弃，那会把一个真实存在且可测的时刻变成「永远不可得」。
+        """
         warnings = []
-        # 早于 work_complete 的绝对时刻（100 + 8.0 = 108.0）
-        observed = self._observed(charts_ready_abs=107.0)
+        observed = self._observed(charts_ready_abs=107.0)   # 早于 work_complete(108.0)
         segments = GuiQtAdapter()._startup_segments(observed, self._hook(), warnings)
-        assert 'charts_ready' not in segments
-        assert any('charts_ready' in w for w in warnings)
+
+        # 八段一个不少，且全部为正值
+        assert set(segments) == set(STARTUP_STAGES), segments
+        assert all(value > 0 for value in segments.values()), segments
+        # 每个时长记在**较晚那个时刻**的段上：107 - 102.3 = 4.7
+        assert segments['charts_ready'] == pytest.approx(107.0 - (self.SPAWN + 2.3))
+        assert segments['work_complete'] == pytest.approx(108.0 - 107.0)
+        assert any('观测顺序' in w for w in warnings)
+
+    def test_nominal_order_emits_no_such_warning(self):
+        """顺序正常时不该平白多一条告警——`charts_ready` 在 `work_complete` 之后。"""
+        warnings = []
+        observed = self._observed(charts_ready_abs=110.0)   # 晚于 work_complete(108.0)
+        GuiQtAdapter()._startup_segments(observed, self._hook(), warnings)
+        assert not [w for w in warnings if '观测顺序' in w]
 
 
 class TestChildEnvironment:
@@ -347,11 +367,18 @@ class TestRealStartupMeasurement:
         assert result.stages.get('work_complete', 0) > 0
         assert result.resources.rss_peak_mb is not None
 
-        # 钩子段要么在，要么有一条点名成因的告警——**不得静默缺失**
+        # 钩子的三段（1/3/5）与依赖其锚点的第 6 段必须到位；不齐就得有一条点名
+        # 回传通道的告警——**不得静默缺失**。
         hook_segments = {'interpreter_start', 'app_construct', 'window_construct',
-                         'window_visible', 'charts_ready'}
+                         'window_visible'}
         if not hook_segments <= set(result.stages):
             assert any(STARTUP_JSON_ENV in w for w in result.warnings), result.warnings
+
+        # 第 8 段单独判：它的成败不取决于回传通道是否打通，而取决于「10 个
+        # ChartWebView 真的都加载完了」。要么在，要么有一条点名其成因的告警——
+        # 两种成因分得开（一直不就绪 / 只读访问器抛错）。
+        if 'charts_ready' not in result.stages:
+            assert any('charts_ready' in w or '图表可用' in w for w in result.warnings),                 result.warnings
 
     def test_startup_key_never_leaks_into_simulation_records(self, plan):
         assert plan.ignored_fields() != ()
@@ -415,3 +442,81 @@ class TestStartupIsExemptFromAutoDowngrade:
         with pytest.raises(BaselineGateError):
             register_baseline('sim-down', simulation, root=tmp_path)
 
+
+
+class TestHookContractIsWiredBothWays:
+    """`3f-1`（消费者）与 `3f-2`（生产者）的契约名必须一致。
+
+    **契约是一个字符串，两侧各写一份字面量**：产品代码不得 import `benchmarks/`
+    （那是开发侧资产、不进发布产物），故这条边界只能靠名字对齐。两侧各改各的会
+    让整条链**静默断掉**——适配器照常起进程、照常轮询，只是永远读不到回传文件，
+    报告里表现为「回传通道未启用」，而实际是名字不一致。
+    """
+
+    def test_env_var_name_written_in_product_source(self):
+        source = (REPO_ROOT / 'gacha_simulator' / 'main.py').read_text(encoding='utf-8')
+        assert f"'{STARTUP_JSON_ENV}'" in source, (
+            f'main.py 里必须出现 {STARTUP_JSON_ENV!r}——两侧的名字是同一个契约'
+        )
+
+    def test_product_does_not_import_the_dev_side_asset(self):
+        """反向：产品代码不得 **import** `benchmarks/`（它不进发布产物）。
+
+        只查 import 语句而非「文件里有没有出现这个词」：`main.py` 的注释里正当地
+        引用了 `benchmarks/perf/adapters/gui_qt.py` 来说明契约名对应哪一侧，那是
+        文档而非依赖。
+        """
+        source = (REPO_ROOT / 'gacha_simulator' / 'main.py').read_text(encoding='utf-8')
+        offenders = [line.strip() for line in source.splitlines()
+                     if re.match(r'\s*(import|from)\s+benchmarks', line)]
+        assert offenders == [], offenders
+
+    def test_every_probe_point_is_guarded(self):
+        """打点必须处处由 `_probe is not None` 守着——`3f-2` 的「零行为变化」成立前提。"""
+        source = (REPO_ROOT / 'gacha_simulator' / 'main.py').read_text(encoding='utf-8')
+        body = source[source.index("if __name__ == '__main__':"):]
+        probe_calls = body.count('_probe[') + body.count('_probe_now()')
+        guards = body.count('if _probe is not None:')
+        assert probe_calls >= 4, body[:200]
+        assert guards >= 3, '每个打点段落都必须在同一个 `if _probe is not None:` 之下'
+
+
+class TestProbeWrite:
+    """`main.py` 的落盘原语（`3f-2`）——不依赖 Qt，故进默认 `pytest -q`。"""
+
+    def _module(self):
+        import importlib
+
+        return importlib.import_module('gacha_simulator.main')
+
+    def test_writes_json(self, tmp_path):
+        module = self._module()
+        target = tmp_path / 'timeline.json'
+        module._probe_write(str(target), {'pid': 1, 'origin': 2.5})
+        assert json.loads(target.read_text(encoding='utf-8')) == {'pid': 1, 'origin': 2.5}
+
+    def test_no_tmp_residue(self, tmp_path):
+        """先写临时文件再替换——替换之后临时文件不得留下。"""
+        module = self._module()
+        target = tmp_path / 'timeline.json'
+        module._probe_write(str(target), {'a': 1})
+        assert [p.name for p in tmp_path.iterdir()] == ['timeline.json']
+
+    def test_rewrite_is_in_place(self, tmp_path):
+        """第二次写（段 8 就绪后回写）覆盖同一路径，读方轮询的就是它。"""
+        module = self._module()
+        target = tmp_path / 'timeline.json'
+        module._probe_write(str(target), {'charts_ready': None})
+        module._probe_write(str(target), {'charts_ready': 3.5})
+        assert json.loads(target.read_text(encoding='utf-8'))['charts_ready'] == 3.5
+
+    def test_unwritable_path_is_swallowed(self, tmp_path):
+        """打点失败**不得抛**：它不该改变退出码，也不该让产品行为变化。"""
+        module = self._module()
+        blocker = tmp_path / 'a_file'
+        blocker.write_text('x', encoding='utf-8')
+        module._probe_write(str(blocker / 'sub' / 'timeline.json'), {'a': 1})  # 不抛即通过
+
+    def test_unserializable_payload_is_swallowed(self, tmp_path):
+        module = self._module()
+        module._probe_write(str(tmp_path / 'x.json'), {'bad': object()})       # 不抛即通过

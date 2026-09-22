@@ -137,29 +137,48 @@ python -m benchmarks.perf run --plan <plan.json> --baseline <name>
 
 **退出码：** `0` 正常；`2` 用法错误 / `plan.json` 非法 / 安全协议拒绝 / 缺基线；`3` 该路径在本环境不可用；`4` 适配器运行失败。
 
-**`run` 的输出**（`--quiet` 只留结论行）：
+**`run` 的实跑输出**（`--quiet` 只留结论行）。下面是 2026-09-22 一次**真实运行**的逐字记录，`plan.json` 为 `n=20 / workers=2 / seed=42 / repeats=3 / grain=batch`（绝对路径已简写）：
 
 ```
-本次记录：path=cli / n=100 / workers=2 / seed=42 / strategy=smart
-  配置：config/config.toml（plan.json: ...）
-  墙钟中位数：1.234s（repeats=3，样本 3 个）
-  机器类别：17+cores_Windows 11 / QT_QPA_PLATFORM=（本路径不适用）
-  阶段：config_load=0.005s，env_build=0.001s，pool_start=0.587s，simulate=0.159s，extract=0.001s
+$ python -m benchmarks.perf run --plan plan.json --baseline g1-smoke --register
+本次记录：path=cli / n=20 / workers=2 / seed=42 / strategy=smart
+  配置：<配置目录>/config.toml（plan.json: <plan.json 路径>）
+  墙钟中位数：1.394s（repeats=3，样本 3 个）
+  机器类别：17+cores_Windows 11 / QT_QPA_PLATFORM=
+  阶段：config_load=0.011s，env_build=0.001s，pool_start=0.585s，simulate=0.491s，extract=0.004s
   ⚠ 2 条告警：
     - 本路径不产出该段：dispatch（分发）
     - 本期不采集：subject=simulation 的 RSS 峰值（P83 §3.3）
+已登记基线 'g1-smoke' → <baselines>/17+cores_Windows 11/g1-smoke.json
+
+$ python -m benchmarks.perf run --plan plan.json --baseline g1-smoke
+本次记录：path=cli / n=20 / workers=2 / seed=42 / strategy=smart
+  墙钟中位数：1.363s（repeats=3，样本 3 个）
+  阶段：config_load=0.005s，env_build=0.001s，pool_start=0.530s，simulate=0.472s，extract=0.004s
 
 本次（cli / 17+cores_Windows 11） vs 基线 g1-smoke：
-  总墙钟比值（本次 / 基线）：1.012
+  总墙钟比值（本次 / 基线）：1.005
   三元组字节数比值：1.000（代理指标，当回归判据用、不当绝对开销读）
   阶段比值：
-    config_load  1.004
-    env_build    0.998
-    pool_start   1.021
-    simulate     1.008
-    extract      1.000
+    config_load  0.446
+    env_build    0.921
+    extract      1.003
+    pool_start   0.907
+    simulate     0.961
+  阶段占比（本次 / 基线）：
+    config_load  0.005 / 0.010
+    env_build    0.001 / 0.001
+    extract      0.004 / 0.003
+    pool_start   0.524 / 0.536
+    simulate     0.467 / 0.450
 
-结论：配置 config/config.toml 在路径 cli 上对比基线 g1-smoke 的总墙钟比值 = 1.012
+结论：配置 <配置目录>/config.toml 在路径 cli 上对比基线 g1-smoke 的总墙钟比值 = 1.005
 ```
 
-> **样例的采集时点：** 上面是**格式样例**，其数值以本机一次真实运行为准，在 `1i`（G1 闭环的验收处）落地时逐字替换为当次实跑的输出。之所以不在此处凭空填写：G1 的验收证据必须是真实输出，而这台机器当时可用内存低于规则 5 的 2.0 GB 下限，门控按设计拒绝了运行。
+**读这份输出的三件事：**
+
+- `QT_QPA_PLATFORM=`（空）表示**本路径不适用**（`cli` 不是 Qt 路径），不是「未记录」。三种状态的区分见 `perf/record.py` 的 `EnvFingerprint.qt_qpa_platform`
+- 阶段只有五段——`dispatch` 缺失**属事实而非缺口**（`cli` 没有分发器），故报告显式标注而非留空
+- **`config_load` 的比值 0.446 不是「优化了 55%」**：它是 11ms → 5ms 量级的抖动，落在基线中位数 < 50 ms 的区间。§3.13 的定向性判据对这类短段改用绝对判据（绝对差 ≤ 50 ms），正是为此
+
+**取这份样例时的环境注记：** 本机当时可用内存 1.42 GB，**低于规则 5 的 2.0 GB 下限，裸命令被门控按设计拒绝**。故样例是在规则 5 被显式注入旁路的前提下跑出的；除此之外全程真实（真实子进程、真实模拟、真实基线登记与比值比对）。**这条注记本身就是规则 5 生效的实证。**

@@ -102,17 +102,25 @@ class CliAdapter(Adapter):
         return argv
 
     def _build_argv(self, plan: Plan, *, perf_json: str, output: str) -> tuple:
-        """实际使用的 argv 与「因被测 CLI 不支持而剔除的开关」列表。
+        """实际使用的 argv 与「**确实被剔除**的开关」列表。
 
         与 `build_argv` 分开，使「理想 argv」与「本版 CLI 可接受的 argv」两件事
         各自可测：`--chunksize` 在 `cli.py` 上不存在，直接传会让 argparse 以退出码
         2 终止**整次测量**，属「测量工具伤及被测对象」，故在此剔除并记软降级。
+
+        `dropped` **只含真的从 argv 里去掉的那些**：本版 CLI 不支持、而本次 plan
+        也没打算传的开关（例如 plan 未设 `chunksize` 时的 `--chunksize`），不应
+        产生一条「已剔除」的告警——**没有的东西谈不上被剔除**，报出来只会让读报告
+        的人去找一个本就不存在的参数。
         """
         argv = self.build_argv(plan, perf_json=perf_json, output=output)
         help_text = self._cli_help_text()
-        dropped = [flag for flag in _OPTIONAL_FLAGS if flag not in help_text]
-        for flag in dropped:
+        dropped: List[str] = []
+        for flag in _OPTIONAL_FLAGS:
+            if flag in help_text or flag not in argv:
+                continue
             argv = _drop_flag(argv, flag)
+            dropped.append(flag)
         return argv, dropped
 
     _cli_help_text_cached: Optional[str] = None

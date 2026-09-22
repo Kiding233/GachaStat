@@ -6,6 +6,8 @@
 的拒绝行为另有专测（`test_safety_rules.py`），不该让它污染其余用例。
 """
 
+import os
+
 import pytest
 
 from benchmarks.perf.plan import Plan, injected_memory_query
@@ -88,3 +90,23 @@ def record_without_repeats(make_result):
         payload['repeats'] = None
         return RunResult.from_dict(payload)
     return factory
+
+
+# ── 真实运行的开关门控（§3.9） ─────────────────────────────
+#
+# `pytest.mark.skipif` 是**内建标记**，无需在 `pyproject.toml` 注册 markers，
+# 故不改配置；也避免这些用例撞 H9 的 120s 超时。
+
+PERF_TESTS_ENV = 'P83_PERF_TESTS'
+_TRUTHY = {'1', 'true', 'yes', 'on'}
+
+
+def perf_tests_enabled() -> bool:
+    """是否显式开启了需要真实进程池的用例。"""
+    return os.environ.get(PERF_TESTS_ENV, '').strip().lower() in _TRUTHY
+
+
+requires_real_run = pytest.mark.skipif(
+    not perf_tests_enabled(),
+    reason=f'需起真实进程池，默认不跑；设 {PERF_TESTS_ENV}=1 启用（§3.9）',
+)

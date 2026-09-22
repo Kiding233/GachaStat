@@ -150,6 +150,11 @@ class TestUnavailablePathIsSkippedNotFatal:
 
 @requires_real_run
 class TestRealRunContract:
+    # §3.9 T3/T4 的耗时上限由 `pytest-timeout` 在**用例级**兜底：超时即 FAIL，
+    # 而不是挂死。实测过一次挂死的代价——某条用例把产品的私有 worker 换掉后
+    # 任务永远不到 done，适配器一路轮询到它自己的硬超时（3600s）。
+    pytestmark = pytest.mark.timeout(60)   # T3 的 cli 部分（§3.9 定的上限 60s）
+
     """需真实子进程——受 `P83_PERF_TESTS` 门控。"""
 
     def _plan(self, **overrides):
@@ -185,6 +190,11 @@ class TestRealRunContract:
 
 @requires_real_run
 class TestG1Closure:
+    # §3.9 T3/T4 的耗时上限由 `pytest-timeout` 在**用例级**兜底：超时即 FAIL，
+    # 而不是挂死。实测过一次挂死的代价——某条用例把产品的私有 worker 换掉后
+    # 任务永远不到 done，适配器一路轮询到它自己的硬超时（3600s）。
+    pytestmark = pytest.mark.timeout(120)   # G1 闭环跑两次建基线+比对，比单次 T3 宽
+
     """G1 的闭环：**用 `1k` 的命令**跑「建首条基线 → 再跑一次 → 出比值」。
 
     不得靠手工多步操作凑出（§3.1 / `1i` 行）——故本用例两次都调 `entry.main`，

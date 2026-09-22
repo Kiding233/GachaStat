@@ -270,6 +270,11 @@ class TestPlatformReallyTakesEffect:
 @requires_pyqt
 @requires_real_run
 class TestRealRunContract:
+    # §3.9 T3/T4 的耗时上限由 `pytest-timeout` 在**用例级**兜底：超时即 FAIL，
+    # 而不是挂死。实测过一次挂死的代价——某条用例把产品的私有 worker 换掉后
+    # 任务永远不到 done，适配器一路轮询到它自己的硬超时（3600s）。
+    pytestmark = pytest.mark.timeout(120)   # gui-qt 每条用例都要起一次 Chromium
+
     """真实驱动 `MainWindow` 跑一次模拟——含 Chromium 子进程，受 `P83_PERF_TESTS` 门控。"""
 
     @pytest.fixture

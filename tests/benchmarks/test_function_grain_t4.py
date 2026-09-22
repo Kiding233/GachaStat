@@ -51,6 +51,11 @@ def _fingerprint(result):
 
 @requires_real_run
 class TestFunctionGrainIntegration:
+    # §3.9 T3/T4 的耗时上限由 `pytest-timeout` 在**用例级**兜底：超时即 FAIL，
+    # 而不是挂死。实测过一次挂死的代价——某条用例把产品的私有 worker 换掉后
+    # 任务永远不到 done，适配器一路轮询到它自己的硬超时（3600s）。
+    pytestmark = pytest.mark.timeout(60)   # T4 的唯一真实并行的部分（§3.9 定的上限 60s）
+
     @pytest.fixture
     def plan(self, make_plan, tmp_path):
         return make_plan(config_path=CONFIG, n=N, workers=WORKERS, seed=SEED,

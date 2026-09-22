@@ -340,6 +340,11 @@ class TestChildEnvironment:
 
 @requires_real_run
 class TestRealStartupMeasurement:
+    # §3.9 T3/T4 的耗时上限由 `pytest-timeout` 在**用例级**兜底：超时即 FAIL，
+    # 而不是挂死。实测过一次挂死的代价——某条用例把产品的私有 worker 换掉后
+    # 任务永远不到 done，适配器一路轮询到它自己的硬超时（3600s）。
+    pytestmark = pytest.mark.timeout(180)   # 启动测量 = 预热 + 记录两次冷启动（各约 8-15s），比 T3 宽
+
     """真实冷启动测量：起一条真实平台的子进程、弹一次窗口，约 10s ×2。
 
     **由人工触发**（§3.9 T6）：它要弹真实窗口，不进 H9 的 `pytest -q` 门控。

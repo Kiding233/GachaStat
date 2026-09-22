@@ -150,7 +150,12 @@ class EnvFingerprint:
 
     @property
     def machine_class(self) -> str:
-        """机器类别标签（核数区间 + OS 版本）——基线分组键。"""
+        """机器类别标签（核数区间 + OS 版本）——基线分组键。
+
+        **必须是路径安全的**：该值直接用作 `baselines/<机器类别>/` 的目录名
+        （§3.6），故分隔符取 `_` 而非 `/`——用 `/` 会把单层目录变成两层嵌套，
+        与「按机器类别分组」的单层结构不符。
+        """
         if self.cores <= 4:
             band = '1-4'
         elif self.cores <= 8:
@@ -159,7 +164,7 @@ class EnvFingerprint:
             band = '9-16'
         else:
             band = '17+'
-        return f'{band}cores/{self.os}'
+        return f'{band}cores_{self.os}'
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

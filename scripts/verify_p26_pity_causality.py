@@ -92,7 +92,7 @@ def run_p_scan(store, target_specs: Dict[str, int],
             initial_resources=ir, num_simulations=num_simulations,
             max_workers=max_workers,
             seed=hash(str(r)) % (2**31),
-            strategy_name='smart',
+            strategy_key='smart',
         )
         p = compute_success_probability(histories, target_specs, gdr_key, gdr_threshold)
         probs.append(p)

@@ -170,7 +170,7 @@ def run_simulation_at_resource(
         num_simulations=num_simulations,
         max_workers=max_workers,
         seed=seed,
-        strategy_name='smart',
+        strategy_key='smart',
     )
     return compute_success_probability(histories, target_specs, gdr_key, gdr_threshold)
 

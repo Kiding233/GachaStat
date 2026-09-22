@@ -102,10 +102,33 @@ class SimulationEnv:
     # **注入点是「调用方在拿到 env 之后直接赋值」，不经 builder 的显式 keyword 表**：
     # from_config_store 与 from_dict 都以显式 keyword 列表构造 env，两张表内均无
     # profile_*——落在 builder 上是行不通的。
-    profile_enabled: bool = False           # 总开关
-    profile_dir: str = ''                   # run 级 profile 目录（<--profile-dir>/<run_id>）；空则不落盘
-    profile_skip: int = 2                   # 前 N 次调用不采样（warmup）
-    profile_count: int = 50                 # **每个 worker 进程各自**采样多少次后关闭（per-worker，非本次 plan 的总量）
+    profile_enabled: bool = False
+    """总开关。默认 `False`——不设该字段的调用方（如经 `from_dict` 构造 env 的
+    `worst_impact.py`）恒不产剖面，**如实登记、不是缺口**（§3.8 D1 第 2 条）。"""
+
+    profile_dir: str = ''
+    """**本字段取的是 run 级目录**，空则不落盘。
+
+    §3.8 D1 把它注释为「run 级 profile **父**目录；实际落盘在
+    `<profile_dir>/<run_id>/`」，而 `run_id` 在四字段里**没有载体**——worker 要往
+    `<profile_dir>/<run_id>/` 写，却无从得知 `<run_id>`。故落地时把 `run_id` 折进
+    本字段的取值：**调用方**（`cli.py` 的 `--profile-*` 与 `inline` 适配器）先算出
+    `<--profile-dir>/<run_id>` 再赋给本字段，worker 直接往 `env.profile_dir` 写、
+    `6c` 直接扫 `env.profile_dir`，两侧口径相同，无需第五个字段。
+    D3 的隔离要求（no_draw 基线重跑不得混入主模拟的剖面）由此成立。"""
+
+    profile_skip: int = 2
+    """前 N 次调用不采样（warmup）。第 1 次调用含 `_run_single` 的懒加载 import 开销
+    （`_wk_init` 刻意不预导入 `core` / `service`，避免 Windows spawn 下各 worker 同时
+    加载 scipy 大 DLL），从第 1 次开始采样会把 import 算成热点（§3.8 D4）。"""
+
+    profile_count: int = 50
+    """**每个 worker 进程各自**采样多少次后关闭（per-worker，非本次 plan 的总量）。
+
+    该字段随 env 被 pickle 到每个 worker，而注入点在 worker 侧的 `_wk_run_single`，
+    故**每个 worker 各自从零计数**。一次 `run_batch_parallel(N, W)` 实际被插桩的样本数
+    是 `profile_count × W`，真实插桩比例是 `profile_count × W / N`（§3.8 D1）。
+    `Plan.validate()` 对它设了 per-worker 硬上限 500（D8）。"""
     card_overflow_map: Dict[str, list] = dc_field(default_factory=dict)  # ← P63
     # P61（Ph6，ISSUE-011）：Banner 构造定义——from_config_store 填充 List[Banner]
     # （与 pools 同对象）。_run_single 每次从它（或 pools）深拷贝重建，隔离 Banner

@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import logging
 import statistics
+import tempfile
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import ClassVar, Dict, List, Optional, Tuple, Type
 
@@ -89,6 +91,20 @@ class SingleRun:
     warnings: List[str] = field(default_factory=list)
 
 
+@contextmanager
+def _profile_parent(profile_dir: str):
+    """给出第二趟用的 profile 父目录：plan 给了就用它，没给就配一个临时目录。
+
+    临时目录在本方法退出时清理。**清理的是系统临时目录，不是仓库里的任何东西**——
+    与「禁止擅自删除文件」那条规则无关（那条管的是仓库产物）。
+    """
+    if profile_dir:
+        yield profile_dir
+        return
+    with tempfile.TemporaryDirectory(prefix='p83-function-') as tmp:
+        yield tmp
+
+
 def new_run_id() -> str:
     """本次 run 的标识。
 
@@ -142,10 +158,19 @@ class Adapter(ABC):
           （首次运行兼任试跑，用它的墙钟乘 `repeats` 作预估）
         - 阶段分解与资源计数取**首次**运行的产出——它们是确定性量、零噪声，
           重复测量只为压墙钟噪声，对确定性量没有意义（§3.5）
+
+        `grain='function'` 走**两趟**（§3.8 D6），见 `_run_two_pass`。
         """
         if not self.available():
             raise AdapterUnavailable(f'{self.name} 适配器在本环境不可用（available() 为 False）')
 
+        if plan.grain == 'function':
+            return self._run_two_pass(plan)
+
+        return self._measure(plan)
+
+    def _measure(self, plan: Plan, *, extra_warnings: Optional[List[str]] = None) -> RunResult:
+        """重复测量本体。`_run_two_pass` 复用它跑耗时那一趟。"""
         planned = max(1, int(plan.repeats))
         first = self._run_once(plan)
         samples: List[float] = [first.wall]
@@ -169,6 +194,7 @@ class Adapter(ABC):
                 f'{DOWNGRADE_THRESHOLD_SECONDS:.0f}s（§3.5）。该记录不得作为基线'
                 '（建基线强制 repeats >= 3）。'
             )
+        warnings.extend(extra_warnings or [])
 
         return RunResult(
             run_id=first.run_id or new_run_id(),
@@ -190,6 +216,45 @@ class Adapter(ABC):
             not_comparable=first.not_comparable or plan.grain == 'function',
             warnings=warnings,
         )
+
+    def _run_two_pass(self, plan: Plan) -> RunResult:
+        """`grain='function'` 的**两趟跑**（§3.8 D6）。
+
+        cProfile 有 2-5x 插桩开销（§3.8 D3 的验证记录实测 +124%），**同一次运行里既采
+        剖面又报耗时是不诚实的**——耗时数字被插桩放大了一倍以上。故：
+
+        1. 第一趟：`grain='stage'` 且**关掉剖析** → 取可信的耗时
+        2. 第二趟：带 profiler → 取函数级统计
+        3. 合并为一条记录，并把 `not_comparable` 置 `True`
+
+        `not_comparable` 的消费者是 `1f` 的比值比对（它据此把 `wall_median` 排除出
+        比值，`excluded` 里写明成因）——语义的提供者与消费者在此对齐。
+
+        第二趟需要的 `profile_dir` 若 plan 未给，**自动配一个临时父目录**并在本方法
+        返回前清理：否则 `grain='function'` 必须由调用方额外设置 `profile_dir` 才可能
+        有用，那是个容易踩空的隐性前置条件。
+        """
+        timing_plan = replace(plan, grain='stage', profile_enabled=False)
+        result = self._measure(timing_plan, extra_warnings=[
+            'function 档走两趟（§3.8 D6）：耗时取自**不带插桩**的第一趟，函数统计取自'
+            '第二趟——两者不是同一次运行的产物。故 wall_median 标注 not_comparable'
+            '并被基线比值排除。'
+        ])
+
+        warnings = list(result.warnings)
+        with _profile_parent(plan.profile_dir) as parent:
+            profiled_plan = replace(plan, profile_enabled=True, repeats=1,
+                                    profile_dir=parent, grain='function')
+            profiled = self._run_once(profiled_plan)
+            functions = profiled.functions
+        warnings.extend(w for w in profiled.warnings if w not in warnings)
+
+        if functions is None:
+            warnings.append(
+                '第二趟未产出任何函数级统计（成因见上方剖析告警）；'
+                'RunResult.functions 为 None，但读的人能从告警看出是哪种成因'
+            )
+        return replace(result, functions=functions, not_comparable=True, warnings=warnings)
 
     def _qt_qpa_platform(self, run: SingleRun) -> Optional[str]:
         """本次运行的 `QT_QPA_PLATFORM` 取值（§3.11）。

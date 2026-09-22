@@ -381,6 +381,9 @@ def parse_speedscope(source: object) -> SpeedscopeSummary:
             duration=total_duration or None,
             samples=total_samples or None,
             errors=errors,
+            # **必须显式传**：`SamplesMeta.profiles` 的默认值是 1，不传的话
+            # 「一个 sampled profile 都没有」会被读成「有一个正常的剖面」。
+            profiles=sampled_profiles,
         ),
         profile_count=sampled_profiles,
         frame_count=len(frames),

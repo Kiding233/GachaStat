@@ -100,6 +100,20 @@ class CliAdapter(Adapter):
             argv += ['--chunksize', str(plan.chunksize)]
         if plan.strategy_params and plan.strategy_params != _EMPTY_PARAMS:
             argv += ['--strategy-params', json.dumps(plan.strategy_params, ensure_ascii=False)]
+        if plan.profile_enabled:
+            # §3.8 D1 的四字段在**子进程驱动**这条路上只有一个通道：被测 CLI 自己的
+            # `--profile-*` 开关（`cli.py` 的 `main()` 收到后赋给 `env`）。适配器与
+            # 被测的 `python -m gacha_simulator.cli` 不是同一个进程，故不能像 `inline`
+            # 那样直接给 `env` 赋值。
+            #
+            # **缺这一段则 `cli` 路径的 `function` 档静默失效**：`cli.py` 有这三个开关、
+            # `--perf-json` 也会回传 `functions`，但**没有任何人传开关**，于是永远拿不到
+            # 剖面，只剩一条把读者指向 stderr 的告警（而 stderr 里什么都没有）。
+            # 2026-09-23 实测发现；§3.9 T4 的 AUDIT-BREAK-3 条要求的正是这条链的断言。
+            argv += ['--profile-skip', str(plan.profile_skip),
+                     '--profile-count', str(plan.profile_count)]
+            if plan.profile_dir:
+                argv += ['--profile-dir', plan.profile_dir]
         return argv
 
     def _build_argv(self, plan: Plan, *, perf_json: str, output: str) -> tuple:
@@ -219,14 +233,19 @@ class CliAdapter(Adapter):
 
         functions = _parse_functions(payload.get('functions'), warnings)
         if functions is None and plan.profile_enabled:
-            # D7：`--perf-json` 的载荷只有定死的五项，剖析降级的**成因文案装不下**，
-            # 被测进程只能把它打到 stderr（那正是 `--perf-json` 之外的通道）。此处记
-            # 一条指向 stderr 的说明，使 `RunResult.warnings` 里至少能看出「请求了
-            # 剖析但没拿到函数级统计」以及**该去哪儿看成因**——而不是留一个无声的 None。
-            warnings.append(
-                '已请求剖析（plan.profile_enabled）但未取到函数级统计：'
-                '被测进程的 stderr 里有具体成因（§3.8 D7）。'
-            )
+            # **两种成因分开报**：没传 `--profile-dir` 时剖析根本没启动（这是适配器侧
+            # 的事，与 stderr 无关）；传了却没结果才是 D7 的降级，成因在被测进程的
+            # stderr 里。混成一句话会把读者指向一个空无一物的地方。
+            if not plan.profile_dir:
+                warnings.append(
+                    '已请求剖析但 plan.profile_dir 为空——被测 CLI 的 `--profile-dir` '
+                    '未传，剖面无处落盘，本次剖析实际没有启动（不是 D7 的降级）。'
+                )
+            else:
+                warnings.append(
+                    '已请求剖析（plan.profile_enabled）但未取到函数级统计：'
+                    '被测进程的 stderr 里有具体成因（§3.8 D7）。'
+                )
 
         return SingleRun(
             wall=wall,

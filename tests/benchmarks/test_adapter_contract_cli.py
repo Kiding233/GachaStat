@@ -129,6 +129,26 @@ class TestArgvAssembly:
         argv = get_adapter('cli').build_argv(make_plan(), perf_json='P', output='O')
         assert '--no-progress' in argv
 
+    def test_profile_flags_passed_when_enabled(self, make_plan, tmp_path):
+        """§3.8 D1 的四字段在 `cli` 上只能经被测 CLI 的 `--profile-*` 传下去。
+
+        **缺这一段则 cli 路径的 `function` 档静默失效**：`cli.py` 有这三个开关、
+        `--perf-json` 也会回传 `functions`，但没人传开关，于是永远拿不到剖面，
+        只剩一条把读者指向 stderr 的告警——而 stderr 里什么都没有。
+        """
+        plan = make_plan(profile_enabled=True, profile_dir=str(tmp_path),
+                         profile_skip=0, profile_count=7)
+        argv = get_adapter('cli').build_argv(plan, perf_json='P', output='O')
+        for flag, value in (('--profile-dir', str(tmp_path)),
+                            ('--profile-skip', '0'),
+                            ('--profile-count', '7')):
+            assert argv[argv.index(flag) + 1] == value
+
+    def test_profile_flags_absent_when_disabled(self, make_plan):
+        """没请求剖析时一个开关都不传——默认路径上不引入任何采样。"""
+        argv = get_adapter('cli').build_argv(make_plan(), perf_json='P', output='O')
+        assert not [item for item in argv if item.startswith('--profile-')]
+
 
 class TestUnavailablePathIsSkippedNotFatal:
     """`available()` 为 False 时平台**跳过**该适配器而非报错（§二 G2）。"""

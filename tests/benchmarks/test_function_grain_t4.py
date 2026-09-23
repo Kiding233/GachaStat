@@ -159,3 +159,55 @@ class TestTripleArityContract:
         )
         assert len(result.packet_bytes) == N
         assert all(b > 0 for b in result.packet_bytes)
+
+
+@requires_real_run
+class TestCliFunctionGrainClosure:
+    """§3.9 T4 明写要求而此前**缺失**的那条断言（AUDIT-BREAK-3）。
+
+    原文：「`cli` 路径的 `function` 档闭合链：断言 `cli` 适配器产出的
+    `RunResult.functions` **非 `None`**（即 `--perf-json` 的 `run_id` / `functions`
+    两字段确实回传到了适配器进程）——`cli` 是 §3.8 D1 指定的 `function` 档主路径，
+    而它是子进程驱动，**不测这一条则该链「在两端各自成立、中间断开」时无人发现**」。
+
+    2026-09-23 实测发现该断裂**确实存在**：`CliAdapter.build_argv` 从不传
+    `--profile-*`，故被测 CLI 的剖析从未启动、`functions` 恒为 `None`，而报告里只有
+    一条把读者指向 stderr 的告警。本类即原文要求的那道断言，现已补上并随之修好。
+    """
+
+    pytestmark = pytest.mark.timeout(60)   # §3.9：T4 ≤ 60s
+
+    @pytest.fixture
+    def plan(self, make_plan, tmp_path):
+        return make_plan(config_path=CONFIG, n=20, workers=2, seed=SEED,
+                         repeats=1, grain='function', collector=False,
+                         profile_enabled=True, profile_dir=str(tmp_path / 'prof'),
+                         profile_skip=0, profile_count=4)
+
+    def test_functions_come_back_through_perf_json(self, plan):
+        result = get_adapter('cli').run(plan)
+        assert result.functions, (
+            'cli 的 function 档闭合链断了：适配器未取到函数级统计。'
+            f'告警：{result.warnings}'
+        )
+        names = ' '.join(f.name for f in result.functions)
+        assert '_run_single' in names or 'output' in names, names[:300]
+
+    def test_no_chain_when_no_directory(self, plan):
+        """对照组：请求了剖析但**没有可写目录**时，`functions` 如实为 `None`。
+
+        **注意不能用 `grain='function'` 造这个对照**：`grain='function'` 走两趟
+        （§3.8 D6），第二趟**总会**自己配一个临时目录，故它必然有剖面。要测的是
+        「请求了剖析、但没人给它落盘的地方」——对应 `stage` 档 + `profile_dir` 为空。
+
+        同时断言告警**点名真实成因**：「没传 `--profile-dir`，剖析实际没启动」与
+        D7 的「剖析故障，成因在 stderr 里」是两件事，混成一句会把读者指向一个
+        空无一物的地方（这正是修好之前那条告警的问题）。
+        """
+        from dataclasses import replace
+
+        quiet = replace(plan, grain='stage', profile_dir='', profile_enabled=True)
+        result = get_adapter('cli').run(quiet)
+        assert result.functions is None
+        assert any('profile_dir 为空' in w for w in result.warnings), result.warnings
+        assert not any('stderr 里有具体成因' in w for w in result.warnings), result.warnings

@@ -2,6 +2,41 @@
 """性能分析：模拟 GUI 流程各阶段耗时"""
 import sys, os, time
 
+def _parse_scale():
+    """解析规模参数，并**按性能平台的同一组常量**做安全检查。
+
+    **为什么必须挡**（P83 `04-问题.md` 的 P0）：`workers` 取自核数（22 核 → 上限 16），
+    按规则 5 的公式 `max(2.0, workers × 0.75)` 需要 **12 GB** 可用内存，而本机长期
+    只有 2-5 GB。**修好属性名之后本脚本从「一跑就崩」变成「一跑就真跑」——失效本身
+    此前构成了一道无意的保护**，修复把风险由潜伏变为现实。2026-09-17 那台机器被
+    60000 次无收集器的模拟打满内存崩掉，就是这个形态。
+
+    阈值**不在本脚本里另立一份**：交给 `scale_issue()`（内部仍走 `Plan.validate()`），
+    越界即拒绝运行并原样重放平台给的成因。调小 `--workers` 即可在内存紧张的机器上跑。
+    """
+    import argparse
+
+    default_workers = min(16, (os.cpu_count() or 8) - 2)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('-n', '--num-simulations', type=int, default=1000)
+    parser.add_argument('-w', '--workers', type=int, default=default_workers,
+                        help='默认取核数-2、上限 16；内存不足时按平台规则 5 调小')
+    args = parser.parse_args()
+
+    from benchmarks.perf.plan import scale_issue
+
+    issue = scale_issue(args.num_simulations, args.workers,
+                        collector=True, path='cli')
+    if issue is not None:
+        raise SystemExit(
+            '⚠ 规模被性能平台的安全协议拒绝，已中止（原样重放该规则）：\n'
+            f'  {issue}\n'
+            f'  本次请求 N={args.num_simulations} workers={args.workers}——'
+            '调小 --workers（或 --num-simulations）后重试。'
+        )
+    return args.num_simulations, args.workers
+
+
 def main():
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(PROJECT_ROOT)
@@ -22,7 +57,7 @@ def main():
     # ── 构建 SimulationEnv ──
     t1 = time.time()
     target_specs = {tc.card_id: tc.quantity for tc in config_store.target_cards}
-    N, workers = 1000, min(16, (os.cpu_count() or 8) - 2)
+    N, workers = _parse_scale()
     env = SimulationEnvBuilder.from_config_store(config_store)
     t2 = time.time()
     print(f"[2] env构建: {t2 - t1:.2f}s")

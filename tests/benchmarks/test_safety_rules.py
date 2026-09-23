@@ -25,12 +25,13 @@ from benchmarks.perf.plan import (
     MEM_BASE_GB,
     MEM_GUI_QT_EXTRA_GB,
     MEM_PER_WORKER_GB,
+    MemoryProbeUnavailable,
     N_MAX_NO_COLLECTOR,
     N_MAX_WITH_COLLECTOR,
     PROFILE_COUNT_MAX,
-    MemoryProbeUnavailable,
     SafetyRuleError,
     injected_memory_query,
+    scale_issue,
 )
 
 AMPLE = 64.0
@@ -237,3 +238,53 @@ class TestEveryRejectionIsAValueError:
     def test_value_error(self, make_plan, overrides):
         with pytest.raises(ValueError):
             make_plan(**overrides)
+
+
+class TestScaleIssueForScripts:
+    """`scale_issue()`：给 `scripts/` 下那些**不经 `Plan` 构造**就直接调
+    `run_batch_parallel` 的脚本用的规模护栏（`04-问题.md` 的 P0）。
+
+    那些脚本没有构造期校验这道防线，而 `workers` 取自核数（22 核 → 上限 16），按
+    规则 5 需要 12 GB 可用内存，本机长期只有 2-5 GB。**阈值不在脚本里另立一份**——
+    本函数内部仍走 `Plan.validate()`，故只有一处口径。
+    """
+
+    def test_accepts_a_small_scale(self):
+        with injected_memory_query(lambda: 64.0):
+            assert scale_issue(100, 2) is None
+
+    def test_rejects_when_memory_is_short(self):
+        with injected_memory_query(lambda: 3.0):
+            issue = scale_issue(1000, 16)
+        assert issue is not None and '规则 5' in issue
+
+    def test_rejects_over_the_n_limit(self):
+        """脚本传了 `on_result`（collector=True），故受规则 4 的 1600 管。"""
+        with injected_memory_query(lambda: 64.0):
+            assert scale_issue(N_MAX_WITH_COLLECTOR + 1, 2) is not None
+            assert scale_issue(N_MAX_WITH_COLLECTOR, 2) is None
+
+    def test_collector_flag_selects_the_rule(self):
+        """`collector=False` 时受规则 1 的 1000 管——传错只影响该用哪条规则。"""
+        with injected_memory_query(lambda: 64.0):
+            assert scale_issue(N_MAX_NO_COLLECTOR + 1, 2, collector=False) is not None
+            assert scale_issue(N_MAX_NO_COLLECTOR + 1, 2, collector=True) is None
+
+    def test_gui_qt_path_carries_the_extra_half_gigabyte(self):
+        """`gui-qt` 的特例要跟着走，否则 `profile_gui.py` 那道防线会偏松。"""
+        with injected_memory_query(lambda: 2.4):
+            assert scale_issue(100, 2, path='gui-qt') is not None
+            assert scale_issue(100, 2, path='cli') is None
+
+    def test_malformed_values_are_rejected_not_raised(self):
+        """`n <= 0` 一类形态错误也算拒绝：本函数的契约是「返回成因」而非抛异常。"""
+        with injected_memory_query(lambda: 64.0):
+            assert scale_issue(0, 2) is not None
+
+    def test_shares_the_single_source_of_truth(self):
+        """反向自检：改动规则的唯一来源，本函数必须跟着变。"""
+        import inspect
+
+        from benchmarks.perf import plan as plan_module
+
+        assert 'Plan(' in inspect.getsource(plan_module.scale_issue)

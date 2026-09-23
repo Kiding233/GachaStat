@@ -15,6 +15,7 @@
 | D2.1 | `grain='function'` 且 `workers <= 1`（只有 MPPool 路径经过 `_wk_run_single`） |
 | §3.3 | `grain='single'`——本期未实现，声明即调用方编程错误 |
 | §3.11 | `subject='startup'` 落到本期无落点的路径 / 档位（`3e`，见下） |
+| §3.3 | `py_spy=True`——43 项中无任何一项承接它的消费方（2026-09-23 补，见下） |
 
 规则 1 与规则 4 的上限**互不包含**：若规则 1 沿用规则 4 的 1600，其拒绝集合会
 成为规则 4 的真子集，而事故量级（60000 无收集器）恰好落在放行区间内。
@@ -208,6 +209,32 @@ def suspended_memory_check() -> Iterator[None]:
         yield
 
 
+def scale_issue(n: int, workers: int, *, collector: bool = True,
+                path: str = 'cli') -> Optional[str]:
+    """按安全协议检查一组规模参数；通过返回 `None`，否则返回拒绝成因。
+
+    **给谁用：`scripts/` 下那些不经 `Plan` 构造就直接调 `run_batch_parallel` 的脚本。**
+    它们没有构造期校验这道防线，而 `workers` 取自核数（本机 22 核 → 上限 16），按
+    规则 5 的公式需要 **12 GB** 可用内存，而本机长期只有 2-5 GB。2026-09-17 那台
+    机器被 60000 次无收集器的模拟打满内存崩掉，就是这个形态——**脚本自己定规模、
+    没有任何人拦**。修复它们的属性名之后，它们从「一跑就崩」变成「一跑就真跑」，
+    风险随之由潜伏变为现实（见 `04-问题.md` 的 P0）。
+
+    **阈值不在调用方另立一份**：本函数内部仍走 `Plan.validate()`，故规则 1 / 4 / 5
+    与 D8 的数值只有一处口径。`collector` 与 `path` 由调用方如实申报（传错只影响
+    该用哪条规则，不影响「有没有人拦」）。
+
+    **读不到可用内存也拒绝**（`MemoryProbeUnavailable` 是 `SafetyRuleError` 的子类）
+    ——规则 5 是防 OOM 的硬规则，读不到就不放行。
+    """
+    try:
+        Plan(config_path='', strategy_key='', strategy_params={}, n=n, workers=workers,
+             seed=0, collector=collector, path=path)
+    except (SafetyRuleError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
 # ── Plan ─────────────────────────────────────────────────
 
 
@@ -323,6 +350,23 @@ class Plan:
             )
         if self.grain not in GRAINS:
             raise ValueError(f'Plan.grain 必须是 {GRAINS} 之一，收到 {self.grain!r}')
+        if self.py_spy:
+            # 与 `grain='single'` 同型：**声明了平台不实现的档位即调用方编程错误**。
+            # `py_spy` 是 §6.0 的 `1b` 列进字段表的，但 43 项里**没有任何一项承接
+            # 「谁在 `py_spy=True` 时去调 `perf/profilers/pyspy.py`」**——阶段 4 交付
+            # 的是调用封装 + speedscope 解析 + 解析层测试，消费方从未归属。
+            # 放行的后果是**静默**：plan 写 `py_spy: true`，平台照常跑完、照常出报告，
+            # 只是什么也没采，连一句告警都没有（与 §3.13 要防的「报告说谎」同型；
+            # 对照 `grain='single'` 有这道拒绝，所以它不静默）。
+            # 要解除本条：先给某条路径加上「读该字段并真的去 attach」的落点，
+            # 登记到 §6.0 后**再删除**本拒绝规则。
+            raise ValueError(
+                "Plan.py_spy=True 本期无落点（P83 §6.0 的 43 项中无任何一项承接它的"
+                '消费方）：阶段 4 交付的是 py-spy 的调用封装与 speedscope 解析，'
+                '但没有任何路径会在该字段为真时去调用它。放行会让 plan 看起来请求了'
+                '现场采样、实际什么也不采且无告警。实现该字段须先登记消费方，'
+                "再删除本条拒绝规则（同 §3.3 对 grain='single' 的处置）。"
+            )
         if self.repeats < 1:
             raise ValueError(f'Plan.repeats 必须 >= 1，收到 {self.repeats}')
         if self.profile_skip < 0:

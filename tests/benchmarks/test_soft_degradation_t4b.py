@@ -14,6 +14,7 @@
 每条路径还须**成因可辨**：D7 的四种成因不得共用一句话，否则读的人不知道该查什么。
 """
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -69,11 +70,19 @@ _VOLATILE = ('generated_at',)
 
 
 def _fingerprint(result):
-    """把一组 `CompactResult` 归一为可逐字段比对的形式。"""
-    return [
-        {k: v for k, v in r.to_dict().items() if k not in _VOLATILE}
-        for r in result
-    ]
+    """把一组 `CompactResult` 归一为可逐字段比对的形式。
+
+    **按内容排序后再比**（2026-09-28 订正，独立审查指出）：MPPool 路径用
+    `imap_unordered` 边收边 `append`（`batch_simulator.py:650`），同种子下每次模拟的
+    **内容**是确定的、但**返回顺序不确定**（谁先算完谁先出）。不排序就是在比顺序，
+    会把顺序差异误报成内容差异。**实测**：空载时 27/27 通过；加载 8 个满载 CPU 进程后
+    16 对里 7 对失败，而每次失配都是纯排列、逐条内容完全相等。
+
+    同一条 worker 路径的 `test_function_grain_t4.py` 早就按多重集读（那里的注释写的就是
+    这个理由），本处此前漏了——**同一个仓里两处同型断言写法不一致，是漏抄而非有意**。
+    """
+    rows = [{k: v for k, v in r.to_dict().items() if k not in _VOLATILE} for r in result]
+    return sorted(rows, key=lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False))
 
 
 class TestPath1ProfileDirNotWritable:

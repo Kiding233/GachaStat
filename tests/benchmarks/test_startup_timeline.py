@@ -21,6 +21,7 @@ from benchmarks.perf.adapters.gui_qt import (
     STARTUP_JSON_ENV,
     STARTUP_PLATFORM,
     WARN_STARTUP_NOT_A_PARTITION,
+    WARN_STARTUP_WARM,
     GuiQtAdapter,
     _as_float,
     _positive,
@@ -50,6 +51,22 @@ import time:     22628 |      28823 | PyQt6.QtWebEngineWidgets
 import time:      1084 |     430248 | gacha_simulator.gui.main_window
 some unrelated stderr noise
 """
+
+
+class TestWarmStartIsLabelled:
+    """§七 的验收条：启动记录须**显式标注「热启动、非冷启动」**（规则 10 的配套）。
+
+    只实现「预热一次丢弃」不够——**读数是热启动值这一点不写进记录，用的人就会把它当
+    冷启动**，而两者相差数倍（冷热文件缓存）。故记录里必须带一句说明。真实运行的那条
+    断言在受门控的 `TestRealStartupMeasurement` 里，此处钉住文案本身。
+    """
+
+    def test_wording_says_warm_not_cold(self):
+        assert '热启动' in WARN_STARTUP_WARM
+        assert '冷启动' in WARN_STARTUP_WARM and '不在覆盖范围' in WARN_STARTUP_WARM
+
+    def test_wording_points_at_the_rule(self):
+        assert '规则 10' in WARN_STARTUP_WARM
 
 
 class TestStartupVocabulary:
@@ -367,6 +384,9 @@ class TestRealStartupMeasurement:
 
         # 平台口径必须记下来（§3.11：启动跑真实平台，与 offscreen 的基线不可混比）
         assert result.fingerprint.qt_qpa_platform == STARTUP_PLATFORM
+
+        # §七 验收条：热启动/非冷启动须显式标注
+        assert any('热启动' in w for w in result.warnings), result.warnings
 
         # 外部观测的三段随适配器一并落地
         assert result.stages.get('work_complete', 0) > 0

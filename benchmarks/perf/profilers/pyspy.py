@@ -149,12 +149,25 @@ def record(
         argv += ['--rate', str(rate)]
     if output:
         argv += ['--output', output]
-    # `--duration` 让 record 自行收口；不设则须外部发信号停止（无人值守场景下不可靠）
-    argv += ['--duration', str(duration)]
+    # `--duration` 让 record 自行收口；不设则须外部发信号停止（无人值守场景下不可靠）。
+    #
+    # **必须是整数秒**：`py-spy` 的 `--duration` 走 `ParseIntError` 解析，传 `8.0`
+    # 会让它 **panic 退出（码 101）**——2026-09-28 实测 attach 时撞到。此前 `4c` 的
+    # 用例只用整数时长（`str(1)` → `"1"`）故没暴露；而「不真的 attach」是 T5 的明确
+    # 设计，所以这条只能靠**手工实测**发现。取整后若与原值不等，记一条告警——读数上
+    # 看不出来的口径变化不该静默发生。
+    seconds = max(1, int(round(duration)))
+    notes: List[str] = []
+    if abs(seconds - duration) > 1e-9:
+        notes.append(
+            f'py-spy 的 --duration 只接受整数秒：请求 {duration}s，实际按 {seconds}s 采样'
+        )
+    argv += ['--duration', str(seconds)]
 
     result = _run(argv, timeout=timeout if timeout is not None else duration + 30.0)
     if output:
         result.output_path = output
+    result.warnings.extend(w for w in notes if w not in result.warnings)
     return result
 
 

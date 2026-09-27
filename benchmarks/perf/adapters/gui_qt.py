@@ -159,6 +159,16 @@ _STARTUP_CPU_IDLE_SAMPLES = 2
 #: 与「恰好赶上两个空档」分开（连上 `_STARTUP_CPU_IDLE_SAMPLES=2` 即要求约 1s 安静）。
 _STARTUP_CPU_WINDOW_SECONDS = 0.5
 
+WARN_STARTUP_WARM = (
+    '本记录是**热启动**：按规则 10 先跑一次同条件预热并丢弃，记录的是第二次。'
+    '**冷启动（清空文件缓存）显式不在覆盖范围**——无管理员权限下无法可靠清空 Windows '
+    '文件缓存，故本读数不可当「用户首次启动」读（P83 §3.11 规则 10）。'
+)
+"""§七 的验收条要求「启动测量的基线记录中显式标注『热启动、非冷启动』，或等价的
+可比性说明」。**读数是热启动值这一点不写进记录，比对的人就会把它当冷启动用**——
+而两者相差数倍（冷热文件缓存差异），是典型的「口径没写清就会被误用」。"""
+
+
 WARN_STARTUP_NOT_A_PARTITION = (
     '启动八段不是一份划分：Qt 栈 import（第 2 段）与主模块 import（第 4 段）是 '
     '-X importtime 的独立测量，时间窗与第 1 / 3 / 5 段重叠，故八段之和不等于总'
@@ -514,7 +524,7 @@ class GuiQtAdapter(Adapter):
         经 `STARTUP_JSON_ENV` 指向的 JSON 回传（生产者是 `3f-2`），其余由父进程外部
         观测（2 / 4 解析 `-X importtime`，6 `EnumWindows`，7 整棵进程树 CPU）。
         """
-        warnings: List[str] = []
+        warnings: List[str] = [WARN_STARTUP_WARM]
 
         # 规则 10：先跑一次同条件预热并丢弃。**冷启动（清空文件缓存）显式不在覆盖
         # 范围**——无管理员权限下无法可靠清空 Windows 文件缓存（§3.11 规则 10）。

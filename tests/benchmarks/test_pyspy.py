@@ -194,7 +194,30 @@ class TestCommandAssembly:
         assert argv[argv.index('--format') + 1] == 'speedscope'
         assert argv[argv.index('--output') + 1] == 'out.json'
         assert argv[argv.index('--rate') + 1] == '200'
-        assert argv[argv.index('--duration') + 1] == '8.0'
+        assert argv[argv.index('--duration') + 1] == '8'
+
+    def test_duration_is_sent_as_an_integer(self, captured):
+        """`--duration` **必须取整**——`py-spy` 用 `ParseIntError` 解析它。
+
+        传 `8.0` 会让 py-spy **panic 退出（码 101）**，即 `record()` 对任何非整数时长
+        从来不工作。**本文件原来那条断言写的是 `== '8.0'`**，把缺陷当成正确行为钉住了，
+        所以 T5 全绿、缺陷活着——而「不真的 attach」是 T5 的明确设计，只有手工实测
+        能发现它（2026-09-28 attach 时撞到）。
+        """
+        record(1, duration=8.0)
+        assert captured[-1][captured[-1].index('--duration') + 1] == '8'
+        record(1, duration=7.4)
+        assert captured[-1][captured[-1].index('--duration') + 1] == '7'
+
+    def test_duration_rounding_is_announced(self, captured):
+        """取整改变了读数口径（采样时长），不该静默发生。"""
+        assert record(1, duration=8.0).warnings == []
+        assert any('只接受整数秒' in w for w in record(1, duration=7.4).warnings)
+
+    def test_sub_second_duration_floors_at_one(self, captured):
+        """`--duration 0` 在 py-spy 里意为「一直采」，故下限取 1 秒。"""
+        record(1, duration=0.2)
+        assert captured[-1][captured[-1].index('--duration') + 1] == '1'
 
     def test_record_covers_subprocesses_by_default(self, captured):
         """不覆盖子进程就只能采到父进程主线程的空等（实测父进程空等在 pool.py:861）。"""

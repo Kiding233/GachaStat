@@ -102,7 +102,13 @@ __all__ = ['GuiQtAdapter', 'pyqt_available', 'qt_argv', 'parse_importtime',
 
 #: 本路径**结构上不产出**的段：产品侧没有回传通道，这几段在 GUI 进程内发生但不外流。
 #: 报告据此标注「本路径不产出该段」，**不得留空静默跳过**（§3.5 末表的口径）。
-_ABSENT_STAGES = ('config_load', 'env_build', 'pool_start', 'extract')
+#:
+#: **`dispatch`（面板分发）也在此列（2026-09-28 订正）。** 此前本路径报过一个该段的值，
+#: 但那是**假的**：`_await_completion` 是「副作用已落地」之后才取起点、再固定排空
+#: `_POLL_INTERVAL` 才返回——而「副作用落地」本身就是 `MainWindow.on_simulation_finished`
+#: 跑完的产物。故它结构上恒等于那个常量，不是「两条 `on_simulation_finished` 之间」的跨度。
+#: 详见 `_drive` 里的说明与 `04-问题.md`。
+_ABSENT_STAGES = ('config_load', 'env_build', 'pool_start', 'extract', 'dispatch')
 
 #: 轮询间隔（秒）。GUI 的完成判据是副作用而非信号，只能轮询。
 _POLL_INTERVAL = 0.05
@@ -302,18 +308,32 @@ class GuiQtAdapter(Adapter):
 
         # 完成判据走 MainWindow 的**结果落地副作用**（§3.10 第 1 条）
         timeout = max(_MIN_TIMEOUT, self._estimate_timeout(plan))
-        dispatch_seconds = self._await_completion(app, window, panel, thread,
-                                                 baseline, baseline_index, timeout)
+        self._await_completion(app, window, panel, thread,
+                               baseline, baseline_index, timeout)
         wall = time.perf_counter() - started
 
-        simulate_seconds = max(0.0, wall - dispatch_seconds)
-        raw_stages = {'simulate': simulate_seconds, 'dispatch': dispatch_seconds}
+        # **只报 `simulate` 一段，且它含 env 构建与进程池启动**（产品侧无采集点，三者
+        # 在这条路径上不可切分）。**不报 `dispatch`**——2026-09-28 订正：本适配器此前报过
+        # 一个 `dispatch` 值，但那是**假的**。§3.10 要求该段的切分点是「`GachaPanel.
+        # on_simulation_finished` 的 emit 到 `MainWindow.on_simulation_finished` 的返回」，
+        # 而这两个时刻**都在 Qt 事件循环内部、两次槽调用之间**：适配器只能在
+        # `processEvents()` 之外观察，而它唯一的观察口（结果副作用出现）恰恰是那个跨度
+        # **结束之后**的产物。故该跨度在不改产品代码的前提下**外部不可观测**——§3.10 的
+        # 逃生口正是为这类情形写的（停下并申报产品侧通道），而不是拿近似值充当读数。
+        # 报一个恒等于排空常量的数，与「填 0 冒充采到了」同类，比缺席更坏。
+        raw_stages = {'simulate': wall}
         stages, stage_warnings = normalize_stages(raw_stages, absent_by_design=self.absent_stages)
         warnings.extend(w for w in stage_warnings if w not in warnings)
         # 噪声过滤：offscreen 下 Chromium 会往 stderr 输出 GPU 错误，不影响功能（§3.10）
         warnings.append(
             '本路径无回传通道：阶段计时与三元组字节数不可得（§3.5）；'
             'simulate 段含 env 构建与进程池启动——产品侧无采集点，三者在这条路径上不可切分。'
+        )
+        warnings.append(
+            '`dispatch`（面板分发）段本路径**不产出**：§3.10 定的切分点（两条 '
+            '`on_simulation_finished` 之间）在 Qt 事件循环内部、两次槽调用之间，适配器'
+            '唯一的外部观察口是「结果副作用出现」——而那正是该跨度**结束之后**的产物，'
+            '故它外部不可观测。要测该段须按 §3.10 的逃生口申报产品侧 opt-in 通道。'
         )
 
         resources, resource_warnings = normalize_resources(subject=plan.subject)
@@ -370,14 +390,18 @@ class GuiQtAdapter(Adapter):
 
     def _await_completion(self, app: Any, window: Any, panel: Any, thread: Any,
                           baseline: Any, baseline_index: Optional[int],
-                          timeout: float) -> float:
-        """轮询等完成，返回 `dispatch` 段的耗时。
+                          timeout: float) -> None:
+        """轮询等完成。**不返回任何耗时**——它只负责「等到收口」。
 
         三条出口（§3.10）：**完成** = 结果副作用出现；**失败** = 线程结束但副作用未出现；
         **超时** = 到点杀进程树并抛错（绝不无超时等待）。
+
+        2026-09-28 订正：本方法此前返回一个「`dispatch` 段耗时」，但那个数**结构上是个
+        常量**——起点取在「副作用已落地」之后，而那正是该跨度结束的产物；随后固定排空
+        `_POLL_INTERVAL` 才返回，所以它恒等于那个排空窗口。见 `_drive` 里对 `dispatch`
+        缺席的说明。
         """
         deadline = time.perf_counter() + timeout
-        dispatch_started: Optional[float] = None
 
         while True:
             app.processEvents()
@@ -385,19 +409,16 @@ class GuiQtAdapter(Adapter):
             # **两侧都为 None 时不能用 `!=` 判完成**——那意味着本窗口根本没有可读的
             # 结果容器，而不是「结果已落地」。此时只能靠线程结束 + 错误判据收口。
             if baseline is not None and evidence is not None and evidence != baseline:
-                # 副作用已落地。`dispatch` 段 = 面板 emit 到 MainWindow 处理返回。
-                dispatch_started = time.perf_counter()
                 self._drain_events(app, _POLL_INTERVAL)
-                return time.perf_counter() - dispatch_started
+                return
 
             if self._thread_finished(thread):
                 # **先宽限排空、再下结论**：`QThread.isFinished()` 会先于**排队中的
                 # `finished` 信号**为真（信号经事件循环投递）。不等投递就判失败，
                 # 会把每一次正常完成都误报成失败——`_FINISH_GRACE_SECONDS` 就是为此。
                 if self._grace_drain(app, window, baseline):
-                    dispatch_started = time.perf_counter()
                     self._drain_events(app, _POLL_INTERVAL)
-                    return time.perf_counter() - dispatch_started
+                    return
 
                 status = self._status_text(panel)
                 if self._looks_like_error(status):
@@ -407,9 +428,8 @@ class GuiQtAdapter(Adapter):
                     )
                 if self._current_tab_index(window) != baseline_index:
                     # 副作用以另一种形式出现（切了 tab）——按完成处理
-                    dispatch_started = time.perf_counter()
                     self._drain_events(app, _POLL_INTERVAL)
-                    return time.perf_counter() - dispatch_started
+                    return
                 raise AdapterError(
                     'gui-qt 路径失败：SimulationThread 已结束，但宽限期后结果副作用与 '
                     f'tab 索引仍未变化，状态栏文案={status!r}（§3.10 的错误判据）'

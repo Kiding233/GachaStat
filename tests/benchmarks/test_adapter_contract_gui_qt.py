@@ -78,9 +78,13 @@ class TestContractSurface:
         assert 'gui-qt' in load_adapters()
 
     def test_declares_absent_stages(self):
-        """产品侧没有回传通道，这四段在 GUI 进程内发生但不外流——属事实而非缺口。"""
+        """产品侧没有回传通道，**六段全部**在 GUI 进程内发生但不外流——属事实而非缺口。
+
+        `dispatch` 是 2026-09-28 补进这一列的：它此前报过一个恒等于排空常量的假值
+        （切分点在 Qt 事件循环内部、两次槽调用之间，外部不可观测），现如实标为不产出。
+        """
         assert set(get_adapter('gui-qt').absent_stages) == {
-            'config_load', 'env_build', 'pool_start', 'extract',
+            'config_load', 'env_build', 'pool_start', 'extract', 'dispatch',
         }
 
     def test_timeout_is_finite(self):
@@ -300,11 +304,15 @@ class TestRealRunContract:
     def test_stages_and_absent_stages_are_labelled(self, plan):
         result = get_adapter('gui-qt').run(plan)
         assert result.stages.get('simulate', 0) > 0
-        assert result.stages.get('dispatch', 0) > 0
-        for absent in ('config_load', 'env_build', 'pool_start', 'extract'):
-            assert absent not in result.stages
+        # **六段一段都不产出**（2026-09-28 订正）：`dispatch` 此前报过一个恒等于排空常量
+        # 的假值，现如实标为「本路径不产出」。**这条断言要有鉴别力**——旧版只写
+        # `dispatch > 0`，而那是个常量，所以旧断言对缺陷毫无反应。
+        for absent in ('config_load', 'env_build', 'pool_start', 'extract', 'dispatch'):
+            assert absent not in result.stages, absent
         assert any('本路径不产出该段' in w for w in result.warnings)
         assert any('本路径不可得' in w for w in result.warnings)
+        # 成因要能读出来：面板分发段为何外部不可观测
+        assert any('面板分发' in w for w in result.warnings), result.warnings
 
     def test_no_gui_side_effects_after_teardown(self, plan):
         """规则 7：收尾必须回收 Chromium 子进程，否则每跑一次残留 10 个。

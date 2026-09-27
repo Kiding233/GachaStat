@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.perf.record import SamplesMeta
+from tests.benchmarks.conftest import requires_real_run
 from benchmarks.perf.profilers.pyspy import (
     DEFAULT_RATE_HZ,
     Hotspot,
@@ -269,3 +270,63 @@ class TestPublicSurface:
                        samples=1).name == 'f'
         assert PySpyResult(available=True, ok=True)
         assert SpeedscopeSummary(meta=SamplesMeta(), profile_count=0, frame_count=0)
+
+
+@requires_real_run
+class TestLiveAttach:
+    """G4 的**可重复**证据（2026-09-28 补——独立审查指出此前仓内只有一次性手工记录）。
+
+    §七 要求「`py-spy` 采集可 attach 到运行中的真实进程并覆盖子进程」，而本文件开头
+    明写「**不在测试里真的 attach**」。两者不矛盾但需要分清：T5 管的是**默认门控**——
+    attach 要真实长跑进程，会造成 flaky 与内存风险，不能进 `pytest -q`；本类受
+    `P83_PERF_TESTS` 门控、由人工触发，正好落在 T5 划出的那条线之外。
+
+    判「覆盖子进程」的依据：`cli` 路径的父进程此刻阻塞在 `imap_unordered` 上，真正
+    干活的是 **worker 子进程**，故样本里出现**只在 worker 侧执行**的函数名即证明覆盖
+    到了。只看「有没有采到样本」不够——那只能证明 attach 成功。
+    """
+
+    pytestmark = pytest.mark.timeout(180)
+
+    def test_attach_covers_worker_subprocesses(self, tmp_path):
+        import os
+        import sys
+        import time
+
+        from benchmarks.perf.profilers.pyspy import parse_speedscope, record, resolve_binary
+
+        if resolve_binary() is None:
+            pytest.skip('本环境没有 py-spy 可执行文件')
+
+        target = tmp_path / 'attach.speedscope.json'
+        root = Path(__file__).resolve().parents[2]
+        proc = subprocess.Popen(
+            [sys.executable, '-m', 'gacha_simulator.cli', '-n', '600', '-w', '2',
+             '-s', '42', '--no-progress', '-o', str(tmp_path / 'out.json')],
+            cwd=str(root), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            text=True, encoding='utf-8', errors='replace',
+        )
+        try:
+            time.sleep(3.0)          # 等进程池起起来、进入模拟循环
+            result = record(proc.pid, duration=6, output=str(target), subprocesses=True,
+                            rate=200)
+            assert result, f'采样失败：ok={result.ok} warnings={result.warnings}'
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:      # pragma: no cover
+                proc.kill()
+        assert os.path.isfile(target), '未产出 speedscope 文件'
+
+        summary = parse_speedscope(str(target))
+        assert not summary.meta.errors, summary.meta.errors
+        names = [hot.name for hot in summary.hotspots]
+        # 多个剖面 = 不只采到父进程（`--subprocesses` 的产物）
+        assert summary.profile_count >= 2, f'只采到 {summary.profile_count} 份剖面'
+        worker_frames = [name for name in names
+                         if '_run_single' in name or 'run_simulation_compact' in name]
+        assert worker_frames, (
+            'attach 成功但**未覆盖子进程**：样本里没有任何只在 worker 侧执行的函数。'
+            f'前十个热点：{names[:10]}'
+        )

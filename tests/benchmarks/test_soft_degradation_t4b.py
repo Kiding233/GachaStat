@@ -119,6 +119,27 @@ class TestPath3WorkerTerminatedFilesMissing:
     这也是 `6b` 改成逐次落盘的原因之一。
     """
 
+    def test_simulation_unaffected(self, env_and_targets, tmp_path):
+        """**本条是独立审查补出来的**（§七 要求四条降级路径**各自**断言「模拟结果与不带
+        profile 的同种子对照组逐字段一致」，而路径 3 此前只有「成因可辨」两条断言）。
+
+        **自然触发**：单进程路径（`max_workers=1`）不经过 `_wk_run_single`，故即使请求了
+        剖析也一个文件都不会落——正好就是「worker 被 terminate 致文件缺失」那一形态
+        （§3.8 D2 的实证依据：`Pool.__exit__` 走 `self.terminate()`）。不需要注入替身。
+        """
+        env_a, targets_a = env_and_targets
+        control = _fingerprint(_run(env_a, targets_a, profile_dir='', enabled=False))
+
+        env_b, targets_b = env_and_targets
+        profile_dir = tmp_path / 'prof'
+        os.makedirs(profile_dir, exist_ok=True)
+        affected = _fingerprint(_run(env_b, targets_b, profile_dir=str(profile_dir),
+                                     enabled=True))
+        assert affected == control, '文件缺失这一形态不得改变模拟结果'
+        # 先确认本用例真的落在了路径 3 的形态上（否则这条断言是空转）
+        assert list(profile_dir.rglob(f'*{PROFILE_FILE_SUFFIX}')) == []
+        assert '没有任何' in merge_profiles(str(profile_dir))[1][0]
+
     def test_missing_files_have_their_own_cause(self, tmp_path):
         functions, warnings = merge_profiles(str(tmp_path))
         assert functions is None

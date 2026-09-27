@@ -166,8 +166,16 @@ class TestPath3WorkerTerminatedFilesMissing:
         env_b, targets_b = env_and_targets
         profile_dir = tmp_path / 'prof'
         profile_dir.mkdir(parents=True, exist_ok=True)
-        # **对照与实验组同用 `workers=2`**：换并发度会连带换掉「哪个种子落在哪个 worker」，
-        # 结果本就会变，那就不是一个受控对照了。
+        # **对照与实验组同用 `workers=2`**：并发度决定的是「哪个种子落在哪个 worker」与
+        # `imap_unordered` 的到达顺序，**不改变每条模拟的内容**（内容由 seed + i 与初始
+        # 资源决定，与 worker 编号无关——见 `batch_simulator.py:623-624`）。独立审查
+        # 2026-09-28 实测：`workers=1` 与 `workers=2` 的每条模拟内容多重集完全一致，
+        # 带 profile 与不带亦然，故本行原先「结果本就会变」的说法是错的。
+        #
+        # 那为什么仍要同 workers：本用例的对照组必须与实验组**走过同一条执行路径**，
+        # 否则两组的差异里就混进了路径差异，而不是被检验的「剖析是否伤及模拟」。
+        # 到达顺序那一维已由 `_fingerprint` 的排序消掉，故现在换并发度也能比——
+        # 保持同 workers 是为了把「同一条路径」这件事显式写出来。
         control = _fingerprint(_run(env_a, targets_a, profile_dir='', enabled=False,
                                     workers=2))
         affected = _fingerprint(_run(env_b, targets_b, profile_dir=str(profile_dir),

@@ -42,6 +42,10 @@ def main():
     os.chdir(PROJECT_ROOT)
     sys.path.insert(0, PROJECT_ROOT)
 
+    # **规模安检放在最前**（2026-09-28，与 `profile_gui.py` 同口径）：它只依赖 sys.path，
+    # 不依赖配置，故没有理由等到读完配置再判。越界即中止，不做任何无谓动作。
+    N, workers = _parse_scale()
+
     from gacha_simulator.core.config_toml import load_toml
     from gacha_simulator.service.batch_simulator import (
         SimulationEnvBuilder, run_batch_parallel,
@@ -57,7 +61,6 @@ def main():
     # ── 构建 SimulationEnv ──
     t1 = time.time()
     target_specs = {tc.card_id: tc.quantity for tc in config_store.target_cards}
-    N, workers = _parse_scale()
     env = SimulationEnvBuilder.from_config_store(config_store)
     t2 = time.time()
     print(f"[2] env构建: {t2 - t1:.2f}s")

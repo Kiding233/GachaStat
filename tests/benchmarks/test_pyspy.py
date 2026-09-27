@@ -6,8 +6,10 @@
 2. `4a` 的「`py-spy` 不存在」软降级：注入不存在的可执行路径后，`record` / `dump`
    的封装返回降级结果并记 `warnings`，**不抛异常、不使测量失败**
 
-**不在测试里真的 attach 进程**：attach 需要真实长跑进程，会造成 flaky 与内存风险
-（违反 §3.4 规则 4）。扣掉这一点，本文件可进默认 `pytest -q`、不受 `P83_PERF_TESTS` 门控。
+**默认门控内不在测试里真的 attach 进程**：attach 需要真实长跑进程，会造成 flaky 与内存风险
+（违反 §3.4 规则 4）。故本文件的**默认**部分（解析与软降级）进 `pytest -q`；「真的 attach」
+ 那一条落在 `TestLiveAttach` 里、**受 `P83_PERF_TESTS` 门控**（2026-09-28 补——§七 要求
+ 「可 attach 到运行中的真实进程」有可重复证据，而手工记录不算）。
 
 fixture 的来源：`py-spy record --format speedscope --rate 200 -- python <工作负载>`
 ——录制**新起的**进程，不是 attach 已有进程。
@@ -289,6 +291,11 @@ class TestLiveAttach:
     pytestmark = pytest.mark.timeout(180)
 
     def test_attach_covers_worker_subprocesses(self, tmp_path):
+        """**本用例直接起 cli 子进程，绕过 `Plan.validate()`**，故规则 5 的内存门禁在这里
+        不生效（n=600 时父进程保留约 600 × 1996 KB ≈ 1.2 GB）。受 `P83_PERF_TESTS` 门控、
+        由人工触发，故不构成默认路径上的风险；但若将来把它挪进默认套件，须先过一遍 `Plan`
+        的校验口径。
+        """
         import os
         import sys
         import time
@@ -300,12 +307,16 @@ class TestLiveAttach:
 
         target = tmp_path / 'attach.speedscope.json'
         root = Path(__file__).resolve().parents[2]
-        proc = subprocess.Popen(
-            [sys.executable, '-m', 'gacha_simulator.cli', '-n', '600', '-w', '2',
-             '-s', '42', '--no-progress', '-o', str(tmp_path / 'out.json')],
-            cwd=str(root), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            text=True, encoding='utf-8', errors='replace',
-        )
+        # **stderr 落文件，不要接 PIPE 而无人读**：日志一多就会把子进程堵死在 write 上
+        # （64KB 管道），表现为「采样期间子进程莫名不动」——同一个坑在 `gui_qt.py` 的启动
+        # 测量里踩过一次（见 `benchmarks/README.md` 的启动测量纪律），别在这里复现。
+        stderr_path = tmp_path / 'child_stderr.txt'
+        with open(stderr_path, 'w', encoding='utf-8', errors='replace') as err:
+            proc = subprocess.Popen(
+                [sys.executable, '-m', 'gacha_simulator.cli', '-n', '600', '-w', '2',
+                 '-s', '42', '--no-progress', '-o', str(tmp_path / 'out.json')],
+                cwd=str(root), stdout=subprocess.DEVNULL, stderr=err,
+            )
         try:
             time.sleep(3.0)          # 等进程池起起来、进入模拟循环
             result = record(proc.pid, duration=6, output=str(target), subprocesses=True,
@@ -322,8 +333,29 @@ class TestLiveAttach:
         summary = parse_speedscope(str(target))
         assert not summary.meta.errors, summary.meta.errors
         names = [hot.name for hot in summary.hotspots]
-        # 多个剖面 = 不只采到父进程（`--subprocesses` 的产物）
-        assert summary.profile_count >= 2, f'只采到 {summary.profile_count} 份剖面'
+
+        # **判据必须是能区分的那一条。** 独立审查做过对照实验：把 `--subprocesses` 关掉，
+        # `profile_count` 仍是 2-3——**speedscope 按「进程 × 线程」出份数**，只采父进程也有
+        # 好几份（`Thread-1 (_handle_workers)` 等）。故「份数 >= 2」在「完全没覆盖子进程」
+        # 时**照样通过**，与我刚在 `gui_qt` 里修掉的 `dispatch > 0` 是同一类无鉴别力断言。
+        # 真判据是：**剖面名里出现别的 pid**，以及下面的 worker 侧帧。
+        import json as _json
+
+        with open(target, encoding='utf-8') as handle:
+            payload = _json.load(handle)
+        profile_names = [item.get('name', '') for item in payload.get('profiles', [])]
+        # **判据的形态是实测定的，不是推的**：`py-spy` 只在采**多个进程**时才给剖面名加
+        # `Process <pid> ` 前缀；关掉 `--subprocesses` 时名字是裸的 `Thread <tid> "..."`。
+        # 故「名字里不含被测 pid」这种写法会把「无前缀」误判成「别的进程」而照样通过
+        # （我第一版就是这么写的，反向对照实测抓到）。**要判「覆盖了子进程」，必须要求
+        # 前缀存在且 pid 不同**。
+        foreign = [name for name in profile_names
+                   if name.startswith('Process ') and f'Process {proc.pid} ' not in name]
+        assert foreign, (
+            '没有采到任何**别的进程**的剖面——attach 成功但未覆盖子进程。'
+            '注意：`py-spy` 只在采多进程时才加 `Process <pid> ` 前缀，故空列表也可能是'
+            f'「根本没开 --subprocesses」。全部剖面名：{profile_names}'
+        )
         worker_frames = [name for name in names
                          if '_run_single' in name or 'run_simulation_compact' in name]
         assert worker_frames, (

@@ -39,8 +39,12 @@ def _parse_scale():
 
     from benchmarks.perf.plan import scale_issue
 
+    # **申报 `path='cli'` 而不是 `'gui-qt'`**（2026-09-28 订正）：规则 5 对 `gui-qt` 一律
+    # 按 `workers = 1` 计并只另加 0.5 GB，故在 16 个 worker 的批量模拟上算出的下限仍是
+    # 2.5 GB——那与 P0 要防的形态正相反（本脚本的 Phase B/C 直接调 `run_batch_parallel`，
+    # 吃内存的是那 16 个 worker，不是 GUI 面板那 0.5 GB）。独立审查 2026-09-28 指出。
     issue = scale_issue(args.num_simulations, args.workers,
-                        collector=True, path='gui-qt')
+                        collector=True, path='cli')
     if issue is not None:
         raise SystemExit(
             '⚠ 规模被性能平台的安全协议拒绝，已中止（原样重放该规则）：\n'
@@ -338,6 +342,12 @@ def print_cycle(times, label):
 # 主程序 - 必须在 __main__ 护卫内
 # ═══════════════════════════════════════════════════════════════
 if __name__ == '__main__':
+    # **规模安检放在第一步**（2026-09-28 订正）：原先它在 Phase A 之后才判，于是传一个
+    # 越界的 `-w` 会先把整个 `MainWindow`（含 10 个 ChartWebView 与 Chromium）建起来、
+    # 再拒绝——安检的意义就是「在昂贵且可能有风险的动作之前」挡住。同一类问题在
+    # `profile_sim.py` 里不存在（那里的安检在 `main()` 开头）。
+    N, max_workers = _parse_scale()
+
     from multiprocessing import freeze_support
     freeze_support()
 
@@ -387,7 +397,6 @@ if __name__ == '__main__':
     # ═══════════════════════════════════════════════════════════
     print(f"\nGachaStat GUI 模拟性能实测")
     print(f"平台: win32 | CPU: {os.cpu_count()} 核")
-    N, max_workers = _parse_scale()
     print(f"参数: N={N}, workers={max_workers}")
 
     header("Phase B: 首次点击「开始模拟」(冷启动)")

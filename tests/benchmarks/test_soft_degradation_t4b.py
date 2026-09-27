@@ -22,7 +22,12 @@ import pytest
 
 import gacha_simulator.service.batch_simulator as bs
 from benchmarks.perf.profilers import cprofile as cprofile_mod
-from benchmarks.perf.profilers.cprofile import PROFILE_FILE_SUFFIX, WorkerProfiler, merge_profiles
+from benchmarks.perf.profilers.cprofile import (
+    PROFILE_FILE_SUFFIX,
+    WORKER_MARKER_PREFIX,
+    WorkerProfiler,
+    merge_profiles,
+)
 from gacha_simulator.core.config_toml import load_toml
 from gacha_simulator.paths import get_config_dir
 from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
@@ -39,14 +44,22 @@ def env_and_targets():
     return env, targets
 
 
-def _run(env, targets, *, profile_dir, enabled):
+def _run(env, targets, *, profile_dir, enabled, workers=1, skip=None, count=None):
     env.profile_enabled = enabled
     env.profile_dir = profile_dir
-    # 单进程路径：不起池，故本文件可进默认 pytest -q；且它足以断言
-    # 「请求剖析这条记账不影响模拟结果」。
+    # 默认走单进程路径（不起池）——本文件大多数用例只需断言「请求剖析这条记账不影响
+    # 模拟结果」，单进程即可，且因此能进默认 `pytest -q`。
+    #
+    # **但路径 3 必须起池**：`_make_worker_profiler` 只被 `_wk_init` 调用，单进程分支
+    # 根本不读 `profile_enabled` / `profile_dir`——在单进程上断言「结果不受影响」是
+    # **近乎构造性成立**的（独立审查 2026-09-28 指出）。
+    if skip is not None:
+        env.profile_skip = skip
+    if count is not None:
+        env.profile_count = count
     return bs.run_batch_parallel(
         env=env, target_specs=targets, initial_resources=env.initial_resources,
-        num_simulations=N, max_workers=1, seed=SEED, strategy_key='smart',
+        num_simulations=N, max_workers=workers, seed=SEED, strategy_key='smart',
     )
 
 
@@ -120,25 +133,53 @@ class TestPath3WorkerTerminatedFilesMissing:
     """
 
     def test_simulation_unaffected(self, env_and_targets, tmp_path):
-        """**本条是独立审查补出来的**（§七 要求四条降级路径**各自**断言「模拟结果与不带
-        profile 的同种子对照组逐字段一致」，而路径 3 此前只有「成因可辨」两条断言）。
+        """**独立审查指出本条此前是错的**（2026-09-28），已重写。
 
-        **自然触发**：单进程路径（`max_workers=1`）不经过 `_wk_run_single`，故即使请求了
-        剖析也一个文件都不会落——正好就是「worker 被 terminate 致文件缺失」那一形态
-        （§3.8 D2 的实证依据：`Pool.__exit__` 走 `self.terminate()`）。不需要注入替身。
+        §七 要求四条降级路径**各自**断言「模拟结果与不带 profile 的同种子对照组逐字段
+        一致」，路径 3 此前只有「成因可辨」两条断言，我补的第一版**用了单进程路径**——
+        而 `_make_worker_profiler` 只被 `_wk_init` 调用，单进程分支**根本不读**
+        `profile_enabled` / `profile_dir`，于是「结果不受影响」**近乎构造性成立**：它证明
+        的是「两个没人读的字段不改结果」，不是路径 3。
+
+        **本版的触发方式照 §3.9 T4b 自己定的**（「令本 run 子目录为空 / 删除落盘文件」）：
+
+        1. 起池（`workers=2`）并让采样窗口真的打开 → 字段到达 worker、采样器被构造、
+           剖面真的落盘（三步都有断言先证明「确实发生了」，否则后面的断言是空转）；
+        2. **把落下的 `.prof` 删掉**——对应现实中 worker 被 `Pool.__exit__` 的
+           `terminate()` 强杀以致文件缺失（§3.8 D2 的实证依据）；
+        3. 再断言合并侧报「没有任何文件」这个**路径 3 专属成因**，且模拟结果与对照组一致。
+
+        **我第一版曾想用「`profile_skip` 大到窗口永不打开」来造文件缺失，那是错的**：
+        `_write_marker()` 就在窗口内（`cprofile.py:138`），窗口不开则连自报标记都没有，
+        「字段到了 worker」这一步就无从证明——同一次批评里被独立审查一并指出。
         """
         env_a, targets_a = env_and_targets
-        control = _fingerprint(_run(env_a, targets_a, profile_dir='', enabled=False))
-
         env_b, targets_b = env_and_targets
         profile_dir = tmp_path / 'prof'
-        os.makedirs(profile_dir, exist_ok=True)
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        # **对照与实验组同用 `workers=2`**：换并发度会连带换掉「哪个种子落在哪个 worker」，
+        # 结果本就会变，那就不是一个受控对照了。
+        control = _fingerprint(_run(env_a, targets_a, profile_dir='', enabled=False,
+                                    workers=2))
         affected = _fingerprint(_run(env_b, targets_b, profile_dir=str(profile_dir),
-                                     enabled=True))
+                                     enabled=True, workers=2, skip=0, count=2))
+
+        # **先证明本用例真的落在路径 3 的形态上**，否则下面的断言是空转：
+        # ① worker 自报标记存在 → 四字段确实到了 worker、采样器确实被构造、窗口真的开了
+        markers = list(profile_dir.rglob(f'{WORKER_MARKER_PREFIX}*'))
+        assert markers, ('worker 未落自报标记——四字段没到 worker，那本条就退化成'
+                         '「没人读这两个字段」的构造性断言了（独立审查的批评正是这一条）')
+        # ② 剖面文件确实落过（证明采样真的发生）
+        assert list(profile_dir.rglob(f'*{PROFILE_FILE_SUFFIX}')), '采样窗口没打开'
+        # ③ 把它们删掉——**这就是 §3.9 T4b 定的路径 3 触发方式**（「令本 run 子目录为空 /
+        #    删除落盘文件」），对应现实中 worker 被 `Pool.__exit__` 的 `terminate()` 强杀
+        #    以致文件缺失。删的是本用例 tmp_path 下的产物，不涉仓库文件。
+        for stale in profile_dir.rglob(f'*{PROFILE_FILE_SUFFIX}'):
+            stale.unlink()
+        functions, causes = merge_profiles(str(profile_dir))
+        assert functions is None and '没有任何' in causes[0]
+
         assert affected == control, '文件缺失这一形态不得改变模拟结果'
-        # 先确认本用例真的落在了路径 3 的形态上（否则这条断言是空转）
-        assert list(profile_dir.rglob(f'*{PROFILE_FILE_SUFFIX}')) == []
-        assert '没有任何' in merge_profiles(str(profile_dir))[1][0]
 
     def test_missing_files_have_their_own_cause(self, tmp_path):
         functions, warnings = merge_profiles(str(tmp_path))

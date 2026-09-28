@@ -2,6 +2,7 @@
 """GachaStat 命令行版本"""
 
 import argparse
+import copy
 import json
 import logging
 import os
@@ -15,11 +16,16 @@ logging.basicConfig(level=logging.WARNING, format='%(levelname)s:%(name)s:%(mess
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# **顶层只留轻量导入**（`_version` / `paths`，实测与空解释器同为约 0.03s）。
+# 凡触及 `gacha_simulator.core` / `.service` 的导入，一律下沉到各自的函数体内。
+# 理由：Windows 用 spawn 起 worker，每个 worker 是全新解释器且**必须重新导入主模块**
+# （本文件）才能拿到 `_wk_init` 等 initializer。顶层若有重导入，这笔成本就由每个
+# worker 各付一遍：实测 `import gacha_simulator.core` 单次 0.204s，4 个 worker 并发
+# 合计 0.57s，占 `pool_start` 的七成（P83 实测 `pool_start` = 0.824s）。
+# 下沉后 worker 重导主模块只执行上面两行轻量导入。
+# **同型先例**：`core/worst_impact.py:136`、`gui/analysis_panel.py:218`；
+# `core/__init__.py` 的 `__getattr__` 惰性导入是同一手法。
 from gacha_simulator._version import __version__  # noqa: E402
-from gacha_simulator.core.config_toml import load_toml  # noqa: E402
-from gacha_simulator.core.strategy import STRATEGY_REGISTRY  # noqa: E402
-from gacha_simulator.core.strategy_loader import load_plugin_strategies  # noqa: E402
-from gacha_simulator.service.batch_simulator import SimulationEnvBuilder, run_batch_parallel  # noqa: E402
 from gacha_simulator.paths import get_config_dir  # noqa: E402
 
 
@@ -30,6 +36,8 @@ def _strategy_choices() -> list:
     （`[plugins].disabled` 不是 `load_toml` 施加的，且 parser 构造还在 `load_toml`
     之前）。禁用项改由 `_reject_disabled_strategy()` 在 `load_toml` 之后显式拒绝。
     """
+    from gacha_simulator.core.strategy import STRATEGY_REGISTRY
+
     return [key for key, meta in STRATEGY_REGISTRY.items() if not meta.internal]
 
 
@@ -141,6 +149,12 @@ def _merge_profile_functions(profile_dir):
 
 
 def main():
+    # 重导入下沉至此（理由见文件顶部注释）：worker 不会调用 main()，故不付这笔成本。
+    from gacha_simulator.core.config_toml import load_toml
+    from gacha_simulator.core.strategy_loader import load_plugin_strategies
+    from gacha_simulator.service.batch_simulator import (
+        SimulationEnvBuilder, run_batch_parallel)
+
     # P83（1e-3 第 1 步）：**先 load_plugin_strategies()、后构造 parser**。
     # 顺序是硬要求：STRATEGY_REGISTRY 由 @register_strategy 装饰器副作用填充，插件键
     # 只在 load_plugin_strategies 之后才存在，而 argparse 的 choices 在构造时就要求
@@ -340,6 +354,37 @@ def main():
 
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
 
+    # ── 不抽卡基线 ──（与 gui/gacha_panel.py:105-124、webui/api.py:307-317 同口径）
+    # 两个目的：① 给出「不抽卡时能攒下多少」的对照基准；② 使 cli 的执行流程与
+    # GUI/WebUI 一致。P83 的跨路径对比要求流程与开销相同，而基线是另两条入口在主
+    # 模拟之后固定要多跑的一次调用（n=1, w=1）；缺了它，cli 的开销与它们不可比。
+    # **计时落在 elapsed 之外**：上面的 `Completed in` 仍只反映主模拟，基线单独报。
+    # **max_workers=1 是照 GUI 的**：走单进程路径、不建池，故 pool_start 为 0。
+    # **P79 裁决**：基线不继承用户停止条件。no_draw 策略全程只返回等待，
+    # fixed_action_count 一类条件会把基线截断，final_resources 偏低、基准失真
+    # （这是 gui/gacha_panel.py 与 webui/api.py 共同的既有裁决，此处照做）。
+    baseline_final = {}
+    _baseline_started = time.perf_counter()
+    try:
+        _baseline_env = copy.deepcopy(env)
+        _baseline_env.stop_condition = None
+        _baseline_res = run_batch_parallel(
+            env=_baseline_env,
+            target_specs=target_specs,
+            initial_resources=env.initial_resources,
+            num_simulations=1,
+            max_workers=1,
+            seed=args.seed,
+            strategy_key='no_draw',
+        )
+        if _baseline_res and _baseline_res[0]:
+            baseline_final = dict(_baseline_res[0].get('final_resources', {}) or {})
+    except Exception as exc:
+        # 与另两条入口的 `except Exception: pass` 有意不同：静默吞掉会让「基线缺失」
+        # 与「基线为 0」无从区分，正是 P83 反复在防的静默失效形态，故留一条告警。
+        print(f"警告：不抽卡基线计算失败（{exc}），该段对照省略", file=sys.stderr)
+    _baseline_elapsed = time.perf_counter() - _baseline_started
+
     if args.perf_json:
         # `functions` 由本进程内的 pstats 合并填充（`6c`）。`--profile-dir` 未设置时
         # `functions` 与 `run_id` 均为 None——**如实标注，不伪造**（§3.5）。
@@ -395,10 +440,25 @@ def main():
     print(f"  25th percentile: {np.percentile(gdr_percents, 25):.2f}%")
     print(f"  75th percentile: {np.percentile(gdr_percents, 75):.2f}%")
 
+    if baseline_final:
+        # 对照基准：同种子、全程不抽卡跑一次，看「什么都不做能攒下多少」。
+        print()
+        print("No-Draw Baseline (same seed, draws nothing, 1 run):")
+        for _k in sorted(baseline_final):
+            print(f"  {_k}: {baseline_final[_k]:.1f}")
+        print(f"  (baseline run took {_baseline_elapsed:.2f}s)")
+
     output_data = {
         'config': config_meta,
         'num_simulations': args.num_simulations,
         'elapsed_time': elapsed,
+        # 不抽卡基线（同种子、n=1、w=1）。**新增键**，位置与 `summary` 平级——
+        # 既有的 config / num_simulations / elapsed_time / summary / extraction
+        # 五个键语义与取值均不变。
+        'no_draw_baseline': {
+            'final_resources': {k: float(v) for k, v in baseline_final.items()},
+            'elapsed_time': _baseline_elapsed,
+        },
         'summary': {
             'total_draws': {'mean': float(np.mean(total_draws)),
                             'median': float(np.median(total_draws)),

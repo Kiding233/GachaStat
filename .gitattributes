@@ -1,0 +1,11 @@
+# 行尾规范
+#
+# 背景（2026-09-22）：仓库的 core.autocrlf=true 会把工作区文本文件转成 CRLF，
+# 而 Claude Code 的 Workflow 脚本加载器把 \r 判定为「control characters」并拒绝
+# 执行（报错：script contains control characters that would be hidden in the
+# approval dialog），导致 .claude/workflows/plan-review.workflow.js 无法运行。
+#
+# 故 workflow 脚本强制 LF，与 harness 自身生成的脚本保持一致。
+
+.claude/workflows/*.js text eol=lf
+.claude/workflows/**/*.js text eol=lf

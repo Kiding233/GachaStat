@@ -38,10 +38,11 @@ class BatchResult:
     # 同批改**——只加槽不改构造签名则新槽永不被赋值、__slots__ 下访问即 AttributeError
     # （同 warnings 槽当年的处置）。两槽**只在 collect_perf=True 时被赋值**，默认关闭
     # 时保持空 list / 空 dict，且不做任何序列化、不取任何阶段计时。
-    __slots__ = ('results', 'extraction', 'warnings', 'packet_bytes', 'stage_times')
+    __slots__ = ('results', 'extraction', 'warnings', 'packet_bytes', 'stage_times',
+                 'parallel_metrics')
 
     def __init__(self, results, extraction=None, warnings=None,
-                 packet_bytes=None, stage_times=None):
+                 packet_bytes=None, stage_times=None, parallel_metrics=None):
         self.results = results if results is not None else []
         self.extraction = extraction
         # P79（阶段 3）：零进度 / 迭代预算耗尽告警的父进程载体。槽与构造签名必须
@@ -58,6 +59,9 @@ class BatchResult:
         # 计入 simulate，extract 只含循环结束后的父进程合并——**跨路径的
         # simulate / extract 比值不可直接比较**。
         self.stage_times = stage_times if stage_times is not None else {}
+        # P83 并行效率增量（L1+L2）：并行读数槽。**只在 collect_perf=True 时被赋值**，
+        # 默认关闭时恒为空 dict——与上面两槽同一门控、同一纪律。
+        self.parallel_metrics = parallel_metrics if parallel_metrics is not None else {}
 
     def __getitem__(self, i):
         return self.results[i]
@@ -253,6 +257,15 @@ _wk_extractor = None
 _wk_return_compact = True
 # P83（`6b`）：worker 侧的 cProfile 采样窗口控制器。`None` 表示不采样（默认）。
 _wk_profiler = None
+# P83（并行效率增量，L1）：worker 侧的任务计数落点。`''` 表示不采集（默认）。
+#
+# **为什么走文件而不是塞进回传三元组**：`_wk_run_single` 的 arity 是 3 的硬契约
+# （docstring 里那段 ⚠ 写明了只改末条会让两条早退分支整体错位），而「本 worker 处理了
+# 几次」不属于模拟结果，塞进 warnings 位会污染语义。故与 `6b` 的 worker 自报标记同型：
+# **旁路落一份文件**，父进程扫它。默认关闭，故未开启时热路径逐项不变。
+_wk_metrics_dir = ''
+#: 本 worker 已处理的模拟次数（进程内累计）。
+_wk_task_count = 0
 
 
 def _load_worker_profiler():
@@ -320,8 +333,11 @@ def _build_target_set(card_defs, target_specs):
 def _wk_init(env: SimulationEnv, target_specs: Dict[str, int] = None):
     """子进程 initializer——将 SimulationEnv 注入子进程全局变量，预构建不可变数据。"""
     global _wk_env, _wk_target_set, _wk_extractor, _wk_return_compact, _wk_profiler
+    global _wk_metrics_dir
     _wk_env = env
     _wk_return_compact = getattr(env, 'return_compact', True)
+    # P83（并行效率增量）：与四字段同型的 getattr 读法——字段缺失即不采集（软降级）。
+    _wk_metrics_dir = getattr(env, 'metrics_dir', '') or ''
     # P83（`6b`）：**只建控制器，不在这里 enable()**。`Pool.__exit__` 走 `terminate()`
     # （本机 Python 3.12.5 源码核验），进程级 enable 的收尾本就不可靠；真正的开闭
     # 窗口在 `_wk_run_single` 内围绕单次 `_run_single` 调用。
@@ -446,6 +462,11 @@ def _wk_run_single(args):
     compact 与 warnings 双丢且无告警。
     """
     seed, initial_resources = args
+    # P83（并行效率增量，L1）：**入口即计**——不管下面走哪条 return，本次都是本 worker
+    # 处理掉的。计数落文件（pid 即身份），父进程据此得「每 worker 分担了多少」。
+    # 采集关闭时这一段只多一次字符串判空。
+    if _wk_metrics_dir:
+        _wk_count_task()
     try:
         # P83（`6b`）：开闭窗口**围绕单次 `_run_single` 调用**（§3.8 D2）。窗口在
         # `profiler is None`（默认）时完全不介入，故不采样时的热路径与改动前逐项一致。
@@ -475,6 +496,35 @@ def _wk_run_single(args):
     return (None, extraction, warnings)
 
 
+def _wk_count_task() -> None:
+    """把「本 worker 处理了一次」落进计数文件（P83 并行效率增量，L1）。
+
+    文件按 pid 命名、内容为累计次数：`<metrics_dir>/worker-<pid>.count`。父进程扫目录
+    即得每个 worker 各处理了多少次。
+
+    **每 50 次才写一次**：这个函数在热路径上（每次模拟都调），而 `imap_unordered` 的
+    `chunksize` 让单 worker 的调用次数可达数百——每次都开文件写会把测量工具本身变成
+    可观开销（测量者效应）。每 50 次写一次的代价可忽略，而**尾部最多丢 49 次的精度**，
+    对「负载是否均衡」这个判断够用（要精确到个位可把它调成 1，但那时须重估开销）。
+
+    **异常一律吞掉**：这是诊断产物，不得影响模拟（同 `6b` 的 `_write_marker`）。
+    """
+    global _wk_task_count
+    _wk_task_count += 1
+    if _wk_task_count % 50 != 1 and _wk_task_count != 1:
+        # 首次必写（否则调用次数 < 50 的 worker 会一个文件都没有，正是要防的那种失真）
+        return
+    try:
+        import os
+
+        os.makedirs(_wk_metrics_dir, exist_ok=True)
+        with open(os.path.join(_wk_metrics_dir, f'worker-{os.getpid()}.count'),
+                  'w', encoding='utf-8') as handle:
+            handle.write(str(_wk_task_count))
+    except Exception:
+        pass
+
+
 # --- 公共批量模拟接口 ---
 
 def _packet_size(compact, extraction, warnings) -> int:
@@ -491,6 +541,99 @@ def _packet_size(compact, extraction, warnings) -> int:
     测量者效应。
     """
     return len(pickle.dumps((compact, extraction, warnings)))
+
+
+def _tree_cpu_seconds_by_pid() -> Dict[str, float]:
+    """本进程 + 全部子进程的累计 CPU 秒数，**按 pid 分项**（P83 并行效率增量，L2）。
+
+    分项而不是只取总和：总和看不出「3 个在算、1 个在闲」，而负载不均正是并行效率
+    最要回答的问题之一。父进程自己那份也在返回里（键为父进程 pid），调用方据此把
+    「模拟本身用的 CPU」与「父进程序列化/合并用的 CPU」分开。
+
+    每次调用**重新枚举子进程**：worker 是陆续创建的，只枚举一次会漏；worker 退出后
+    其累计时间随之消失，故调用方须把负的差值钳到 0。
+
+    缺 `psutil` 时返回空 dict——调用方据此记 `None` + 点名成因的告警（**不得填 0**）。
+    """
+    try:
+        import psutil
+    except ImportError:
+        return {}
+    try:
+        me = psutil.Process()
+        tree = [me, *me.children(recursive=True)]
+    except Exception:
+        return {}
+    out: Dict[str, float] = {}
+    for item in tree:
+        try:
+            times = item.cpu_times()
+        except Exception:               # 采样窗口内退出的进程
+            continue
+        out[str(item.pid)] = float(times.user) + float(times.system)
+    return out
+
+
+def _read_worker_task_counts(metrics_dir: str) -> Dict[str, int]:
+    """扫 worker 侧落的计数文件，返回 `{pid: 处理次数}`（P83 并行效率增量，L1）。
+
+    读不到就返回空 dict（目录不存在 / 一个文件都没有），由调用方记告警。
+    """
+    if not metrics_dir:
+        return {}
+    import os
+
+    counts: Dict[str, int] = {}
+    try:
+        names = os.listdir(metrics_dir)
+    except OSError:
+        return {}
+    for name in names:
+        if not (name.startswith('worker-') and name.endswith('.count')):
+            continue
+        try:
+            with open(os.path.join(metrics_dir, name), encoding='utf-8') as handle:
+                counts[name[len('worker-'):-len('.count')]] = int(handle.read().strip())
+        except (OSError, ValueError):
+            continue
+    return counts
+
+
+def _parallel_metrics(collect_perf: bool, cpu_before: Optional[Dict[str, float]],
+                      cpu_after: Optional[Dict[str, float]], worker_count: int,
+                      simulate_sec: float, task_counts: Dict[str, int]
+                      ) -> Dict[str, object]:
+    """把并行读数归一为一个 dict（P83 并行效率增量，L1+L2）。
+
+    **只在 `collect_perf=True` 时调用。** 产品侧只采原始量、不做派生——`parallel_efficiency`
+    由适配器/报告侧算（与 `stage.py` 只解析不采集的分工一致）。
+
+    缺 `psutil`（`cpu_before` 为空）时 `cpu_seconds_total` 记 `None`，**不是 0**：
+    「没采到」与「真的用了 0 秒 CPU」是两件事（同 §3.3 对 RSS 的处置）。
+    """
+    if not collect_perf:
+        return {}
+    metrics: Dict[str, object] = {
+        'worker_count': int(worker_count),
+        'worker_task_counts': {str(k): int(v) for k, v in task_counts.items()},
+    }
+    if not cpu_before or not cpu_after:
+        metrics['cpu_seconds_total'] = None
+        metrics['cpu_seconds_by_worker'] = None
+        metrics['cpu_unavailable_reason'] = '缺 psutil 或无法枚举进程树'
+        return metrics
+    # 每个进程的差值；负值钳到 0（采样间隙里退出的进程）
+    import os
+
+    deltas = {pid: max(0.0, after - cpu_before.get(pid, after))
+              for pid, after in cpu_after.items()}
+    total = sum(deltas.values())
+    parent_pid = str(os.getpid())
+    metrics['cpu_seconds_total'] = total
+    metrics['cpu_seconds_parent'] = deltas.get(parent_pid, 0.0)
+    metrics['cpu_seconds_by_worker'] = {pid: value for pid, value in deltas.items()
+                                        if pid != parent_pid}
+    return metrics
 
 
 def _stage_times(collect_perf: bool, pool_start: float, simulate: float,
@@ -546,6 +689,7 @@ def run_batch_parallel(
     # packet_bytes 恒为空 list、stage_times 恒为空 dict、pickle.dumps 零调用、
     # 阶段计时零采集，即三条产品路径的默认行为与改动前逐项一致。
     packet_bytes_acc: list = []
+    parallel_metrics_acc: Dict[str, object] = {}
     pool_start_sec = 0.0
     simulate_sec = 0.0
     extract_sec = 0.0
@@ -617,6 +761,7 @@ def run_batch_parallel(
         return BatchResult(results if on_result is None else [], merged_ext,
                            warnings=warnings_acc,
                            packet_bytes=packet_bytes_acc,
+                           parallel_metrics=parallel_metrics_acc,
                            stage_times=_stage_times(collect_perf, pool_start_sec,
                                                     simulate_sec, extract_sec))
 
@@ -630,6 +775,16 @@ def run_batch_parallel(
 
     # Windows spawn 模式下频繁创建/销毁 Pool 可导致 worker 进程 EOFError，
     # 进而引发父进程 MaybeEncodingError。以逐级降并发重试来绕过系统资源瓶颈。
+    # P83 并行效率增量（L1）：worker 侧任务计数的落点。**空字符串即不采集**（默认）。
+    # 目录须在起池**之前**注入 `env`（worker 是经 `initargs=(env, …)` pickle 过去的），
+    # 故不能等到池起好再说。
+    metrics_dir = ''
+    if collect_perf:
+        import tempfile as _tempfile
+
+        metrics_dir = _tempfile.mkdtemp(prefix='p83-parallel-')
+        env.metrics_dir = metrics_dir
+
     mp_failed = False
     for _retry in range(3):  # workers=N, N/2, N/4
         workers = max(1, max_workers // (2 ** _retry))
@@ -643,6 +798,11 @@ def run_batch_parallel(
                 if collect_perf:
                     # 进程池构造到就绪（含 initializer 执行完毕）
                     pool_start_sec = time.perf_counter() - _pool_started
+                    # P83 并行效率增量（L1+L2）：**与 simulate 计时同一对时刻**取 CPU。
+                    # 注意 CPU 基线的取法：此刻 worker 已起、但还没干活，故它的累计值
+                    # 已含 initializer 的开销（那部分归属 pool_start 而非 simulate）——
+                    # 故差值里 initializer 的 CPU 被自然扣掉，这正是我们要的口径。
+                    cpu_before = _tree_cpu_seconds_by_pid()
                     _sim_started = time.perf_counter()
                 results = [] if on_result is None else None
                 extraction_packets = []
@@ -682,6 +842,15 @@ def run_batch_parallel(
                     # 本路径的提取在 worker 内，父进程侧只有下方的收尾合并，
                     # 故 simulate 不含逐次提取（与单进程 / mp_failed 的口径不同）。
                     simulate_sec = time.perf_counter() - _sim_started
+                    # P83 并行效率增量：worker 数取**最终成功那次**的（重试降并发时
+                    # 前几次的进程数是错的）；`_processes` 是 `Pool` 的公开属性。
+                    parallel = _parallel_metrics(
+                        collect_perf, cpu_before, _tree_cpu_seconds_by_pid(),
+                        worker_count=getattr(mp_pool, '_processes', workers),
+                        simulate_sec=simulate_sec,
+                        task_counts=_read_worker_task_counts(metrics_dir),
+                    )
+                    parallel_metrics_acc = parallel
                 if n_failed > 0:
                     logging.warning("%s/%s simulations failed", n_failed, num_simulations)
             break
@@ -785,9 +954,15 @@ def run_batch_parallel(
     if collect_perf:
         extract_sec = time.perf_counter() - _extract_started
 
-    # 统一终点：兼作 MPPool 与 mp_failed 兜底的汇合点
+    # 统一终点：兼作 MPPool 与 mp_failed 兜底的汇合点。
+    #
+    # ⚠ **本处必须与上面那条 `return`（MPPool 分支内的提前返回）逐项同步**：MPPool
+    # 成功时 `break` 出重试循环后会落到这里，故两处的 keyword 表**漏一个就是静默丢读数**
+    # ——2026-09-28 首次实测时 `parallel_metrics` 正是漏在这里（分支内采到了、统一终点
+    # 没传，报告里是空 `{}`，而**没有任何报错**）。新增槽时两处一起改。
     return BatchResult(raw_results, merged_extraction, warnings=warnings_acc,
                        packet_bytes=packet_bytes_acc,
+                       parallel_metrics=parallel_metrics_acc,
                        stage_times=_stage_times(collect_perf, pool_start_sec,
                                                 simulate_sec, extract_sec))
 

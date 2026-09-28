@@ -94,9 +94,14 @@ def _fallback_target_ids(store) -> list:
 def _write_perf_json(path, **payload) -> bool:
     """写 P83 的性能载荷。失败只警告不中断（D7：测量失败不得伤及被测对象）。
 
-    载荷字段**定死为五项**（§3.5，AUDIT-BREAK-3）：`stages` / `packet_bytes` /
+    载荷字段（§3.5，AUDIT-BREAK-3 **定死五项**）：`stages` / `packet_bytes` /
     `stage_times` / `run_id` / `functions`。后两项是 `cli` 路径 `function` 档闭合链
     的必经环节——适配器进程与被测进程不是同一个，合并结果只能经此回传。
+
+    **2026-09-28 增第六项 `parallel_metrics`**（P83 并行效率增量，L1+L2）：worker 数 /
+    每 worker 任务数 / CPU 时间。它同样只在被测进程内可得（进程树是它的），故必须
+    经此回传。**新增一项就是改契约**——消费侧（`adapters/cli.py`）须同步，且
+    `_perf_json_payload_keys()` 里有断言守着字段集，改一处会被测试拦下。
     """
     try:
         with open(path, 'w', encoding='utf-8') as handle:
@@ -348,6 +353,7 @@ def main():
             stages=perf_stages,
             packet_bytes=list(getattr(batch_result, 'packet_bytes', []) or []),
             stage_times=dict(getattr(batch_result, 'stage_times', {}) or {}),
+            parallel_metrics=dict(getattr(batch_result, 'parallel_metrics', {}) or {}),
             run_id=run_id,
             functions=functions,
         )

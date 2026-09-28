@@ -86,6 +86,40 @@ class ResourceStats:
     bytes: Optional[int] = None
     rss_peak_mb: Optional[float] = None
 
+    # ── 并行读数（P83 并行效率增量，L1+L2；2026-09-28）──
+    #
+    # 五项全部**可以为 `None`**，且 `None` 的成因要能分清：「本路径不产出」与
+    # 「采了但没采到」是两件事（同 `bytes` 与 `rss_peak_mb` 的既有处置）。
+    #
+    # 定义与判据的唯一真值源见 `docs/01-活跃/subsystems/性能分析/并行效率测量-清单与判据.md`。
+
+    worker_count: Optional[int] = None
+    """实际起了几个 worker 进程。`1` 表示走了单进程路径或降级到单 worker。"""
+
+    worker_task_counts: Optional[Dict[str, int]] = None
+    """每个 worker 各处理了多少次模拟（键为 pid 字符串）。用于看**负载是否均衡**。"""
+
+    cpu_seconds_total: Optional[float] = None
+    """整棵进程树（父进程 + 全部 worker）在 `simulate` 段内的 CPU 秒数（user+system）。"""
+
+    cpu_seconds_by_worker: Optional[Dict[str, float]] = None
+    """同上，**按 worker 分项**（不含父进程自己那份）。分项才是不均的证据。"""
+
+    cpu_seconds_parent: Optional[float] = None
+    """父进程自己那份 CPU 秒数（序列化、合并等）。单列是为了与 worker 侧分开看。"""
+
+    parallel_efficiency: Optional[float] = None
+    """`cpu_seconds_total ÷ (simulate 墙钟 × worker_count)`。
+
+    **一个数回答「worker 在算还是在等」。** 口径三条（见判据文档 §3）：
+
+    - 分子取**整棵进程树**，故含父进程侧的序列化/合并；
+    - 分母的墙钟取 **`simulate` 段**，不是总墙钟——`pool_start` 那 1 秒是串行的；
+    - **`> 1` 是可能的且正常**（多核上 CPU 时间可超墙钟），上限是 `worker_count`。
+      **`1.0` 表示「worker 侧满载」，不是「效率 100%」**——父进程那份也计在分子里，
+      故它可能 > 1 而 worker 并未满载。**报告须写清这一点，否则会被读成「超高效」。**
+    """
+
 
 @dataclass
 class SamplesMeta:

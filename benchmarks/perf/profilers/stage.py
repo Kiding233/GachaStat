@@ -49,6 +49,8 @@ __all__ = [
     'stage_label',
     'normalize_stages',
     'normalize_resources',
+    'WARN_PARALLEL_NOT_COLLECTED',
+    'WARN_PARALLEL_UNAVAILABLE',
 ]
 
 
@@ -140,6 +142,16 @@ WARN_STAGE_MISSING = '该段未采集：{stage}'
 WARN_STAGES_NOT_COLLECTED = '本路径未采集阶段计时（collect_perf=False 或该路径无回传通道）'
 """整份 stage_times 缺失。**不假装六段都在**，也不逐段报缺失。"""
 
+WARN_PARALLEL_NOT_COLLECTED = (
+    '本路径未采集并行读数（collect_perf=False 或该路径无进程池）：'
+    'worker 数 / 每 worker 任务数 / CPU 时间 / 并行效率'
+)
+"""并行读数整体缺失。**成因与下面那条不同**，报告中须区分：一个是「本路径不采」，
+一个是「采了但采不到」。"""
+
+WARN_PARALLEL_UNAVAILABLE = '本指标不可得：缺 psutil 或无法枚举进程树，CPU 时间读不到'
+"""**采了但采不到**——与「本路径不采」是两件事（同 RSS 的两种 `None`）。"""
+
 
 def stage_label(stage: str) -> str:
     """段的显示名（中文），未登记的段名回退为原名。
@@ -224,6 +236,8 @@ def normalize_resources(
     packet_bytes: Optional[Sequence[int]] = None,
     rss_peak_mb: Optional[float] = None,
     subject: str = 'simulation',
+    parallel_metrics: Optional[Mapping[str, Any]] = None,
+    simulate_seconds: Optional[float] = None,
 ) -> Tuple[ResourceStats, List[str]]:
     """归一资源计数。
 
@@ -237,6 +251,15 @@ def normalize_resources(
     - `rss_peak_mb`：`subject='simulation'` 下**恒为 `None`**（本期不采集，§3.3），
       记 `WARN_RSS_NOT_COLLECTED`；`subject='startup'` 下取 `3f-1` 的采样值，
       读不到时记 `WARN_RSS_UNAVAILABLE`。
+    - **并行五项**（`worker_count` / `worker_task_counts` / `cpu_seconds_total` /
+      `cpu_seconds_by_worker` / `cpu_seconds_parent` / `parallel_efficiency`）：
+      原始量由产品侧采（`BatchResult.parallel_metrics`，与 `packet_bytes` 同一门控），
+      **`parallel_efficiency` 是派生量、由本函数算**——产品侧只采原始量、不做派生
+      （与「`stage.py` 只解析不采集」的分工一致）。
+
+      `parallel_metrics` 为空（本路径不采）→ 五项全 `None` + `WARN_PARALLEL_NOT_COLLECTED`；
+      **采了但 CPU 读不到** → 仍给 `worker_count` 与任务数，CPU 三项记 `None` +
+      `WARN_PARALLEL_UNAVAILABLE`。**两种成因分开报**。
     """
     warnings: List[str] = []
 
@@ -258,4 +281,50 @@ def normalize_resources(
     else:
         rss = float(rss_peak_mb)
 
-    return ResourceStats(bytes=byte_stat, rss_peak_mb=rss), warnings
+    parallel, parallel_warnings = _normalize_parallel(parallel_metrics, simulate_seconds)
+    warnings.extend(parallel_warnings)
+
+    return ResourceStats(bytes=byte_stat, rss_peak_mb=rss, **parallel), warnings
+
+
+def _normalize_parallel(metrics: Optional[Mapping[str, Any]],
+                        simulate_seconds: Optional[float]) -> Tuple[Dict[str, Any], List[str]]:
+    """归一并行五项并**算出 `parallel_efficiency`**（P83 并行效率增量，L2）。
+
+    效率的口径定死（判据文档 §3）：`cpu_seconds_total ÷ (simulate 墙钟 × worker_count)`。
+
+    - 分母用 **`simulate` 段**而非总墙钟——`pool_start` 那 1 秒是串行的，算进去会
+      系统性压低效率，而那不是并行的锅。
+    - **算不出来就记 `None`，绝不填 0**：缺 CPU、缺 worker 数、或墙钟为 0 三种情形
+      都属「本指标不可得」。
+    """
+    warnings: List[str] = []
+    if not metrics:
+        warnings.append(WARN_PARALLEL_NOT_COLLECTED)
+        return {name: None for name in (
+            'worker_count', 'worker_task_counts', 'cpu_seconds_total',
+            'cpu_seconds_by_worker', 'cpu_seconds_parent', 'parallel_efficiency')}, warnings
+
+    worker_count = metrics.get('worker_count')
+    total = metrics.get('cpu_seconds_total')
+    if total is None:
+        # 采了但读不到 CPU——**worker 数与任务数照给**，只有 CPU 三项与效率为 None
+        warnings.append(WARN_PARALLEL_UNAVAILABLE
+                        + (f'（成因：{metrics.get("cpu_unavailable_reason")}）'
+                           if metrics.get('cpu_unavailable_reason') else ''))
+
+    efficiency: Optional[float] = None
+    if total is not None and worker_count and simulate_seconds:
+        efficiency = float(total) / (float(simulate_seconds) * int(worker_count))
+
+    return {
+        'worker_count': int(worker_count) if worker_count is not None else None,
+        'worker_task_counts': (dict(metrics['worker_task_counts'])
+                               if metrics.get('worker_task_counts') else None),
+        'cpu_seconds_total': float(total) if total is not None else None,
+        'cpu_seconds_by_worker': (dict(metrics['cpu_seconds_by_worker'])
+                                  if metrics.get('cpu_seconds_by_worker') else None),
+        'cpu_seconds_parent': (float(metrics['cpu_seconds_parent'])
+                               if metrics.get('cpu_seconds_parent') is not None else None),
+        'parallel_efficiency': efficiency,
+    }, warnings

@@ -228,6 +228,10 @@ class CliAdapter(Adapter):
         resources, resource_warnings = normalize_resources(
             packet_bytes=payload.get('packet_bytes'),
             subject=plan.subject,
+            # P83 并行效率增量：原始量经 `--perf-json` 回传（产品侧采，与两槽同一门控）；
+            # 效率的派生在 `normalize_resources` 内做（产品侧不做派生）。
+            parallel_metrics=payload.get('parallel_metrics'),
+            simulate_seconds=stages.get('simulate'),
         )
         warnings.extend(resource_warnings)
 

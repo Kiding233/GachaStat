@@ -311,14 +311,15 @@ Lifecycle 独立于 Tracker/Modifier，只管 `is_active` 判定和 `deactivate_
 <!-- REVIEW-R1-FIX: ISSUE-029 -->
 <!-- REVIEW-R1-FIX: ISSUE-032 -->
 <!-- REVIEW-R1-FIX: ISSUE-202 -->
-**Lifecycle 协议（强制；ISSUE-029 补 `rebind`；ISSUE-202 补 `initialize`）**：`Pity` 骨架调用以下**五个**方法——`initialize(state, name)`（**构造期**写入初始 `_active`，归属论证见下段 ISSUE-202 专段）、`is_active(state, name)`（`before_draw` / `after_draw` 首行早退）、`should_deactivate(ctx, state, name)`（退役判定，**先于** `commit`，见 §3.1.4 的 ISSUE-018）、`deactivate(state, name)`（清 `_active`）、`rebind(state, name)`（重绑本生命周期持有的 `_active` Flag 到 per-call `state`；与 Tracker / Modifier 同名同义，`Pity._rebind_state` 无条件调用）。另须暴露 `deactivate_on_early_hit` 属性供 `Pity.after_draw` 判定「本次退役是否跳过重置」。四个内置 Lifecycle 均须实现这**五**个方法（无状态可空实现），`rebind` 尤其不可省——`Pity` 不设守卫。
+**Lifecycle 协议（强制；ISSUE-029 补 `rebind`；ISSUE-202 补 `initialize`）**：`Pity` 骨架调用以下**五个**方法——`initialize(state, name)`（**构造期**写入初始 `_active`，归属论证见下段 ISSUE-202 专段）、`is_active(state, name)`（`before_draw` / `after_draw` 首行早退）、`should_deactivate(ctx, state, name, fired)`（退役判定，**先于** `commit`，见 §3.1.4 的 ISSUE-018；**`fired` 形参为 2026-09-28 独立复核补**——它是「本次抽卡是否命中」的布尔值，由 `Pity` 用 `any(tr.did_reset(...))` 算好后传入，**Lifecycle 自身拿不到该判据**，因为 `LifecycleConfig` 只有 `deactivate_on_early_hit` / `depends_on`、无 `scope` / `reset`，而「命中」的定义依赖后者）、`deactivate(state, name)`（清 `_active`）、`rebind(state, name)`（重绑本生命周期持有的 `_active` Flag 到 per-call `state`；与 Tracker / Modifier 同名同义，`Pity._rebind_state` 无条件调用）。另须暴露 `deactivate_on_early_hit` 属性供 `Pity.after_draw` 判定「本次退役是否跳过重置」。四个内置 Lifecycle 均须实现这**五**个方法（无状态可空实现），`rebind` 尤其不可省——`Pity` 不设守卫。
 
 **`max_triggers` 的计数载体（2026-09-28 独立审查补，原缺口）**：`OnceActive` / `DependentOnceActive` 的「已触发次数」必须落在 **state 的保底命名空间**下，键名定为 **`triggers`**（与 `counter` / `guaranteed` / `fate_points` 等既有键同层）。四条约束：
 
 1. **不可放在 Lifecycle 对象内**——Lifecycle 实例在同一 worker 内**跨模拟复用**（`rebind` 每次调度都被调用），对象内计数会跨模拟泄漏，破坏「固定种子可复现」。
 2. **键集声明**——该键须登记进 §3.12.1 的「状态键合法」不变式检查集；声明者是 **Lifecycle** 而非 Tracker（它是生命周期状态，不属追踪器）。
 3. **与等价性口径的关系**——该键**仅在 `max_triggers > 0` 时**创建（与 `*_init` 的 truthy 规则一致），而旧实现无此能力（`deactivate_on_early_hit` 只覆盖 N=1 且不计数），故属**增量能力**，**不在「S1–S5 状态快照逐场一致」范围内**，须按 §3.5 的增量能力口径单独验收。
-4. **退役判定**——`should_deactivate` 读 `state.get(name, "triggers", 0) >= max_triggers`；未激活期间 `after_draw` 首行早退（§3.1.4 骨架），不累加，故「自激活后起算」（§五 风险行 / §六 ⑥）由调用位置天然保证。
+4. **读写都在 `should_deactivate`，且只在 `fired` 时累加**——`if fired: n = state.get(name, "triggers", 0) + 1; state.set(name, "triggers", n); if n >= max_triggers: return True`。**2026-09-28 独立复核补**：原稿只写了「读」、未写「谁累加」，而最自然的落点（无条件累加）会让 `triggers` 变成「激活后的**抽数**」而非「**触发次数**」——`max_triggers=2` 会在第 2 抽就退役，与「触发 N 次后退役」相反。加上 `fired` 判据后语义才正确，且与 §3.1.1 M4 的「命中 ≡ 回到初始状态」同源。
+5. **未激活期间不累加**——`after_draw` 首行 `is_active` 早退（§3.1.4 骨架）在 `should_deactivate` 之前，故「自激活后起算」（§五 风险行 / §六 ⑥）由调用位置天然保证。
 
 <!-- REVIEW-R1-FIX: ISSUE-301 -->
 **生命周期字段到 Lifecycle 对象的构造来源（ISSUE-301，2026-09-22 定稿，强制）**
@@ -1130,6 +1131,26 @@ def factor_redistribute(dist, scope_cards, target_cards, ratio):
 
 **单卡定向的写法**：`target_cards = (selected,)`，`T` 即该卡当前概率，因子 `k = ratio * P / T` 把它抬到 ratio·P。这就是 S8 解决双 UP 定轨失真（§3.7）与 G3（UP 组排除已拥有）的机制：前者传单卡，后者传「未拥有的 UP 子集」。
 
+**F 语义的卡级对应物 `factor_override`（2026-09-28 独立复核补）**：`factor_redistribute` 是 **R 语义**（scope 内重分配，scope 总量不变）；而「必出」类机制需要 **F 语义**（目标占据全局）。两者不可互相替代——§3.14.3 已实测：`R_1` 只让 scope 内部重新分配（SSR 总量仍 0.9%），只有 `F` 才让 SSR 占 100%，**按比例抽样下前者根本不是「必出」**。
+
+```python
+def factor_override(ctx, dist, target_cards, scope):
+    """F 语义：全池置零；target 按基础权重占满；更高稀有度卡保持原值（豁免）。
+
+    与 factor_redistribute 的区别是**作用范围**：R 让 scope 总量不变，F 让 target 占据全局。
+    返回因子向量，由 _apply_factor 归一化。base_weights 取自 ctx.draw。
+    """
+    scope_rank = ctx.draw.rarity_rank.get(scope, 99)
+    exempt = {c for rarity, rank in ctx.draw.rarity_rank.items() if rank < scope_rank
+                for s in ctx.draw.scope_slots.get(rarity, ())
+                for c in ctx.draw.scope_cards.get(rarity, ())}
+    w = ctx.draw.base_probabilities
+    return {c: (w.get(c, 0.0) if c in target_cards else (1.0 if c in exempt else 0.0))
+            for c in dist}
+```
+
+**共享者**：`ThresholdForceModifier`（hard）与 `ForceNotOwnedModifier`（G3）**共用本函数**——两者的差别只在 `target_cards`（前者是 scope 内目标槽的卡，后者是「scope 内未拥有的 UP 卡」）。§3.14.3 的「F 语义独立实现、不复用 `factor_redistribute`」由此落为「独立于 R、但 F 内部共用」。
+
 #### 3.9.5 边界处理
 
 | 情形 | 处理 | 依据 |
@@ -1243,7 +1264,7 @@ PityEngine.get_probabilities(pool_id, state, base_probabilities, external=None)
    - 通道 A：`Banner.draw` 手上**已有** `state`（[banner.py:195](gacha_simulator/core/banner.py#L195)），直接 `pity_engine.before_draw(..., external=state.external_view())`
    - 通道 B：`StrategyContext.state` 即同一 `GachaState`（[strategy.py:96](gacha_simulator/core/strategy.py#L96)），`get_pity_probabilities` 同样补 `external=self.state.external_view()`
 3. **调度入口加可选参**：`PityEngine.before_draw(pool_id, state, base, external=None)` 与 `PityEngine.get_probabilities(...)` 同形（既有调用不传即保持原行为，与 §六「既有调用形式不变」相容）。
-4. **`reads` 门控下移到 `Pity`**：调用方**总是**传 view（成本可忽略），由 `Pity` 按自身 Modifier 的 `reads` 声明决定「是否把它暴露给 Modifier」——未声明则传 `None`。于是 `get_reads_for_pool()` 的并集查询从「两个填充点的前置条件」降为「`Pity` 内部的一次判断」，**显式性约束不变**（未声明 `reads` 的保底仍拿不到 `external`）。
+4. **`reads` 门控下移到 `Pity`**：调用方**总是**传 view（成本可忽略），由 `Pity` 按**自身的 `self._reads`**（来自 `PityDef.reads`，构造形参，**不是** Modifier 级声明——Modifier 无 `reads` 属性）决定「是否把它暴露给 Modifier」——未声明则传 `None`。于是 `get_reads_for_pool()` 的并集查询从「两个填充点的前置条件」降为「`Pity` 内部的一次判断」，**显式性约束不变**（未声明 `reads` 的保底仍拿不到 `external`）。
 
 **为什么优于原方案 (a)**：原方案设了两个填充点（A 走 `Banner.draw` 新增形参、B 在 `StrategyContext` 内自行构造），但**通道 B 的 `_initial_counts` 来源在计划中从未定过**——`StrategyContext` 只持有 `GachaState`，拿不到 `GachaService` 的局部变量；同时「两条通道口径一致」只能靠约定维持。修正后两条通道用的是**同一个 state 上的同一个方法**，口径一致由构造保证而非约定，且省掉了 `Banner.draw` 的形参扩张与两处并集查询。
 
@@ -1386,12 +1407,20 @@ class ForceNotOwnedModifier(Modifier):       # ISSUE-GATE-3-dependency-order：�
         if not target:
             return None            # 全部已拥有——退化，返回恒等（§3.1.5.6）
         # ISSUE-016：一律 .get(scope, ())，禁止直接下标（无 featured 卡的池无该键，会 KeyError）
-        return factor_redistribute(dist, ctx.draw.scope_cards.get(self._scope, ()), target, 1.0)
+        # 2026-09-28 独立复核修正：原用 factor_redistribute（R 语义）只做 scope 内重分配——
+        # 目标占满 scope 但 scope 总量不变，按比例抽样下并非「必出」，与机制「每 50 抽必出 UP」相反，
+        # 且相对手册 §7.2 现有的 hard(target_featured=true, threshold=50) 是**退化**。改用 F 语义（§3.9.4）。
+        return factor_override(ctx, dist, target, self._scope)
 ```
 
 配套（**2026-09-28 定稿**，原写「待 S9 实施时定」）：
 
-1. **新增独立 type `hard_exclude_owned`**（display_name「硬保底·排除已获得」）——`BEHAVIOR_REGISTRY` 注册新 preset：`trackers=[CounterTracker(scope, reset_on="scope")]`、`modifiers=[ConditionalModifier(ForceNotOwnedModifier(scope), CounterCondition('counter', pdef.threshold)), BaseRatioModifier(scope)]`
+1. **新增独立 type `hard_exclude_owned`**（display_name「硬保底·排除已获得」）——`BEHAVIOR_REGISTRY` 注册新 preset，**四键齐全**（对照 `_preset_hard`，2026-09-28 复核补）：
+   - `trackers=[CounterTracker(scope=pdef.scope, reset_on=pdef.reset or pdef.scope)]`——**`reset_on` 取 `pdef.reset or pdef.scope`**，原稿写死 `"scope"` 会让 `reset` 配置被静默忽略（§3.2 取值来源表已定该口径）
+   - `modifiers=[ConditionalModifier(ForceNotOwnedModifier(pdef.scope), CounterCondition('counter', tau)), BaseRatioModifier(pdef.scope)]`，其中 **`tau = pdef.threshold if pdef.threshold is not None else 50`**——`PityDef.threshold` 默认 `None`（[config_store.py:162](gacha_simulator/core/config_store.py#L162)）且 `_build_pity` 直取 `p.get('threshold')`（[config_toml.py:669](gacha_simulator/core/config_toml.py#L669)），不回退则 TOML 不写该键时条件成 `counter >= None`（TypeError）；`_preset_hard` 的同一回退见 §3.2 取值来源表
+   - `lifecycle=build_lifecycle(pdef)`——**原稿未给**，缺则该类保底的 `deactivate_on_early_hit` / `depends_on` / `max_triggers` 全部静默失效（§3.1.3 与 §3.2 均要求每个 preset 必含该键，`create_behavior` 有 `ConfigError` 防线）
+   - `counters={"counter": pdef.counter_init}`——**原稿未给**，缺则「已垫抽数」静默归零（对照 `_preset_hard`）
+   - registry 条目的 `params` 中 `threshold` 的 `default` 取 **50**（与机制一致，`hard` 为 90）；`default_scope` 取 `"ssr"`
 2. **`config_toml` 校验放行**该 type（`_build_pity` 的类型白名单）
 3. **GUI 下拉自动出现**——`_PITY_TYPES` 已改为由 `BEHAVIOR_REGISTRY` 生成（§3.6 的 2026-09-28 改造），新 type 注册后自动进入下拉，**不需要手工追加**
 4. 配置加 `reads = ["acquired"]`
@@ -1616,7 +1645,7 @@ def _preset_rotating(pdef):                      # ISSUE-005：必须是工厂�
 | `ForceFeaturedModifier` | 占满 featured 组 | `FlagCondition('guaranteed')` |
 | `ForceNonFeaturedModifier`（G1） | 占满非 UP 组 | `FlagCondition('forced_loss')` |
 | `ForceSelectedModifier` | 占满定轨卡 / 子集 | `Or(FlagCondition('guaranteed'), FateReadyCondition(τ))` |
-| `ForceNotOwnedModifier`（G3） | 占满「UP ∩ 未拥有」 | `CounterCondition('counter', pdef.threshold)`——**仅在该抽保底触发时**（2026-09-28 修正：原写 `Always()` 与 §3.10.4「不能沿用 pool 层近似」自相矛盾） |
+| `ForceNotOwnedModifier`（G3） | **F 语义**（`factor_override`，与 `ThresholdForceModifier` 同族，仅 target 不同），目标 = 「scope 内未拥有的 UP 卡」 | `CounterCondition('counter', pdef.threshold)`——仅在该抽保底触发时（2026-09-28 两处修正：① 原写 `Always()` 与 §3.10.4「不能沿用 pool 层近似」自相矛盾；② 原用 `factor_redistribute`（R 语义）不产生「必出」，见 §3.10.4 代码注释） |
 | `ThresholdForceModifier`（hard） | **F 语义**（见 3.14.3） | `CounterCondition('counter', τ)` |
 | `BoostModifier`（soft） | `factor_redistribute(dist, 源集∪目标集, 目标集 T, ratio=(T+βQ)/(T+Q))`——**ISSUE-022**：统一为 §3.9.4 的 4 位置参形态（原稿写关键字 `scope=`，与形参名 `scope_cards` 不匹配且缺 `dist` / `target_cards`，照抄即 TypeError）。语义：源集 Q = scope \ T，故 `scope_cards = Q ∪ T`、`P = T + Q`，目标占 scope 比例 `ratio = (T+βQ)/(T+Q)` 即「从 Q 取比例 β 转给 T」 | `Always()` | <!-- REVIEW-R1-FIX: ISSUE-022 -->
 | `BaseRatioModifier` | 按当前比例（恒等） | `Always()` |
@@ -1737,7 +1766,7 @@ F 另有两点与 R 不同（§3.1.5.2 的表已按实现记录）：① 范围�
 | `core/config_toml.py` | 修改（**G16-1 / S6a / S6c**） | reset 枚举 `never`（G16 独立先行）+ `rotating_inverse` 校验放行（S6a）+ **移除事件驱动型 deactivate_on_early_hit 拒绝分支（H3）**（S6c） |
 | `core/config_store.py` | 修改（**S4b**，字段定义） | PityDef 新增 `priority` 字段（G5）。**字段定义与 `config_toml` 解析随 S4b 落地**（2026-09-22 第八轮前移：原归 S6b，但 S4-2 的 `Pity(..., priority=pdef.priority)` 与 S4b 的三处透传都排在 S6b 之前，而实测 `PityDef`（[config_store.py:150-186](gacha_simulator/core/config_store.py#L150-L186)）当前确无该字段，照原序施工即 `AttributeError`，改用 `getattr` 兜底则退化为恒 0 的静默空转）；S6b 只留 `_resolve_order` 排序键与 GUI 控件。新序：**S4-1 → S4b → S4-2** | <!-- REVIEW-R1-FIX: ISSUE-GATE-dependency-order -->
 | `gui/config_panel.py` | 修改（**G16-1 / S6a / S6b / S9-3**；**S7a** 验收） | **新建 reset 控件**并加「永不重置」（G16 独立先行，现无该控件）；`_PITY_TYPES` **改为由 `BEHAVIOR_REGISTRY` 生成**（2026-09-28 改造，见 §3.6）——新增 type（`rotating_inverse` / `hard_exclude_owned`）**自动出现在下拉**，不再需要手工追加；priority 编辑控件（S6b）；S7a 做 round-trip 验收 |
-| `service/gacha_service.py` | 修改（**S6c** + **S9**） | 定轨识别 `isinstance(bh, TargetedBehavior)` → `getattr(bh, '_btype', '') in ('targeted', 'targeted_soft')`（H1，**S6c**）。 **S9（2026-09-28 重梳）**：**不再是 `ExternalView` 的填充点**——`initial_counts` 提升为 `GachaState` 字段后，视图由 state 自产（`state.external_view()`），服务层的改动只剩「构造 `GachaState` 时把 `_initial_counts` 传进去」（原先它是本函数的局部变量） | <!-- REVIEW-R1-FIX: ISSUE-010 --> <!-- REVIEW-R1-FIX: ISSUE-027 --> <!-- REVIEW-R1-FIX: ISSUE-013 --> <!-- REVIEW-R1-FIX: ISSUE-007 --> <!-- REVIEW-R1-FIX: ISSUE-008 --> <!-- REVIEW-R1-FIX: ISSUE-027 --> <!-- REVIEW-R1-FIX: ISSUE-033 -->
+| `service/gacha_service.py` | 修改（**S6c** + **S9**） | 定轨识别 `isinstance(bh, TargetedBehavior)` → `getattr(bh, '_btype', '') in ('targeted', 'targeted_soft')`（H1，**S6c**）。 **S9（2026-09-28 重梳；同日复核修正）**：**不再是 `ExternalView` 的填充点**——`initial_counts` 提升为 `GachaState` 字段后，视图由 state 自产（`state.external_view()`）。**注意：`GachaService` 并不构造 `GachaState`**（全库构造点只有 [batch_simulator.py:446](gacha_simulator/service/batch_simulator.py#L446) 与 `clone()`；`run_simulation` 首行是 `initial_state.clone()`，[gacha_service.py:307](gacha_simulator/service/gacha_service.py#L307)），故本文件的改动是**把 `_initial_counts` 的计算结果落到 state 上**（经构造点或 clone 之后的赋值），而非「构造时传入」；原稿「服务层的改动只剩构造 GachaState 时把 `_initial_counts` 传进去」是事实错误 | <!-- REVIEW-R1-FIX: ISSUE-010 --> <!-- REVIEW-R1-FIX: ISSUE-027 --> <!-- REVIEW-R1-FIX: ISSUE-013 --> <!-- REVIEW-R1-FIX: ISSUE-007 --> <!-- REVIEW-R1-FIX: ISSUE-008 --> <!-- REVIEW-R1-FIX: ISSUE-027 --> <!-- REVIEW-R1-FIX: ISSUE-033 -->
 | `service/batch_simulator.py` | 修改（**S8 / S9**） | **ISSUE-007 / ISSUE-008：配置到运行时引擎的桥接，原稿全表零出现**。三处**枚举式透传点**须同步 `priority`（[batch_simulator.py:899-925](gacha_simulator/service/batch_simulator.py#L899-L925) 的 `pentry` **24 键**（实测；原写「26 键」）、:179-205 的 `_PityDef` 重建）与 `reads`、`initial_counts`（:398-408）：任一处漏写，引擎侧读到的恒为默认值，配置层看不出异常。**建议同时改造为「由 dataclass 字段驱动」以免后续再漏** **AUDIT-BREAK-1 追加**：本行是字段往返守卫测试的第一处断言对象（`assert set(pentry) == {f.name for f in dataclasses.fields(PityDef)}`，§六「PityDef 字段枚举透传守卫」条）；改造后 `pentry` 必须由 `dataclasses.fields(PityDef)` 驱动生成，不得继续手写键表 | **S9（2026-09-28 审查补）**：`GachaState(...)` 构造点（[:446](gacha_simulator/service/batch_simulator.py#L446)）须补传 `initial_counts`；`_ms_initial` 的计算点在 [:415-421](gacha_simulator/service/batch_simulator.py#L415-L421)（原引 `:398-408` 实测无 `initial_counts`，行号有误）。
 | `core/retreat_config.py` | 修改 | **ISSUE-007 / ISSUE-008**：[retreat_config.py:123-142](gacha_simulator/core/retreat_config.py#L123-L142) 按 24 个显式字段浅拷贝 `PityDef`（行号与字段数 2026-09-22 实测修正），同一批透传缺口的第三处，须补 `priority` / `reads` **AUDIT-BREAK-1 追加**：本行是字段往返守卫测试的第三处断言对象（同 `pentry` 口径），浅拷贝须改为 dataclass 字段驱动；漏字段的失败形态是**静默落回默认值**而非报错 |
 | `core/strategy.py` | 修改（**S9**） | **ISSUE-013**：`StrategyContext.get_pity_probabilities`（:178）是 `external=None` 的既有查询路径，须由 `StrategyContext` 自行构造并传入 `ExternalView`（它持有 `GachaState`，:100/:113），或在 Modifier 侧以「`external is None` → 恒等」兜底并登记已知差异 **AUDIT-BREAK-9 追加**：本行为 `reads` 的**通道 B**（策略查询通道）宿主：`get_pity_probabilities` 经 `_pity_cache` 绕过 `Banner.draw`，须与通道 A 共用同一 `GachaState` / `_initial_counts` 源；验收见 §六「`reads` 双通道等价」条 |

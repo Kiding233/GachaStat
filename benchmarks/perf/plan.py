@@ -67,6 +67,8 @@ __all__ = [
     'get_memory_query',
     'injected_memory_query',
     'suspended_memory_check',
+    'suspended_n_limits',
+    'n_limits_suspended',
     'N_MAX_NO_COLLECTOR',
     'N_MAX_WITH_COLLECTOR',
     'MEM_BASE_GB',
@@ -207,6 +209,44 @@ def suspended_memory_check() -> Iterator[None]:
     """
     with injected_memory_query(lambda: float('inf')):
         yield
+
+
+#: 规则 1 / 4 的 N 上限是否被暂时挂起（`suspended_n_limits()` 期间为真）。
+_SUSPEND_N_LIMITS = False
+
+
+@contextmanager
+def suspended_n_limits() -> Iterator[None]:
+    """临时让规则 1 / 4 的 N 上限放行——**仅用于校准这两条规则自身的数值**。
+
+    **为什么需要它**：规则 1 的 1000 与规则 4 的 1600 都是**按内存估算推出来的**
+    （「父进程持有全部 n 份提取包，约 1996 KB/模拟」），而不是实测出来的。要检验那个
+    估算对不对，就必须跑到它划的线之外——**用被检验的假设去限制检验，是循环论证**。
+
+    与 `suspended_memory_check()` 的分工：那个放行**规则 5**（判「现在这台机器能不能
+    跑」），用于重建历史记录；本函数放行**规则 1 / 4**（判「这个 n 大不大」），用于
+    **校准规则自身的数值**。两者的共同点是都必须**显式命名**，以免被顺手用成「绕过
+    安全协议」的通用开关。
+
+    **使用纪律（强制）**：
+    1. 只在**测量/校准**脚本里用，且该次运行的内存须由调用方自行盯着（本函数不解锁
+       任何保护，只是不再拿估算值拦你）；
+    2. 调用方**必须**把「跑到线外」的结果回写规则数值或登记证伪结论——**测完不改，
+       等于用一次危险的运行换了一堆没人看的数**；
+    3. 不得在 `benchmarks/perf/` 的运行路径（适配器、`__main__`）里使用。
+    """
+    global _SUSPEND_N_LIMITS
+    previous = _SUSPEND_N_LIMITS
+    _SUSPEND_N_LIMITS = True
+    try:
+        yield
+    finally:
+        _SUSPEND_N_LIMITS = previous
+
+
+def n_limits_suspended() -> bool:
+    """规则 1 / 4 的 N 上限此刻是否被挂起（供 `_validate_n_limits` 查询）。"""
+    return _SUSPEND_N_LIMITS
 
 
 def scale_issue(n: int, workers: int, *, collector: bool = True,
@@ -434,6 +474,10 @@ class Plan:
 
     # 规则 1 / 4
     def _validate_n_limits(self) -> None:
+        if _SUSPEND_N_LIMITS:
+            # `suspended_n_limits()` 期间放行——**仅用于校准这两条规则自身的数值**。
+            # 见该上下文管理器的使用纪律：调用方须自行盯内存，且**测完必须回写结论**。
+            return
         if self.subject == 'startup':
             # 决策 34：startup 下 n / workers 被忽略（STARTUP_IGNORED_FIELDS），
             # 规则 1 与 4 的对象不存在。

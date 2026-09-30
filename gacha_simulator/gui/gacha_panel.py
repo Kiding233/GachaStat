@@ -367,7 +367,11 @@ class GachaPanel(QWidget):
         self._calculate_quick_stats(aggregate_data)
 
         self.simulation_finished.emit(result_bundle)
-        self.status_update.emit(f"模拟完成，共 {n_results} 次")
+        # 此处**不再**补发 status_update：`simulation_finished` 是同线程直连信号，
+        # MainWindow.on_simulation_finished 已在上面这次 emit 中同步写入
+        # 「模拟完成，共 N 次模拟，已存入: <数据集名>」（main_window.py:508）。
+        # 再补发一条不含数据集名的更笼统消息，会被 status_bar.showMessage 立即
+        # 覆盖，用户于是看不到结果已自动入库、也不知道存成了什么名字。
 
     def on_simulation_error(self, error_msg):
         self.status_label.setText("错误")

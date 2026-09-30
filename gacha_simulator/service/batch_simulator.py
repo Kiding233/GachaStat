@@ -37,6 +37,15 @@ _FAILURE_PREFIX = '模拟失败：'
 #: `_merge_warnings` 合并后的条数上限。见该函数说明。
 _MAX_WARNING_KINDS = 20
 
+#: 每个 worker 进程最多打印几份完整 traceback。
+#:
+#: 失败原因已由 `_wk_run_single` 的第三分量回传（父进程去重后进 `BatchResult.warnings`），
+#: 完整 traceback 只是补充「崩在哪一行」。实测 3 次失败即 76 行 stderr，1000 次失败上万行，
+#: 会把真正要读的告警冲得看不见。**计数器是进程内的**（Windows spawn 下每个 worker 各有
+#: 一份模块级全局），故实际上限是「每 worker 各 N 份」而非全局 N 份。
+_MAX_WORKER_TRACEBACKS = 3
+_wk_tracebacks_printed = 0
+
 
 def _merge_warnings(acc: list, items) -> None:
     """把一批**逐次模拟产生的**告警并入 `acc`：**按内容去重，并限制总条数**。
@@ -529,7 +538,16 @@ def _wk_run_single(args):
         # 一旦打包就没了），父进程连失败次数都数不到。
         # **文案不得含种子或行号**：N 次同类失败必须产出同一条字符串，父进程的
         # _merge_warnings 才能按内容把它压成一条；带上种子即上千条各不相同、去重失效。
-        traceback.print_exc()
+        global _wk_tracebacks_printed
+        if _wk_tracebacks_printed < _MAX_WORKER_TRACEBACKS:
+            traceback.print_exc()
+            _wk_tracebacks_printed += 1
+        elif _wk_tracebacks_printed == _MAX_WORKER_TRACEBACKS:
+            # 只提示一次，避免「以为失败了 1 次」的误读
+            _wk_tracebacks_printed += 1
+            import sys as _sys
+            print(f'[worker] 失败已达 {_MAX_WORKER_TRACEBACKS} 次，此后不再逐次打印完整'
+                  f' traceback（失败原因与总数见运行结束后的汇总）', file=_sys.stderr)
         return (None, None, [f'{_FAILURE_PREFIX}{type(exc).__name__}: {exc}'])
 
     if compact is None:

@@ -431,24 +431,52 @@ def main():
 
     import numpy as np
 
+    # 统计量先算好：全部失败时整体缺省（见下方 `_summary is None` 分支的说明）。
+    # 三个列表均非空时才计算——`np.mean([])` 只产 NaN 加一条 RuntimeWarning，而
+    # `np.percentile([], 25)` 会抛 IndexError（它要取数组末元素判 NaN）。这正是
+    # 「一次都没成功」时改前那句 `IndexError: index -1 is out of bounds` 的来历。
+    _summary = None
+    if total_draws:
+        _summary = {
+            'total_draws': {'mean': float(np.mean(total_draws)),
+                            'median': float(np.median(total_draws)),
+                            'std': float(np.std(total_draws))},
+            'ssr_counts': {'mean': float(np.mean(ssr_counts)),
+                           'median': float(np.median(ssr_counts))},
+            'gdr_percent': {
+                'mean': float(np.mean(gdr_percents)),
+                'median': float(np.median(gdr_percents)),
+                'p25': float(np.percentile(gdr_percents, 25)),
+                'p75': float(np.percentile(gdr_percents, 75))
+            }
+        }
+
     print("\n" + "=" * 50)
     print("Results Summary")
     print("=" * 50)
     print(f"Total Simulations: {len(batch_result)}")
-    print("\nTotal Draws:")
-    print(f"  Mean: {np.mean(total_draws):.1f}")
-    print(f"  Median: {np.median(total_draws):.1f}")
-    print(f"  Std: {np.std(total_draws):.1f}")
 
-    print("\nSSR Count:")
-    print(f"  Mean: {np.mean(ssr_counts):.2f}")
-    print(f"  Median: {np.median(ssr_counts):.1f}")
+    if _summary is None:
+        # 全部模拟失败：不打印任何统计量（它们无定义），改说清发生了什么。
+        # 失败原因由 BatchResult.warnings 经上方的「警告：」行给出。
+        print()
+        print(f"没有任何一次模拟成功（共请求 {args.num_simulations} 次），统计结果不可用。")
+        print("失败原因见上方以「警告：」开头的行。")
+    else:
+        print("\nTotal Draws:")
+        print(f"  Mean: {np.mean(total_draws):.1f}")
+        print(f"  Median: {np.median(total_draws):.1f}")
+        print(f"  Std: {np.std(total_draws):.1f}")
 
-    print("\nGDR (Target Card %):")
-    print(f"  Mean: {np.mean(gdr_percents):.2f}%")
-    print(f"  Median: {np.median(gdr_percents):.2f}%")
-    print(f"  25th percentile: {np.percentile(gdr_percents, 25):.2f}%")
-    print(f"  75th percentile: {np.percentile(gdr_percents, 75):.2f}%")
+        print("\nSSR Count:")
+        print(f"  Mean: {np.mean(ssr_counts):.2f}")
+        print(f"  Median: {np.median(ssr_counts):.1f}")
+
+        print("\nGDR (Target Card %):")
+        print(f"  Mean: {np.mean(gdr_percents):.2f}%")
+        print(f"  Median: {np.median(gdr_percents):.2f}%")
+        print(f"  25th percentile: {np.percentile(gdr_percents, 25):.2f}%")
+        print(f"  75th percentile: {np.percentile(gdr_percents, 75):.2f}%")
 
     if baseline_final:
         # 对照基准：同种子、全程不抽卡跑一次，看「什么都不做能攒下多少」。
@@ -469,19 +497,9 @@ def main():
             'final_resources': {k: float(v) for k, v in baseline_final.items()},
             'elapsed_time': _baseline_elapsed,
         },
-        'summary': {
-            'total_draws': {'mean': float(np.mean(total_draws)),
-                            'median': float(np.median(total_draws)),
-                            'std': float(np.std(total_draws))},
-            'ssr_counts': {'mean': float(np.mean(ssr_counts)),
-                           'median': float(np.median(ssr_counts))},
-            'gdr_percent': {
-                'mean': float(np.mean(gdr_percents)),
-                'median': float(np.median(gdr_percents)),
-                'p25': float(np.percentile(gdr_percents, 25)),
-                'p75': float(np.percentile(gdr_percents, 75))
-            }
-        }
+        # 全部失败时为 null（不是 NaN）。**NaN 不是合法 JSON**：json.dump 会写出
+        # 非标准的 `NaN` 字面量，按标准解析的读方（jq、其他语言）会直接报错。
+        'summary': _summary,
     }
 
     if args.output_format == 'full' and batch_result.extraction:
@@ -504,6 +522,11 @@ def main():
 
     print(f"\nResults saved to: {args.output}")
     print("=" * 50)
+
+    if _summary is None:
+        # 非零退出码：脚本/CI 据此判断「这次没跑成」。改前这条路径靠未捕获的
+        # IndexError 退出（同样是 1），但那是崩溃收场而不是收口。
+        sys.exit(1)
 
 
 if __name__ == '__main__':

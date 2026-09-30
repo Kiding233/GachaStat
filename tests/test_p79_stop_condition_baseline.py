@@ -140,7 +140,7 @@ def test_intended_change_fingerprint(env_and_targets):
     assert named != 'all_pools_end'          # 不再是硬编码的 display_name
 
     def _hash(summary):
-        return compute_config_hash(store.banner.banners, store.pity, [],
+        return compute_config_hash(store.banner.banners, store.pity,
                                    milestone_config=store.milestone,
                                    stop_condition_summary=summary)
 

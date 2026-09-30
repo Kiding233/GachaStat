@@ -871,8 +871,8 @@ class TestConfigHashIncludesMilestone:
         m2 = MilestoneConfig(enabled=True, milestones=[
             MilestoneDef(name='m2', threshold=99, bonus_reward={'resources': {'coin': 99}}),
         ])
-        h_none = compute_config_hash(store.banner.banners, None, [])
-        h_m1 = compute_config_hash(store.banner.banners, None, [], milestone_config=m1)
-        h_m2 = compute_config_hash(store.banner.banners, None, [], milestone_config=m2)
+        h_none = compute_config_hash(store.banner.banners, None)
+        h_m1 = compute_config_hash(store.banner.banners, None, milestone_config=m1)
+        h_m2 = compute_config_hash(store.banner.banners, None, milestone_config=m2)
         assert h_none != h_m1, '无 milestone 与含 milestone 应不同 hash'
         assert h_m1 != h_m2, 'milestone 内容不同应不同 hash'

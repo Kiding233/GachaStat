@@ -423,9 +423,15 @@ def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dic
 
 
 def compute_config_hash(pools_config: List[Any], pity_config: Any,
-                        schedules_config: List[Any],
                         milestone_config: Any = None,
-                        stop_condition_summary: Any = None) -> str:
+                        stop_condition_summary: Any = None, *,
+                        rarity_rank: Any = None,
+                        card_defs: Any = None,
+                        gain_rules: Any = None,
+                        day_overrides: Any = None,
+                        sim_start_date: Any = None,
+                        resource_lifecycle: Any = None,
+                        card_overflow_map: Any = None) -> str:
     """计算配置的确定性 hash（用于可比性判断）。
 
     P61（Ph7 / ISSUE-013）：纳入 Banner 级配置。pools_config 现为
@@ -480,11 +486,69 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
         for pd in sorted(pity_config.pities, key=lambda x: x.name):
             h.update(pd.name.encode())
             h.update(str(getattr(pd, 'params', {})).encode())
-    # 排期（P61 Ph6 后 pool_id 为 banner 级）
-    for s in sorted(schedules_config, key=lambda x: getattr(x, 'pool_id', '')):
-        h.update(getattr(s, 'pool_id', '').encode())
-        h.update(str(getattr(s, 'available_from', 0)).encode())
-        h.update(str(getattr(s, 'available_until', 0)).encode())
+    # 2026-10-01 删除 schedules_config 形参：它处理 pool_id / available_from /
+    # available_until 三项，而这三项已被上方 BannerEntry 分支覆盖（Banner 是排期的
+    # 权威载体），且生产调用从来只传空列表（ConfigStore 没有 schedules 属性，
+    # 三处调用都写 getattr(store, 'schedules', [])，其中一处还是 worktree 旧副本）。
+    # 一个「恒空的形参」比不写更危险：读代码的人会以为排期已被覆盖。
+    # ── 2026-10-01：补入「影响模拟结果、此前一个身份字段都没覆盖」的七项 ──
+    #
+    # 依据是逐项实测：改动下列任一字段时旧实现的 hash **不变**，于是两份配置哪怕一个
+    # 每天进 60 资源、一个每天进 600，compare_fingerprints 也判「所有维度相同」。
+    # 覆盖面以「SimulationEnvBuilder.from_config_store 会读的字段」为准（该函数是
+    # 配置进入 worker 的唯一通道，它不读的字段不影响模拟结果，故不在此列）。
+    #
+    # 序列化一律**自己拼规范化字符串**，不用 dataclass 的 repr —— repr 随字段增删
+    # 而变，跨版本不稳定，会做出「同一份配置两个 hash」这种事。
+    if rarity_rank:
+        _update('rarity_rank')
+        for _k, _v in sorted(rarity_rank.items()):
+            _update(f'{_k}={_v}')
+    if card_defs:
+        _update('card_defs')
+        for _cd in sorted(card_defs, key=lambda x: getattr(x, 'card_id', '')):
+            _update(str(getattr(_cd, 'card_id', '')))
+            _update(str(getattr(_cd, 'name', '')))
+            _update(str(getattr(_cd, 'rarity', '')))
+            _update(str(getattr(_cd, 'initial_count', 0)))
+            _update(str(sorted(getattr(_cd, 'pools', []) or [])))
+            # tags / list_tags（P65）决定卡牌维度，影响分析分组
+            _update(str(sorted((getattr(_cd, 'tags', {}) or {}).items())))
+            _update(str(sorted((getattr(_cd, 'list_tags', {}) or {}).items())))
+    if gain_rules:
+        _update('gain_rules')
+        for _gr in gain_rules:
+            _update(str(getattr(_gr, 'rule_type', '')))
+            _update(str(getattr(_gr, 'param', '')))
+            _update(str(sorted((getattr(_gr, 'gains', {}) or {}).items())))
+    if day_overrides:
+        _update('day_overrides')
+        for _ov in sorted(day_overrides, key=lambda x: getattr(x, 'day', 0)):
+            _update(str(getattr(_ov, 'day', 0)))
+            _update(str(sorted((getattr(_ov, 'gains', {}) or {}).items())))
+    if sim_start_date:
+        # 只影响按日历展开的收入规则（monthly_day / weekly / monthly_week），
+        # 但会改变模拟结果，故属配置身份（P85 的 I1/I2）
+        _update('sim_start_date')
+        _update(str(sim_start_date))
+    if resource_lifecycle is not None:
+        _update('resource_lifecycle')
+        _update(str(getattr(resource_lifecycle, 'enabled', True)))
+        for _rl in getattr(resource_lifecycle, 'rules', []) or []:
+            _update(str(getattr(_rl, 'resource_id', '')))
+            _update(str(getattr(_rl, 'expire_at', None)))
+            _update(str(getattr(_rl, 'expire_with_banner', None)))
+            _update(str(sorted((getattr(_rl, 'on_expire', {}) or {}).items())))
+    if card_overflow_map:
+        # 满突溢出的资源返还。它是解析期由 card_defs + rarity_defaults 展开的结果，
+        # 故纳入展开结果即可同时覆盖 rarity_defaults
+        _update('card_overflow_map')
+        for _cid in sorted(card_overflow_map):
+            _update(str(_cid))
+            for _band in card_overflow_map[_cid] or []:
+                _update(str(getattr(_band, 'min', None)))
+                _update(str(getattr(_band, 'max', None)))
+                _update(str(sorted((getattr(_band, 'resources', {}) or {}).items())))
     # 里程碑配置（P58 ISSUE-008——仅 milestone 不同的数据集判「配置: 不同」）
     if milestone_config is not None and hasattr(milestone_config, 'milestones'):
         _update(str(getattr(milestone_config, 'enabled', True)))
@@ -504,6 +568,34 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
     if stop_condition_summary is not None:
         _update(str(stop_condition_summary))
     return h.hexdigest()[:16]
+
+
+def compute_config_hash_for_store(store, *, stop_condition_summary: Any = None) -> str:
+    """从 ConfigStore 计算配置身份哈希 —— **生产代码的唯一入口**。
+
+    为什么要这个包装：底层 `compute_config_hash` 有十来个成分参数，散在各调用点自行
+    拼装，**漏传一个就是「静默判为可比」**。本函数被引入的直接原因就是这件事：
+    2026-10-01 实测发现有七项影响模拟结果的配置完全没进哈希，而当时两个调用点都
+    只传了三个参数。把「该取哪些字段」收在一处，完整性就从「每个调用点都要记得」
+    变成一件结构上的事。
+
+    `stop_condition_summary` 仍由调用方传入：它是**导出量**（条件树经
+    `canonical_stop_condition_summary` 规范化），不是 store 上的字段。
+    """
+    _banner_cfg = getattr(store, 'banner', None)
+    return compute_config_hash(
+        getattr(_banner_cfg, 'banners', None) if _banner_cfg is not None else [],
+        getattr(store, 'pity', None),
+        getattr(store, 'milestone', None),
+        stop_condition_summary,
+        rarity_rank=getattr(store, 'rarity_rank', None),
+        card_defs=getattr(store, 'card_defs', None),
+        gain_rules=getattr(store, 'gain_rules', None),
+        day_overrides=getattr(store, 'day_overrides', None),
+        sim_start_date=getattr(store, 'sim_start_date', None),
+        resource_lifecycle=getattr(store, 'resource_lifecycle', None),
+        card_overflow_map=getattr(store, 'card_overflow_map', None),
+    )
 
 
 def canonical_stop_condition_summary(tree: Optional[Dict[str, Any]]) -> str:

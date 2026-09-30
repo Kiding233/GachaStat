@@ -21,7 +21,7 @@ from .worst_impact_panel import WorstImpactPanel
 from .process_analysis_panel import ProcessAnalysisPanel
 from .comparison_analysis_panel import ComparisonAnalysisPanel
 from ..core.result_store import (
-    ResultStore, StoredDataset, ComparabilityFingerprint, compute_config_hash,
+    ResultStore, StoredDataset, ComparabilityFingerprint, compute_config_hash_for_store,
     canonical_stop_condition_summary,
 )
 from .data_manager_panel import DataManagerPanel
@@ -450,10 +450,11 @@ class MainWindow(QMainWindow):
         # 原实现把指纹的 stop_condition 硬编码为 'all_pools_end'，与用户实际配置无关。
         _stop_summary = canonical_stop_condition_summary(
             getattr(self._store, 'stop_condition', None))
-        config_hash = compute_config_hash(
-            self._store.banner.banners, getattr(self._store, 'pity', None),
-            getattr(self._store, 'schedules', []),
-            milestone_config=getattr(self._store, 'milestone', None),   # P58（ISSUE-008）：里程碑配置纳入可比性指纹
+        # 2026-10-01：改走 compute_config_hash_for_store——原实现在此自行拼装参数，
+        # 漏传了七项影响模拟结果的配置（收入规则 / 起始日期 / 稀有度层级 / 卡定义 /
+        # 资源生命周期 / 溢出表），导致这些差异被静默判为「可比」。
+        config_hash = compute_config_hash_for_store(
+            self._store,
             stop_condition_summary=_stop_summary,   # P79：停止条件纳入可比性指纹
         )
 

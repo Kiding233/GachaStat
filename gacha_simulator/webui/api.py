@@ -388,7 +388,7 @@ class GachaApi:
     def _dataset_from_bundle(self, bundle, store, seed):
         """result_bundle → StoredDataset dict（可持久化 + 前端 meta）。"""
         from gacha_simulator.core.result_store import (
-            canonical_stop_condition_summary, compute_config_hash,
+            canonical_stop_condition_summary, compute_config_hash_for_store,
         )
         agg = bundle['aggregate_data']
         initial_resources = dict(store.initial_resources) if isinstance(store.initial_resources, dict) else {}
@@ -396,10 +396,10 @@ class GachaApi:
         # P79：停止条件的规范化摘要（含参数值；空树产出哨兵 ''）
         _stop_summary = canonical_stop_condition_summary(
             getattr(store, 'stop_condition', None))
-        config_hash = compute_config_hash(
-            store.banner.banners, getattr(store, 'pity', None),
-            getattr(store, 'schedules', []),
-            milestone_config=getattr(store, 'milestone', None),
+        # 2026-10-01：同 gui/main_window.py，改走 for_store 包装（原实现在此自行
+        # 拼装参数，漏传七项影响模拟结果的配置）
+        config_hash = compute_config_hash_for_store(
+            store,
             stop_condition_summary=_stop_summary,   # P79：停止条件纳入可比性指纹
         )
         strategy_name = getattr(store, 'strategy_key', '') or 'unknown'

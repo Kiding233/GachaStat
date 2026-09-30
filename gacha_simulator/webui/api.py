@@ -328,7 +328,7 @@ class GachaApi:
             task['status'] = 'done'
             task['dataset'] = dataset
             self._push_js(f"typeof window.__gscTaskDone === 'function' && "
-                          f"window.__gscTaskDone({json.dumps({'taskId': task_id, 'ok': True})})")
+                          f"window.__gscTaskDone({json.dumps({'taskId': task_id, 'ok': True, 'warnings': bundle.get('warnings') or []}, ensure_ascii=False)})")
         except Exception as e:
             traceback.print_exc()
             task['status'] = 'failed'
@@ -368,6 +368,9 @@ class GachaApi:
                 'no_draw_resources': no_draw_resources,
                 'no_draw_pool_resources': no_draw_pool_resources,
                 'seed': seed,
+                # 核心层告警（失败原因与条数 / 零进度兜底 / 迭代预算耗尽 / 路径降级）。
+                # 前端经 __gscTaskDone 的 warnings 字段消费。
+                'warnings': list(getattr(batch_result, 'warnings', []) or []),
             }
             return bundle
         return {
@@ -379,6 +382,7 @@ class GachaApi:
             'n_results': 0, 'n_requested': n,
             'no_draw_resource': no_draw_resource, 'no_draw_resources': no_draw_resources,
             'no_draw_pool_resources': no_draw_pool_resources, 'seed': seed,
+            'warnings': list(getattr(batch_result, 'warnings', []) or []),
         }
 
     def _dataset_from_bundle(self, bundle, store, seed):

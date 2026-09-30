@@ -148,6 +148,10 @@ class SimulationThread(QThread):
                     'target_specs': target_specs,
                     'n_results': ext.get('n_results', 0),
                     'n_requested': N,
+                    # 核心层告警（失败原因与条数 / 零进度兜底 / 迭代预算耗尽 / 路径降级）。
+                    # **两个分支都要带**：下面 ext 为 None 的兜底分支漏了就静默丢，而那
+                    # 正是「核心层整体失败」时唯一会走的分支。
+                    'warnings': list(getattr(batch_result, 'warnings', []) or []),
                     'no_draw_resource': no_draw_resource,
                     'no_draw_resources': no_draw_resources,
                     'no_draw_pool_resources': no_draw_pool_resources,
@@ -167,6 +171,7 @@ class SimulationThread(QThread):
                     'target_specs': target_specs,
                     'n_results': 0,
                     'n_requested': N,
+                    'warnings': list(getattr(batch_result, 'warnings', []) or []),
                     'no_draw_resource': no_draw_resource,
                     'no_draw_resources': no_draw_resources,
                     'no_draw_pool_resources': no_draw_pool_resources,
@@ -360,9 +365,13 @@ class GachaPanel(QWidget):
         self._log(f"模拟完成，共 {n_results} 次")
 
         if isinstance(result_bundle, dict):
-            n_requested = result_bundle.get('n_requested', 0)
-            if n_requested > 0 and n_results < n_requested:
-                self._log(f"警告: {n_requested - n_results}/{n_requested} 次模拟失败（可能是配置错误或资源不足）")
+            # 核心层的告警原样呈现。原实现在此处自行数一遍
+            # `n_requested - n_results` 并附一句推测（「可能是配置错误或资源不足」）；
+            # 现在核心层的计数是权威值（return_compact=False 形态下两者可证等价：
+            # worker 失败 ⟺ ext_pkt 为 None ⟺ 不入 packets，故 n_results 恒等于
+            # 请求数减失败数）且带**失败原因**，故改为直接呈现结论，不再自行推测。
+            for _w in (result_bundle.get('warnings') or []):
+                self._log(f"⚠️ {_w}")
 
         self._calculate_quick_stats(aggregate_data)
 

@@ -30,6 +30,32 @@ from gacha_simulator.core.strategy import (
 
 logger = logging.getLogger(__name__)
 
+#: worker 失败原因的**统一前缀**。父进程据此把「失败」与「正常运行中的告警」
+#: 分开叙述。**改这个前缀必须同步改 `_wk_run_single` 的两条失败出口**。
+_FAILURE_PREFIX = '模拟失败：'
+
+#: `_merge_warnings` 合并后的条数上限。见该函数说明。
+_MAX_WARNING_KINDS = 20
+
+
+def _merge_warnings(acc: list, items) -> None:
+    """把一批**逐次模拟产生的**告警并入 `acc`：**按内容去重，并限制总条数**。
+
+    为什么必须去重与限流：本函数在三条执行路径的**逐次模拟循环**里被调用，一次
+    1000 次模拟、每次各产一条告警，就会往 `BatchResult.warnings` 里灌进 1000 条。
+    而这些告警的用途是「说明这次运行为什么不对」——同类告警发生 1 次与发生 1000
+    次，需要用户做的事完全一样，刷屏只会把真正有区分度的信息淹没。本通道的三个
+    消费端（GUI 日志框 / CLI stderr / WebUI 提示）接上之后，刷屏是会真发生的
+    （实测：1000 次同类告警原样进列表），故去重与限流在此一并做掉。
+
+    **只作用于逐次模拟的告警**。运行级告警（失败汇总 / 路径降级）由调用方直接
+    `append`，不经本函数：它们本来就只有一条，且不得被逐次告警挤掉。
+    """
+    for w in items or ():
+        if w in acc or len(acc) >= _MAX_WARNING_KINDS:
+            continue
+        acc.append(w)
+
 
 class BatchResult:
     """批量模拟结果容器——向后兼容 list 接口，同时携带 worker 提取数据。"""
@@ -496,12 +522,18 @@ def _wk_run_single(args):
         else:
             with _wk_profiler.window():
                 compact = _run_single(_wk_env, _wk_target_set, seed, initial_resources)
-    except Exception:
+    except Exception as exc:
+        # 失败原因经三元组的第三分量（warnings）跨进程回传——父进程侧才能把「失败了
+        # 多少次」与「为什么失败」一起报给用户。此前只 print_exc 到**子进程** stderr，
+        # 而打包后的 GUI 没有控制台，这条信息等于彻底消失（从终端启动时还能看见，
+        # 一旦打包就没了），父进程连失败次数都数不到。
+        # **文案不得含种子或行号**：N 次同类失败必须产出同一条字符串，父进程的
+        # _merge_warnings 才能按内容把它压成一条；带上种子即上千条各不相同、去重失效。
         traceback.print_exc()
-        return (None, None, [])
+        return (None, None, [f'{_FAILURE_PREFIX}{type(exc).__name__}: {exc}'])
 
     if compact is None:
-        return (None, None, [])
+        return (None, None, [f'{_FAILURE_PREFIX}_run_single 未产出结果'])
 
     extraction = None
     if _wk_extractor is not None:
@@ -747,7 +779,7 @@ def run_batch_parallel(
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
                 sim_warnings = list(getattr(result, 'warnings', []) or [])
-                warnings_acc.extend(sim_warnings)
+                _merge_warnings(warnings_acc, sim_warnings)
                 if collect_perf:
                     # 三元组落地处。口径与 _wk_run_single 的返回值逐项对应：
                     # 单进程路径不设 env.return_compact，故首分量恒为 compact 本体
@@ -771,6 +803,9 @@ def run_batch_parallel(
             simulate_sec = time.perf_counter() - _sim_started
         if n_failed > 0:
             logging.warning("%s/%s simulations failed", n_failed, num_simulations)
+            # logging 只到 stderr，打包后的 GUI 无控制台可看；经 warnings 通道才能
+            # 到达三条入口的界面。文案不加前缀——它不是「单次失败原因」，是汇总。
+            warnings_acc.append(f'{n_failed}/{num_simulations} 次模拟失败')
         _extract_started = time.perf_counter() if collect_perf else 0.0
         merged_ext = merge_extraction_packets(
             extraction_packets,
@@ -838,20 +873,29 @@ def run_batch_parallel(
                         ext_pkt = result
                         warns = []
                     if warns:
-                        warnings_acc.extend(warns)
+                        _merge_warnings(warnings_acc, warns)
 
                     if collect_perf:
                         # 三元组落地处：worker 返回值即三元组本体，逐项对应
                         # _wk_run_single 的 (compact_or_None, extraction, warnings)。
                         packet_bytes_acc.append(_packet_size(compact, ext_pkt, list(warns)))
 
-                    if on_result is not None:
-                        if compact is not None:
+                    # 本次任务是否产出结果：worker 的两条失败出口都返回
+                    # (None, None, _FAILURE_PREFIX 开头的告警)。
+                    # **判据不能只看 compact**——return_compact=False 时（GUI 抽卡面板与
+                    # WebUI 跑主模拟前的默认）成功也不回传 compact，只看它会把每一次
+                    # 成功都记成失败（那是数值反向的错误告警，比不报更坏）；
+                    # **也不能只看 ext_pkt**——那是抽取器自身抛错时的形态。
+                    # 抽取器在 _wk_init 里无条件构造，且 WorkerLocalExtractor.process
+                    # 仅在 compact 为 None 时返回 None（此处 compact 必非 None），故
+                    # 「两者同时为空」⟺ 该任务没有产出任何结果。
+                    if compact is None and ext_pkt is None:
+                        n_failed += 1
+                    elif compact is not None:
+                        if on_result is not None:
                             on_result(compact)
                         else:
-                            n_failed += 1
-                    elif compact is not None:
-                        results.append(compact)
+                            results.append(compact)
 
                     if ext_pkt is not None:
                         extraction_packets.append(ext_pkt)
@@ -873,6 +917,9 @@ def run_batch_parallel(
                     parallel_metrics_acc = parallel
                 if n_failed > 0:
                     logging.warning("%s/%s simulations failed", n_failed, num_simulations)
+                    # 同上：本路径正是 GUI / WebUI 主模拟实际走的路径（并行），
+                    # 此前这条汇总对它们结构性地不可达。
+                    warnings_acc.append(f'{n_failed}/{num_simulations} 次模拟失败')
             break
         except Exception as e:
             ename = type(e).__name__
@@ -944,7 +991,7 @@ def run_batch_parallel(
                 if ext_pkt is not None:
                     extraction_packets.append(ext_pkt)
                 sim_warnings = list(getattr(compact, 'warnings', []) or [])
-                warnings_acc.extend(sim_warnings)
+                _merge_warnings(warnings_acc, sim_warnings)
                 if collect_perf:
                     # 三元组落地处（本路径 compact 恒非 None，与单进程路径同型）
                     packet_bytes_acc.append(_packet_size(compact, ext_pkt, sim_warnings))
@@ -958,6 +1005,7 @@ def run_batch_parallel(
             simulate_sec = time.perf_counter() - _sim_started
         if n_failed > 0:
             logging.warning("%s/%s simulations failed (single-process fallback)", n_failed, num_simulations)
+            warnings_acc.append(f'{n_failed}/{num_simulations} 次模拟失败（单进程兜底路径）')
 
     # 合并 worker / 单进程提取结果
     _extract_started = time.perf_counter() if collect_perf else 0.0

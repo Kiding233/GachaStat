@@ -882,6 +882,14 @@ onMounted(async () => {
       if (!p.ok) t.error = p.error
       onTaskRealDone(t)
     }
+    // 核心层告警（失败原因与条数 / 零进度兜底 / 迭代预算耗尽 / 路径降级）。
+    // 放在 if (t) 之外：任务节点没匹配上时告警照样要出，否则「结果不对」与
+    // 「后端没说话」无从区分。条数已由后端去重限流，前端不再截断。
+    if (p.warnings?.length) {
+      import('element-plus').then(({ ElMessage }) => {
+        p.warnings.forEach((w) => ElMessage.warning({ message: w, duration: 8000, showClose: true }))
+      })
+    }
   })
   await loadInitialConfig()
   ensureRootFolder()

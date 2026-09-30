@@ -354,6 +354,11 @@ def main():
 
     print(f"Completed in {elapsed:.2f}s ({args.num_simulations/elapsed:.1f} sim/s)")
 
+    # 核心层告警（失败原因与条数 / 零进度兜底 / 迭代预算耗尽 / 路径降级）。走 stderr：
+    # 与下方「不抽卡基线」的告警同一约定，且不与 stdout 上的结果摘要混排。
+    for _w in (getattr(batch_result, 'warnings', None) or []):
+        print(f"警告：{_w}", file=sys.stderr)
+
     # ── 不抽卡基线 ──（与 gui/gacha_panel.py:105-124、webui/api.py:307-317 同口径）
     # 两个目的：① 给出「不抽卡时能攒下多少」的对照基准；② 使 cli 的执行流程与
     # GUI/WebUI 一致。P83 的跨路径对比要求流程与开销相同，而基线是另两条入口在主

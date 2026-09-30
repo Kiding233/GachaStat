@@ -1,4 +1,4 @@
-<!-- META: P74 | module:UI框架替换 | status:designing | last:2026-08-05 -->
+<!-- META: P74 | module:UI框架替换 | status:designing | last:2026-09-30 -->
 
 # P74 UI换头计划：pywebview + Vue3 + Element Plus + ECharts
 
@@ -8,7 +8,7 @@
 
 ## 一、问题
 
-当前 GUI 层（`gui/` 17,492 行，PyQt6 + QWebEngineView + Plotly）存在三方面成本：
+当前 GUI 层（`gui/` 17,492 行；2026-09-23 实测 17,704 行，PyQt6 + QWebEngineView + Plotly）存在三方面成本：
 
 1. **体积**：Chromium 内核约 120MB，占打包产物 50-65%（[应用打包 01-理论](../subsystems/应用打包/01-理论.md) §3.3 已记录），PyInstaller 无法缩减
 2. **视觉与交互**：Qt 原生观感偏工具型，无 UI 热重载，现代化程度不足
@@ -24,6 +24,8 @@
 | 技术选型（用户实测判定） | pywebview + Vue 3 + Element Plus + ECharts，四步实证见调查报告第 8 章 |
 
 验证产物：`tools/poc_webview/`（最小示例 / 垂直切片 / 链路穿透 / ui_compare 组件库对比）。
+
+> **2026-09-23 附注（独立评估）：** 表中「计算引擎可 100% 保留」对 `core/`/`service/`/CLI 成立，但阶段 1b/2 的 `webui/` 实现已出现一处偏离：`webui/worst_impact_service.py:57-110` 以 `WorstImpactAnalyzer` 的 7 个私有成员重走 core 已有管线（core 侧 `analyze()` 已提供同一流程，GUI 侧即直接复用）。阶段 2 第二批迁移最差影响面板时须处置，否则会把算法副本带入目标形态。详见 [独立评估-规模与质量-2026-09-23](../04-收件箱/独立评估-规模与质量-2026-09-23.md) §六 H-2。
 
 ## 三、目标
 
@@ -67,7 +69,7 @@
 阶段 2  面板逐批迁移
         第一批：简单面板（数据管理/比较分析/插件管理）
         第二批：中等面板（统计分析/过程分析/方案搜索/脆弱性/最差影响/批量模拟）
-        第三批：config_panel（5895 行复杂表单，最后迁移）
+        第三批：config_panel（2026-08-05 记 5895 行，2026-09-23 实测 7705 行，最后迁移）
 
 阶段 3  收尾
         移除 PyQt6 / PyQt6-WebEngine / plotly 依赖
@@ -79,12 +81,15 @@
 
 | 对象 | 变更 |
 |------|------|
-| `gui/`（17,492 行） | 全部重建为前端面板 |
+| `gui/`（2026-08-05 记 17,492 行，2026-09-23 实测 17,704 行） | 全部重建为前端面板 |
 | `visualization/plotly_charts.py` | PlotlyRenderer 退役，ChartSpec IR 保留 |
 | `core/vulnerability.py` | 2 处直接 import plotly（绕过 IR），需迁移到 ChartSpec 或前端 |
 | `GachaStat.spec` | 重写（移除 Qt/WebEngine/plotly，加入前端产物 + WebView2 相关） |
-| `pyproject.toml` | gui 依赖调整（PyQt6 → pywebview） |
+| `pyproject.toml` | gui 依赖调整（PyQt6 → pywebview）；顺带修正 `version`（当前 `1.6.0`，与 `_version.py` 的 `2.4.0` 不一致，见评估 §五） |
 | 图表引擎子系统 | ChartSpec 保留为数据契约，渲染层前端化 |
+| `webui/api.py` | `toggle_plugin` 直写裸 dict 回 `config.toml`（`:602-604`，用 `tomli_w.dump`），绕过 `save_toml()` 序列化纪律。该写路径会随迁移存活（本计划保留 core 与 `config.toml`），且现已经由 `main_webview` 入口对用户可达 |
+| `webui/worst_impact_service.py` | `generate_worst_config()`（`:57-110`）用 7 个私有成员重写 core 计算管线（见 §二 附注）。阶段 2 第二批迁移最差影响面板时须改为复用 `WorstImpactAnalyzer.analyze()` |
+| `gui/sensitivity_panel`（不存在） | 「敏感度分析」Tab 当前为内联占位 `QWidget`（`gui/main_window.py:102-108`），无对应模块。迁移前需先补实现或明确其归属 |
 
 ## 七、风险
 
@@ -103,11 +108,20 @@
 - 大数据 HTTP 通道方案（阶段 1 验证）
 - config_panel 迁移策略（表单密度最高的面板）
 - 打包体积实测目标值
+- **新增（2026-09-23）**：`webui/api.py:602-604` 裸 dict 写配置的处置时机，随阶段 2 插件管理面板迁移一并修，或阶段 3 收尾前修
+- **新增（2026-09-23）**：最差影响面板迁移时是否改为复用 `WorstImpactAnalyzer.analyze()`（见 §二 附注）
+- **新增（2026-09-23）**：`gui/` 现有 50% 覆盖率的测试资产在换头后如何处理（随层作废 or 迁移为前端 e2e）
+- **新增（2026-09-30）：WebUI 侧四项缺陷登记。** 来源为一次针对「三条入口行为差异」的独立调查（[独立分析-入口行为统一-2026-09-29](../04-收件箱/独立分析-入口行为统一-2026-09-29.md) §2），四项均为实测所得，不是读码推断：
+  - **H1｜WebUI 进程从不加载插件策略（功能缺失）**：`webui/` 全目录无任何 `load_plugin_strategies()` 调用（全仓扫描：只有 `cli.py`、`gui/main_window.py`、插件管理面板三处调用该函数）。实测：WebUI 进程内 `list_strategy_options` 不含任何插件键，`list_plugins` 返回的 8 条全为内置策略且 `plugin_path` 均为空字符串。**后果**：插件管理页形同虚设，功能面与 GUI 不一致。**修法最简**：WebUI 启动时扫一次插件目录，照 `gui/main_window.py:223-224` 的做法。
+  - **F1｜模拟入口绕过配置校验**：`_validate_store()`（`webui/api.py:121-152`，其注释声明与 GUI 同源）**只在保存配置时**被调用（`save_config_text`，`:169-179`）；而模拟入口 `start_simulation`（`:274-299`）把前端传来的 TOML 文本重新解析后**直接开跑**。前端在 `tools/poc_webview/ui_compare/src/App.vue:675-677` 直接调该入口。**待确认**：前端是否允许从「未保存的脏文本」派发（未在真实 WebUI 会话里操作验证）。**后果**：Banner 标识重复这类会被 GUI 弹窗拦下的配置错误（会导致保底串池），在 WebUI 上可能照跑。**修法**：模拟入口也调一次 `_validate_store()`。
+  - **A2｜进度推送无节流（实现质量）**：`webui/api.py:288-291` 每完成**一次**模拟就推一次 JS，而 `_push_task` 最终走 `self._window.evaluate_js(...)`（`:89-95`），即每次模拟一次跨语言调用。CLI 与 GUI 都做了节流（CLI 每 1/10、GUI 每 N/50），唯独 WebUI 没有。**未测量**实际开销，故只登记代码事实与方向。
+  - **C2｜不抽卡基线的异常被静默吞掉**：`webui/api.py:320-321` 与 `gui/gacha_panel.py:121-122` 同为 `except Exception: pass`。同一段逻辑在 CLI 侧已改为打印 stderr 告警（`cli.py:382-385`），理由是「静默吞掉会让『基线缺失』与『基线为 0』无从区分」。三处应统一向 CLI 看齐。
 
 ## 九、验收
 
 - `core/` 测试全过（~800），CLI 路径不变
-- 10 面板功能在 Vue 前端可复刻（对照报告 §2.4 Tab 列表）
+- 9 个功能面板在 Vue 前端可复刻（对照报告 §2.4 Tab 列表）。第 10 个「敏感度分析」当前是内联占位 `QWidget`（`gui/main_window.py:102-108`），`sensitivity_panel` 模块不存在，需先补实现或明确其归属（2026-09-23 核实）
 - 打包产物不含 Chromium，体积显著低于现状
 - 开发环境热重载可用
 - 同配置同种子模拟结果与旧版行为等价
+- **换头完成后 `config.toml` 的读写路径唯一化**（`save_toml()`/`load_toml()` 为唯一出入口，消除 `webui/api.py` 的直写分支）

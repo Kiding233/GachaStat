@@ -1,4 +1,4 @@
-<!-- META: P74 | module:UI框架替换 | status:designing | last:2026-09-30 -->
+<!-- META: P74 | module:UI框架替换 | status:designing | last:2026-10-01 -->
 
 # P74 UI换头计划：pywebview + Vue3 + Element Plus + ECharts
 
@@ -116,6 +116,8 @@
   - **F1｜模拟入口绕过配置校验**：`_validate_store()`（`webui/api.py:121-152`，其注释声明与 GUI 同源）**只在保存配置时**被调用（`save_config_text`，`:169-179`）；而模拟入口 `start_simulation`（`:274-299`）把前端传来的 TOML 文本重新解析后**直接开跑**。前端在 `tools/poc_webview/ui_compare/src/App.vue:675-677` 直接调该入口。**待确认**：前端是否允许从「未保存的脏文本」派发（未在真实 WebUI 会话里操作验证）。**后果**：Banner 标识重复这类会被 GUI 弹窗拦下的配置错误（会导致保底串池），在 WebUI 上可能照跑。**修法**：模拟入口也调一次 `_validate_store()`。
   - **A2｜进度推送无节流（实现质量）**：`webui/api.py:288-291` 每完成**一次**模拟就推一次 JS，而 `_push_task` 最终走 `self._window.evaluate_js(...)`（`:89-95`），即每次模拟一次跨语言调用。CLI 与 GUI 都做了节流（CLI 每 1/10、GUI 每 N/50），唯独 WebUI 没有。**未测量**实际开销，故只登记代码事实与方向。
   - **C2｜不抽卡基线的异常被静默吞掉**：`webui/api.py:320-321` 与 `gui/gacha_panel.py:121-122` 同为 `except Exception: pass`。同一段逻辑在 CLI 侧已改为打印 stderr 告警（`cli.py:382-385`），理由是「静默吞掉会让『基线缺失』与『基线为 0』无从区分」。三处应统一向 CLI 看齐。
+
+- **新增（2026-10-01）：WebUI 进度文案通道无消费者（实现质量）。** 后端 `_push_task(task_id, kind, done, total, pct, msg)`（`webui/api.py:431`）一直在发文案：`:274` 发「正在构建模拟环境…」、`:301` 发「正在计算不抽卡基线…」（`:290` 的逐次进度发 `None`）。而前端 `onTaskProgress`（`tools/poc_webview/ui_compare/src/App.vue:873-876`）**只取了 `p.pct`**，`msg` 在 `src/` 全目录零引用。**后果**：WebUI 跑模拟时整段时间只看到一个百分比，用户不知道程序是在构建环境、跑模拟还是算基线。**与 A2 的关系**：A2 是「推得太频繁」，本条是「推了没人看」，同一通道的两面，建议合并处置。**修法**：前端把 `p.msg` 显示在任务条上（约 1 行），与 A2 的节流一并做；改后需 `npm run build` 重建 `dist/`（`main_webview.py` 生产模式加载构建产物，不重建则改动不生效且不报错）。
 
 ## 九、验收
 

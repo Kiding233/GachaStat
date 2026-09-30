@@ -54,3 +54,9 @@ tools/poc_webview/ui_compare/*.log
 tools/poc_webview/plotly.min.js
 tools/poc_webview/echarts.min.js
 tools/poc_webview/charts.json
+
+# 外部 harness（dsh）的一次性补丁脚本目录（2026-09-30 落地）
+# 依据 P81 代码清理专项的登记：「未跟踪且未被 .gitignore 覆盖，长期出现在 git status
+# 噪声里。建议补入 .gitignore（本类不是删除，是忽略）」。该登记 2026-09-22 写下后未执行。
+# 内容为已应用过的 P79/P64 计划补丁脚本 + .claude/workflows 的旧副本，无保留价值。
+.dsh/

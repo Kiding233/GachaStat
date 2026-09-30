@@ -334,6 +334,26 @@ def _wk_init(env: SimulationEnv, target_specs: Dict[str, int] = None):
     """子进程 initializer——将 SimulationEnv 注入子进程全局变量，预构建不可变数据。"""
     global _wk_env, _wk_target_set, _wk_extractor, _wk_return_compact, _wk_profiler
     global _wk_metrics_dir
+
+    # **插件策略必须在子进程内重新注册**（G2 修复，2026-09-30）。
+    # 三条入口的插件注册都发生在**函数体内**（`cli.py` 的 `main()`、
+    # `gui/main_window.py` 的配置加载、插件管理面板），而 Windows spawn 出的子进程
+    # 只执行主模块的**模块级**代码，父进程那份注册不会传播过来。后果：子进程的
+    # `STRATEGY_REGISTRY` 里没有 `plugin/*` 键 → `create_strategy` 抛
+    # 「Unknown strategy」→ 被 `_wk_run_single` 的 except 吞成 `(None, None, [])`
+    # → 父进程的收集分支（`elif compact is not None`）既不收集也不计数
+    # → **整批静默失败**（实测：`w=1` 正常、`w=2` 时 `len(results)=0` 且 `warnings=[]`）。
+    #
+    # **只在确为插件策略时才扫**：目录扫描与模块导入是纯串行成本、会计入
+    # `pool_start`（该段刚在 `be741aa` 从 0.824 s 降到 0.345 s），而绝大多数运行
+    # 不使用插件，没有理由让它们付这笔钱。判定依据是 env 上的 `strategy_key`——
+    # `run_batch_parallel` 已在传参后、起池前把它写进 env（`:675-676`），故此处读到
+    # 的必是最终值。插件 key 的 `plugin/` 前缀由 loader 强制校验。
+    if str(getattr(env, 'strategy_key', '') or '').startswith('plugin/'):
+        from gacha_simulator.core.strategy_loader import load_plugin_strategies
+
+        load_plugin_strategies()
+
     _wk_env = env
     _wk_return_compact = getattr(env, 'return_compact', True)
     # P83（并行效率增量）：与四字段同型的 getattr 读法——字段缺失即不采集（软降级）。

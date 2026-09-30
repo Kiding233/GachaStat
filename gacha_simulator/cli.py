@@ -411,13 +411,18 @@ def main():
     ssr_counts = []
     gdr_percents = []
 
+    # E1（2026-09-30 裁决）：SSR 数量取「全部 SSR（含常驻）」，与 GUI / WebUI 同口径。
+    # 原实现用 actual_target_ids——那是**目标卡**，于是「SSR Count」与紧随其后的
+    # 「GDR (Target Card %)」共用同一个分子：同一份数被印了两遍、名字却不同，
+    # 而两条入口的「SSR Count」在同一个名字下指的是不同的量（实测同种子 4.75 vs 5.10）。
+    ssr_ids = list(env.ssr_ids)
     for r in batch_result:
         draws = r.get('total_draws', 0)
         total_draws.append(draws)
         cc = r.get('card_counts', {})
-        ssr = sum(cc.get(tid, 0) for tid in actual_target_ids)
-        ssr_counts.append(ssr)
-        gdr_percents.append((ssr / max(total_targets, 1)) * 100)
+        ssr_counts.append(sum(cc.get(sid, 0) for sid in ssr_ids))
+        target_obtained = sum(cc.get(tid, 0) for tid in actual_target_ids)
+        gdr_percents.append((target_obtained / max(total_targets, 1)) * 100)
 
     import numpy as np
 

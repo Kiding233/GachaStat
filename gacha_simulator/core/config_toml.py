@@ -5,6 +5,7 @@ P61（Ph4）：池子配置段已从旧 [[pools]]（含 distribution_template/bi
 （§3.10.6）——模板在迁移时展开为内联 [[banner.pool.reward]]。
 """
 
+import datetime as _dt
 import warnings
 from typing import Dict, List, Optional
 
@@ -126,6 +127,12 @@ def save_toml(store: ConfigStore, path: str) -> None:
     data['resources'] = {
         'defs': dict(store.resource_defs),
         'initial': dict(store.initial_resources),
+        # P85 I2（2026-10-01）：模拟起始日期（day=0 对应的日历日）。它只影响
+        # monthly_day / weekly / monthly_week 这类按**日历**展开的收入规则，但会改变
+        # 模拟结果，故属配置身份的一部分，必须落盘（此前完全不读写，GUI 那个控件改了存不住）。
+        # **总是写**：写盘这一刻把当天固化成显式值——存过一次的配置，之后哪天跑都是同一天，
+        # 「同配置同种子跨天结果不同」这件事由此收口（缺省语义仍是 ConfigStore 的当天）。
+        'sim_start_date': str(getattr(store, 'sim_start_date', '') or _dt.date.today().isoformat()),
     }
 
     # gain_rules
@@ -540,10 +547,26 @@ def _build_cards(data: dict, store: ConfigStore) -> None:
 
 
 def _build_resources(data: dict, store: ConfigStore) -> None:
-    """[resources.defs] + [resources.initial]"""
+    """[resources.defs] + [resources.initial] + [resources.sim_start_date]"""
     res = data.get('resources', {})
     store.resource_defs.update(res.get('defs', {}))
     store.initial_resources.update(res.get('initial', {}))
+
+    # P85 I2（2026-10-01）：模拟起始日期。**缺键即保持 ConfigStore 的默认（当天）**——
+    # 「模拟从今天开始」是既有裁决，落盘不改变该默认，只是让用户的显式设定能存下来。
+    # 非法值**显式告警**而不是静默回退：`_build_resource_gain` 对解析失败的兜底是
+    # 「取当天」（batch_simulator.py 的 except 分支），不报的话用户会以为自己的设定生效了。
+    raw = res.get('sim_start_date')
+    if raw:
+        try:
+            _dt.date.fromisoformat(str(raw))
+        except (ValueError, TypeError):
+            msg = (f"[resources].sim_start_date 取值 {raw!r} 不是合法日期（需 YYYY-MM-DD），"
+                   f"已回退为当天。")
+            store.load_warnings.append(msg)
+            warnings.warn(msg)
+        else:
+            store.sim_start_date = str(raw)
 
 
 def _build_gain_rules(data: dict, store: ConfigStore) -> None:

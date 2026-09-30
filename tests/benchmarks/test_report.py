@@ -192,6 +192,17 @@ class TestReportText:
                                  baseline=baseline)
         assert '代理指标' in text
 
+    def test_mentions_stage_values_are_single_sample(self, make_result):
+        """段值口径（2026-10-01 选项 A）：报告须注明段值为单次采样。
+
+        守「如实标注」这条：段值与 `wall_median` 不同源（前者取首次运行），
+        不注明会让读者把单次采样当精确读数。
+        """
+        current, baseline = make_result(wall=1200.0), make_result(wall=1000.0)
+        text = format_comparison(compare(current, baseline), current=current,
+                                 baseline=baseline)
+        assert '单次采样' in text
+
 
 class TestRepeatsDowngradedPropagation:
     """`repeats_downgraded` 的传播（§3.9 T1）——它既要在比对侧可见，也要挡住基线登记。"""

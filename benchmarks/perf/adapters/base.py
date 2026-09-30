@@ -211,8 +211,12 @@ class Adapter(ABC):
         - **预估墙钟超 `DOWNGRADE_THRESHOLD_SECONDS` 时降为 1 次**并把
           `repeats_downgraded` 置 `True`（该阈值的取值与两次修订理由见其定义处）
           （首次运行兼任试跑，用它的墙钟乘 `repeats` 作预估）
-        - 阶段分解与资源计数取**首次**运行的产出——它们是确定性量、零噪声，
-          重复测量只为压墙钟噪声，对确定性量没有意义（§3.5）
+        - 阶段分解与资源计数取**首次**运行的产出。**两类量的噪声性质不同**（2026-10-01
+          订正，原文写「它们是确定性量、零噪声」，只对前一类成立）：`packet_bytes` /
+          `worker_count` / `worker_task_counts` 是确定性量（同配置同种子下可复现）；
+          `pool_start` / `simulate` / `extract` 与 CPU 时间是**墙钟量、有实测噪声**，
+          报告按「单次采样」如实标注（见 `report.format_comparison`），读数不得与中位数
+          `wall_median` 混作同一次测量（§3.5）
 
         `grain='function'` 走**两趟**（§3.8 D6），见 `_run_two_pass`。
         """

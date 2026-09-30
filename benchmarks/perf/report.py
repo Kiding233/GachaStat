@@ -285,7 +285,10 @@ def format_comparison(comparison: Comparison, *, current: RunResult,
                      '（代理指标，当回归判据用、不当绝对开销读）')
 
     if comparison.stage_ratios:
-        lines.append('  阶段比值：')
+        # 段值口径（2026-10-01 选项 A）：段值取首次运行的单次采样，`repeats` 只压总墙钟。
+        # 与 `wall_median` 不是同一次测量，读比值须自留噪声余量（`04-问题.md` 该条已处置）。
+        lines.append('  阶段比值（段值取首次运行的单次采样，repeats 只压总墙钟；'
+                     '读比值须自留噪声余量）：')
         for name, ratio in sorted(comparison.stage_ratios.items()):
             lines.append(f'    {name:<12} {_fmt(ratio)}')
     if comparison.current_stage_shares:

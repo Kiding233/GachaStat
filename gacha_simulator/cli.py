@@ -85,8 +85,8 @@ def _reject_disabled_strategy(strategy: Optional[str], config_path: Optional[str
         sys.exit(2)
 
 
-def _cli_target_ids(store) -> list:
-    """CLI 统计所用的目标卡 id。
+def _cli_target_specs(store) -> dict:
+    """CLI 统计所用的目标卡规格 ``{card_id: quantity}``。
 
     **2026-10-01 裁决：不做兜底**（原 ISSUE-003 的兜底据此撤销）。原实现在无
     ``[[targets]]`` 时合成一个 ``{banner_id}_ssr`` 当目标，它假设了「banner 叫 b1、
@@ -96,10 +96,13 @@ def _cli_target_ids(store) -> list:
     它为前缀），命中数恒为 0。也就是说兜底静默失效，而失效时没有任何提示。
 
     用户裁决：没配目标卡时「目标达成率」本就无从计算，应当是 0；CLI 与
-    GUI / WebUI 取同一口径（``gacha_panel.py`` 的 ``_calculate_quick_stats``
-    在 ``target_ids`` 为空时直接记 0），不再各自猜一个目标。
+    GUI / WebUI 取同一口径。
+
+    返回**含 quantity 的规格**而非 id 列表：达成率口径已于同日统一为注册表的
+    ``target_achievement``，而它的定义按份数加权（``Σmin(count_i, qty_i) / Σqty_i``），
+    需要 quantity 才成立。
     """
-    return [t.card_id for t in store.target_cards]
+    return {t.card_id: getattr(t, 'quantity', 1) for t in store.target_cards}
 
 
 def _write_perf_json(path, **payload) -> bool:
@@ -411,10 +414,16 @@ def main():
             functions=functions,
         )
 
-    # 目标卡取自配置，不做兜底（2026-10-01 裁决；见 _cli_target_ids 的说明）。
-    # 未配目标卡时 total_targets 为 0，下面以 max(..., 1) 作分母，达成率恒为 0。
-    actual_target_ids = _cli_target_ids(store)
-    total_targets = len(actual_target_ids)
+    # 达成率口径统一为注册表的 target_achievement（Q6，2026-10-01 裁决）。
+    # 原实现自搓 ``Σcount / 目标卡种类数``，与注册表的
+    # ``Σmin(count_i, qty_i) / Σqty_i`` 是**两个不同的量**：前者不封顶（某张卡
+    # quantity=3 抽满即显示 200%，超抽到 5 显示 300%），后者封顶 100%。
+    # 注册表是本项目 GDR 的中央定义，快统计不应另立第三个算式，故**直接调它的函数**
+    # 而不是重抄表达式；显示名同样取它的 display_name，杜绝「同一量两处两个名字」。
+    # 未配目标卡时 target_specs 为空，函数按定义返回 0.0 —— 与 GUI / WebUI 同口径。
+    from gacha_simulator.core.gdr import UNIFIED_GDR_REGISTRY as _GDR_REG
+    _GDR_ACH = _GDR_REG['target_achievement']
+    target_specs_for_stat = _cli_target_specs(store)
 
     total_draws = []
     ssr_counts = []
@@ -430,8 +439,7 @@ def main():
         total_draws.append(draws)
         cc = r.get('card_counts', {})
         ssr_counts.append(sum(cc.get(sid, 0) for sid in ssr_ids))
-        target_obtained = sum(cc.get(tid, 0) for tid in actual_target_ids)
-        gdr_percents.append((target_obtained / max(total_targets, 1)) * 100)
+        gdr_percents.append(_GDR_ACH.compute_from_compact(r, target_specs_for_stat) * 100)
 
     import numpy as np
 
@@ -476,7 +484,7 @@ def main():
         print(f"  Mean: {np.mean(ssr_counts):.2f}")
         print(f"  Median: {np.median(ssr_counts):.1f}")
 
-        print("\nGDR (Target Card %):")
+        print(f"\n{_GDR_ACH.display_name} (%):")
         print(f"  Mean: {np.mean(gdr_percents):.2f}%")
         print(f"  Median: {np.median(gdr_percents):.2f}%")
         print(f"  25th percentile: {np.percentile(gdr_percents, 25):.2f}%")

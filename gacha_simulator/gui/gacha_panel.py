@@ -195,6 +195,7 @@ class GachaPanel(QWidget):
         self.simulation_thread = None
         self.result_bundle = None
         self.target_ids = set()
+        self.target_specs = {}
         self.ssr_ids = set()
         self.gdr_context = None
         self.pool_end_times = {}
@@ -272,7 +273,12 @@ class GachaPanel(QWidget):
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.results_table.setRowCount(5)
 
-        for i, label in enumerate(["总抽卡数", "SSR数量", "目标达成率(%)", "保底触发次数", "模拟时长(天)"]):
+        # 达成率的列名取自注册表（Q6，2026-10-01）：与 _calculate_quick_stats 的算式
+        # 同源。**不硬编码**——E3「同一个量在两处两个名字」正是硬编码造出来的。
+        from gacha_simulator.core.gdr import UNIFIED_GDR_REGISTRY
+        _ach_name = UNIFIED_GDR_REGISTRY['target_achievement'].display_name
+
+        for i, label in enumerate(["总抽卡数", "SSR数量", f"{_ach_name}(%)", "保底触发次数", "模拟时长(天)"]):
             self.results_table.setItem(i, 0, QTableWidgetItem(label))
             self.results_table.setItem(i, 1, QTableWidgetItem("-"))
             self.results_table.setItem(i, 2, QTableWidgetItem("-"))
@@ -348,6 +354,8 @@ class GachaPanel(QWidget):
         self.result_bundle = result_bundle
         if isinstance(result_bundle, dict):
             self.target_ids = result_bundle.get('target_ids', set())
+            # 达成率需要 quantity（注册表定义按份数加权），故一并取规格
+            self.target_specs = result_bundle.get('target_specs', {}) or {}
             self.ssr_ids = result_bundle.get('ssr_ids', set())
             self.gdr_context = result_bundle.get('gdr_context', None)
             self.pool_end_times = result_bundle.get('pool_end_times', {})
@@ -398,24 +406,32 @@ class GachaPanel(QWidget):
     def _calculate_quick_stats(self, results):
         import numpy as np
 
+        # Q6（2026-10-01 裁决）：达成率口径统一为注册表的 target_achievement
+        # （显示名「简单目标达成率」，列名在 _setup_ui 里取同一个来源）。
+        # 原实现自搓 ``Σcount / 目标卡种类数``，与注册表的
+        # ``Σmin(count_i, qty_i) / Σqty_i`` 是两个不同的量：前者不封顶（某张卡
+        # quantity=3 抽满即显示 200%，超抽到 5 显示 300%），后者封顶 100%。
+        # 注册表是本项目 GDR 的中央定义，快统计不应另立第三个算式。
+        # 未配目标卡时 target_specs 为空，函数按定义返回 0.0。
+        from gacha_simulator.core.gdr import UNIFIED_GDR_REGISTRY
+        _ach = UNIFIED_GDR_REGISTRY['target_achievement'].compute_from_compact
+
         total_draws = []
         ssr_counts = []
         target_rates = []
         pity_counts = []
         sim_durations = []
 
-        target_ids = self.target_ids
         ssr_ids = self.ssr_ids
-        target_count = len(target_ids) if target_ids else 1
+        target_specs = self.target_specs
 
         for h in results:
             if isinstance(h, dict):
                 total_draws.append(h.get('total_draws', 0))
                 cc = h.get('card_counts', {})
                 ssr_count = sum(cc.get(sid, 0) for sid in ssr_ids)
-                target_obtained = sum(cc.get(tid, 0) for tid in target_ids)
                 ssr_counts.append(ssr_count)
-                target_rates.append((target_obtained / target_count) * 100 if target_ids else 0)
+                target_rates.append(_ach(h, target_specs) * 100)
                 pity_counts.append(h.get('pity_triggers', 0))
                 final_time = h.get('final_time', 0)
                 sim_durations.append(final_time / 86400.0)

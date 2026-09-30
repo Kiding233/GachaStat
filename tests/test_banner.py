@@ -804,28 +804,31 @@ class TestWorstImpactAnalyzeExpectedPools:
         assert result.worst_resource == 50000
 
 
-class TestCliTargetIds:
-    """CLI 的目标卡 id 取自配置，**不做兜底**。
+class TestCliTargetSpecs:
+    """CLI 的目标卡规格取自配置，**不做兜底**。
 
     2026-10-01 裁决撤销了原 ISSUE-003 的兜底：它合成 ``{banner_id}_ssr`` 当目标，
     而仓库那份 config.toml 的 banner 叫 ``pool_cN``、卡叫 ``limited_ssr_N``，合成 id
     不是任何真实卡，命中数恒为 0（兜底静默失效且无提示）。裁决为「没配目标卡时达成率
     就是 0」，与 GUI / WebUI 同口径。
+
+    返回**含 quantity 的规格**而非 id 列表：同日达成的另一条裁决把达成率口径统一为
+    注册表的 ``target_achievement``，其定义按份数加权，需要 quantity。
     """
 
     def test_no_targets_yields_empty(self):
-        """无 [[targets]] 时返回空列表 —— 达成率随之恒为 0（不再是拼出来的假目标）。"""
+        """无 [[targets]] 时返回空规格 —— 达成率随之恒为 0（不再是拼出来的假目标）。"""
         b = BannerEntry(id='b1', name='池', enabled=True,
                         available_from=0.0, available_until=21 * DAY,
                         pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
                                                       _reward('r1', 50.0, 'R')])])
         store = _make_store([b])  # 无 target_cards
-        from gacha_simulator.cli import _cli_target_ids
-        assert _cli_target_ids(store) == [], \
+        from gacha_simulator.cli import _cli_target_specs
+        assert _cli_target_specs(store) == {}, \
             '未配置目标卡时不应合成任何目标（2026-10-01 裁决）'
 
     def test_configured_targets_passed_through(self):
-        """配了 [[targets]] 时原样返回，顺序与配置一致。"""
+        """配了 [[targets]] 时原样返回 card_id -> quantity。"""
         b = BannerEntry(id='b1', name='池', enabled=True,
                         available_from=0.0, available_until=21 * DAY,
                         pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
@@ -834,8 +837,8 @@ class TestCliTargetIds:
             TargetCardEntry(card_id='b1_ssr', quantity=1),
             TargetCardEntry(card_id='r1', quantity=2),
         ])
-        from gacha_simulator.cli import _cli_target_ids
-        assert _cli_target_ids(store) == ['b1_ssr', 'r1']
+        from gacha_simulator.cli import _cli_target_specs
+        assert _cli_target_specs(store) == {'b1_ssr': 1, 'r1': 2}
 
 
 class TestCliMigrateDisposition:

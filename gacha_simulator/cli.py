@@ -85,18 +85,21 @@ def _reject_disabled_strategy(strategy: Optional[str], config_path: Optional[str
         sys.exit(2)
 
 
-def _fallback_target_ids(store) -> list:
-    """CLI 无 [[targets]] 时的兜底目标 id（ISSUE-003）。
+def _cli_target_ids(store) -> list:
+    """CLI 统计所用的目标卡 id。
 
-    展平视图 pool_id 为全限定键 {banner_id}.{pool_id}——直接拼接会生成
-    {banner_id}.main_ssr 与真实卡 id 失配、ssr 计数恒 0。取 banner 段拼 _ssr。
+    **2026-10-01 裁决：不做兜底**（原 ISSUE-003 的兜底据此撤销）。原实现在无
+    ``[[targets]]`` 时合成一个 ``{banner_id}_ssr`` 当目标，它假设了「banner 叫 b1、
+    其 SSR 卡就叫 b1_ssr」这条命名约定。仓库里那份 ``config.toml`` 不遵循该约定
+    （banner 是 ``pool_cN``，卡是 ``limited_ssr_N`` / ``standard_ssr_N``），合成出的
+    ``pool_c1_ssr`` **不是任何一张真实卡**（实测：不在 ``card_defs`` 中，且无任何卡以
+    它为前缀），命中数恒为 0。也就是说兜底静默失效，而失效时没有任何提示。
+
+    用户裁决：没配目标卡时「目标达成率」本就无从计算，应当是 0；CLI 与
+    GUI / WebUI 取同一口径（``gacha_panel.py`` 的 ``_calculate_quick_stats``
+    在 ``target_ids`` 为空时直接记 0），不再各自猜一个目标。
     """
-    actual = [t.card_id for t in store.target_cards]
-    if actual:
-        return actual
-    if store.pools:
-        return [f"{store.pools[0].pool_id.split('.')[0]}_ssr"]
-    return []
+    return [t.card_id for t in store.target_cards]
 
 
 def _write_perf_json(path, **payload) -> bool:
@@ -408,8 +411,9 @@ def main():
             functions=functions,
         )
 
-    # P61（ISSUE-003）：无 [[targets]] 时兜底目标取 banner 段拼 _ssr（模块级函数，可测）
-    actual_target_ids = _fallback_target_ids(store)
+    # 目标卡取自配置，不做兜底（2026-10-01 裁决；见 _cli_target_ids 的说明）。
+    # 未配目标卡时 total_targets 为 0，下面以 max(..., 1) 作分母，达成率恒为 0。
+    actual_target_ids = _cli_target_ids(store)
     total_targets = len(actual_target_ids)
 
     total_draws = []

@@ -804,23 +804,38 @@ class TestWorstImpactAnalyzeExpectedPools:
         assert result.worst_resource == 50000
 
 
-class TestCliFallbackTarget:
-    """CLI 无 [[targets]] 兜底目标取 banner 段（ISSUE-003）。"""
+class TestCliTargetIds:
+    """CLI 的目标卡 id 取自配置，**不做兜底**。
 
-    def test_fallback_target_is_real_card(self):
+    2026-10-01 裁决撤销了原 ISSUE-003 的兜底：它合成 ``{banner_id}_ssr`` 当目标，
+    而仓库那份 config.toml 的 banner 叫 ``pool_cN``、卡叫 ``limited_ssr_N``，合成 id
+    不是任何真实卡，命中数恒为 0（兜底静默失效且无提示）。裁决为「没配目标卡时达成率
+    就是 0」，与 GUI / WebUI 同口径。
+    """
+
+    def test_no_targets_yields_empty(self):
+        """无 [[targets]] 时返回空列表 —— 达成率随之恒为 0（不再是拼出来的假目标）。"""
         b = BannerEntry(id='b1', name='池', enabled=True,
                         available_from=0.0, available_until=21 * DAY,
                         pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
                                                       _reward('r1', 50.0, 'R')])])
         store = _make_store([b])  # 无 target_cards
-        # P61（ISSUE-003）：调用 cli 真实兜底函数（非重抄表达式）——取 banner 段拼 _ssr
-        from gacha_simulator.cli import _fallback_target_ids
-        fallback_ids = _fallback_target_ids(store)
-        assert fallback_ids == ['b1_ssr'], \
-            f'兜底目标应取 banner 段（非全限定 banner.main_ssr），实际 {fallback_ids}'
-        card_ids = {c.card_id for c in store.card_defs}
-        assert fallback_ids[0] in card_ids, \
-            f'兜底目标 {fallback_ids[0]} 应为真实卡，实际卡集 {card_ids}'
+        from gacha_simulator.cli import _cli_target_ids
+        assert _cli_target_ids(store) == [], \
+            '未配置目标卡时不应合成任何目标（2026-10-01 裁决）'
+
+    def test_configured_targets_passed_through(self):
+        """配了 [[targets]] 时原样返回，顺序与配置一致。"""
+        b = BannerEntry(id='b1', name='池', enabled=True,
+                        available_from=0.0, available_until=21 * DAY,
+                        pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
+                                                      _reward('r1', 50.0, 'R')])])
+        store = _make_store([b], target_cards=[
+            TargetCardEntry(card_id='b1_ssr', quantity=1),
+            TargetCardEntry(card_id='r1', quantity=2),
+        ])
+        from gacha_simulator.cli import _cli_target_ids
+        assert _cli_target_ids(store) == ['b1_ssr', 'r1']
 
 
 class TestCliMigrateDisposition:

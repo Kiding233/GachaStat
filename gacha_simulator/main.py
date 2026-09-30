@@ -116,6 +116,45 @@ def _probe_install_charts_ready(window, payload, path):
     state['timer'] = timer
 
 
+def _install_excepthook() -> None:
+    """把从 Qt 槽逃逸的异常接住，避免 PyQt6 直接 ``qFatal()`` 中止进程。
+
+    **实测依据**（PyQt6 6.11.0 / Qt 6.11.0 / Python 3.12.5，用真实 ``pyqtSignal``
+    加槽复现）：槽内抛异常时，未装本钩子的进程以 ``0xC0000409``（abort）消失且
+    stdout/stderr 全空；装了之后 traceback 正常打印、``app.exec()`` 返回 0、
+    **进程存活**。这是本项目唯一一道能拦住「窗口无声消失」的网。
+
+    与 ``gui/slot_guard.py`` 的 ``@guarded_slot`` 分工：本钩子是**兜底**，覆盖所有
+    未装饰的槽，只保证「进程不死 + 终端有 traceback」；装饰器装饰在最要紧的槽上，
+    能弹出与本步上下文相符的说明。**两层都要**，缺了装饰器则打包环境（无控制台）
+    下用户仍然什么都看不到。
+
+    **只改异常路径**：无异常时本函数不参与任何调用链。
+    """
+    def _hook(exc_type, exc_value, exc_tb):
+        # 先按常规打到 stderr（终端启动时可见；打包后无控制台则自然丢弃）
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        # 再弹窗告诉用户「程序还在，但这一步没生效」——打包环境下唯一的可见通道
+        try:
+            from PyQt6.QtCore import QThread
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+
+            app = QApplication.instance()
+            if app is None or QThread.currentThread() != app.thread():
+                return
+            QMessageBox.critical(
+                None, '发生未预期的错误',
+                '程序遇到了一个未处理的错误，但**仍在运行**。\n\n'
+                '刚才那一步没有生效（例如结果没能存进数据集），请检查后重试。\n\n'
+                f'{exc_type.__name__}: {exc_value}',
+            )
+        except Exception:
+            # 报告本身失败不得再抛：二次异常会重新触发 qFatal，等于没有兜底
+            pass
+
+    sys.excepthook = _hook
+
+
 if __name__ == '__main__':
     # 段 1 的锚点：这一行就是「脚本首行」，与父进程的 spawn 时刻相减即解释器启动耗时。
     # 未设置打点环境变量时 `_probe` 恒为 None，下面每个打点都是一次布尔判断。
@@ -145,6 +184,9 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     if _probe is not None:
         _probe['app_construct_end'] = _probe_now()            # 段 3 止
+    # 槽异常兜底网：必须在窗口构造**之前**装好——MainWindow() 的构造期就会连信号，
+    # 装晚了覆盖不到构造期与首帧的槽调用。
+    _install_excepthook()
     from gacha_simulator.gui.wheel_blocker import GlobalWheelBlocker
     app.installEventFilter(GlobalWheelBlocker(app))
     app.setApplicationName("GachaStat")

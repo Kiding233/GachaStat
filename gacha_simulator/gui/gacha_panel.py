@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 
+from .slot_guard import guarded_slot
+
 import sys
 import os
 _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -341,6 +343,7 @@ class GachaPanel(QWidget):
         self.simulation_thread.status_update.connect(self.status_update)
         self.simulation_thread.start()
 
+    @guarded_slot
     def on_simulation_finished(self, result_bundle):
         self.result_bundle = result_bundle
         if isinstance(result_bundle, dict):

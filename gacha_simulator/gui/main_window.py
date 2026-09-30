@@ -25,6 +25,7 @@ from ..core.result_store import (
     canonical_stop_condition_summary,
 )
 from .data_manager_panel import DataManagerPanel
+from .slot_guard import guarded_slot
 from ..core.config_store import ConfigStore, derive_pool_type_from_distribution
 from ..core.config_toml import load_toml, save_toml
 from ..paths import get_config_dir, get_resource
@@ -339,6 +340,7 @@ class MainWindow(QMainWindow):
                         str(card_counts),
                     ])
 
+    @guarded_slot
     def on_simulation_finished(self, result_bundle):
         if isinstance(result_bundle, dict):
             aggregate_data = result_bundle.get('aggregate_data', [])

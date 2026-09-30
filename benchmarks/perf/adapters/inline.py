@@ -167,9 +167,22 @@ class InlineAdapter(Adapter):
         混入主模拟的剖面），而 `env` 只有这一个字段可用，故把 `run_id` 折进它的取值。
         与 `1e-2` 在 `cli.py` 侧的落法一致，使 `6b` 写入与 `6c` 扫描两侧口径相同。
 
+        **`plan.profile_dir` 为空时不落盘**（契约见 `Plan.profile_dir` 与
+        `SimulationEnv.profile_dir` 两个字段的 docstring）：此时不置位 `env` 四字段，
+        `env.profile_enabled` 保持默认 `False`——与 `cli` 路径不传 `--profile-dir` 时
+        被测对象的状态逐项一致。
+
         D7：目录不可写**一律软降级**——绝不因剖析失败导致模拟失败。
         """
         if not plan.profile_enabled:
+            return
+        # 契约「空则不落盘」：这个守卫必须在 `os.path.join` **之前**。
+        # `os.path.join('', run_id)` 返回的是裸 `run_id`（相对路径），缺了守卫 run 目录
+        # 会被建到**调用方的当前工作目录**，而不是「什么都不做」——实测在仓库根累积了
+        # 70 个 12 位十六进制空目录（每次 `pytest` 掉一个）。
+        # 告警不在这里补：`env.profile_enabled` 保持默认 False，`_run_once` 遂把空串递给
+        # `merge_profiles`，由它给出「未指定 profile 目录」一条，与 `functions=None` 一同到位。
+        if not plan.profile_dir:
             return
         run_dir = os.path.join(plan.profile_dir, run_id)
         try:

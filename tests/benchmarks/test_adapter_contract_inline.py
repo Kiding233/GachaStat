@@ -14,6 +14,7 @@
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,6 +79,52 @@ class TestCollectorDeclarationMatchesDriver:
         source = (REPO_ROOT / 'benchmarks' / 'perf' / 'adapters' / 'inline.py').read_text(encoding='utf-8')
         call = call_arguments(source, 'run_batch_parallel')
         assert re.search(r'on_result\s*=', call), 'on_result 应无条件传入，而非由 plan.collector 条件控制'
+
+
+class TestEmptyProfileDirWritesNothing:
+    """`profile_enabled=True` + `profile_dir=''` 时**不得落盘**（契约「空则不落盘」）。
+
+    **回归用途：** 该组合是合法状态（`cli` 路径的 `test_no_chain_when_no_directory` 就是
+    这么用的），而 `os.path.join('', run_id)` 会退化成裸 `run_id`（相对路径）——守卫缺失
+    时 run 目录被建到**调用方的当前工作目录**：2026-09-30 在仓库根查出 70 个 12 位十六
+    进制空目录，每次 `pytest` 掉一个（含 H9 在 `git push` 时跑的全量）。
+
+    **不受 `P83_PERF_TESTS` 门控：** 本用例护的正是默认 `pytest -q` 会踩到的那条路，
+    放进受门控的类里等于没测。
+    """
+
+    def test_no_directory_created_in_cwd(self, make_plan, tmp_path, monkeypatch):
+        """空 `profile_dir` 时工作目录必须一个条目都不多出来。"""
+        monkeypatch.chdir(tmp_path)
+        plan = make_plan(config_path=DEFAULT_CONFIG, path='inline', n=2, workers=1,
+                         seed=42, repeats=1, grain='stage', collector=True,
+                         profile_enabled=True, profile_dir='')
+        result = get_adapter('inline').run(plan)
+        leftover = sorted(entry.name for entry in tmp_path.iterdir())
+        assert leftover == [], f'profile_dir 为空时不该在工作目录建任何东西，实得 {leftover}'
+        assert result.functions is None
+        assert any('未指定 profile 目录' in w for w in result.warnings), result.warnings
+
+    def test_directory_is_created_when_profile_dir_given(self, make_plan, tmp_path):
+        """反向对照：守卫只挡空值。给了 `profile_dir` 时四字段照常置位、目录照常建。
+
+        **没有这一条，上面那条断言对「守卫被写成无差别 return」没有鉴别力**——那种写法
+        会让剖析彻底失效，而上面一条仍会通过。
+        """
+        run_id = 'abcdef012345'
+        plan = make_plan(config_path=DEFAULT_CONFIG, path='inline', n=2, workers=1,
+                         seed=42, repeats=1, grain='stage', collector=True,
+                         profile_enabled=True, profile_dir=str(tmp_path),
+                         profile_skip=0, profile_count=4)
+        env = SimpleNamespace(profile_enabled=False, profile_dir='',
+                              profile_skip=0, profile_count=0)
+        warnings: list = []
+        get_adapter('inline')._apply_profile_fields(env, plan, run_id, warnings)
+        assert warnings == []
+        assert env.profile_enabled is True
+        assert env.profile_dir == str(tmp_path / run_id)
+        assert env.profile_skip == 0 and env.profile_count == 4
+        assert (tmp_path / run_id).is_dir(), '给了 profile_dir 就该落 run 级子目录'
 
 
 @requires_real_run

@@ -130,18 +130,24 @@ class TestWordingIsDistinguishable:
 class TestD9FlowsIntoRunResult:
     """`BatchResult.warnings` → `RunResult.warnings` 的传递（§3.8 D9 的通道）。"""
 
-    def test_adapter_surfaces_it(self, env_and_targets, force_mp_failed, make_plan):
+    def test_adapter_surfaces_it(self, env_and_targets, force_mp_failed, make_plan,
+                                 tmp_path):
         """经 `inline` 适配器跑一次，D9 告警应出现在 `RunResult.warnings` 里。
 
         `MPPool` 已被替换成必失败的替身，故适配器内部的 `run_batch_parallel` 落到
         `mp_failed` 兜底路径，D9 告警经 `BatchResult.warnings` 进入 `SingleRun.warnings`。
+
+        **`profile_dir` 必须显式给**：本用例要的形态是「请求了剖析、且有落盘处」。留空
+        会让 `os.path.join('', run_id)` 退化成裸 `run_id`（相对路径），run 目录被建到当时
+        的工作目录——2026-09-30 定位到的那处 cwd 污染，70 个空目录即由此累积。
         """
         from benchmarks.perf.adapters.base import get_adapter
 
         adapter = get_adapter('inline')
         plan = make_plan(config_path=os.path.join(get_config_dir(), 'config.toml'),
                          n=N, workers=2, seed=SEED, repeats=1, grain='stage',
-                         collector=True, profile_enabled=True)
+                         collector=True, profile_enabled=True,
+                         profile_dir=str(tmp_path))
         result = adapter.run(plan)
         assert any(D9_MARKER in w for w in result.warnings), result.warnings
         assert result.functions is None, '路径降级时 functions 必然为 None'

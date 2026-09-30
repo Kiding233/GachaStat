@@ -406,6 +406,7 @@ class GachaApi:
         now = datetime.now().isoformat()
         fingerprint = ComparabilityFingerprint(
             config_hash=config_hash, strategy_name=strategy_name, strategy_key=strategy_name,
+            strategy_params=dict(getattr(store, 'strategy_params', {}) or {}),
             target_cards=dict(bundle['target_specs']), initial_resources=initial_resources,
             stop_condition=_stop_summary,   # P79：条件树渲染的规范化摘要（原为硬编码）
             seed_start=seed,

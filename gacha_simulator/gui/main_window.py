@@ -463,6 +463,9 @@ class MainWindow(QMainWindow):
             config_hash=config_hash,
             strategy_name=strategy_name,
             strategy_key=strategy_name,
+            # 2026-10-01：策略参数参与「策略」维度判定（原实现不记录它，
+            # 同一策略只改参数的两次运行会被判「所有维度相同」）
+            strategy_params=dict(getattr(self._store, 'strategy_params', {}) or {}),
             target_cards=target_specs_for_fp,
             initial_resources=initial_resources,
             stop_condition=_stop_summary,   # P79：条件树渲染的规范化摘要（原为硬编码）

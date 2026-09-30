@@ -38,12 +38,16 @@ class ComparabilityFingerprint:
     pool_ids: Tuple[str, ...]            # 池子 ID 列表（有序）
     created_at: str                      # ISO 时间戳
     strategy_key: str = ''               # P69 ISSUE-002：策略注册 key
+    # 2026-10-01（用户裁决）：策略参数参与「策略」维度的可比性判定。
+    # 原实现完全不记录它，于是「同一个策略、只改参数」的两次运行被判「所有维度相同」。
+    strategy_params: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             'config_hash': self.config_hash,
             'strategy_name': self.strategy_name,
             'strategy_key': self.strategy_key,
+            'strategy_params': dict(self.strategy_params),
             'target_cards': dict(self.target_cards),
             'initial_resources': dict(self.initial_resources),
             'stop_condition': self.stop_condition,
@@ -60,6 +64,8 @@ class ComparabilityFingerprint:
             config_hash=d.get('config_hash', ''),
             strategy_name=d.get('strategy_name', ''),
             strategy_key=d.get('strategy_key', ''),
+            # 旧数据集没有这个键 -> 取空 dict（降级为「参数未记录」，不误判为不同）
+            strategy_params=dict(d.get('strategy_params', {}) or {}),
             target_cards={str(k): int(v) for k, v in d.get('target_cards', {}).items()},
             initial_resources={str(k): float(v) for k, v in d.get('initial_resources', {}).items()},
             stop_condition=d.get('stop_condition', ''),
@@ -168,8 +174,9 @@ class ComparabilityDiff:
     def only_strategy_differs(self) -> bool:
         """仅策略不同的纯策略比较"""
         diff_dims = {k for k, v in self.dimensions.items() if v != 'same'}
-        # P69 ISSUE-812：差异维度限定在 strategy_name 或 strategy_key 中
-        return bool(diff_dims) and diff_dims <= {'strategy_name', 'strategy_key'}
+        # 2026-10-01：策略相关的三个字段已合成单一维度 'strategy'（原为
+        # strategy_name / strategy_key 两项，P69 ISSUE-812 的限定随之收敛）
+        return bool(diff_dims) and diff_dims <= {'strategy'}
 
     def all_same(self) -> bool:
         """所有维度相同"""
@@ -181,10 +188,7 @@ class ComparabilityDiff:
         if self.only_strategy_differs():
             return '策略比较——同一环境下策略的选择差异。同种子可配对比较。'
         # P69 ISSUE-813：同时检查 strategy_name 和 strategy_key 维度
-        strategy_diff = (
-            self.dimensions.get('strategy_name', 'same') != 'same'
-            or self.dimensions.get('strategy_key', 'same') != 'same'
-        )
+        strategy_diff = self.dimensions.get('strategy', 'same') != 'same'
         config_diff = any(
             self.dimensions.get(d, 'same') != 'same'
             for d in ['config_hash', 'target_cards', 'initial_resources', 'stop_condition', 'pool_ids']
@@ -359,7 +363,19 @@ class ResultStore:
                 name_b, fp_b = fps[j]
                 pair_key = f"{name_a} vs {name_b}"
                 dims[pair_key] = {}
-                for attr in ['strategy_name', 'strategy_key', 'config_hash', 'stop_condition',
+                # 2026-10-01（用户裁决）：策略相关字段**合成一个维度** —— 「换策略」与
+                # 「改参数」都算这一个维度的改动。原实现分列 strategy_name 与
+                # strategy_key 两项，且 strategy_params 完全不参与，于是同一策略只改
+                # 参数的两次运行会被判「所有维度相同」。
+                _na, _nb = _strategy_label(fp_a), _strategy_label(fp_b)
+                if _strategy_signature(fp_a) == _strategy_signature(fp_b):
+                    dims[pair_key]['strategy'] = 'same'
+                elif _na != _nb:
+                    dims[pair_key]['strategy'] = f'different: {_na} ≠ {_nb}'
+                else:
+                    dims[pair_key]['strategy'] = 'different: 同一策略、参数不同'
+
+                for attr in ['config_hash', 'stop_condition',
                              'seed_start', 'seed_end', 'num_simulations']:
                     a = getattr(fp_a, attr)
                     b = getattr(fp_b, attr)
@@ -401,6 +417,23 @@ class ResultStore:
 
     def __contains__(self, name: str) -> bool:
         return name in self._datasets
+
+
+def _strategy_label(fp) -> str:
+    """策略维度的可读名（用于差异单元格的展示）。"""
+    return getattr(fp, 'strategy_key', '') or getattr(fp, 'strategy_name', '') or '?'
+
+
+def _strategy_signature(fp) -> str:
+    """策略维度的**判定签名**：名称 + 参数。
+
+    参数经 ``json.dumps(sort_keys=True)`` 规范化 —— 它是从 TOML 读来的 dict，
+    键序不保证，直接 ``str()`` 比较会把「同一份参数」判成不同。
+    """
+    params = getattr(fp, 'strategy_params', None) or {}
+    if not params:
+        return _strategy_label(fp)
+    return f"{_strategy_label(fp)}|{json.dumps(params, sort_keys=True, ensure_ascii=False)}"
 
 
 def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dict[str, str]:

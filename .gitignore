@@ -60,3 +60,11 @@ tools/poc_webview/charts.json
 # 噪声里。建议补入 .gitignore（本类不是删除，是忽略）」。该登记 2026-09-22 写下后未执行。
 # 内容为已应用过的 P79/P64 计划补丁脚本 + .claude/workflows 的旧副本，无保留价值。
 .dsh/
+
+# superpowers 技能运行态（2026-09-30 落地，同 P81 登记）
+# 内含：brainstorm 的本地预览服务器状态（server.pid / server-stopped / .last-port
+# / .last-token）与设计比稿 HTML、plan-execute 的运行账本。属工具运行态而非项目产物。
+# 注意：该目录下已有 34 个文件在 2026-06 的三次文档重构提交（65ab06d / 3570776 /
+# 9cae590）中被误入库。.gitignore 对已跟踪文件无效，故本次同时取消跟踪（文件保留在
+# 磁盘上，非删除；可 git revert 恢复跟踪）。
+.superpowers/

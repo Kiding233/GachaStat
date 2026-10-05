@@ -43,13 +43,28 @@ body{
 .tb-sep{width:1px;height:20px;background:var(--line);margin:0 4px}
 
 /* ---------- 主体 ---------- */
-.app-body{flex:1;display:flex;min-height:0;padding:8px;gap:0}
+.app-body{flex:1;display:flex;min-height:0;padding:8px;gap:8px}
 
 /* 左侧栏：上半文件树 + 下半对比任务 */
 .side{
   width:326px;flex:0 0 326px;display:flex;flex-direction:column;min-height:0;
   background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
 }
+
+/* 整页切换把手所在的道：位于左栏与右侧工作台之间，常驻不遮挡内容 */
+.rail{
+  width:34px;flex:0 0 34px;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;user-select:none;
+}
+.rail .knob{
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:16px 8px;background:var(--accent);color:#fff;
+  border-radius:10px;box-shadow:0 2px 14px rgba(25,118,210,.42);
+  transition:background .15s,transform .15s;
+}
+.rail:hover .knob{background:#1565c0;transform:translateX(2px)}
+.rail .chev{font-size:20px;line-height:1;font-weight:700}
+.rail .vtext{writing-mode:vertical-rl;font-size:12px;letter-spacing:4px}
 .side-top{flex:1;min-height:0;display:flex;flex-direction:column}
 .side-bottom{height:172px;flex:0 0 172px;display:flex;flex-direction:column;border-top:2px solid var(--line)}
 .side-head{
@@ -83,18 +98,16 @@ body{
 
 /* 右侧工作台 */
 .workbench{
-  flex:1;min-width:0;margin-left:8px;display:flex;flex-direction:column;
+  flex:1;min-width:0;display:flex;flex-direction:column;
   background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
   position:relative;
 }
-.wb-head{
-  min-height:48px;display:flex;align-items:center;gap:12px;padding:6px 12px;
-  border-bottom:1px solid var(--line);background:linear-gradient(#fbfcfd,#f7f9fb);flex-wrap:wrap;
+/* 每个页面自己设计头部，右侧没有统一标题区 */
+.page-head{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);
 }
-.wb-title{display:flex;align-items:baseline;gap:8px;min-width:0}
-.wb-title b{font-size:15px}
-.wb-title span{color:var(--ink-3);font-size:12px}
-.mode-label{font-size:11px;color:var(--ink-2);background:#eef1f5;border-radius:10px;padding:2px 10px}
+.page-head h3{margin:0;font-size:16px;font-weight:600}
 /* 切换的是整个右侧页面：分析页从右侧滑入，详情页淡出 */
 .wb-body{flex:1;min-height:0;overflow:hidden;position:relative}
 .wb-page{position:absolute;inset:0;overflow:auto;padding:12px}
@@ -103,29 +116,6 @@ body{
 .slide-enter-from{transform:translateX(100%);opacity:.35}
 .slide-leave-to{opacity:0}
 .wb-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--ink-3)}
-
-/* 分段控件（模式指示器） */
-.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius);overflow:hidden;background:#fff}
-.seg button{
-  border:0;background:transparent;padding:5px 14px;font:inherit;font-size:12px;color:var(--ink-2);
-  cursor:pointer;border-right:1px solid var(--line);
-}
-.seg button:last-child{border-right:0}
-.seg button:hover:not(.on){background:#f2f6fb}
-.seg button.on{background:var(--accent);color:#fff}
-.seg button[disabled]{color:#c3c8d2;cursor:not-allowed}
-
-/* 整页切换把手：右侧面板左边缘正中 */
-.edge-switch{
-  position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:8;
-  display:flex;flex-direction:column;align-items:center;gap:5px;
-  padding:12px 6px;background:var(--accent);color:#fff;cursor:pointer;
-  border-radius:0 9px 9px 0;box-shadow:3px 0 12px rgba(25,118,210,.3);
-  user-select:none;transition:background .15s,padding .15s;
-}
-.edge-switch:hover{background:#1565c0;padding-right:10px}
-.edge-switch .chev{font-size:16px;line-height:1}
-.edge-switch .vtext{writing-mode:vertical-rl;font-size:11px;letter-spacing:3px}
 
 /* 分析面板 */
 .anchor-bar{
@@ -162,7 +152,7 @@ body{
 .reason{font-size:11px;color:var(--danger);display:flex;align-items:center;gap:4px}
 
 .notice{
-  position:absolute;top:56px;left:50%;transform:translateX(-50%);z-index:9;
+  position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:9;
   animation:fade 2.6s ease forwards;
 }
 @keyframes fade{0%,75%{opacity:1}100%{opacity:0}}
@@ -175,8 +165,6 @@ body{
 .fitem{display:flex;align-items:center;gap:8px}
 .fitem label{width:88px;flex:0 0 88px;color:var(--ink-3);font-size:12px;text-align:right}
 .fitem .el-select,.fitem .el-input{flex:1}
-.state-bar{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);
-  border-radius:var(--radius);background:#fafbfd;margin-bottom:14px}
 </style>
 </head>
 <body>
@@ -258,17 +246,15 @@ body{
       </div>
     </aside>
 
-    <main class="workbench">
-      <!-- 头部：标题 + 模式指示器 -->
-      <div class="wb-head">
-        <div class="wb-title">
-          <b>{{ subjectLabel }}</b>
-          <span>{{ subjectSub }}</span>
-        </div>
-        <span class="spacer"></span>
-        <span class="mode-label">{{ modeLabel }}</span>
+    <!-- 整页切换把手：常驻在左栏与工作台之间，不遮挡任何页面内容 -->
+    <div v-if="switchStyle==='edge' && canToggle" class="rail" @click="toggleMode">
+      <div class="knob">
+        <span class="chev">{{ mode==='analysis' ? '《' : '》' }}</span>
+        <span class="vtext">{{ mode==='analysis' ? '收起分析' : '展开分析' }}</span>
       </div>
+    </div>
 
+    <main class="workbench">
       <!-- 临时提示 -->
       <el-alert v-if="notice" class="notice" :title="notice" type="info" :closable="false" show-icon />
 
@@ -276,6 +262,10 @@ body{
        <transition name="slide" mode="out-in">
         <div :key="pageKey" class="wb-page">
         <div v-if="mode==='tasks'" class="task-view">
+          <div class="page-head">
+            <h3>任务管理</h3>
+            <span class="tmeta">占满右侧的独立页</span>
+          </div>
           <el-table :data="tasks" size="small" style="width:100%">
             <el-table-column prop="name" label="任务" min-width="220" />
             <el-table-column prop="config" label="配置" min-width="160" />
@@ -292,11 +282,20 @@ body{
             </el-table-column>
           </el-table>
           <p class="tmeta" style="margin-top:10px">
-            模拟任务管理是占满右侧的独立页，与详情 / 分析并列，由同一个模式指示器切进来。
+            进度与取消在此；任务的产物（子配置与数据集）落在树上对应锚点的子节点。
           </p>
         </div>
 
         <div v-else-if="mode==='analysis'" class="analysis-view">
+          <!-- 比较分析：本页自有头部，页签只有比较方法 -->
+          <div v-if="subjectKind==='compare'" class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" effect="light" type="info">比较分析</el-tag>
+            <span class="tmeta">参与数据集：{{ subject.members.join('、') }}</span>
+          </div>
+
+          <!-- 一般分析：锚点栏即本页头部 -->
+          <template v-else>
           <!-- 锚点常驻指示器：解决 C2 的静默错误归因 -->
           <div class="anchor-bar">
             <span class="lbl">分析锚点</span>
@@ -318,9 +317,10 @@ body{
             未列入可选（不参与普通分析）：
             {{ excludedDatasets.map(d => d.label + '（' + d.why + '）').join('；') }}
           </p>
+          </template>
 
           <el-tabs v-model="analysisTab" style="margin-top:6px">
-            <el-tab-pane v-for="cat in categories" :key="cat.key" :label="cat.name" :name="cat.key">
+            <el-tab-pane v-for="cat in activeCategories" :key="cat.key" :label="cat.name" :name="cat.key">
               <p v-if="cat.note" class="reason" style="color:var(--warn);margin:0 0 10px">
                 {{ cat.note }}
               </p>
@@ -392,13 +392,13 @@ body{
         </div>
 
         <div v-else-if="mode==='detail' && subjectKind==='config'" class="detail-view">
-          <div class="state-bar">
-            <span>文件态</span>
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
             <el-tag size="small" :type="nodeState.tagType" effect="light">{{ nodeState.text }}</el-tag>
-            <span class="tmeta">{{ nodeState.hint }}</span>
             <span class="spacer"></span>
-            <el-button size="small" @click="nodeState = {text:'已保存（未派生）', tagType:'success', hint:'改动写回本配置'}; flash('已保存')">保存</el-button>
+            <el-button size="small" @click="saveDraft">保存</el-button>
           </div>
+          <p class="tmeta" style="margin:-6px 0 14px">{{ nodeState.hint }}</p>
 
           <div class="form-sec">
             <h4>策略与目标</h4>
@@ -434,6 +434,10 @@ body{
         </div>
 
         <div v-else-if="mode==='detail' && subjectKind==='batch'" class="detail-view">
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" effect="light" type="info">批次视图</el-tag>
+          </div>
           <p class="tmeta" style="margin-top:0">
             批次是「派生批次标记」的渲染视图（P87 §3.11 F2），不是新实体。它的详情页渲染任务记录。
           </p>
@@ -451,8 +455,12 @@ body{
         </div>
 
         <div v-else-if="mode==='detail' && subjectKind==='dataset'" class="detail-view">
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" effect="light" type="info">数据集 · 只读</el-tag>
+          </div>
           <div class="form-sec">
-            <h4>数据集元信息</h4>
+            <h4>元信息</h4>
             <table class="kv">
               <tr><td>显示名</td><td>{{ subject.label }}</td></tr>
               <tr><td>样本数</td><td>{{ subject.samples }}</td></tr>
@@ -469,6 +477,10 @@ body{
         </div>
 
         <div v-else-if="mode==='detail' && subjectKind==='compare'" class="detail-view">
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" effect="light" type="info">对比任务</el-tag>
+          </div>
           <div class="form-sec">
             <h4>比较任务</h4>
             <table class="kv">
@@ -478,21 +490,17 @@ body{
             </table>
           </div>
           <el-button size="small" type="primary" @click="mode='analysis'">切换到比较分析</el-button>
+          <span class="tmeta" style="margin-left:8px">也可以点左栏与工作台之间的把手整页切换</span>
         </div>
 
         <div v-else-if="mode==='detail' && subjectKind==='folder'" class="detail-view">
+          <div class="page-head"><h3>{{ subjectLabel }}</h3><el-tag size="small" effect="light" type="info">文件夹</el-tag></div>
           <p class="tmeta">文件夹节点没有详情内容。</p>
         </div>
 
         <div v-else class="wb-empty">点击左侧工作区打开配置 / 数据集 / 批次 / 对比任务</div>
         </div>
        </transition>
-      </div>
-
-      <!-- 切换控件方案 B：右侧面板左边缘正中的整页切换把手 -->
-      <div v-if="switchStyle==='edge' && canToggle" class="edge-switch" @click="toggleMode">
-        <span class="chev">{{ mode==='analysis' ? '《' : '》' }}</span>
-        <span class="vtext">{{ mode==='analysis' ? '收起分析' : '展开分析' }}</span>
       </div>
     </main>
   </div>
@@ -608,6 +616,25 @@ const categories = [
     ]},
 ];
 
+/* 比较分析页签：与一般分析页面同构，但页签只有比较方法。
+   依据 P86 §3.1：comparison_analyzer（检验与支配矩阵）留在 core，进本层的只是编排。 */
+const compareCategories = [
+  { key: 'dominance', name: '随机占优', items: [
+    { key: 'dominance_matrix', name: '支配矩阵', shape: 'sync', chart: 'table', needsStream: true,
+      params: { 检验: 'Donald-Hsu 2016', 中心化: '选择性重中心化' },
+      rows: [['A 支配 B', '是'], ['B 支配 A', '否'], ['不可比', '否']] },
+    { key: 'bootstrap_v2', name: 'Bootstrap 检验', shape: 'sync', chart: 'line', needsStream: true,
+      params: { 重采样: '2000', alpha: '0.05' } },
+  ]},
+  { key: 'dist_compare', name: '分布对比', items: [
+    { key: 'gdr_overlay', name: 'GDR 分布叠加', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { gdr: 'target_achievement' } },
+    { key: 'summary_compare', name: '统计量对照', shape: 'sync', chart: 'table', needsStream: true,
+      params: { 指标: 'target_achievement' },
+      rows: [['main_01 均值', '0.612'], ['main_02 均值', '0.588'], ['差值', '+0.024']] },
+  ]},
+];
+
 const compareTasks = [
   { id: 'cmp1', type: 'compare', label: '对比：三池毕业难度', members: ['main_01', 'main_02'] },
   { id: 'cmp2', type: 'compare', label: '对比：改保底前后', members: ['main_01', 'sa_01'] },
@@ -713,21 +740,6 @@ createApp({
 
     /* ---- 模式可用性 ---- */
     const canToggle = computed(() => subjectKind.value === 'compare' || !!anchorId.value);
-    const availableModes = computed(() => {
-      if (subjectKind.value === 'compare') {
-        return [
-          { key: 'detail', label: '详情', enabled: true },
-          { key: 'analysis', label: '比较分析', enabled: true },
-          { key: 'tasks', label: '任务管理', enabled: true },
-        ];
-      }
-      const hasAnchor = !!anchorId.value;
-      return [
-        { key: 'detail', label: '详情', enabled: true },
-        { key: 'analysis', label: '分析', enabled: hasAnchor },
-        { key: 'tasks', label: '任务管理', enabled: true },
-      ];
-    });
 
     /* ---- 交互 ---- */
     function onNodeClick(data) {
@@ -780,12 +792,18 @@ createApp({
       return '';
     });
     const pageKey = computed(() => mode.value + ':' + subjectKind.value);
-    const modeLabel = computed(() => {
-      if (mode.value === 'tasks') return '任务管理';
-      if (mode.value === 'detail') return '详情';
-      return subjectKind.value === 'compare' ? '比较分析' : '分析';
+    // 比较分析页签与一般分析页签同构但不同集；切主体时把页签拉回该集的第一项
+    const activeCategories = computed(() =>
+      subjectKind.value === 'compare' ? compareCategories : categories);
+    watch(subjectKind, (nv) => {
+      const cats = nv === 'compare' ? compareCategories : categories;
+      if (!cats.some(c => c.key === analysisTab.value)) analysisTab.value = cats[0].key;
     });
     function runSim() { flash('运行模拟：' + subjectLabel.value); }
+    function saveDraft() {
+      nodeState.value = { text: '已保存（未派生）', tagType: 'success', hint: '改动写回本配置' };
+      flash('已保存');
+    }
 
     /* ---- 展示辅助 ---- */
     const subjectLabel = computed(() => subject.value ? subject.value.label : '（未选中）');
@@ -806,6 +824,8 @@ createApp({
     }
     function itemRunnable(it) {
       if (it.shape === 'dispatch') return !!anchorId.value;
+      // 比较项消费的是对比任务的成员数据集，不经过锚点的数据集选择器
+      if (subjectKind.value === 'compare') return true;
       const d = curDataset.value;
       if (!d || !d.id) return false;
       if (it.needsStream && !d.stream) return false;
@@ -837,8 +857,8 @@ createApp({
       notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
-      canToggle, availableModes, canRun, runDisabledReason, pageKey, modeLabel,
-      onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim,
+      canToggle, canRun, runDisabledReason, pageKey, activeCategories,
+      onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim, saveDraft,
       typeColor, itemRunnable, itemReason, bars, linePoints,
     };
   }
@@ -853,7 +873,7 @@ createApp({
 </div>
 <script>
 (function () {
-  const opts = [['edge', '右侧边缘把手「《」'], ['toolbar', '工具栏按钮']];
+  const opts = [['edge', '左栏右侧的切换把手（默认）'], ['toolbar', '工具栏按钮']];
   const host = document.getElementById('sw');
   opts.forEach(([k, label]) => {
     const b = document.createElement('button');

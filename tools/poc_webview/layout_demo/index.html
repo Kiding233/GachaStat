@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GachaStat 工作区 UI 布局探针</title>
+
+<!-- 一次性布局探针：数据全假，不接 Python。用于评估「左树 + 右侧详情/分析双模式」方案。
+     Vue 3 + Element Plus 走 cdnjs，版本与 tools/poc_webview/ui_compare 一致。 -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/element-plus/2.9.1/index.min.css">
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --line-strong:#d0d5dd;
+  --ink:#1f2430; --ink-2:#5a6272; --ink-3:#8b93a3;
+  --accent:#1976d2; --accent-soft:#e8f1fb;
+  --ok:#2e7d32; --warn:#b26a00; --danger:#c62828; --purple:#6941c6;
+  --radius:6px;
+}
+*{box-sizing:border-box}
+[v-cloak]{display:none}
+html,body{height:100%;margin:0}
+body{
+  font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-size:13px;color:var(--ink);background:var(--bg);overflow:hidden;
+}
+#app{height:100vh;display:flex;flex-direction:column}
+
+/* ---------- 顶部：菜单栏 + 工具栏 ---------- */
+.menu-bar{
+  height:34px;display:flex;align-items:center;gap:2px;padding:0 10px;
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+.brand{font-weight:700;font-size:14px;color:var(--accent);margin-right:14px;letter-spacing:.3px}
+.menu-btn{padding:4px 10px;border-radius:4px;color:var(--ink-2);cursor:pointer}
+.menu-btn:hover{background:var(--bg);color:var(--ink)}
+.spacer{flex:1}
+.demo-tag{font-size:11px;color:var(--ink-3);border:1px dashed var(--line-strong);border-radius:10px;padding:1px 8px}
+
+.tool-bar{
+  height:42px;display:flex;align-items:center;gap:8px;padding:0 10px;
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+.tb-sep{width:1px;height:20px;background:var(--line);margin:0 4px}
+
+/* ---------- 主体 ---------- */
+.app-body{flex:1;display:flex;min-height:0;padding:8px;gap:0}
+
+/* 左侧栏：上半文件树 + 下半对比任务 */
+.side{
+  width:326px;flex:0 0 326px;display:flex;flex-direction:column;min-height:0;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+}
+.side-top{flex:1;min-height:0;display:flex;flex-direction:column}
+.side-bottom{height:172px;flex:0 0 172px;display:flex;flex-direction:column;border-top:2px solid var(--line)}
+.side-head{
+  height:30px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 10px;font-size:12px;font-weight:600;color:var(--ink-2);
+  background:linear-gradient(#fbfcfd,#f4f6f9);border-bottom:1px solid var(--line);
+}
+.side-scroll{flex:1;min-height:0;overflow:auto}
+
+/* 树节点 */
+.el-tree{background:transparent;--el-tree-node-hover-bg-color:#f2f6fb;padding:4px 0}
+.tnode{display:flex;align-items:center;gap:6px;width:100%;padding-right:8px}
+.tdot{width:7px;height:7px;border-radius:2px;flex:0 0 7px}
+.tlabel{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tbadge{font-size:10px;line-height:14px;padding:0 5px;border-radius:8px;border:1px solid;}
+.b-frozen{color:var(--purple);border-color:#d9cdf5;background:#f5f1fd}
+.b-dirty{color:var(--warn);border-color:#f0dcb8;background:#fdf7ec}
+.b-running{color:var(--accent);border-color:#c7ddf5;background:var(--accent-soft)}
+.b-l1{color:var(--ok);border-color:#cbe6cc;background:#eef7ee}
+.tmeta{font-size:10px;color:var(--ink-3)}
+
+/* 对比任务列表 */
+.cmp-list{padding:4px 0}
+.cmp-item{
+  display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;
+  border-left:3px solid transparent;
+}
+.cmp-item:hover{background:#f2f6fb}
+.cmp-item.active{background:var(--accent-soft);border-left-color:var(--accent)}
+.cmp-item .tlabel{font-size:12px}
+
+/* 右侧工作台 */
+.workbench{
+  flex:1;min-width:0;margin-left:8px;display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+  position:relative;
+}
+.wb-head{
+  min-height:48px;display:flex;align-items:center;gap:12px;padding:6px 12px;
+  border-bottom:1px solid var(--line);background:linear-gradient(#fbfcfd,#f7f9fb);flex-wrap:wrap;
+}
+.wb-title{display:flex;align-items:baseline;gap:8px;min-width:0}
+.wb-title b{font-size:15px}
+.wb-title span{color:var(--ink-3);font-size:12px}
+.wb-body{flex:1;min-height:0;overflow:auto;padding:12px}
+.wb-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--ink-3)}
+
+/* 分段控件（模式指示器） */
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius);overflow:hidden;background:#fff}
+.seg button{
+  border:0;background:transparent;padding:5px 14px;font:inherit;font-size:12px;color:var(--ink-2);
+  cursor:pointer;border-right:1px solid var(--line);
+}
+.seg button:last-child{border-right:0}
+.seg button:hover:not(.on){background:#f2f6fb}
+.seg button.on{background:var(--accent);color:#fff}
+.seg button[disabled]{color:#c3c8d2;cursor:not-allowed}
+
+/* 右侧边缘切换控件 */
+.edge-switch{
+  position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:22px;height:56px;display:flex;align-items:center;justify-content:center;
+  background:var(--accent);color:#fff;font-size:15px;cursor:pointer;
+  border-radius:0 6px 6px 0;opacity:.75;user-select:none;
+}
+.edge-switch:hover{opacity:1}
+
+/* 分析面板 */
+.anchor-bar{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 12px;background:var(--accent-soft);border-bottom:1px solid #d3e3f5;
+}
+.anchor-bar .lbl{font-size:12px;color:var(--ink-2)}
+.anchor-bar b{font-size:13px;color:var(--accent)}
+.anchor-hint{font-size:11px;color:var(--ink-3);margin-left:auto}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+.card{border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow:hidden}
+.card.dim{opacity:.55}
+.card-h{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);background:#fafbfd}
+.card-h b{font-size:13px;flex:1}
+.card-b{padding:10px}
+.card-params{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.pchip{font-size:11px;color:var(--ink-2);background:#f2f4f7;border-radius:3px;padding:1px 6px}
+.pchip i{font-style:normal;color:var(--ink-3)}
+
+.shape{font-size:10px;line-height:16px;padding:0 6px;border-radius:8px}
+.shape.sync{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.shape.dispatch{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+
+.mini{height:104px;display:flex;align-items:flex-end;gap:2px;padding:6px 2px 0;border-bottom:1px solid var(--line)}
+.mini i{flex:1;background:linear-gradient(#8fbdf0,#3f8fd9);border-radius:2px 2px 0 0;min-height:2px}
+.mini-line{height:104px;border-bottom:1px solid var(--line);padding:6px 2px 0}
+.kv{width:100%;border-collapse:collapse;font-size:12px}
+.kv td{padding:4px 6px;border-bottom:1px solid #f0f2f5}
+.kv td:first-child{color:var(--ink-3);width:120px}
+.reason{font-size:11px;color:var(--danger);display:flex;align-items:center;gap:4px}
+
+.notice{
+  position:absolute;top:56px;left:50%;transform:translateX(-50%);z-index:9;
+  animation:fade 2.6s ease forwards;
+}
+@keyframes fade{0%,75%{opacity:1}100%{opacity:0}}
+
+/* 详情页表单 */
+.form-sec{margin-bottom:16px}
+.form-sec>h4{margin:0 0 8px;font-size:13px;color:var(--ink-2);font-weight:600;
+  border-left:3px solid var(--accent);padding-left:8px}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px 16px}
+.fitem{display:flex;align-items:center;gap:8px}
+.fitem label{width:88px;flex:0 0 88px;color:var(--ink-3);font-size:12px;text-align:right}
+.fitem .el-select,.fitem .el-input{flex:1}
+.state-bar{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:var(--radius);background:#fafbfd;margin-bottom:14px}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- ================= 顶部 ================= -->
+  <div class="menu-bar">
+    <span class="brand">GachaStat</span>
+    <span class="menu-btn">文件</span>
+    <span class="menu-btn">工具</span>
+    <span class="menu-btn">帮助</span>
+    <span class="spacer"></span>
+    <span class="demo-tag">布局探针 · 数据全假 · 不接后端</span>
+  </div>
+
+  <div class="tool-bar">
+    <el-button size="small">新建配置</el-button>
+    <el-button size="small">新建搜索任务</el-button>
+    <el-button size="small" @click="selectCompare(compareTasks[0])">新建比较分析</el-button>
+    <div class="tb-sep"></div>
+    <!-- 切换控件方案 C：工具栏按钮 -->
+    <el-button v-if="switchStyle==='toolbar'" size="small" type="primary" plain
+               :disabled="!canToggle" @click="toggleMode">
+      切换到{{ mode==='analysis' ? '详情' : '分析' }}
+    </el-button>
+    <span class="spacer"></span>
+    <!-- D1：运行模拟是上下文动作，不是全局动作 -->
+    <el-button size="small" type="primary" :disabled="!canRun" @click="runSim">
+      运行模拟{{ canRun ? '：' + subjectLabel : '' }}
+    </el-button>
+    <el-button size="small" @click="mode='tasks'">任务管理</el-button>
+  </div>
+
+  <!-- ================= 主体 ================= -->
+  <div class="app-body">
+    <aside class="side">
+      <!-- 上半：文件树 -->
+      <div class="side-top">
+        <div class="side-head"><span>工作区</span><span class="tmeta">WORKSPACE</span></div>
+        <div class="side-scroll">
+          <el-tree
+            :data="tree"
+            :props="treeProps"
+            node-key="id"
+            :default-expanded-keys="expandedKeys"
+            :expand-on-click-node="false"
+            highlight-current
+            :current-node-key="subjectId"
+            @node-click="onNodeClick">
+            <template #default="{ data }">
+              <div class="tnode">
+                <span class="tdot" :style="{ background: typeColor(data) }"></span>
+                <span class="tlabel">{{ data.label }}</span>
+                <span v-if="data.type==='batch'" class="tmeta">{{ data.children.length }} 项</span>
+                <span v-if="data.badge" class="tbadge" :class="data.badgeClass">{{ data.badge }}</span>
+                <span v-if="data.type==='dataset'" class="tmeta">{{ data.samples }} 样本</span>
+              </div>
+            </template>
+          </el-tree>
+        </div>
+      </div>
+
+      <!-- 下半：对比任务 -->
+      <div class="side-bottom">
+        <div class="side-head"><span>对比任务</span><span class="tmeta">{{ compareTasks.length }}</span></div>
+        <div class="side-scroll cmp-list">
+          <div v-for="c in compareTasks" :key="c.id" class="cmp-item"
+               :class="{active: subjectId===c.id}" @click="selectCompare(c)">
+            <span class="tdot" style="background:#0f8a8a"></span>
+            <span class="tlabel">{{ c.label }}</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="workbench">
+      <!-- 头部：标题 + 模式指示器 -->
+      <div class="wb-head">
+        <div class="wb-title">
+          <b>{{ subjectLabel }}</b>
+          <span>{{ subjectSub }}</span>
+        </div>
+        <span class="spacer"></span>
+
+        <!-- 切换控件方案 A：面板内分段控件（同时充当模式指示器，解决 D3） -->
+        <div v-if="switchStyle==='segmented'" class="seg">
+          <button v-for="m in availableModes" :key="m.key"
+                  :class="{on: mode===m.key}" :disabled="!m.enabled"
+                  @click="mode=m.key">{{ m.label }}</button>
+        </div>
+      </div>
+
+      <!-- 临时提示 -->
+      <el-alert v-if="notice" class="notice" :title="notice" type="info" :closable="false" show-icon />
+
+      <div class="wb-body">
+        <div v-if="mode==='tasks'" class="task-view">
+          <el-table :data="tasks" size="small" style="width:100%">
+            <el-table-column prop="name" label="任务" min-width="220" />
+            <el-table-column prop="config" label="配置" min-width="160" />
+            <el-table-column label="进度" width="190">
+              <template #default="{ row }">
+                <el-progress :percentage="row.pct" :status="row.status==='失败' ? 'exception' : undefined" />
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="90" />
+            <el-table-column label="操作" width="90">
+              <template #default="{ row }">
+                <el-button v-if="row.status==='运行中'" size="small" text type="danger">取消</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <p class="tmeta" style="margin-top:10px">
+            模拟任务管理是占满右侧的独立页，与详情 / 分析并列，由同一个模式指示器切进来。
+          </p>
+        </div>
+
+        <div v-else-if="mode==='analysis'" class="analysis-view">
+          <!-- 锚点常驻指示器：解决 C2 的静默错误归因 -->
+          <div class="anchor-bar">
+            <span class="lbl">分析锚点</span>
+            <b>{{ anchorLabel }}</b>
+            <template v-if="analysisTab !== 'dispatch'">
+              <span class="lbl">数据集</span>
+              <el-select v-model="analysisDatasetId" size="small" style="width:210px">
+                <el-option v-for="d in datasetOptions" :key="d.id" :value="d.id" :label="d.label">
+                  <span>{{ d.label }}</span>
+                  <span class="tmeta" style="float:right">{{ d.samples }} 样本</span>
+                </el-option>
+              </el-select>
+            </template>
+            <span v-else class="lbl">本页展示派发型分析自己生成的子配置与数据集</span>
+            <span class="anchor-hint">{{ anchorHint }}</span>
+          </div>
+          <p v-if="analysisTab !== 'dispatch' && excludedDatasets.length" class="tmeta"
+             style="margin:8px 2px 0">
+            未列入可选（不参与普通分析）：
+            {{ excludedDatasets.map(d => d.label + '（' + d.why + '）').join('；') }}
+          </p>
+
+          <el-tabs v-model="analysisTab" style="margin-top:6px">
+            <el-tab-pane v-for="cat in categories" :key="cat.key" :label="cat.name" :name="cat.key">
+              <p v-if="cat.note" class="reason" style="color:var(--warn);margin:0 0 10px">
+                {{ cat.note }}
+              </p>
+              <div class="cards">
+                <div v-for="it in cat.items" :key="it.key" class="card" :class="{dim: !itemRunnable(it)}">
+                  <div class="card-h">
+                    <b>{{ it.name }}</b>
+                    <span class="shape" :class="it.shape">
+                      {{ it.shape==='sync' ? '即时分析' : '需派发模拟' }}
+                    </span>
+                  </div>
+                  <div class="card-b">
+                    <div class="card-params">
+                      <span v-for="(v,k) in it.params" :key="k" class="pchip"><i>{{ k }}</i> {{ v }}</span>
+                    </div>
+
+                    <div v-if="!itemRunnable(it)" class="reason">
+                      <span>✕</span>
+                      <span>{{ itemReason(it) }}</span>
+                    </div>
+
+                    <template v-else-if="it.shape==='dispatch'">
+                      <div class="mini" style="align-items:center;justify-content:center">
+                        <span class="tmeta" style="text-align:center">
+                          汇合产出：{{ it.produces || '任务结论（不落子配置）' }}
+                        </span>
+                      </div>
+                    </template>
+
+                    <template v-else-if="it.chart==='bars'">
+                      <div class="mini"><i v-for="(h,i) in bars(it.key)" :key="i" :style="{height:(h*100)+'%'}"></i></div>
+                    </template>
+                    <template v-else-if="it.chart==='line'">
+                      <div class="mini-line">
+                        <svg width="100%" height="92" viewBox="0 0 300 92" preserveAspectRatio="none">
+                          <polyline :points="linePoints(it.key)" fill="none" stroke="#3f8fd9" stroke-width="2" />
+                        </svg>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <table class="kv">
+                        <tr v-for="(r,i) in it.rows" :key="i"><td>{{ r[0] }}</td><td>{{ r[1] }}</td></tr>
+                      </table>
+                    </template>
+
+                    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+                      <template v-if="it.shape==='dispatch'">
+                        <el-button size="small" type="primary" plain @click="dispatch(it)">提交任务</el-button>
+                        <span v-if="it.produces" class="tmeta">
+                          产物已存在：{{ it.produces }}（本锚点子节点，可在上方数据集栏切换查看）
+                        </span>
+                      </template>
+                      <template v-else>
+                        <el-button size="small" text type="primary">重新计算</el-button>
+                        <span class="tmeta">即时返回，秒级</span>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+
+        <div v-else-if="mode==='detail' && subjectKind==='config'" class="detail-view">
+          <div class="state-bar">
+            <span>文件态</span>
+            <el-tag size="small" :type="nodeState.tagType" effect="light">{{ nodeState.text }}</el-tag>
+            <span class="tmeta">{{ nodeState.hint }}</span>
+            <span class="spacer"></span>
+            <el-button size="small" @click="nodeState = {text:'已保存（未派生）', tagType:'success', hint:'改动写回本配置'}; flash('已保存')">保存</el-button>
+          </div>
+
+          <div class="form-sec">
+            <h4>策略与目标</h4>
+            <div class="form-grid">
+              <div class="fitem"><label>策略</label>
+                <el-select v-model="draft.strategy" size="small" @change="markDirty">
+                  <el-option label="smart" value="smart" />
+                  <el-option label="draw_target" value="draw_target" />
+                  <el-option label="no_draw" value="no_draw" />
+                </el-select></div>
+              <div class="fitem"><label>目标卡</label>
+                <el-input v-model="draft.target" size="small" @input="markDirty" /></div>
+              <div class="fitem"><label>模拟次数</label>
+                <el-input v-model.number="draft.n" size="small" @input="markDirty" /></div>
+              <div class="fitem"><label>种子起点</label>
+                <el-input v-model.number="draft.seed" size="small" @input="markDirty" /></div>
+            </div>
+          </div>
+
+          <div class="form-sec">
+            <h4>池子与保底</h4>
+            <el-table :data="draft.pools" size="small">
+              <el-table-column prop="name" label="池子" min-width="180" />
+              <el-table-column prop="pity" label="保底类型" min-width="150" />
+              <el-table-column prop="rate" label="出率" width="90" />
+            </el-table>
+          </div>
+
+          <p class="tmeta">
+            这里是**可编辑的详情页**。按 P87 §3.10，保存是可感知动作；若本配置已被数据集引用或正被任务持有，
+            保存会派生为新配置文件而不是就地覆盖，状态标签会随之变成「已派生新配置」。
+          </p>
+        </div>
+
+        <div v-else-if="mode==='detail' && subjectKind==='batch'" class="detail-view">
+          <p class="tmeta" style="margin-top:0">
+            批次是「派生批次标记」的渲染视图（P87 §3.11 F2），不是新实体。它的详情页渲染任务记录。
+          </p>
+          <div class="form-sec">
+            <h4>任务记录</h4>
+            <table class="kv">
+              <tr><td>批次标识</td><td>{{ subject.batchTag }}</td></tr>
+              <tr><td>任务类型</td><td>{{ subject.taskType }}</td></tr>
+              <tr><td>状态</td><td>{{ subject.status }}</td></tr>
+              <tr><td>派生方式</td><td>{{ subject.derivation }}</td></tr>
+              <tr><td>产物清单</td><td>{{ subject.children.length }} 份子配置，各带一个数据集</td></tr>
+            </table>
+          </div>
+          <p class="tmeta">落在 tasks/&lt;task-id&gt;.json，与配置、数据集并列存放（P87 §3.11 F）。</p>
+        </div>
+
+        <div v-else-if="mode==='detail' && subjectKind==='dataset'" class="detail-view">
+          <div class="form-sec">
+            <h4>数据集元信息</h4>
+            <table class="kv">
+              <tr><td>显示名</td><td>{{ subject.label }}</td></tr>
+              <tr><td>样本数</td><td>{{ subject.samples }}</td></tr>
+              <tr><td>流式分析</td><td>{{ subject.stream ? '已跑' : '未跑（compact 之外无明细）' }}</td></tr>
+              <tr><td>产生它的配置</td><td>{{ subject.fromConfig }}</td></tr>
+              <tr><td>配置哈希</td><td class="tmeta">9f3ac1…（判等用，不作身份）</td></tr>
+            </table>
+          </div>
+          <p class="tmeta">
+            数据集节点的详情页是只读的。选中它时锚点自动落在它所属的**一级配置节点**上（不会变成它自己），
+            所以它出现在锚点的数据集栏里，但不能被设为锚点，也不能对它单独套用一般分析方法。
+            {{ subject.analyzable ? '' : '本数据集不参与普通分析，原因见分析页选择器下方的排除说明。' }}
+          </p>
+        </div>
+
+        <div v-else-if="mode==='detail' && subjectKind==='compare'" class="detail-view">
+          <div class="form-sec">
+            <h4>比较任务</h4>
+            <table class="kv">
+              <tr><td>名称</td><td>{{ subject.label }}</td></tr>
+              <tr><td>参与数据集</td><td>{{ subject.members.join('、') }}</td></tr>
+              <tr><td>检验方法</td><td>Donald-Hsu 选择性重中心化 Bootstrap</td></tr>
+            </table>
+          </div>
+          <el-button size="small" type="primary" @click="mode='analysis'">切换到比较分析</el-button>
+        </div>
+
+        <div v-else-if="mode==='detail' && subjectKind==='folder'" class="detail-view">
+          <p class="tmeta">文件夹节点没有详情内容。</p>
+        </div>
+
+        <div v-else class="wb-empty">点击左侧工作区打开配置 / 数据集 / 批次 / 对比任务</div>
+      </div>
+
+      <!-- 切换控件方案 B：右侧正中边缘 -->
+      <div v-if="switchStyle==='edge' && canToggle" class="edge-switch" @click="toggleMode">
+        {{ mode==='analysis' ? '《' : '》' }}
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.prod.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/element-plus/2.9.1/index.full.min.js"></script>
+<script>
+const { createApp, ref, reactive, computed, watch } = Vue;
+
+/* ============ 假数据 ============ */
+function ds(id, label, samples, stream, from, poolEnd) {
+  // analyzable：能否被普通分析消费。判据 = 样本数 > 1 且跑过流式分析。
+  // 依据 P87 §3.7：基线是「单值产物」类型，不叫数据集，避免分析层把 1 个样本当分布。
+  return {
+    id, label, samples, stream, poolEnd: !!poolEnd, fromConfig: from, type: 'dataset',
+    analyzable: samples > 1 && !!stream,
+  };
+}
+// 一级配置节点本身与其子树（含派发型分析的产物、搜索批次）
+const cfg1 = {
+  id: 'cfg1', type: 'config', level: 1, label: '主线毕业配置',
+  badge: '已冻结', badgeClass: 'b-frozen',
+  children: [
+    ds('ds1', 'main_01', 1000, true, 'cfg1', true),
+    { id: 'w1', type: 'config', level: 2, label: '变体1（低配）', badge: '未跑', badgeClass: 'b-dirty',
+      children: [ds('ds2', 'main_02', 1000, true, 'w1', true)] },
+    { id: 'base1', type: 'config', level: 2, label: '基线（no_draw）',
+      children: [ds('ds3', 'baseline_01', 1, false, 'base1')] },
+    { id: 'wi1', type: 'config', level: 2, label: '最差影响派生配置',
+      children: [ds('ds4', 'worst_01', 200, false, 'wi1')] },
+    {
+      id: 'batch1', type: 'batch', label: '搜索批次 search-A', batchTag: 'search-A',
+      taskType: '方案搜索（迭代变换器）', status: '已完成', derivation: 'iterate:retreat_search',
+      children: [
+        { id: 'sa1', type: 'config', level: 2, label: 'search-A-01',
+          children: [ds('dsa1', 'sa_01', 300, true, 'sa1')] },
+        { id: 'sa2', type: 'config', level: 2, label: 'search-A-02',
+          children: [ds('dsa2', 'sa_02', 300, true, 'sa2')] },
+        { id: 'sa3', type: 'config', level: 2, label: 'search-A-03',
+          children: [ds('dsa3', 'sa_03', 300, false, 'sa3')] },
+      ]
+    }
+  ]
+};
+const tree = [
+  {
+    id: 'root', type: 'folder', label: '崩坏3 主线', children: [cfg1]
+  }
+];
+
+/* 分析项：分类与顺序取自 gui/analysis_panel.py 的 ANALYSIS_CATEGORIES（P86 §3.2 将迁移为注册表派生） */
+const categories = [
+  { key: 'overall', name: '总体广义出率分析', items: [
+    { key: 'gdr_dist', name: 'GDR分布', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { gdr: 'target_achievement', hist: '开', cdf: '关' } },
+    { key: 'gdr_statistics', name: 'GDR指标统计', shape: 'sync', chart: 'table', needsStream: true,
+      params: { ci: 'Wilson 95%' },
+      rows: [['均值', '0.612'], ['标准差', '0.184'], ['中位数', '0.640'], ['95% CI', '[0.600, 0.624]']] },
+    { key: 'correlation', name: 'GDR指标相关性', shape: 'sync', chart: 'table', needsStream: true,
+      params: { scope: '全样本' },
+      rows: [['target_achievement ↔ total_card_value', '0.71'], ['target_achievement ↔ draw_count', '−0.42']] },
+  ]},
+  { key: 'success', name: '成功率分析', items: [
+    { key: 'success_rate', name: '成功率分析', shape: 'sync', chart: 'line', needsStream: false,
+      params: { threshold: '0.8', alpha: '0.05' } },
+  ]},
+  { key: 'risk', name: '风险分析', items: [
+    { key: 'risk_var_cvar', name: 'VaR/CVaR分析', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { alpha: '0.05' } },
+    { key: 'risk_worst_case', name: '最差情形分析', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { scope: '全样本' } },
+    { key: 'risk_best_case', name: '最好情形分析', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { scope: '全样本' } },
+    { key: 'conditional_dist', name: '条件分布', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { cond: '成功' } },
+  ]},
+  { key: 'time', name: '时间演化', items: [
+    { key: 'time_series', name: 'GDR时间序列演化', shape: 'sync', chart: 'line', needsStream: true,
+      params: { unit: '天' } },
+    { key: 'time_heatmap', name: '时间-GDR热力图', shape: 'sync', chart: 'table', needsStream: true,
+      params: { bins: '24' }, rows: [['0–30 天', '0.41'], ['30–60 天', '0.58'], ['60–90 天', '0.72']] },
+    { key: 'draws_vs_gdr', name: '抽卡数-目标达成率散点图', shape: 'sync', chart: 'table', needsStream: true,
+      params: { unit: '抽' }, rows: [['r', '0.83'], ['n', '1000']] },
+    { key: 'waterfall_3d', name: '3D瀑布图', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { unit: '抽' } },
+    { key: 'waterfall_2d', name: '2D压缩瀑布图', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { unit: '抽' } },
+  ]},
+  { key: 'per_pool', name: '每池分析', items: [
+    { key: 'per_pool_draws', name: '每池抽卡数统计', shape: 'sync', chart: 'table', needsStream: false,
+      params: { pool_index: '0' }, rows: [['池 A', '312.4'], ['池 B', '298.1']] },
+    { key: 'per_pool_target_rate', name: '每池目标卡数', shape: 'sync', chart: 'table', needsStream: false,
+      params: { pool_index: '0' }, rows: [['池 A', '1.62'], ['池 B', '1.55']] },
+    { key: 'per_pool_pity_rate', name: '每池保底数', shape: 'sync', chart: 'table', needsStream: false,
+      params: { pool_index: '0' }, rows: [['池 A', '0.88'], ['池 B', '0.91']] },
+    { key: 'cumulative_by_banner', name: '截止每 banner 的GDR分布', shape: 'sync', chart: 'bars', needsStream: true,
+      params: { gdr: 'target_achievement' } },
+    { key: 'transition_analysis', name: '转变分析', shape: 'sync', chart: 'table', needsStream: true,
+      needsPoolEnd: true,
+      params: { eventMode: '池成败' }, rows: [['成功→成功', '0.74'], ['成功→失败', '0.26']] },
+  ]},
+  // 第 6 页签：需要派发模拟的统计方法。归属待定，见方案 C6
+  { key: 'dispatch', name: '模拟派发',
+    note: '本页签的归属待定（方案 C6）：派发项是异步任务，与即时分析项的操作形态不同，但要求并列。',
+    items: [
+      { key: 'worst_impact', name: '最差影响分析', shape: 'dispatch', needsStream: false,
+        params: { 阈值: '0.9', 迭代: '3' }, produces: 'worst_01' },
+      { key: 'plan_search', name: '方案搜索', shape: 'dispatch', needsStream: false,
+        params: { 目标: '毕业', 轮数: '50' }, produces: 'search-A 批次（3 份子配置）' },
+      { key: 'sensitivity', name: '敏感性扫描', shape: 'dispatch', needsStream: false,
+        params: { 维度: '模拟次数', 范围: '300–1500' } },
+    ]},
+];
+
+const compareTasks = [
+  { id: 'cmp1', type: 'compare', label: '对比：三池毕业难度', members: ['main_01', 'main_02'] },
+  { id: 'cmp2', type: 'compare', label: '对比：改保底前后', members: ['main_01', 'sa_01'] },
+];
+
+const tasks = [
+  { name: '方案搜索 search-A', config: '主线毕业配置', pct: 100, status: '已完成' },
+  { name: '最差影响', config: '主线毕业配置', pct: 100, status: '已完成' },
+  { name: '主模拟', config: '变体1（低配）', pct: 42, status: '运行中' },
+];
+
+/* ============ 应用 ============ */
+createApp({
+  setup() {
+    const mode = ref('detail');              // detail | analysis | tasks
+    const switchStyle = ref('segmented');    // segmented | edge | toolbar
+    const subjectId = ref('cfg1');
+    const subjectKind = ref('config');
+    const analysisDatasetId = ref('ds1');
+    window.addEventListener('switch-style', e => { switchStyle.value = e.detail; });
+    const analysisTab = ref('overall');
+    const notice = ref('');
+    const expandedKeys = ref(['root', 'cfg1']);   // batch1 默认折叠
+    const draft = reactive({ strategy: 'smart', target: '雷电芽衣', n: 1000, seed: 42,
+      pools: [
+        { name: '角色池 UP', pity: 'rotating', rate: '0.6%' },
+        { name: '武器池 UP', pity: 'targeted', rate: '0.8%' },
+      ] });
+    const nodeState = ref({ text: '已冻结（跑过即不可就地覆盖）', tagType: 'warning',
+      hint: '按 P87 §3.10，此配置已被数据集引用，保存会派生新配置' });
+
+    const treeProps = { children: 'children', label: 'label' };
+
+    /* ---- 树查找：把扁平 id 映射回节点与祖先链 ---- */
+    function walk(nodes, fn, ancestors) {
+      ancestors = ancestors || [];
+      for (const n of nodes) {
+        if (fn(n, ancestors) === true) return n;
+        if (n.children) {
+          const hit = walk(n.children, fn, ancestors.concat([n]));
+          if (hit) return hit;
+        }
+      }
+      return null;
+    }
+    const subject = computed(() =>
+      subjectKind.value === 'compare'
+        ? compareTasks.find(c => c.id === subjectId.value)
+        : walk(tree, n => n.id === subjectId.value));
+
+    // 一级配置祖先：分析锚点只能落在这里
+    function topLevelConfigOf(id) {
+      let found = null;
+      walk(tree, (n, anc) => {
+        if (n.id !== id) return false;
+        const chain = anc.concat([n]);
+        found = chain.filter(x => x.type === 'config' && x.level === 1).pop() || null;
+        return true;
+      });
+      return found;
+    }
+    // 锚点由「当前选中节点的最近一级配置祖先」自动派生。
+    // 用户规则：选中一级配置节点本人或其任意子节点，分析面板都附着在该一级配置上，
+    // 故同一子树内点击任何节点，锚点不变，分析页面自然不发生变化。
+    const anchorId = computed(() => {
+      if (subjectKind.value === 'compare') return null;
+      const top = topLevelConfigOf(subjectId.value);
+      return top ? top.id : null;
+    });
+    // 跨一级配置切换锚点时重置数据集选择；锚点消失则退出分析模式
+    watch(anchorId, (nv, ov) => {
+      if (nv === ov) return;
+      if (!nv) { if (mode.value === 'analysis') mode.value = 'detail'; return; }
+      const top = walk(tree, n => n.id === nv);
+      analysisDatasetId.value = (top && walk([top], n => n.type === 'dataset') || {}).id || null;
+    });
+
+    const anchorLabel = computed(() => {
+      const a = walk(tree, n => n.id === anchorId.value);
+      return a ? a.label : '（无）';
+    });
+    const anchorDatasets = computed(() => {
+      const out = [];
+      const a = walk(tree, n => n.id === anchorId.value);
+      if (!a) return out;
+      walk([a], n => { if (n.type === 'dataset') out.push(n); return false; });
+      return out;
+    });
+    const curDataset = computed(() =>
+      datasetOptions.value.find(d => d.id === analysisDatasetId.value) || datasetOptions.value[0] || {});
+    // 选择器只列「能被普通分析消费」的数据集（样本数 > 1 且跑过流式分析）。
+    // 子配置的产物（单值基线、未跑流式的派发产物）压根不进这个列表，
+    // 所以「切到子数据集点 GDR分布」这条失败路径由构造排除。
+    const datasetOptions = computed(() => anchorDatasets.value.filter(d => d.analyzable));
+    const excludedDatasets = computed(() =>
+      anchorDatasets.value.filter(d => !d.analyzable).map(d => ({
+        label: d.label,
+        why: d.samples === 1 ? '单值产物，不作分布分析' : '未跑流式分析，缺分析所需数据',
+      })));
+    const anchorHint = computed(() => analysisTab.value === 'dispatch'
+      ? '锚点不随树选中变化'
+      : '锚点不随树选中变化；切换数据集在本栏内完成');
+
+    /* ---- 模式可用性 ---- */
+    const canToggle = computed(() => subjectKind.value === 'compare' || !!anchorId.value);
+    const availableModes = computed(() => {
+      if (subjectKind.value === 'compare') {
+        return [
+          { key: 'detail', label: '详情', enabled: true },
+          { key: 'analysis', label: '比较分析', enabled: true },
+          { key: 'tasks', label: '任务管理', enabled: true },
+        ];
+      }
+      const hasAnchor = !!anchorId.value;
+      return [
+        { key: 'detail', label: '详情', enabled: true },
+        { key: 'analysis', label: '分析', enabled: hasAnchor },
+        { key: 'tasks', label: '任务管理', enabled: true },
+      ];
+    });
+
+    /* ---- 交互 ---- */
+    function onNodeClick(data) {
+      const prevAnchor = anchorId.value;         // 计算属性，取变化前的值
+      subjectId.value = data.id;
+      subjectKind.value = data.type === 'config' ? 'config'
+        : data.type === 'batch' ? 'batch'
+        : data.type === 'dataset' ? 'dataset' : 'folder';
+
+      const top = topLevelConfigOf(data.id);
+      // 同一一级配置子树内点击（含点一级节点本人），锚点不变，分析页面不发生变化
+      if (mode.value === 'analysis' && top && top.id === prevAnchor) {
+        flash('分析锚点不变：仍为「' + top.label + '」');
+      }
+      // 选中的节点不在任何一级配置之下（如根的文件夹）时，分析模式没有锚点可用
+      if (!top && mode.value === 'analysis') mode.value = 'detail';
+    }
+    function selectCompare(c) {
+      subjectId.value = c.id; subjectKind.value = 'compare'; mode.value = 'detail';
+    }
+    function toggleMode() { mode.value = mode.value === 'analysis' ? 'detail' : 'analysis'; }
+
+    let timer = null;
+    function flash(msg) {
+      notice.value = msg;
+      clearTimeout(timer);
+      timer = setTimeout(() => (notice.value = ''), 2600);
+    }
+    function markDirty() {
+      nodeState.value = { text: '未保存', tagType: 'danger',
+        hint: '按 P87 §3.10，未保存的配置不能派发模拟' };
+    }
+    function dispatch(it) {
+      tasks.unshift({ name: it.name, config: anchorLabel.value, pct: 0, status: '运行中' });
+      flash('已提交任务（切到「任务管理」可看进度）');
+    }
+    const canRun = computed(() => subjectKind.value === 'config' && subject
+      && nodeState.value.text.indexOf('已冻结') === 0);
+    function runSim() { flash('运行模拟：' + subjectLabel.value); }
+
+    /* ---- 展示辅助 ---- */
+    const subjectLabel = computed(() => subject.value ? subject.value.label : '（未选中）');
+    const subjectSub = computed(() => {
+      if (subjectKind.value === 'compare') return '对比任务';
+      if (subjectKind.value === 'dataset') return '数据集 · 只读';
+      if (subjectKind.value === 'batch') return '批次视图';
+      if (subjectKind.value === 'config')
+        return (subject.value && subject.value.level === 1) ? '一级配置节点（可作分析锚点）' : '子配置（不可作分析锚点）';
+      return '';
+    });
+    function typeColor(n) {
+      if (n.type === 'folder') return '#b9c0cc';
+      if (n.type === 'batch') return '#6941c6';
+      if (n.type === 'config') return n.level === 1 ? '#2e7d32' : '#1976d2';
+      if (n.type === 'dataset') return n.samples === 1 ? '#b26a00' : '#0f8a8a';
+      return '#8b93a3';
+    }
+    function itemRunnable(it) {
+      if (it.shape === 'dispatch') return !!anchorId.value;
+      const d = curDataset.value;
+      if (!d || !d.id) return false;
+      if (it.needsStream && !d.stream) return false;
+      if (it.needsPoolEnd && !d.poolEnd) return false;
+      return true;
+    }
+    // 项级能力缺口：选择器已把「整体不可分析」的数据集挡在外面，但仍存在
+    // 「数据集合法、其中某一项缺字段」。依据 gui/analysis_panel.py:1343-1344
+    // （转变分析需要池结束时间，为空则跳过）。
+    function itemReason(it) {
+      const d = curDataset.value || {};
+      if (it.needsPoolEnd && !d.poolEnd) return '当前数据集无池结束时间（转变分析需要），此项跳过';
+      if (it.needsStream && !d.stream) return '当前数据集未跑流式分析，此项缺少所需数据';
+      return '当前数据集不满足该项依赖';
+    }
+    // 假图表：稳定伪随机
+    function bars(key) {
+      let x = 0; for (const ch of key) x = (x * 31 + ch.charCodeAt(0)) % 2147483647;
+      const a = [];
+      for (let i = 0; i < 18; i++) { x = (x * 1103515245 + 12345) % 2147483648; a.push(0.15 + (x % 1000) / 1200); }
+      return a;
+    }
+    function linePoints(key) {
+      const a = bars(key); return a.map((v, i) => (i / (a.length - 1) * 300).toFixed(1) + ',' + (90 - v * 80).toFixed(1)).join(' ');
+    }
+
+    return {
+      mode, switchStyle, subjectId, subjectKind, anchorId, analysisDatasetId, analysisTab,
+      notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,
+      subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
+      datasetOptions, excludedDatasets, anchorHint,
+      canToggle, availableModes, canRun,
+      onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim,
+      typeColor, itemRunnable, itemReason, bars, linePoints,
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+
+<!-- 探针自身的对照开关：不属于方案，只为裁决「切换控件放哪」 -->
+<div style="position:fixed;right:14px;bottom:14px;z-index:20;background:#fff;border:1px solid var(--line);
+            border-radius:6px;padding:8px 12px;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,.08)">
+  <b style="color:var(--ink-2)">对照：切换分析/详情的控件放哪</b>
+  <div id="sw" style="margin-top:6px;display:flex;gap:6px"></div>
+</div>
+<script>
+(function () {
+  const opts = [['segmented', '面板内分段控件'], ['edge', '右侧正中「《」'], ['toolbar', '工具栏按钮']];
+  const host = document.getElementById('sw');
+  opts.forEach(([k, label]) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.dataset.k = k;
+    b.style.cssText = 'border:1px solid var(--line-strong);background:#fff;border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;font-size:11px';
+    b.onclick = () => {
+      [...host.children].forEach(x => x.style.background = '#fff');
+      b.style.background = '#e8f1fb';
+      window.dispatchEvent(new CustomEvent('switch-style', { detail: k }));
+    };
+    host.appendChild(b);
+  });
+  host.children[0].click();
+})();
+</script>
+</body>
+</html>

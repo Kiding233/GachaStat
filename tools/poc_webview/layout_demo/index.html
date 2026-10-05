@@ -94,7 +94,14 @@ body{
 .wb-title{display:flex;align-items:baseline;gap:8px;min-width:0}
 .wb-title b{font-size:15px}
 .wb-title span{color:var(--ink-3);font-size:12px}
-.wb-body{flex:1;min-height:0;overflow:auto;padding:12px}
+.mode-label{font-size:11px;color:var(--ink-2);background:#eef1f5;border-radius:10px;padding:2px 10px}
+/* 切换的是整个右侧页面：分析页从右侧滑入，详情页淡出 */
+.wb-body{flex:1;min-height:0;overflow:hidden;position:relative}
+.wb-page{position:absolute;inset:0;overflow:auto;padding:12px}
+.slide-enter-active{transition:transform .3s cubic-bezier(.25,.8,.35,1),opacity .25s}
+.slide-leave-active{transition:opacity .12s}
+.slide-enter-from{transform:translateX(100%);opacity:.35}
+.slide-leave-to{opacity:0}
 .wb-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--ink-3)}
 
 /* 分段控件（模式指示器） */
@@ -108,14 +115,17 @@ body{
 .seg button.on{background:var(--accent);color:#fff}
 .seg button[disabled]{color:#c3c8d2;cursor:not-allowed}
 
-/* 右侧边缘切换控件 */
+/* 整页切换把手：右侧面板左边缘正中 */
 .edge-switch{
-  position:absolute;left:0;top:50%;transform:translateY(-50%);
-  width:22px;height:56px;display:flex;align-items:center;justify-content:center;
-  background:var(--accent);color:#fff;font-size:15px;cursor:pointer;
-  border-radius:0 6px 6px 0;opacity:.75;user-select:none;
+  position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:8;
+  display:flex;flex-direction:column;align-items:center;gap:5px;
+  padding:12px 6px;background:var(--accent);color:#fff;cursor:pointer;
+  border-radius:0 9px 9px 0;box-shadow:3px 0 12px rgba(25,118,210,.3);
+  user-select:none;transition:background .15s,padding .15s;
 }
-.edge-switch:hover{opacity:1}
+.edge-switch:hover{background:#1565c0;padding-right:10px}
+.edge-switch .chev{font-size:16px;line-height:1}
+.edge-switch .vtext{writing-mode:vertical-rl;font-size:11px;letter-spacing:3px}
 
 /* 分析面板 */
 .anchor-bar{
@@ -139,6 +149,9 @@ body{
 .shape{font-size:10px;line-height:16px;padding:0 6px;border-radius:8px}
 .shape.sync{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
 .shape.dispatch{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.dform{display:flex;flex-direction:column;gap:8px}
+.drow{display:flex;align-items:center;gap:8px}
+.drow label{width:70px;flex:0 0 70px;color:var(--ink-3);font-size:12px;text-align:right}
 
 .mini{height:104px;display:flex;align-items:flex-end;gap:2px;padding:6px 2px 0;border-bottom:1px solid var(--line)}
 .mini i{flex:1;background:linear-gradient(#8fbdf0,#3f8fd9);border-radius:2px 2px 0 0;min-height:2px}
@@ -181,8 +194,10 @@ body{
 
   <div class="tool-bar">
     <el-button size="small">新建配置</el-button>
-    <el-button size="small">新建搜索任务</el-button>
     <el-button size="small" @click="selectCompare(compareTasks[0])">新建比较分析</el-button>
+    <span class="tmeta" style="margin-left:6px">
+      方案搜索 / 最差影响 / 敏感性在分析页面内发起，不在工具栏
+    </span>
     <div class="tb-sep"></div>
     <!-- 切换控件方案 C：工具栏按钮 -->
     <el-button v-if="switchStyle==='toolbar'" size="small" type="primary" plain
@@ -190,10 +205,14 @@ body{
       切换到{{ mode==='analysis' ? '详情' : '分析' }}
     </el-button>
     <span class="spacer"></span>
-    <!-- D1：运行模拟是上下文动作，不是全局动作 -->
-    <el-button size="small" type="primary" :disabled="!canRun" @click="runSim">
-      运行模拟{{ canRun ? '：' + subjectLabel : '' }}
-    </el-button>
+    <!-- D1：运行模拟是上下文动作；且只对一级配置节点开放 -->
+    <el-tooltip :disabled="canRun" :content="runDisabledReason" placement="bottom">
+      <span>
+        <el-button size="small" type="primary" :disabled="!canRun" @click="runSim">
+          运行模拟{{ canRun ? '：' + subjectLabel : '' }}
+        </el-button>
+      </span>
+    </el-tooltip>
     <el-button size="small" @click="mode='tasks'">任务管理</el-button>
   </div>
 
@@ -247,19 +266,15 @@ body{
           <span>{{ subjectSub }}</span>
         </div>
         <span class="spacer"></span>
-
-        <!-- 切换控件方案 A：面板内分段控件（同时充当模式指示器，解决 D3） -->
-        <div v-if="switchStyle==='segmented'" class="seg">
-          <button v-for="m in availableModes" :key="m.key"
-                  :class="{on: mode===m.key}" :disabled="!m.enabled"
-                  @click="mode=m.key">{{ m.label }}</button>
-        </div>
+        <span class="mode-label">{{ modeLabel }}</span>
       </div>
 
       <!-- 临时提示 -->
       <el-alert v-if="notice" class="notice" :title="notice" type="info" :closable="false" show-icon />
 
       <div class="wb-body">
+       <transition name="slide" mode="out-in">
+        <div :key="pageKey" class="wb-page">
         <div v-if="mode==='tasks'" class="task-view">
           <el-table :data="tasks" size="small" style="width:100%">
             <el-table-column prop="name" label="任务" min-width="220" />
@@ -328,10 +343,23 @@ body{
                     </div>
 
                     <template v-else-if="it.shape==='dispatch'">
-                      <div class="mini" style="align-items:center;justify-content:center">
-                        <span class="tmeta" style="text-align:center">
+                      <!-- 派发型分析：参数区 + 发起按钮都在分析页内，仿 GUI 的独立面板布局 -->
+                      <div class="dform">
+                        <div class="drow" v-for="(v,k) in it.params" :key="k">
+                          <label>{{ k }}</label>
+                          <el-input :model-value="v" size="small" style="width:140px" />
+                        </div>
+                        <div>
+                          <el-button size="small" type="primary" @click="dispatch(it)">
+                            开始{{ it.name }}
+                          </el-button>
+                        </div>
+                        <p class="tmeta" style="margin:0">
                           汇合产出：{{ it.produces || '任务结论（不落子配置）' }}
-                        </span>
+                          <template v-if="it.produces">
+                            ，写回本锚点的子节点，可在上方数据集栏切换查看
+                          </template>
+                        </p>
                       </div>
                     </template>
 
@@ -351,17 +379,10 @@ body{
                       </table>
                     </template>
 
-                    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
-                      <template v-if="it.shape==='dispatch'">
-                        <el-button size="small" type="primary" plain @click="dispatch(it)">提交任务</el-button>
-                        <span v-if="it.produces" class="tmeta">
-                          产物已存在：{{ it.produces }}（本锚点子节点，可在上方数据集栏切换查看）
-                        </span>
-                      </template>
-                      <template v-else>
-                        <el-button size="small" text type="primary">重新计算</el-button>
-                        <span class="tmeta">即时返回，秒级</span>
-                      </template>
+                    <div v-if="it.shape!=='dispatch'"
+                         style="margin-top:10px;display:flex;gap:8px;align-items:center">
+                      <el-button size="small" text type="primary">重新计算</el-button>
+                      <span class="tmeta">即时返回，秒级</span>
                     </div>
                   </div>
                 </div>
@@ -464,11 +485,14 @@ body{
         </div>
 
         <div v-else class="wb-empty">点击左侧工作区打开配置 / 数据集 / 批次 / 对比任务</div>
+        </div>
+       </transition>
       </div>
 
-      <!-- 切换控件方案 B：右侧正中边缘 -->
+      <!-- 切换控件方案 B：右侧面板左边缘正中的整页切换把手 -->
       <div v-if="switchStyle==='edge' && canToggle" class="edge-switch" @click="toggleMode">
-        {{ mode==='analysis' ? '《' : '》' }}
+        <span class="chev">{{ mode==='analysis' ? '《' : '》' }}</span>
+        <span class="vtext">{{ mode==='analysis' ? '收起分析' : '展开分析' }}</span>
       </div>
     </main>
   </div>
@@ -571,9 +595,9 @@ const categories = [
       needsPoolEnd: true,
       params: { eventMode: '池成败' }, rows: [['成功→成功', '0.74'], ['成功→失败', '0.26']] },
   ]},
-  // 第 6 页签：需要派发模拟的统计方法。归属待定，见方案 C6
+  // 第 6 页签：需要派发模拟的统计方法，仿 GUI 的独立面板，发起入口在分析页内而非工具栏
   { key: 'dispatch', name: '模拟派发',
-    note: '本页签的归属待定（方案 C6）：派发项是异步任务，与即时分析项的操作形态不同，但要求并列。',
+    note: '派发型分析在分析页面内发起，工具栏不设入口。与即时分析项并列，但操作形态不同：异步提交、可取消。',
     items: [
       { key: 'worst_impact', name: '最差影响分析', shape: 'dispatch', needsStream: false,
         params: { 阈值: '0.9', 迭代: '3' }, produces: 'worst_01' },
@@ -599,7 +623,7 @@ const tasks = [
 createApp({
   setup() {
     const mode = ref('detail');              // detail | analysis | tasks
-    const switchStyle = ref('segmented');    // segmented | edge | toolbar
+    const switchStyle = ref('edge');         // edge | toolbar
     const subjectId = ref('cfg1');
     const subjectKind = ref('config');
     const analysisDatasetId = ref('ds1');
@@ -713,6 +737,9 @@ createApp({
         : data.type === 'batch' ? 'batch'
         : data.type === 'dataset' ? 'dataset' : 'folder';
 
+      // 任务管理是全局页，点树即离开它
+      if (mode.value === 'tasks') mode.value = 'detail';
+
       const top = topLevelConfigOf(data.id);
       // 同一一级配置子树内点击（含点一级节点本人），锚点不变，分析页面不发生变化
       if (mode.value === 'analysis' && top && top.id === prevAnchor) {
@@ -740,8 +767,24 @@ createApp({
       tasks.unshift({ name: it.name, config: anchorLabel.value, pct: 0, status: '运行中' });
       flash('已提交任务（切到「任务管理」可看进度）');
     }
-    const canRun = computed(() => subjectKind.value === 'config' && subject
+    // 运行模拟只对一级配置节点开放：子配置是派生体，它的模拟由分析面板派发，不在树里单独运行
+    const canRun = computed(() =>
+      subjectKind.value === 'config' && !!subject.value && subject.value.level === 1
       && nodeState.value.text.indexOf('已冻结') === 0);
+    const runDisabledReason = computed(() => {
+      if (subjectKind.value !== 'config') return '请先选中一个一级配置节点';
+      if (subject.value && subject.value.level !== 1)
+        return '子配置的模拟由分析面板派发，不能在树里单独运行';
+      if (nodeState.value.text.indexOf('已冻结') !== 0)
+        return '配置未保存，按 P87 §3.10 不能派发模拟';
+      return '';
+    });
+    const pageKey = computed(() => mode.value + ':' + subjectKind.value);
+    const modeLabel = computed(() => {
+      if (mode.value === 'tasks') return '任务管理';
+      if (mode.value === 'detail') return '详情';
+      return subjectKind.value === 'compare' ? '比较分析' : '分析';
+    });
     function runSim() { flash('运行模拟：' + subjectLabel.value); }
 
     /* ---- 展示辅助 ---- */
@@ -794,7 +837,7 @@ createApp({
       notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
-      canToggle, availableModes, canRun,
+      canToggle, availableModes, canRun, runDisabledReason, pageKey, modeLabel,
       onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim,
       typeColor, itemRunnable, itemReason, bars, linePoints,
     };
@@ -810,7 +853,7 @@ createApp({
 </div>
 <script>
 (function () {
-  const opts = [['segmented', '面板内分段控件'], ['edge', '右侧正中「《」'], ['toolbar', '工具栏按钮']];
+  const opts = [['edge', '右侧边缘把手「《」'], ['toolbar', '工具栏按钮']];
   const host = document.getElementById('sw');
   opts.forEach(([k, label]) => {
     const b = document.createElement('button');

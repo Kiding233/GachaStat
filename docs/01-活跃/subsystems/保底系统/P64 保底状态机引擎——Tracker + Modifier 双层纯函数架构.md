@@ -936,7 +936,10 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 |------|-------------|---------------|
 | `assign`（hard / G3） | 口径 3：组间按基础权重和，组内保当前比例 | **不需要**。旧实现在槽级就写 `w_s/Σw`，卡级扩张是整槽同乘，与口径 3 逐位相同 |
 | `share`，T 为单槽或单卡（rotating / targeted / CR / G1） | 组内常数因子 | **不需要**。单元素组内不存在「分配」这一层，两种口径退化为同一式子 |
-| `share`，T 为整个稀有度组（soft） | 组内常数因子 | **需要**。旧实现的增量按 `w_s/Σw` 分给两个槽；不变式成立时「按基础权重加」与「按当前比例缩放」同值，不成立时分开 |
+| `share`，T **跨多个 (稀有度, featured) 组**（soft 的 `tf=False`） | 组内常数因子 | **需要**。旧实现的增量按 `w_s/Σw` 分给 featured 与非 featured **两个槽**；不变式成立时「按基础权重加」与「按当前比例缩放」同值，不成立时分开。**实测**：不变式破坏时差 1.03e-01（§3.14.3） |
+| `share`，T 落在单个 (稀有度, featured) 组内（soft 的 `tf=True`；rotating / targeted / CR / G1） | 组内常数因子 | **不需要**。旧实现的目标槽只有一个，增量全给该槽、卡级扩张整槽同乘，比例恒保持。**实测**：不变式破坏下仍逐位一致（差 0） |
+
+> **边界的正确表述**：需要不变式的条件是「**T 是否跨多个 (稀有度, featured) 组**」，不是「T 是整组还是单卡」。原稿按「单槽 / 整组」分档，在 `tf=True`（多张 UP 卡、跨行同组）一例上会给出错误预测。2026-10-05 实测修正。
 
 **故本定理对 `assign` 与「单槽目标」的 `share` 是严格包含，对 soft 是「不变式下包含」**，比原稿的「一律不变式下包含」更强。
 
@@ -2302,6 +2305,51 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 <!-- REVIEW-R1-FIX: RULING-1B -->
 <!-- REVIEW-R1-FIX: RULING-3B -->
 
+##### 3.14.3.1 `assign` 的口径 3 实测验证（2026-10-05）
+
+**验证对象**：§3.9.4.2 的 `factor_override`（口径 3 + `resolve_universe`）对旧 `HardPityBehavior` 的复现程度。**对照口径**：旧实现在**槽位级**产出 → `banner.py:226-248` 的 `scale_factors` 还原到卡级 → 归一化；新实现在**卡级**直接产出因子 → `_apply_factor`。两侧均归一化后逐卡比较（`pool.draw` 的 `_adjusted_total_weight` 隐含归一化，§3.9.5）。
+
+**测试池**（刻意让 featured 组含两张卡，使「组内分配」这一层真正起作用）：
+`f1`(SSR/UP, 0.004) · `f2`(SSR/UP, 0.002) · `s1`(SSR/非UP, 0.005) · `sr1`(SR, 0.05) · `r1`(R, 0.939)；
+`rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}`（小写键，与 `batch_simulator.py:1193` 的 `{k.lower(): v ...}` 同口径）。
+
+| # | 场景 | U（全域） | 最大差 | 结论 |
+|---|------|----------|-------|------|
+| 1 | `scope='ssr'`，`tf=False` | 全池（ssr 为最高，无豁免） | 0.00e+00 | ✓ |
+| 2 | `scope='ssr'`，`tf=True` | 全池 | 0.00e+00 | ✓ |
+| 3 | `scope='sr'`，`tf=False` | `{sr1, r1}`（ssr 被豁免出 U） | 0.00e+00 | ✓ |
+| 4 | `scope='sr'`，`tf=True` | `{sr1, r1}` | 0.00e+00 | ✓ |
+| 5 | `scope='r'`，`tf=False` | `{r1}` | 0.00e+00 | ✓ |
+| 6 | `scope='r'`，`tf=True` | `{r1}` | 0.00e+00 | ✓ |
+
+**6/6 逐位一致（差 0）**，含「更高稀有度豁免」的 U 构建路径（场景 3..6：ssr / sr 的卡不在 U 内，因子不写即保持原值）。
+
+**不变式无关性（第二组实测）**：把输入分布人为扰动为 featured 组内 **9:1**（基础是 2:1），即「组内比例 = 基础权重比例」的不变式被破坏：
+
+```
+输入        f1=0.009 f2=0.001 s1=0.020 sr1=0.030 r1=0.940   （f1:f2 = 9.0）
+旧实现       f1=0.490909090909 f2=0.054545454545 s1=0.454545454545 sr1=0 r1=0
+新（口径 3） f1=0.490909090909 f2=0.054545454545 s1=0.454545454545 sr1=0 r1=0
+最大差 0.00e+00；组内比例 旧 9.0 / 新 9.0
+```
+
+**结论：`assign` 不需要「组内比例 = 基础权重比例」不变式**（旧实现在槽内整槽同乘，卡级扩张天然保比例；口径 3 的组内常数因子同效）。
+
+**同时排除口径 1**：若 `assign` 按「每卡的基础权重」分配（口径 1），上例的组内比例会被压回 **2:1**，与旧实现的 9:1 不符。**口径 3 是唯一复现旧实现的选择。**
+
+##### 3.14.3.2 `share` 的不变式依赖边界（2026-10-05 实测）
+
+同池、`soft_step(deltas=((1, 50.0),))`（第 1 抽起 50% boost），U = 全池：
+
+| T | 不变式成立 | 不变式破坏（9:1） | 结论 |
+|---|-----------|-----------------|------|
+| `tf=False`（T = 整个 ssr 组，**跨 featured 与非 featured 两组**） | 差 1.11e-16 ✓ | **差 1.03e-01 ✗** | 需要不变式 |
+| `tf=True`（T = featured 组，**落在单个组内**） | 差 0.00e+00 ✓ | 差 0.00e+00 ✓ | 不需要 |
+
+**边界是「T 是否跨多个 (稀有度, featured) 组」**，不是「单槽还是整组」。旧实现在跨组时把增量按各**槽**的基础权重和（`w_s/Σw`）分配，槽内卡级扩张同乘；跨组时该分配会改变组间比例，而 `share` 的组内常数因子保持不变，两者在不变量成立时同值。**§3.1.5.4 的三行表已按此修正。**
+
+<!-- REVIEW-R1-FIX: RULING-3B -->
+
 #### 3.14.4 Condition 与 EventMatch 的分工（命名区分）
 
 系统里有两处判断，**不合并**，且在命名上分开以免被误读为「同一概念的两份实现」：
@@ -2469,6 +2517,9 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - [ ] **S8 边界断言（ISSUE-016）**：`scope` 键缺失（无 featured 卡的稀有度、新增标准池）时保底返回恒等而非抛 `KeyError`；`scope_cards` / `featured_cards` 一律经 `.get(scope, ())` 消费
 - [ ] **S8 空目标集断言（2026-10-05 补，强制）**：`factor_redistribute` / `factor_override` 在 `target_cards == ()` 时**返回 `None`（恒等）**，**不得返回零因子向量**。反例（改前形态）：`factor_redistribute(dist, ('ssr_featured','ssr'), (), 1.0)` 返回 `{'ssr_featured': 0.0, 'ssr': 0.0}`，归一化后全 scope 归零。触发路径：`rotating` 绑定到无 featured 卡的池。断言须**同时**覆盖两个原语（§3.9.4.1 / §3.9.4.2 的守卫）
 - [x] **可交换性实测（2026-10-05 完成，脚本形态见 §3.1.5.5）**：对**旧类**（`pity.py` 现行实现）逐抽扫描，结论四条：① `soft(tf=False) + hard` **可交换**；② `hard + rotating`（rotating 非 guaranteed）**可交换**；③ `hard + rotating`（rotating **guaranteed**）**不可交换**（抽 6 起分歧）；④ `soft(tf=True) + hard` **不可交换**（该配置按裁决 7B 已不可构造，反例随之消除）。归纳判据见 §3.1.5.5 的「判据」专段（`X` 与 `hard` 可交换 ⟺ `X` 在 `hard` 的输出上恒等）
+- [x] **`assign` 口径 3 实测验证（2026-10-05 完成）**：§3.9.4.2 的 `factor_override`（口径 3 + `resolve_universe`）对旧 `HardPityBehavior` 的复现程度已在**卡级**逐卡对照完毕，**6/6 场景逐位一致（差 0）**，含「更高稀有度豁免」的 U 构建路径；且**不需要**「组内比例 = 基础权重比例」不变式（扰动分布下仍一致）。口径 1 同时被排除（会把组内比例压回基础比例）。方法与数据见 §3.14.3.1。
+- [x] **`share` 的不变式依赖边界（2026-10-05 完成）**：实测确认需要不变式的条件是「**T 跨多个 (稀有度, featured) 组**」，不是「T 是整组」。`soft(tf=True)`（T 落在单组内）在不变式破坏下仍逐位一致。§3.1.5.4 的三行表已按此修正，数据见 §3.14.3.2。
+- [ ] **S8 口径 3 的回归断言（M2 施工，未完成）**：上两条测的是**旧类对照**。S8 落地后须把 §3.14.3.1 的六场景固化为测试（`tests/core/test_pity_primitives.py`），断言对象为**卡级逐卡**结果而非目标组总量（只断言总量 = 1.0 对本轮修的两处错误恒通过）
 - [ ] **S8 可交换性复测（M2 口径，未完成）**：上条测的是**旧类**。S8 落地后须对**新骨架 + 卡级管道**复测同样四组，确认判据在卡级下同样成立。**关键差异面**：旧类的 `hard` 在槽位级取 `base_probabilities`，卡级下若取自 `DrawInfo.base_probabilities` 而该字段语义已由槽位级改为卡级（§3.9.3 的 `DrawInfo.base_probabilities` 行），须确认归一化后仍与旧产物一致
 - [ ] **`targeted` 的有效分支补测（2026-10-05 遗留）**：2026-10-05 的探针**未注入 `selected_card`**，故 `targeted` 全程走空目标集（恒等），实测到的「可交换」**不构成结论**。须在注入 `selected_card`（策略层 `NonDrawAction` 写入）后重测 `hard + targeted`，覆盖 `guaranteed` 与 `fate_ready` 两条非恒等分支
 - [ ] **S8 差异归因清单（ISSUE-012 / ISSUE-006）**：S8 与 S5 产物的对比口径为**归一化后分布**；下列两处的差异**允许存在**并须逐一登记，不得当作回归——
@@ -2820,7 +2871,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
     - ① 目标值按**口径 3** 计算（组间按 `w_g/Σw`、组内常数因子），**必须除以 `gt`**：原稿写 `w_c` 等于目标值 `∝ w_c·p_c`，组内比例平方放大
     - ② `u_cards` 由 `resolve_universe(ctx, scope, u_kind)` 统一构建，**不得在函数内现算 `exempt`**（原稿的 `rarity_rank.get(scope, 99)` 魔数与「按 `rarity_rank` 遍历、按 `scope_cards` 取目标」的两套键空间一并删除）
     - ③ 两个原语各补「`target_cards == ()` 返 `None`」守卫
-    - 验收命令（遵「验收命令与断言对象绑定纪律」，§七 引言）：`pytest -q tests/core/test_pity_primitives.py -k "assign or universe"`，须覆盖：`assign` 的目标组内**逐卡**比例与旧 `HardPityBehavior` 一致（**不能只断言目标组总量 = 1.0**，那对错误 ① 恒通过）、`scope` 不在 `[rarities].ranks` 内时抛 `ConfigError`、两个原语的空目标集返 `None`
+    - 验收命令（遵「验收命令与断言对象绑定纪律」，§七 引言）：`pytest -q tests/core/test_pity_primitives.py -k "assign or universe"`，须覆盖 §3.14.3.1 已实测的**六场景**（`scope` × `tf` 全组合，含更高稀有度豁免路径）：`assign` 的目标组内**逐卡**结果与旧 `HardPityBehavior` 一致（**不能只断言目标组总量 = 1.0**，那对错误 ① 恒通过；也不能只断言不变式成立的那一档，那对错误 ② 恒通过）、`scope` 不在 `[rarities].ranks` 内时抛 `ConfigError`、两个原语的空目标集返 `None`
   - [ ] **S8-3c `TransferModifier` 合并（~0.4 人时；§3.1.2 映射表，2026-10-05 补）**｜目标文件 `core/pity_modifier.py` + `core/pity.py`（preset 工厂）。按 §3.14.5 的方案 C 落地：6 个类合并为 `TransferModifier(u_of, t_of, mode, ratio_of)`，删除 `ForceFeatured` / `ForceNonFeatured` / `ForceSelected` / `ForceNotOwned` / `BaseRatio` / `Intercept` 六个类，目标解析器族落 `core/pity_modifier.py`
   - **⚠ S8-1 / S8-2 / S8-3 / S8-3b 必须视为一个原子单元（2026-10-01 补登记，2026-10-05 扩入 S8-3b）**：三块的顺序是 S8-1 换接口（`factor`）→ S8-2 管道换卡级 → S8-3 交付卡级 `factor_redistribute`。**任一中间态都是键空间错位窗口**：`_apply_factor` 的 `m.get(c, 1.0)` 把「未在因子向量里出现的键」当作恒等 1.0，于是因子键与 `dist` 键不匹配时**不报错**，而是让**全部保底静默退化为恒等**。计划的 GATE-5 只在回滚段承认「半卡级 / 半槽位混态」，未给排序约束。**强制定稿**：三块**同一个 commit 落地**（或把 S8-3 前移到 S8-2 之前），并**新增一条跨块断言**：S8-2 的验收命令在冒烟之外须断言「卡级管道下同一配置的分布与 S5 产物逐元素一致（容差 1e-12）」，使中间态的静默退化在 CI 期即暴露。**回滚约束**：回退 S8-1 / S8-2 / S8-3 中任一方须**连带回退另外两方**（GATE-5 的「S8 逐子项回滚」在本三块上收窄为此条）。
   - [ ] S8-4 **删除 `aggregate_probs_by_rarity` 与其导出行 + 卡级管道的分布解包口径改写**（~0.8 人时；§3.9.3）｜目标文件 `core/pity.py` + `core/pool.py` + `core/__init__.py`（+ `python -c "import gacha_simulator.core"` 冒烟）：`aggregate_probs_by_rarity` 与其导出同步清理；分布解包口径随卡级管道改写。**本步不做 `compute_scope_mappings` 的「只产卡集合」改造**——卡集合（`scope_cards` / `featured_cards`）是该函数五元组的**既有前两项**（[pity.py:1067-1068](gacha_simulator/core/pity.py#L1067-L1068)），`PityEngine` 三个调度入口早已透传进 `DrawInfo`，新骨架可直接消费，本步无增量可做（**ISSUE-901**）。**ISSUE-901（强制，与原稿互斥已改判）**：本步**不删** `PoolPitySpec` / `DrawInfo` 的 `scope_slots` / `featured_slots` / `card_to_slot`，也**不改** `compute_scope_mappings` 的槽位产出为「只产卡集合」，**不改** `service/batch_simulator.py` 的 `PoolPitySpec` 构造（本步对它零改动）——旧保底类在发布前仍读这三字段（4 处旧类概率入口 + `_redistribute_scope` 函数体 + `PityEngine` 三个 `DrawInfo(...)` 构造点），删早即 S5a harness 与 S8-6 同时失效。三字段与槽位产出的删除并入 GATE-5 末条「发布前一次性移除旧保底类」commit。<!-- REVIEW-R1-FIX: ISSUE-901 --><!-- ⚠ 待人工裁决（ISSUE-901 备选路径）：若坚持在本步删字段，则 S8-6 的基线必须改为「S5 阶段固化 golden 快照」（丢弃「现跑旧类」），并同步改写 §六 差异归因清单、GATE-5 末条与 §3.9.3 的「旧类仍可用」表述——本计划取保守路径（推迟删除），备选保留待用户裁决 --><!-- REVIEW-FIX-PREV: AUDIT-BREAK-8 -->**`core/__init__.py` 是双目标文件**：本步删 [core/\_\_init\_\_.py:3](gacha_simulator/core/__init__.py#L3) 的 `aggregate_probs_by_rarity` import、`_redistribute_scope` 的 import（:20）与两者在 `__all__` 的条目（**import 与 `__all__` 必须同批改**）；10 个旧行为类 + `SoftPityMixin` 的 re-export 归 S4-3（已在其任务项）；`infer_rarity_from_spec` 的去留**已由 §3.9.3 的复核结论定稿为「一并删除」**（**ISSUE-504**：其唯一消费者链在 S8-2 / S8-4 中断，本步删其 `core/__init__.py:3` import 与 `__all__:101` 条目，函数本体已在 S8-2 删除）<!-- REVIEW-R1-FIX: ISSUE-504 -->

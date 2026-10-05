@@ -961,7 +961,7 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 | soft + soft（异 scope） | 是 | 低稀有度算子的源集与目标集都落在高稀有度算子的源集之内 |
 | **soft(tf=False) + hard（同 scope）** | **是（2026-10-05 实测）** | 见下方「判据」专段。实测：`soft(start=2) + hard(threshold=6)` 逐抽 1..15 无反例 |
 | **hard + rotating（rotating 处于非 guaranteed 分支）** | **是（2026-10-05 实测）** | 该分支的 r = `p(S_f)/p(S_c)` 即当前份额，`share` 退化为恒等，**在任何分布上都是恒等**，故与 `hard` 可交换 |
-| **hard + rotating（rotating 处于 guaranteed 分支）** | **否（2026-10-05 实测）** | r = 1，非恒等。实测 `hard(threshold=5)` + `rotating`（第 1 抽中非 UP 的 SSR 置 guaranteed）：**抽 6 起分歧**，`[hard, rot]` = `{ssr: 0, ssr_featured: 1.0}`，`[rot, hard]` = `{ssr: 0.5556, ssr_featured: 0.4444}`。**裁决 7B 未消除本条**，它是 7B 之后唯一剩下的代数型反例 |
+| **hard + rotating / targeted（guaranteed 分支）** | **否（2026-10-05 实测）** | r = 1，非恒等。实测 `hard(threshold=5)` + `rotating`（第 1 抽中非 UP 的 SSR 置 guaranteed）：**抽 6 起分歧**，`[hard, rot]` = `{ssr: 0, ssr_featured: 1.0}`、`[rot, hard]` = `{ssr: 0.5556, ssr_featured: 0.4444}`。**`targeted` 的同名分支与 `rotating` 逐位相同**（直接对照三组输入，含 `hard` 的输出，差 0），故本行同时覆盖它。**裁决 7B 未消除本条**，它是 7B 之后唯一剩下的代数型反例 |
 | 含 `rotating_cr` 的组合 | 否 | 非代数问题：因子本身可交换，但掷骰消费全局 `random`，换序导致 ω 消费位置改变、样本路径分叉。裁决 6B 后掷骰移入 Tracker，Tracker 的 `commit` 同样按行为顺序调用，**本条结论不变** |
 
 **判据（2026-10-05 实测归纳，取代原「逐类猜测」）**：
@@ -982,7 +982,10 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 | `rotating`（非 guaranteed） | 是 | r = 当前份额，恒等（对任意分布成立） |
 | `rotating`（guaranteed） | **否** | r = 1，把 scope 总量全给 featured |
 | `soft(tf=True)` | **否** | hard 输出里 ssr（非 UP 的 SSR）= 0.5556，落在 soft 的源集内（源集 = 除目标与更高稀有度外的全体） |
-| `targeted`（无 `selected_card`） | 是 | 目标集为空 → 恒等。**注**：2026-10-05 的探针未注入 `selected_card`，故实测到的「可交换」**不构成对 targeted 有效分支的结论**，须补测 |
+| `targeted`（非 guaranteed / 非 fate-ready） | 是 | `featured_ratio = featured_total / total` 即当前份额，恒等（[pity.py:658-660](gacha_simulator/core/pity.py#L658-L660)） |
+| `targeted`（guaranteed 或 fate-ready） | **否** | 与 `rotating` 的 guaranteed 分支**逐位相同**（同一式子 `_redistribute_scope(ctx, 1.0, total, <单个 featured 槽>, scope)`），在 `hard` 的输出上非恒等。**2026-10-05 直接对照实测**（三组输入含 `hard` 输出，最大差 0.00e+00） |
+
+> **`hard + targeted` 的实测订正（2026-10-05）**：早先的引擎级探针得出「可交换」，**该结论不成立**：`TargetedBehavior` 直接继承 `PityBehavior`（[pity.py:615](gacha_simulator/core/pity.py#L615)）、不走 `CounterBasedBehavior` 的 `_active` 门控，探针里它从未进入 guaranteed / fate-ready 分支，全程落在恒等分支上，故测到的「可交换」只反映恒等分支。**改为直接对照两个 behavior 在同输入上的输出**后结论为：`targeted` 的 guaranteed 分支与 `rotating` 逐位相同，「在 `hard` 输出上非恒等」成立，**按判据 `hard + targeted` 不可交换**。<!-- REVIEW-R1-FIX: RULING-6B -->
 
 **原引理 2.2 的处置**：原版那条「源集包含 + 统一缩放 + 固定权重再分配」的充分条件描述的是槽位级算子，在卡级 `share`/`assign` 下不再需要，上面的判据一行即可替代。
 
@@ -2521,7 +2524,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - [x] **`share` 的不变式依赖边界（2026-10-05 完成）**：实测确认需要不变式的条件是「**T 跨多个 (稀有度, featured) 组**」，不是「T 是整组」。`soft(tf=True)`（T 落在单组内）在不变式破坏下仍逐位一致。§3.1.5.4 的三行表已按此修正，数据见 §3.14.3.2。
 - [ ] **S8 口径 3 的回归断言（M2 施工，未完成）**：上两条测的是**旧类对照**。S8 落地后须把 §3.14.3.1 的六场景固化为测试（`tests/core/test_pity_primitives.py`），断言对象为**卡级逐卡**结果而非目标组总量（只断言总量 = 1.0 对本轮修的两处错误恒通过）
 - [ ] **S8 可交换性复测（M2 口径，未完成）**：上条测的是**旧类**。S8 落地后须对**新骨架 + 卡级管道**复测同样四组，确认判据在卡级下同样成立。**关键差异面**：旧类的 `hard` 在槽位级取 `base_probabilities`，卡级下若取自 `DrawInfo.base_probabilities` 而该字段语义已由槽位级改为卡级（§3.9.3 的 `DrawInfo.base_probabilities` 行），须确认归一化后仍与旧产物一致
-- [ ] **`targeted` 的有效分支补测（2026-10-05 遗留）**：2026-10-05 的探针**未注入 `selected_card`**，故 `targeted` 全程走空目标集（恒等），实测到的「可交换」**不构成结论**。须在注入 `selected_card`（策略层 `NonDrawAction` 写入）后重测 `hard + targeted`，覆盖 `guaranteed` 与 `fate_ready` 两条非恒等分支
+- [x] **`targeted` 的有效分支补测（2026-10-05 完成）**：**已改为直接对照两个 behavior 在同输入上的输出**（不经引擎，避开 `TargetedBehavior` 不走 `_active` 门控、探针无法可靠注入状态的问题）：`targeted` 的 guaranteed / fate-ready 分支与 `rotating` 的 guaranteed 分支**逐位相同**（三组输入，含 `hard` 的输出，最大差 0.00e+00），故按判据 `hard + targeted` **不可交换**。原「可交换」结论作废，原因是探针覆盖不足（详见 §3.1.5.5 判据表的注）
 - [ ] **S8 差异归因清单（ISSUE-012 / ISSUE-006）**：S8 与 S5 产物的对比口径为**归一化后分布**；下列两处的差异**允许存在**并须逐一登记，不得当作回归——
   （a）`⟨m,p⟩ ≠ 1` 的配置（`hard` 的 scope 低于最高稀有度）：S5 输出 Σ = 1.009、S8 输出 Σ = 1，管道内可见绝对值改变（抽样分布因 `pool.draw` 的 `_adjusted_total_weight` 隐含归一化可能不变，见 §3.9.5）；**连带的观测面变更（ISSUE-903）**：`core/invariants.py` 的分布层归一性判据须同批从 scope 感知式改为恒等断言 `Σp = 1`，`tests/core/test_pity_invariant_checker.py` 的正例期望值随之更新（S8-6 ⑤）；<!-- REVIEW-R1-FIX: ISSUE-903 -->
   （b）`worst_impact` 的卡集合对齐改造（§3.9.3 专项）会改变最差影响分析数值

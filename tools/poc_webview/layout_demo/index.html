@@ -88,36 +88,48 @@ body{
   background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
   position:relative;
 }
-/* 整页切换把手：浮在右侧页面最右侧之上，直角，不占布局宽度 */
-.handle{
-  position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:8;
-  display:flex;flex-direction:column;align-items:center;gap:6px;
-  padding:16px 7px;background:var(--accent);color:#fff;cursor:pointer;
-  border-radius:0;box-shadow:-2px 0 12px rgba(25,118,210,.35);
-  user-select:none;transition:background .15s,padding .15s;
-}
-.handle:hover{background:#1565c0;padding-left:11px}
-.handle .chev{font-size:20px;line-height:1;font-weight:700}
-.handle .vtext{writing-mode:vertical-rl;font-size:12px;letter-spacing:4px}
 /* 每个页面自己设计头部，右侧没有统一标题区 */
 .page-head{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);
 }
 .page-head h3{margin:0;font-size:16px;font-weight:600}
-/* 切换的是整个右侧页面。只有分析页从右侧滑入；返回详情时详情页只淡入不滑动，
-   这样浮在右边缘的把手在视觉上才是稳的（把手不参与滑动） */
+/* 两页横向并排，锁在同一条轨道上：切换就是整条轨道平移（推拉）。
+   外框 .workbench 与内的 .wb-body 都不动，动的只有 .strip */
 .wb-body{flex:1;min-height:0;overflow:hidden;position:relative}
-.wb-page{position:absolute;inset:0;overflow:auto;padding:12px 44px 12px 12px}
-.slide-enter-active{transition:transform .3s cubic-bezier(.25,.8,.35,1),opacity .25s}
-.slide-leave-active{transition:opacity .12s}
-.slide-enter-from{transform:translateX(100%);opacity:.35}
-.slide-leave-to{opacity:0}
-.fade-enter-active{transition:opacity .18s}
-.fade-leave-active{transition:opacity .12s}
-.fade-enter-from{opacity:0}
-.fade-leave-to{opacity:0}
+.strip{
+  display:flex;width:200%;height:100%;
+  transition:transform .34s cubic-bezier(.25,.8,.35,1);
+}
+.strip.analysis{transform:translateX(-50%)}
+.pane{
+  flex:0 0 50%;width:50%;height:100%;overflow:auto;
+  padding:12px 46px 12px 46px;
+}
 .wb-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--ink-3)}
+
+/* 展开 / 收起分析的道：整条竖直通道都是入口，不是挤出来的一条空白。
+   它随轨道一起被推到右端（详情态）或左端（分析态），因此位置与页面切换同步 */
+.lane{
+  position:absolute;top:0;bottom:0;width:34px;z-index:8;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  cursor:pointer;user-select:none;
+  border-left:1px solid var(--line);border-right:1px solid var(--line);
+  transition:left .34s cubic-bezier(.25,.8,.35,1),background .15s;
+}
+.lane.at-right{left:calc(100% - 34px)}
+.lane.at-left{left:0}
+.lane .chev{font-size:20px;line-height:1;font-weight:700}
+.lane .vtext{writing-mode:vertical-rl;font-size:12px;letter-spacing:5px}
+/* 道配色：全部无色系（颜色在本项目里留给语义，见交接文档的方向约束） */
+.lane.c-light{background:#eef1f5;color:#5a6272}
+.lane.c-light:hover{background:#e2e7ee}
+.lane.c-mid{background:#d7dce3;color:#3f4654}
+.lane.c-mid:hover{background:#c7cfda}
+.lane.c-graphite{background:#3f4654;color:#eef1f5}
+.lane.c-graphite:hover{background:#333944}
+.lane.c-slate{background:#64748b;color:#f1f5f9}
+.lane.c-slate:hover{background:#556174}
 
 /* 分析面板 */
 .anchor-bar{
@@ -148,6 +160,10 @@ body{
 .mini{height:104px;display:flex;align-items:flex-end;gap:2px;padding:6px 2px 0;border-bottom:1px solid var(--line)}
 .mini i{flex:1;background:linear-gradient(#8fbdf0,#3f8fd9);border-radius:2px 2px 0 0;min-height:2px}
 .mini-line{height:104px;border-bottom:1px solid var(--line);padding:6px 2px 0}
+.cfg-tabs .el-tabs__header{margin-bottom:12px}
+.cfg-tabs .el-tabs__item{font-size:12px;height:34px;line-height:34px}
+.sub-tabs .el-tabs__header{margin-bottom:10px}
+.sub-tabs .el-tabs__item{font-size:12px;height:30px;line-height:30px}
 .kv{width:100%;border-collapse:collapse;font-size:12px}
 .kv td{padding:4px 6px;border-bottom:1px solid #f0f2f5}
 .kv td:first-child{color:var(--ink-3);width:120px}
@@ -189,9 +205,8 @@ body{
       方案搜索 / 最差影响 / 敏感性在分析页面内发起，不在工具栏
     </span>
     <div class="tb-sep"></div>
-    <!-- 切换控件方案 C：工具栏按钮 -->
-    <el-button v-if="switchStyle==='toolbar'" size="small" type="primary" plain
-               :disabled="!canToggle" @click="toggleMode">
+    <!-- 切换控件：与右侧页面里的道并存，两者都能切换 -->
+    <el-button size="small" plain :disabled="!canToggle" @click="toggleMode">
       切换到{{ mode==='analysis' ? '详情' : '分析' }}
     </el-button>
     <span class="spacer"></span>
@@ -253,8 +268,11 @@ body{
       <el-alert v-if="notice" class="notice" :title="notice" type="info" :closable="false" show-icon></el-alert>
 
       <div class="wb-body">
-       <transition :name="enterAnim" mode="out-in">
-        <div :key="pageKey" class="wb-page">
+       <!-- 两页横向并排，锁在同一条轨道上，切换即整条推拉；外框不动 -->
+       <div class="strip" :class="{ analysis: mode==='analysis' }">
+
+        <!-- 第 1 页：详情 / 任务管理 -->
+        <div class="pane">
         <div v-if="mode==='tasks'" class="task-view">
           <div class="page-head">
             <h3>任务管理</h3>
@@ -280,7 +298,266 @@ body{
           </p>
         </div>
 
-        <div v-else-if="mode==='analysis'" class="analysis-view">
+        <div v-else-if="subjectKind==='config'" class="detail-view">
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" :type="nodeState.tagType" effect="light">{{ nodeState.text }}</el-tag>
+            <span class="spacer"></span>
+            <el-button size="small">复制为一级配置节点</el-button>
+            <el-button size="small">另存为</el-button>
+            <el-button size="small" type="primary" @click="saveDraft">保存</el-button>
+          </div>
+          <p class="tmeta" style="margin:-6px 0 14px">{{ nodeState.hint }}</p>
+
+          <!-- 与 GUI 配置面板一致：按 tag 组织，11 个标签页同名同序 -->
+          <el-tabs v-model="cfgTab" class="cfg-tabs">
+            <el-tab-pane label="卡牌定义" name="cards">
+              <el-table :data="draft.cards" size="small">
+                <el-table-column prop="id" label="id" width="110"></el-table-column>
+                <el-table-column prop="name" label="名称" min-width="140"></el-table-column>
+                <el-table-column prop="rarity" label="稀有度" width="90"></el-table-column>
+                <el-table-column prop="tags" label="tags" min-width="140"></el-table-column>
+                <el-table-column prop="pools" label="所属池" min-width="150"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="资源定义" name="resdef">
+              <el-table :data="draft.resDefs" size="small">
+                <el-table-column prop="id" label="id" width="170"></el-table-column>
+                <el-table-column prop="name" label="显示名" min-width="140"></el-table-column>
+                <el-table-column prop="kind" label="类型" width="100"></el-table-column>
+                <el-table-column prop="init" label="初始值" width="120"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="资源获取" name="resgain">
+              <el-table :data="draft.resGains" size="small">
+                <el-table-column prop="res" label="资源" width="140"></el-table-column>
+                <el-table-column prop="mode" label="规则" min-width="170"></el-table-column>
+                <el-table-column prop="amount" label="数量" width="100"></el-table-column>
+                <el-table-column prop="every" label="周期" width="110"></el-table-column>
+              </el-table>
+              <p class="tmeta" style="margin-top:8px">
+                收入规则是当前唯一的时间驱动资源来源，也是基线「无随机源」结论的前提（P87 §1.5）。
+              </p>
+            </el-tab-pane>
+            <el-tab-pane label="卡池管理" name="pools">
+              <el-tabs v-model="poolSubTab" type="card" class="sub-tabs">
+                <el-tab-pane label="池" name="pool">
+                  <el-table :data="draft.pools" size="small">
+                    <el-table-column prop="name" label="池子" min-width="150"></el-table-column>
+                    <el-table-column prop="type" label="类型" width="80"></el-table-column>
+                    <el-table-column prop="pity" label="保底" width="110"></el-table-column>
+                    <el-table-column prop="rate" label="出率" width="80"></el-table-column>
+                    <el-table-column prop="from" label="开放" width="100"></el-table-column>
+                    <el-table-column prop="until" label="下架" width="110"></el-table-column>
+                  </el-table>
+                </el-tab-pane>
+                <el-tab-pane label="生命周期" name="lifecycle">
+                  <el-table :data="draft.lifecycles" size="small">
+                    <el-table-column prop="cond" label="条件" min-width="220"></el-table-column>
+                    <el-table-column prop="act" label="动作" min-width="200"></el-table-column>
+                  </el-table>
+                </el-tab-pane>
+              </el-tabs>
+            </el-tab-pane>
+            <el-tab-pane label="保底机制" name="pity">
+              <el-table :data="draft.pities" size="small">
+                <el-table-column prop="scope" label="适用稀有度" width="110"></el-table-column>
+                <el-table-column prop="type" label="类型" width="120"></el-table-column>
+                <el-table-column prop="threshold" label="阈值" width="80"></el-table-column>
+                <el-table-column prop="counter" label="计数器初始" width="110"></el-table-column>
+                <el-table-column prop="guaranteed" label="保证初始" width="100"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="累抽奖励" name="milestone">
+              <el-table :data="draft.milestones" size="small">
+                <el-table-column prop="threshold" label="累抽阈值" width="110"></el-table-column>
+                <el-table-column prop="repeat" label="重复" width="80"></el-table-column>
+                <el-table-column prop="max" label="上限" width="80"></el-table-column>
+                <el-table-column prop="reward" label="奖励" min-width="160"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="抽卡策略" name="strategy">
+              <div class="fitem" style="margin-bottom:10px"><label>策略</label>
+                <el-select v-model="draft.strategy" size="small" style="width:200px" @change="markDirty">
+                  <el-option label="smart" value="smart"></el-option>
+                  <el-option label="draw_target" value="draw_target"></el-option>
+                  <el-option label="no_draw" value="no_draw"></el-option>
+                </el-select></div>
+              <el-table :data="draft.strategyCfg" size="small">
+                <el-table-column prop="key" label="参数键" min-width="200"></el-table-column>
+                <el-table-column prop="val" label="值" min-width="220"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="停止条件" name="stop">
+              <el-table :data="draft.stopCond" size="small">
+                <el-table-column prop="type" label="类型" min-width="190"></el-table-column>
+                <el-table-column prop="params" label="参数" min-width="220"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="目标卡" name="target">
+              <el-table :data="draft.targets" size="small">
+                <el-table-column prop="card" label="卡" min-width="150"></el-table-column>
+                <el-table-column prop="count" label="目标张数" width="110"></el-table-column>
+                <el-table-column prop="gdr" label="产出指标" min-width="180"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="权重配置" name="weights">
+              <el-table :data="draft.weights" size="small">
+                <el-table-column prop="rarity" label="稀有度" width="120"></el-table-column>
+                <el-table-column prop="weight" label="价值权重" width="120"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="满突溢出" name="overflow">
+              <el-table :data="draft.overflows" size="small">
+                <el-table-column prop="card" label="卡 / 生效范围" min-width="190"></el-table-column>
+                <el-table-column prop="band" label="区间" width="120"></el-table-column>
+                <el-table-column prop="to" label="溢出转为" min-width="180"></el-table-column>
+              </el-table>
+            </el-tab-pane>
+          </el-tabs>
+
+          <p class="tmeta" style="margin-top:14px">
+            这是可编辑的详情页，按 tag 组织，与 GUI 配置面板的 11 个标签页同名同序。
+            按 P87 §3.10，保存是可感知动作；若本配置已被数据集引用或正被任务持有，
+            保存会派生为新配置文件而不是就地覆盖，状态标签随之变成「已派生新配置」。
+          </p>
+        </div>
+
+        <div v-else-if="subjectKind==='batch'" class="detail-view">
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" effect="light" type="info">批次视图</el-tag>
+          </div>
+          <p class="tmeta" style="margin-top:0">
+            批次是「派生批次标记」的渲染视图（P87 §3.11 F2），不是新实体。它的详情页渲染任务记录。
+          </p>
+          <div class="form-sec">
+            <h4>任务记录</h4>
+            <table class="kv">
+              <tr><td>批次标识</td><td>{{ subject.batchTag }}</td></tr>
+              <tr><td>任务类型</td><td>{{ subject.taskType }}</td></tr>
+              <tr><td>状态</td><td>{{ subject.status }}</td></tr>
+              <tr><td>派生方式</td><td>{{ subject.derivation }}</td></tr>
+              <tr><td>产物清单</td><td>{{ subject.children.length }} 份子配置，各带一个数据集</td></tr>
+              <tr><td>进度</td><td>50 / 50 轮，已取消 0</td></tr>
+              <tr><td>耗时</td><td>18 min 42 s</td></tr>
+            </table>
+          </div>
+
+          <div class="form-sec">
+            <h4>成员（同批次即一组，视图按需折叠）</h4>
+            <el-table :data="subject.children" size="small">
+              <el-table-column prop="label" label="子配置" min-width="170"></el-table-column>
+              <el-table-column label="数据集" min-width="150">
+                <template #default="{ row }">
+                  {{ row.children && row.children.length ? row.children[0].label : '尚未产出' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="样本数" width="100">
+                <template #default="{ row }">
+                  {{ row.children && row.children.length ? row.children[0].samples : '—' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="可作普通分析" width="130">
+                <template #default="{ row }">
+                  <span v-if="row.children && row.children.length && row.children[0].analyzable">是</span>
+                  <span v-else class="tmeta">否（未跑流式）</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <p class="tmeta">落在 tasks/&lt;task-id&gt;.json，与配置、数据集并列存放（P87 §3.11 F）。</p>
+        </div>
+
+        <div v-else-if="subjectKind==='dataset'" class="detail-view">
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" effect="light" type="info">数据集 · 只读</el-tag>
+          </div>
+          <div class="form-sec">
+            <h4>元信息</h4>
+            <table class="kv">
+              <tr><td>显示名</td><td>{{ subject.label }}</td></tr>
+              <tr><td>id（工作区内相对路径）</td><td class="tmeta">datasets/{{ subject.id }}.json</td></tr>
+              <tr><td>样本数</td><td>{{ subject.samples }}</td></tr>
+              <tr><td>流式分析</td><td>{{ subject.stream ? '已跑' : '未跑（compact 之外无明细）' }}</td></tr>
+              <tr><td>产生它的配置</td><td>{{ subject.fromConfig }}（身份 = 相对路径）</td></tr>
+              <tr><td>配置内容哈希</td><td class="tmeta">9f3ac1…（判等用，不作身份）</td></tr>
+              <tr><td>策略</td><td>smart</td></tr>
+              <tr><td>目标卡规格</td><td>雷电芽衣 ×1</td></tr>
+              <tr><td>初始资源</td><td>抽卡资源 66420 / 兑换券 250</td></tr>
+              <tr><td>池子</td><td>角色池 UP、武器池 UP、常驻池</td></tr>
+            </table>
+          </div>
+
+          <div class="form-sec">
+            <h4>运行记录（RunRecord，不参与可比性判定）</h4>
+            <table class="kv">
+              <tr><td>种子范围</td><td>42 – 42</td></tr>
+              <tr><td>模拟次数</td><td>{{ subject.samples }}</td></tr>
+              <tr><td>耗时</td><td>3.4 s（4 进程）</td></tr>
+              <tr><td>产出时间</td><td>2026-10-05 14:22</td></tr>
+            </table>
+          </div>
+
+          <div class="form-sec">
+            <h4>产出预览</h4>
+            <div class="mini"><i v-for="(h,i) in bars(subject.id)" :key="i" :style="{height:(h*100)+'%'}"></i></div>
+            <p class="tmeta" style="margin:6px 0 0">GDR 分布直方图（示意，仅用于看排版）</p>
+          </div>
+
+          <p class="tmeta">
+            数据集节点的详情页是只读的。选中它时锚点自动落在它所属的<b>一级配置节点</b>上（不会变成它自己），
+            所以它出现在锚点的数据集栏里，但不能被设为锚点，也不能对它单独套用一般分析方法。
+            {{ subject.analyzable ? '' : '本数据集不参与普通分析，原因见分析页选择器下方的排除说明。' }}
+          </p>
+        </div>
+
+        <div v-else-if="subjectKind==='compare'" class="detail-view">
+          <div class="page-head">
+            <h3>{{ subjectLabel }}</h3>
+            <el-tag size="small" effect="light" type="info">对比任务</el-tag>
+          </div>
+          <div class="form-sec">
+            <h4>比较任务</h4>
+            <table class="kv">
+              <tr><td>名称</td><td>{{ subject.label }}</td></tr>
+              <tr><td>参与数据集</td><td>{{ subject.members.join('、') }}</td></tr>
+              <tr><td>检验方法</td><td>Donald-Hsu 选择性重中心化 Bootstrap（v2）</td></tr>
+              <tr><td>重采样次数</td><td>2000</td></tr>
+              <tr><td>显著性水平</td><td>0.05</td></tr>
+              <tr><td>指标</td><td>target_achievement</td></tr>
+            </table>
+          </div>
+
+          <div class="form-sec">
+            <h4>参与数据集</h4>
+            <el-table :data="subject.members.map(m => ({ name: m }))" size="small">
+              <el-table-column prop="name" label="数据集" min-width="200"></el-table-column>
+              <el-table-column label="可作普通分析" width="130">
+                <template #default="{ row }">
+                  <span class="tmeta">按各自类型判定</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <el-button size="small" type="primary" @click="mode='analysis'">切换到比较分析</el-button>
+          <span class="tmeta" style="margin-left:8px">也可以点右侧页面最右侧的把手整页切换</span>
+        </div>
+
+        <div v-else-if="subjectKind==='folder'" class="detail-view">
+          <div class="page-head"><h3>{{ subjectLabel }}</h3><el-tag size="small" effect="light" type="info">文件夹</el-tag></div>
+          <p class="tmeta">文件夹节点没有详情内容。</p>
+        </div>
+
+        <div v-else class="wb-empty">点击左侧工作区打开配置 / 数据集 / 批次 / 对比任务</div>
+        </div><!-- /第 1 页 -->
+
+        <!-- 第 2 页：分析 -->
+        <div class="pane">
+        <div v-if="mode==='analysis'" class="analysis-view">
           <!-- 比较分析：本页自有头部，页签只有比较方法 -->
           <div v-if="subjectKind==='compare'" class="page-head">
             <h3>{{ subjectLabel }}</h3>
@@ -385,258 +662,18 @@ body{
           </el-tabs>
         </div>
 
-        <div v-else-if="mode==='detail' && subjectKind==='config'" class="detail-view">
-          <div class="page-head">
-            <h3>{{ subjectLabel }}</h3>
-            <el-tag size="small" :type="nodeState.tagType" effect="light">{{ nodeState.text }}</el-tag>
-            <span class="spacer"></span>
-            <el-button size="small">复制为一级配置节点</el-button>
-            <el-button size="small">另存为</el-button>
-            <el-button size="small" type="primary" @click="saveDraft">保存</el-button>
-          </div>
-          <p class="tmeta" style="margin:-6px 0 14px">{{ nodeState.hint }}</p>
+        <div v-else class="wb-empty">该节点不能作为分析锚点（需选中某个一级配置节点）</div>
+        </div><!-- /第 2 页 -->
 
-          <div class="form-sec">
-            <h4>策略与目标</h4>
-            <div class="form-grid">
-              <div class="fitem"><label>策略</label>
-                <el-select v-model="draft.strategy" size="small" @change="markDirty">
-                  <el-option label="smart" value="smart"></el-option>
-                  <el-option label="draw_target" value="draw_target"></el-option>
-                  <el-option label="no_draw" value="no_draw"></el-option>
-                </el-select></div>
-              <div class="fitem"><label>目标卡</label>
-                <el-input v-model="draft.target" size="small" @input="markDirty"></el-input></div>
-              <div class="fitem"><label>目标张数</label>
-                <el-input v-model.number="draft.targetCount" size="small" @input="markDirty"></el-input></div>
-            </div>
-          </div>
+       </div><!-- /strip -->
 
-          <div class="form-sec">
-            <h4>运行参数</h4>
-            <div class="form-grid">
-              <div class="fitem"><label>模拟次数</label>
-                <el-input v-model.number="draft.n" size="small" @input="markDirty"></el-input></div>
-              <div class="fitem"><label>种子起点</label>
-                <el-input v-model.number="draft.seedStart" size="small" @input="markDirty"></el-input></div>
-              <div class="fitem"><label>种子终点</label>
-                <el-input v-model.number="draft.seedEnd" size="small" @input="markDirty"></el-input></div>
-              <div class="fitem"><label>进程数</label>
-                <el-input v-model.number="draft.workers" size="small" @input="markDirty"></el-input></div>
-            </div>
-            <p class="tmeta" style="margin:8px 0 0">
-              运行参数不进入配置身份（P87 §3.1），改种子只是换一组样本，不产生新配置。
-            </p>
-          </div>
-
-          <div class="form-sec">
-            <h4>初始资源与收入</h4>
-            <div class="form-grid">
-              <div class="fitem"><label>抽卡资源</label>
-                <el-input v-model.number="draft.resDraw" size="small" @input="markDirty"></el-input></div>
-              <div class="fitem"><label>兑换券</label>
-                <el-input v-model.number="draft.resExchange" size="small" @input="markDirty"></el-input></div>
-              <div class="fitem"><label>每次收入</label>
-                <el-input v-model.number="draft.gainPer" size="small" @input="markDirty"></el-input></div>
-              <div class="fitem"><label>收入周期（天）</label>
-                <el-input v-model.number="draft.gainEvery" size="small" @input="markDirty"></el-input></div>
-            </div>
-          </div>
-
-          <div class="form-sec">
-            <h4>池子</h4>
-            <el-table :data="draft.pools" size="small">
-              <el-table-column prop="name" label="池子" min-width="150"></el-table-column>
-              <el-table-column prop="type" label="类型" width="80"></el-table-column>
-              <el-table-column prop="pity" label="保底" width="110"></el-table-column>
-              <el-table-column prop="rate" label="出率" width="80"></el-table-column>
-              <el-table-column prop="from" label="开放" width="100"></el-table-column>
-              <el-table-column prop="until" label="下架" width="110"></el-table-column>
-            </el-table>
-          </div>
-
-          <div class="form-sec">
-            <h4>保底规则</h4>
-            <el-table :data="draft.pities" size="small">
-              <el-table-column prop="scope" label="适用稀有度" width="110"></el-table-column>
-              <el-table-column prop="type" label="类型" width="120"></el-table-column>
-              <el-table-column prop="threshold" label="阈值" width="80"></el-table-column>
-              <el-table-column prop="counter" label="计数器初始" width="110"></el-table-column>
-              <el-table-column prop="guaranteed" label="保证初始" width="100"></el-table-column>
-            </el-table>
-          </div>
-
-          <div class="form-sec">
-            <h4>Banner 生命周期</h4>
-            <el-table :data="draft.lifecycles" size="small">
-              <el-table-column prop="cond" label="条件" min-width="220"></el-table-column>
-              <el-table-column prop="act" label="动作" min-width="200"></el-table-column>
-            </el-table>
-          </div>
-
-          <div class="form-sec">
-            <h4>里程碑</h4>
-            <el-table :data="draft.milestones" size="small">
-              <el-table-column prop="threshold" label="累抽阈值" width="110"></el-table-column>
-              <el-table-column prop="repeat" label="重复" width="80"></el-table-column>
-              <el-table-column prop="max" label="上限" width="80"></el-table-column>
-              <el-table-column prop="reward" label="奖励" min-width="160"></el-table-column>
-            </el-table>
-          </div>
-
-          <div class="form-sec">
-            <h4>资源生命周期</h4>
-            <el-table :data="draft.resLife" size="small">
-              <el-table-column prop="res" label="资源" width="130"></el-table-column>
-              <el-table-column prop="expire" label="到期" min-width="190"></el-table-column>
-              <el-table-column prop="act" label="处置" min-width="240"></el-table-column>
-            </el-table>
-          </div>
-
-          <p class="tmeta">
-            这是可编辑的详情页。按 P87 §3.10，保存是可感知动作；若本配置已被数据集引用或正被任务持有，
-            保存会派生为新配置文件而不是就地覆盖，状态标签随之变成「已派生新配置」。
-          </p>
-        </div>
-
-        <div v-else-if="mode==='detail' && subjectKind==='batch'" class="detail-view">
-          <div class="page-head">
-            <h3>{{ subjectLabel }}</h3>
-            <el-tag size="small" effect="light" type="info">批次视图</el-tag>
-          </div>
-          <p class="tmeta" style="margin-top:0">
-            批次是「派生批次标记」的渲染视图（P87 §3.11 F2），不是新实体。它的详情页渲染任务记录。
-          </p>
-          <div class="form-sec">
-            <h4>任务记录</h4>
-            <table class="kv">
-              <tr><td>批次标识</td><td>{{ subject.batchTag }}</td></tr>
-              <tr><td>任务类型</td><td>{{ subject.taskType }}</td></tr>
-              <tr><td>状态</td><td>{{ subject.status }}</td></tr>
-              <tr><td>派生方式</td><td>{{ subject.derivation }}</td></tr>
-              <tr><td>产物清单</td><td>{{ subject.children.length }} 份子配置，各带一个数据集</td></tr>
-              <tr><td>进度</td><td>50 / 50 轮，已取消 0</td></tr>
-              <tr><td>耗时</td><td>18 min 42 s</td></tr>
-            </table>
-          </div>
-
-          <div class="form-sec">
-            <h4>成员（同批次即一组，视图按需折叠）</h4>
-            <el-table :data="subject.children" size="small">
-              <el-table-column prop="label" label="子配置" min-width="170"></el-table-column>
-              <el-table-column label="数据集" min-width="150">
-                <template #default="{ row }">
-                  {{ row.children && row.children.length ? row.children[0].label : '尚未产出' }}
-                </template>
-              </el-table-column>
-              <el-table-column label="样本数" width="100">
-                <template #default="{ row }">
-                  {{ row.children && row.children.length ? row.children[0].samples : '—' }}
-                </template>
-              </el-table-column>
-              <el-table-column label="可作普通分析" width="130">
-                <template #default="{ row }">
-                  <span v-if="row.children && row.children.length && row.children[0].analyzable">是</span>
-                  <span v-else class="tmeta">否（未跑流式）</span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-
-          <p class="tmeta">落在 tasks/&lt;task-id&gt;.json，与配置、数据集并列存放（P87 §3.11 F）。</p>
-        </div>
-
-        <div v-else-if="mode==='detail' && subjectKind==='dataset'" class="detail-view">
-          <div class="page-head">
-            <h3>{{ subjectLabel }}</h3>
-            <el-tag size="small" effect="light" type="info">数据集 · 只读</el-tag>
-          </div>
-          <div class="form-sec">
-            <h4>元信息</h4>
-            <table class="kv">
-              <tr><td>显示名</td><td>{{ subject.label }}</td></tr>
-              <tr><td>id（工作区内相对路径）</td><td class="tmeta">datasets/{{ subject.id }}.json</td></tr>
-              <tr><td>样本数</td><td>{{ subject.samples }}</td></tr>
-              <tr><td>流式分析</td><td>{{ subject.stream ? '已跑' : '未跑（compact 之外无明细）' }}</td></tr>
-              <tr><td>产生它的配置</td><td>{{ subject.fromConfig }}（身份 = 相对路径）</td></tr>
-              <tr><td>配置内容哈希</td><td class="tmeta">9f3ac1…（判等用，不作身份）</td></tr>
-              <tr><td>策略</td><td>smart</td></tr>
-              <tr><td>目标卡规格</td><td>雷电芽衣 ×1</td></tr>
-              <tr><td>初始资源</td><td>抽卡资源 66420 / 兑换券 250</td></tr>
-              <tr><td>池子</td><td>角色池 UP、武器池 UP、常驻池</td></tr>
-            </table>
-          </div>
-
-          <div class="form-sec">
-            <h4>运行记录（RunRecord，不参与可比性判定）</h4>
-            <table class="kv">
-              <tr><td>种子范围</td><td>42 – 42</td></tr>
-              <tr><td>模拟次数</td><td>{{ subject.samples }}</td></tr>
-              <tr><td>耗时</td><td>3.4 s（4 进程）</td></tr>
-              <tr><td>产出时间</td><td>2026-10-05 14:22</td></tr>
-            </table>
-          </div>
-
-          <div class="form-sec">
-            <h4>产出预览</h4>
-            <div class="mini"><i v-for="(h,i) in bars(subject.id)" :key="i" :style="{height:(h*100)+'%'}"></i></div>
-            <p class="tmeta" style="margin:6px 0 0">GDR 分布直方图（示意，仅用于看排版）</p>
-          </div>
-
-          <p class="tmeta">
-            数据集节点的详情页是只读的。选中它时锚点自动落在它所属的<b>一级配置节点</b>上（不会变成它自己），
-            所以它出现在锚点的数据集栏里，但不能被设为锚点，也不能对它单独套用一般分析方法。
-            {{ subject.analyzable ? '' : '本数据集不参与普通分析，原因见分析页选择器下方的排除说明。' }}
-          </p>
-        </div>
-
-        <div v-else-if="mode==='detail' && subjectKind==='compare'" class="detail-view">
-          <div class="page-head">
-            <h3>{{ subjectLabel }}</h3>
-            <el-tag size="small" effect="light" type="info">对比任务</el-tag>
-          </div>
-          <div class="form-sec">
-            <h4>比较任务</h4>
-            <table class="kv">
-              <tr><td>名称</td><td>{{ subject.label }}</td></tr>
-              <tr><td>参与数据集</td><td>{{ subject.members.join('、') }}</td></tr>
-              <tr><td>检验方法</td><td>Donald-Hsu 选择性重中心化 Bootstrap（v2）</td></tr>
-              <tr><td>重采样次数</td><td>2000</td></tr>
-              <tr><td>显著性水平</td><td>0.05</td></tr>
-              <tr><td>指标</td><td>target_achievement</td></tr>
-            </table>
-          </div>
-
-          <div class="form-sec">
-            <h4>参与数据集</h4>
-            <el-table :data="subject.members.map(m => ({ name: m }))" size="small">
-              <el-table-column prop="name" label="数据集" min-width="200"></el-table-column>
-              <el-table-column label="可作普通分析" width="130">
-                <template #default="{ row }">
-                  <span class="tmeta">按各自类型判定</span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-
-          <el-button size="small" type="primary" @click="mode='analysis'">切换到比较分析</el-button>
-          <span class="tmeta" style="margin-left:8px">也可以点右侧页面最右侧的把手整页切换</span>
-        </div>
-
-        <div v-else-if="mode==='detail' && subjectKind==='folder'" class="detail-view">
-          <div class="page-head"><h3>{{ subjectLabel }}</h3><el-tag size="small" effect="light" type="info">文件夹</el-tag></div>
-          <p class="tmeta">文件夹节点没有详情内容。</p>
-        </div>
-
-        <div v-else class="wb-empty">点击左侧工作区打开配置 / 数据集 / 批次 / 对比任务</div>
-        </div>
-       </transition>
-      </div>
-
-      <!-- 整页切换把手：浮在右侧页面最右侧之上，直角 -->
-      <div v-if="switchStyle==='edge' && canToggle" class="handle" @click="toggleMode">
-        <span class="chev">{{ mode==='analysis' ? '》' : '《' }}</span>
-        <span class="vtext">{{ mode==='analysis' ? '收起分析' : '展开分析' }}</span>
+       <!-- 展开 / 收起分析的道：整条都是入口，随轨道被推到右端或左端 -->
+       <div v-if="canToggle" class="lane"
+            :class="[mode==='analysis' ? 'at-left' : 'at-right', 'c-' + laneColor]"
+            @click="toggleMode">
+         <span class="chev">{{ mode==='analysis' ? '》' : '《' }}</span>
+         <span class="vtext">{{ mode==='analysis' ? '收起分析' : '展开分析' }}</span>
+       </div>
       </div>
     </main>
   </div>
@@ -788,11 +825,13 @@ const tasks = [
 createApp({
   setup() {
     const mode = ref('detail');              // detail | analysis | tasks
-    const switchStyle = ref('edge');         // edge | toolbar
     const subjectId = ref('cfg1');
     const subjectKind = ref('config');
     const analysisDatasetId = ref('ds1');
-    window.addEventListener('switch-style', e => { switchStyle.value = e.detail; });
+    const cfgTab = ref('cards');             // 配置详情的 tag，与 GUI 的 11 个标签页同名同序
+    const poolSubTab = ref('pool');          // 「卡池管理」下的二级 tag：池 / 生命周期
+    const laneColor = ref('mid');            // 道配色，无色系四选一
+    window.addEventListener('lane-color', e => { laneColor.value = e.detail; });
     const analysisTab = ref('overall');
     const notice = ref('');
     const expandedKeys = ref(['root', 'cfg1']);   // batch1 默认折叠
@@ -820,6 +859,44 @@ createApp({
       ],
       resLife: [
         { res: '限时兑换券', expire: '随「武器池 UP」下架', act: 'convert_to 抽卡资源（每 1 换 160）' },
+      ],
+      cards: [
+        { id: 'yayi', name: '雷电芽衣', rarity: 'ssr', tags: '角色 / 雷', pools: '角色池 UP' },
+        { id: 'kiana', name: '琪亚娜', rarity: 'ssr', tags: '角色 / 火', pools: '常驻池' },
+        { id: 'sword1', name: '雷刀·芽衣', rarity: 'ssr', tags: '武器 / 太刀', pools: '武器池 UP' },
+        { id: 'mat1', name: '合成玉', rarity: 'sr', tags: '材料', pools: '全部' },
+      ],
+      resDefs: [
+        { id: 'draw_resource', name: '抽卡资源', kind: '货币', init: '66420' },
+        { id: 'exchange_currency', name: '兑换券', kind: '货币', init: '250' },
+        { id: 'voucher_pick', name: '自选券', kind: '券', init: '0' },
+      ],
+      resGains: [
+        { res: '抽卡资源', mode: 'every_n_days', amount: '60', every: '1 天' },
+        { res: '兑换券', mode: 'weekly', amount: '5', every: '7 天' },
+      ],
+      strategyCfg: [
+        { key: 'primary_priority', val: '限定角色 > 武器' },
+        { key: 'reserve_for_future', val: 'true（预留 1 个保底）' },
+        { key: 'stop_when_target_met', val: 'true' },
+      ],
+      stopCond: [
+        { type: 'resources_exhausted', params: '抽卡资源 = 0' },
+        { type: 'target_achieved', params: '雷电芽衣 ≥ 1' },
+        { type: 'max_days', params: '120 天' },
+      ],
+      targets: [
+        { card: '雷电芽衣', count: '1', gdr: 'target_achievement' },
+      ],
+      weights: [
+        { rarity: 'ssr', weight: '1.0' },
+        { rarity: 'sr', weight: '0.3' },
+        { rarity: 'r', weight: '0.0' },
+      ],
+      overflows: [
+        { card: '雷电芽衣', band: '第 2 张起', to: '抽卡资源 ×10' },
+        { card: '雷电芽衣', band: '第 4 张起', to: '兑换券 ×5' },
+        { card: '（稀有度默认）sr', band: '第 2 张起', to: '抽卡资源 ×3' },
       ],
     });
     const nodeState = ref({ text: '已冻结（跑过即不可就地覆盖）', tagType: 'warning',
@@ -950,9 +1027,6 @@ createApp({
         return '配置未保存，按 P87 §3.10 不能派发模拟';
       return '';
     });
-    const pageKey = computed(() => mode.value + ':' + subjectKind.value);
-    // 只有分析页从右侧滑入；返回详情等其它切换只淡入，避免整页滑动与浮动把手打架
-    const enterAnim = computed(() => (mode.value === 'analysis' ? 'slide' : 'fade'));
     // 比较分析页签与一般分析页签同构但不同集；切主体时把页签拉回该集的第一项
     const activeCategories = computed(() =>
       subjectKind.value === 'compare' ? compareCategories : categories);
@@ -1014,11 +1088,11 @@ createApp({
     }
 
     return {
-      mode, switchStyle, subjectId, subjectKind, anchorId, analysisDatasetId, analysisTab,
+      mode, subjectId, subjectKind, anchorId, analysisDatasetId, analysisTab,
       notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
-      canToggle, canRun, runDisabledReason, pageKey, enterAnim, activeCategories,
+      canToggle, canRun, runDisabledReason, laneColor, cfgTab, poolSubTab, activeCategories,
       onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim, saveDraft,
       typeColor, itemRunnable, itemReason, bars, linePoints,
     };
@@ -1029,25 +1103,31 @@ createApp({
 <!-- 探针自身的对照开关：不属于方案，只为裁决「切换控件放哪」 -->
 <div style="position:fixed;right:14px;bottom:14px;z-index:20;background:#fff;border:1px solid var(--line);
             border-radius:6px;padding:8px 12px;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,.08)">
-  <b style="color:var(--ink-2)">对照：切换分析/详情的控件放哪</b>
+  <b style="color:var(--ink-2)">道的配色（全部无色系，颜色留给语义）</b>
   <div id="sw" style="margin-top:6px;display:flex;gap:6px"></div>
 </div>
 <script>
 (function () {
-  const opts = [['edge', '右侧页面最右的把手（默认）'], ['toolbar', '工具栏按钮']];
+  const opts = [
+    ['light', '浅灰 #eef1f5'],
+    ['mid', '中灰 #d7dce3'],
+    ['graphite', '石墨 #3f4654'],
+    ['slate', '蓝灰 #64748b'],
+  ];
   const host = document.getElementById('sw');
-  opts.forEach(([k, label]) => {
+  opts.forEach(([k, label], idx) => {
     const b = document.createElement('button');
-    b.textContent = label; b.dataset.k = k;
-    b.style.cssText = 'border:1px solid var(--line-strong);background:#fff;border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;font-size:11px';
+    b.textContent = label;
+    b.style.cssText = 'border:1px solid var(--line-strong);background:#fff;border-radius:4px;'
+      + 'padding:3px 8px;cursor:pointer;font:inherit;font-size:11px';
+    if (idx === 1) b.style.background = '#e8f1fb';
     b.onclick = () => {
       [...host.children].forEach(x => x.style.background = '#fff');
       b.style.background = '#e8f1fb';
-      window.dispatchEvent(new CustomEvent('switch-style', { detail: k }));
+      window.dispatchEvent(new CustomEvent('lane-color', { detail: k }));
     };
     host.appendChild(b);
   });
-  host.children[0].click();
 })();
 </script>
 </body>

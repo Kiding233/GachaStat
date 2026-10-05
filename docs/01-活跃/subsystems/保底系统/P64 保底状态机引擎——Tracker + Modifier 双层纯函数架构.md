@@ -784,6 +784,13 @@ def _target_of(pdef) -> str:
 加组 = T          减组 = U \ T          不变集 = 全池 \ U
 ```
 
+> **三元组是「加/减/不变」的受限特例（2026-10-05 补，强制阅读）**：上式的「减组 = U\T」**多带一条约束**：减组内部**等比缩放**（`share` 下 U\T 的所有成员共用同一个因子 `(1−r)·p(U)/(p(U)−p(T))`）。因此：
+>
+> - **能表达**：「加组 T，减组 = 某个集合 Q，Q 内等比」，取 `U = T ∪ Q` 即可（你说的「一部分加、一部分不变」也在此列：不进 U 的卡就是不变集）
+> - **不能表达**：「加组 T，减组 Q 内**分档**」，例如「从 SR 抽 30%、从 R 抽 10%」。`r` 是单一标量，无法给 Q 的不同子集不同比例
+>
+> 当前 8 个机制**全部落在可表达范围内**（§3.1.5.2.3），故三元组够用。需要分档时须拆成多个 `share`（若各档的目标相同、只比例不同，两个 `share` 复合即可；若还要让某些卡只进一次，则须另立运算）。**不要把「源组 = U\T」当成普遍定律**，它是本表示的约定而非机制领域的性质。
+
 **解析器而非静态集合（强制）**：`u_of` / `t_of` 必须是**可调用对象**。G3 的目标集依赖 `ctx.external.owns(c)`，每抽才知道；若是静态元组，G3 无法表达。构造期常量集合写成返回常量的 lambda 即可。计划中既有的 `_target_of(pdef)`（§3.2 取值来源表）就是 `t_of` 的第一个实例。
 
 ##### 3.1.5.2.1 两个运算
@@ -797,6 +804,8 @@ def _target_of(pdef) -> str:
 | **`identity`** | 不动 | 空（`None`） | 是 |
 
 **统一写法**：一切因子都是 `m_c = 该卡的目标值 / 该卡当前值`。`share` 的目标值正比于当前值（故因子在组内是常数），`assign` 的目标值是绝对量（故因子逐卡不同）。两者同形，差别只在目标值怎么来。**不要再按「算子名」分派，按「目标值怎么算」分派。**
+
+> **`assign` 的输出与输入分布无关（2026-10-05 实测确认，可交换性判据的基础）**：`assign` 的目标值取自 `base_probabilities`（基础分布），不读当前 `dist`。故 `[X, assign] ≡ assign 的输出`，而 `[assign, X] ≡ X 作用于 assign 的输出`。据此可得一条判据：**`X` 与 `assign` 可交换 ⟺ `X` 在「`assign` 的输出」这个分布上恒等**。实测验证与逐条验算见 §3.1.5.5。
 
 > **`assign` 的因子必须除以当前值（本轮修正的第一处实现错误）**：旧实现写的目标值是「T 按基础权重归一」（`w_c / Σ_T w`）。直接把它当因子（即 §3.9.4 原稿的 `factor_override` 写 `w.get(c, 0.0)`）得到的是目标值 `∝ w_c·p_c`，会把组内比例**平方放大**：基础 3:1 会变成 9:1。正确写法是 `(w_c' / Σ_T w') / p_c`。
 
@@ -889,12 +898,12 @@ U 由**机制性质**决定，不是约定。当前 8 个机制恰好落在两�
 
 | 类型 | 例子 | 性质 |
 |------|------|------|
-| **约束冲突（语义）** | 同一 U 上同时出现 `share` 与 `assign`（如 soft 与 hard 共存） | 两个算子对同一 U 的约束无法同时满足，顺序即裁决方式。**这是语义正确的表现**，不是缺陷。`assign` 是**写入**：它把 `U \ T` 置零，故任何**同 U** 的 `share` 若排在它之后，源集已空、退化为恒等，复合结果恒等于该 `assign`。**U 不同时结论不成立**（见 §3.1.5.5 推论表） |
+| **约束冲突（语义）** | `assign` 与「在 `assign` 输出上非恒等」的算子共存（如 `hard` 与 guaranteed 分支的 `rotating`） | **这是语义正确的表现**，不是缺陷。`assign` 是**写入**且输出与输入分布无关，故 `[X, hard] ≡ hard 的输出`，而 `[hard, X] ≡ X 作用于 hard 的输出`；两者相等**当且仅当 X 在 hard 的输出上恒等**。**不是「同 U 才行」**：`soft(tf=False)` 与 `hard` 同 U 且可交换，`rotating`（非 guaranteed）与 `hard` 异 U 也可交换，而 `rotating`（guaranteed）与 `hard` 异 U **不可**交换。完整判据与逐条验算见 §3.1.5.5 |
 | **随机数消费（实现）** | 含 `rotating_cr` 的配置 | 因子本身可交换，但掷骰消费全局 `random`，换序导致随机流错位。数学上若随机源独立则无影响，它只影响固定种子下的可复现性与样本路径。**这是实现绑定的副作用**。裁决 6B 把掷骰从 Modifier 移入 Tracker 后，本条**保留但降级**：Tracker 的 `commit` 同样按行为顺序逐个调用，换序仍会移动消费位置，**B 方案只把它从 Modifier 层搬到 Tracker 层，并未消除** |
 
 > **原「`soft(target_featured=True)` + `hard`」这一反例已不可构造（裁决 7B）**：`soft_*` 类型出现 `target_featured = true` 时按 §3.2 的取值来源表抛 `ConfigError`。其位置由「同 U 的 `share` 与 `assign` 共存」取代。P82 的修正结论「含 `rotating_cr`，或 `target_featured=True` 的 soft 与 hard 共存的配置会变」随之收窄为「**含 `rotating_cr` 的配置会变**」。<!-- REVIEW-R1-FIX: RULING-7B -->
 
-对第一类，正规处置是**显式定义组合语义**（当前为顺序执行 + §1.5 裁决的 `priority` 覆盖），而非消除敏感。另有一种理论上可行的替代语义是**约束求解**（把每个保底写成对分布的约束，求解满足全部约束的分布），它能彻底消除顺序敏感且冲突时较严约束自然胜出。
+对第一类，正规处置是**显式定义组合语义**（当前为顺序执行 + §1.5 裁决的 `priority` 覆盖），而非消除敏感。**2026-10-05 实测后补充**：第一类不是「同 U 才发生」，判据是「X 在 `assign` 的输出上是否恒等」，与 U 是否相同无关（§3.1.5.5）。另有一种理论上可行的替代语义是**约束求解**（把每个保底写成对分布的约束，求解满足全部约束的分布），它能彻底消除顺序敏感且冲突时较严约束自然胜出。
 
 **约束化本身的成本比原稿记的低（2026-10-05 复核）**：3.1.5.2 的 `share` 形式**恰好就是约束形式**（`Σ_{c∈T} p_c = r · Σ_{c∈U} p_c`），故 6 个 `share` 机制天然可写成约束，无须改造。原稿称「带随机拦截的 `rotating_cr` 写不了」，实际是**可写但需线性组合**：CR 的每抽分布是混合 `ω · share(r=1) + (1−ω) · share(r_base)`，转约束要引入混合权重。真正的阻碍是另外两处：① `assign` 是绝对赋值而非齐次约束，写成约束要引入常数项；② 求解远比顺序应用昂贵。当前采用顺序执行是工程上的取舍，若日后要改，须先解决 ①。
 
@@ -947,17 +956,48 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 |------|-------|------|
 | soft + soft（同 scope） | 是 | 裁决 7B 后同 scope 的两条 soft 目标集必为 scope（不再有「异目标集」这一形态），退化为同一 U 同一 T 的两个 `share`：源集团子为常数 `1−β`，相乘可交换；复合等价于 `share` 取 `r = 1 − (1−r₁)(1−r₂)` |
 | soft + soft（异 scope） | 是 | 低稀有度算子的源集与目标集都落在高稀有度算子的源集之内 |
-| **soft + hard（同 scope）** | **是（新结论，2026-10-05）** | soft 与 hard 的 U 相同（全池减更高稀有度）、T 相同（`scope_cards[scope]`）。hard 是 `assign`：把 `U \ T` 置零，而 soft 的源集**恰为** `U \ T`，被置零后 soft 退化为恒等，故复合恒等于 hard 的结果，两种顺序同值。原「否」的结论建立在 `soft(target_featured=True)` 上，该配置按裁决 7B 已不可构造（§3.2 取值来源表）。**须实测确认**，列入 §六 必测清单 |
-| **hard + rotating / targeted（U 不同）** | **否（待实测）** | `assign` 把 scope 外置零后，scope 内总量变为 1.0，此后 scope 内的 `share` 不再退化为恒等，仍会重新分配 scope 内部。**该组合尚无可交换性的实测证据，列入 §六 必测清单** |
+| **soft(tf=False) + hard（同 scope）** | **是（2026-10-05 实测）** | 见下方「判据」专段。实测：`soft(start=2) + hard(threshold=6)` 逐抽 1..15 无反例 |
+| **hard + rotating（rotating 处于非 guaranteed 分支）** | **是（2026-10-05 实测）** | 该分支的 r = `p(S_f)/p(S_c)` 即当前份额，`share` 退化为恒等，**在任何分布上都是恒等**，故与 `hard` 可交换 |
+| **hard + rotating（rotating 处于 guaranteed 分支）** | **否（2026-10-05 实测）** | r = 1，非恒等。实测 `hard(threshold=5)` + `rotating`（第 1 抽中非 UP 的 SSR 置 guaranteed）：**抽 6 起分歧**，`[hard, rot]` = `{ssr: 0, ssr_featured: 1.0}`，`[rot, hard]` = `{ssr: 0.5556, ssr_featured: 0.4444}`。**裁决 7B 未消除本条**，它是 7B 之后唯一剩下的代数型反例 |
 | 含 `rotating_cr` 的组合 | 否 | 非代数问题：因子本身可交换，但掷骰消费全局 `random`，换序导致 ω 消费位置改变、样本路径分叉。裁决 6B 后掷骰移入 Tracker，Tracker 的 `commit` 同样按行为顺序调用，**本条结论不变** |
 
-**原反例实测的处置（2026-09-16 记录，2026-10-05 失效）**：原记录为 soft(`target_featured=True`，deltas 使第 6 抽起 boost) + hard(threshold=8)，两种 `pity_names` 顺序在第 8..12 抽出现分歧（`[soft, hard]` 得 `{'ssr': 0.5, 'ssr_featured': 0.5}`、`[hard, soft]` 得 `{'ssr': 0.2, 'ssr_featured': 0.8}`）。
+**判据（2026-10-05 实测归纳，取代原「逐类猜测」）**：
 
-**该配置按裁决 7B 已不可构造**（`soft_*` 带 `target_featured = true` 抛 `ConfigError`），故原表第 4 行的「否」不再有实例。记录的实测数据保留在此供对照，但**不得再作为判据引用**。<!-- REVIEW-R1-FIX: RULING-7B -->
+`hard`（`assign`）的输出**与输入分布无关**：它只读 `ctx.draw.base_probabilities`，把 U\T 置零、T 写成基础权重归一（`HardPityBehavior._compute_probabilities`，[pity.py:374-390](gacha_simulator/core/pity.py#L374-L390)，`result[s] = w / total_weight` 里的 `w` 取自 `base_probabilities` 而非 `ctx.current`）。故：
 
-**故 P82 的结论「仅含 `rotating_cr` 的配置会变」在 2026-09-21 曾修正为「含 `rotating_cr`，或 `target_featured=True` 的 soft 与 hard 共存的配置会变」；2026-10-05 起收窄回「含 `rotating_cr` 的配置会变」，并新增两条待实测：`soft + hard`（同 scope，预期可交换）与 `hard + rotating/targeted`（异 U，预期不可交换）。**
+```
+[X, hard]  ≡  hard 的输出                        （X 被 hard 覆盖）
+[hard, X]  ≡  X 作用在 hard 的输出上
+⟹  X 与 hard 可交换  ⟺  X 在「hard 的输出」这个分布上表现为恒等
+```
 
-**原引理 2.3 的处置**：原版引理 2.3 称「在当前槽位结构下，参数取『保持当前比例』的 `R` 是恒等映射，原因是单槽位使组内重写退化」。乘法版下该引理**不再需要**：`R_r(T)` 的因子在 T 内是常数、在 `S\T` 内也是常数，当 r 取「当前比例」时两个常数均为 1，恒等性直接由因子读出，无须借助槽位结构。
+**逐条验算**（全部与实测吻合）：
+
+| X | X 在 hard 输出上是否恒等 | 依据 |
+|---|------------------------|------|
+| `soft(tf=False)` | 是 | hard 输出里 U\T 全为 0，而 soft 的源集恰为 U\T，`pool = 0` → 早退（[pity.py:299-300](gacha_simulator/core/pity.py#L299-L300)） |
+| `rotating`（非 guaranteed） | 是 | r = 当前份额，恒等（对任意分布成立） |
+| `rotating`（guaranteed） | **否** | r = 1，把 scope 总量全给 featured |
+| `soft(tf=True)` | **否** | hard 输出里 ssr（非 UP 的 SSR）= 0.5556，落在 soft 的源集内（源集 = 除目标与更高稀有度外的全体） |
+| `targeted`（无 `selected_card`） | 是 | 目标集为空 → 恒等。**注**：2026-10-05 的探针未注入 `selected_card`，故实测到的「可交换」**不构成对 targeted 有效分支的结论**，须补测 |
+
+**原引理 2.2 的处置**：原版那条「源集包含 + 统一缩放 + 固定权重再分配」的充分条件描述的是槽位级算子，在卡级 `share`/`assign` 下不再需要，上面的判据一行即可替代。
+
+**原反例的复核（2026-10-05 重跑，条件与记录一致）**：原记录为 soft(`target_featured=True`，deltas 使第 6 抽起 boost) + hard(threshold=8)，两种 `pity_names` 顺序在第 8..12 抽出现分歧。**2026-10-05 用 `soft(start=2) + hard(threshold=6)` 独立重跑，得同一结论：抽 6..15 顺序敏感**（`[soft, hard]` 与 `[hard, soft]` 的 SSR 内部比例不同）。原记录**属实，不是误记**。
+
+**该配置按裁决 7B 已不可构造**（`soft_*` 带 `target_featured = true` 抛 `ConfigError`），故这一条反例被消除。但**裁决 7B 并未消除全部代数型顺序敏感**，「`hard + rotating`（guaranteed 分支）」仍不可交换（见上表第 5 行），它是 7B 之后剩下的那一条。<!-- REVIEW-R1-FIX: RULING-7B -->
+
+**P82 结论的最终形态（2026-10-05）**：
+
+| 时点 | 结论 |
+|------|------|
+| 原始（P82） | 仅含 `rotating_cr` 的配置会变 |
+| 2026-09-21 修正 | 含 `rotating_cr`，**或** `target_featured=True` 的 soft 与 hard 共存 |
+| **2026-10-05 终版** | 含 `rotating_cr`，**或** `hard` 与「在 `hard` 输出上非恒等」的算子共存（当前实例：`rotating` 处于 guaranteed 分支）。原 `soft(tf=True) + hard` 一例因裁决 7B 消除 |
+
+**本条的时点敏感须注意**：2026-10-05 的上一版计划曾把结论写成「收窄回『含 `rotating_cr` 的配置会变』」，那是在 `hard + rotating` **尚未实测**时的推断；实测证明该推断不成立（见「判据」专段）。
+
+**原引理 2.3 的处置**：原版引理 2.3 称「在当前槽位结构下，参数取『保持当前比例』的 `R` 是恒等映射，原因是单槽位使组内重写退化」。乘法版下该引理**不再需要**：`share` 的因子在 T 内是常数、在 U\T 内也是常数，当 r 取「当前比例」时两个常数均为 1，恒等性直接由因子读出，无须借助槽位结构。**本节的判据表正是该性质的推广**（`rotating` 非 guaranteed 分支即「r = 当前份额」这一特例）。
 
 #### 3.1.5.6 未覆盖（边界）
 
@@ -2428,7 +2468,9 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 <!-- REVIEW-FIX-PREV: ISSUE-006 -->
 - [ ] **S8 边界断言（ISSUE-016）**：`scope` 键缺失（无 featured 卡的稀有度、新增标准池）时保底返回恒等而非抛 `KeyError`；`scope_cards` / `featured_cards` 一律经 `.get(scope, ())` 消费
 - [ ] **S8 空目标集断言（2026-10-05 补，强制）**：`factor_redistribute` / `factor_override` 在 `target_cards == ()` 时**返回 `None`（恒等）**，**不得返回零因子向量**。反例（改前形态）：`factor_redistribute(dist, ('ssr_featured','ssr'), (), 1.0)` 返回 `{'ssr_featured': 0.0, 'ssr': 0.0}`，归一化后全 scope 归零。触发路径：`rotating` 绑定到无 featured 卡的池。断言须**同时**覆盖两个原语（§3.9.4.1 / §3.9.4.2 的守卫）
-- [ ] **S8 可交换性必测组合（2026-10-05 补）**：§3.1.5.5 推论表新增的两行**必须实测**——① `soft + hard`（同 scope，同 U 同 T）**预期可交换**；② `hard + rotating` / `hard + targeted`（U 不同）**预期不可交换**。第 ① 条若实测为「否」，说明 `assign` 的 U 构建有误（应恰为 `全池减更高`，与 soft 逐卡相同）
+- [x] **可交换性实测（2026-10-05 完成，脚本形态见 §3.1.5.5）**：对**旧类**（`pity.py` 现行实现）逐抽扫描，结论四条：① `soft(tf=False) + hard` **可交换**；② `hard + rotating`（rotating 非 guaranteed）**可交换**；③ `hard + rotating`（rotating **guaranteed**）**不可交换**（抽 6 起分歧）；④ `soft(tf=True) + hard` **不可交换**（该配置按裁决 7B 已不可构造，反例随之消除）。归纳判据见 §3.1.5.5 的「判据」专段（`X` 与 `hard` 可交换 ⟺ `X` 在 `hard` 的输出上恒等）
+- [ ] **S8 可交换性复测（M2 口径，未完成）**：上条测的是**旧类**。S8 落地后须对**新骨架 + 卡级管道**复测同样四组，确认判据在卡级下同样成立。**关键差异面**：旧类的 `hard` 在槽位级取 `base_probabilities`，卡级下若取自 `DrawInfo.base_probabilities` 而该字段语义已由槽位级改为卡级（§3.9.3 的 `DrawInfo.base_probabilities` 行），须确认归一化后仍与旧产物一致
+- [ ] **`targeted` 的有效分支补测（2026-10-05 遗留）**：2026-10-05 的探针**未注入 `selected_card`**，故 `targeted` 全程走空目标集（恒等），实测到的「可交换」**不构成结论**。须在注入 `selected_card`（策略层 `NonDrawAction` 写入）后重测 `hard + targeted`，覆盖 `guaranteed` 与 `fate_ready` 两条非恒等分支
 - [ ] **S8 差异归因清单（ISSUE-012 / ISSUE-006）**：S8 与 S5 产物的对比口径为**归一化后分布**；下列两处的差异**允许存在**并须逐一登记，不得当作回归——
   （a）`⟨m,p⟩ ≠ 1` 的配置（`hard` 的 scope 低于最高稀有度）：S5 输出 Σ = 1.009、S8 输出 Σ = 1，管道内可见绝对值改变（抽样分布因 `pool.draw` 的 `_adjusted_total_weight` 隐含归一化可能不变，见 §3.9.5）；**连带的观测面变更（ISSUE-903）**：`core/invariants.py` 的分布层归一性判据须同批从 scope 感知式改为恒等断言 `Σp = 1`，`tests/core/test_pity_invariant_checker.py` 的正例期望值随之更新（S8-6 ⑤）；<!-- REVIEW-R1-FIX: ISSUE-903 -->
   （b）`worst_impact` 的卡集合对齐改造（§3.9.3 专项）会改变最差影响分析数值

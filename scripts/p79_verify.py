@@ -63,6 +63,13 @@ GLOBAL_ALLOWED = {'iterations', 'warnings', 'result_version'}
 SKIP_FIELDS = {'generated_at'}
 # 整组豁免的策略（1c 修复了其时间冻结失效形态，全字段按白名单变化）
 EXEMPT_STRATEGIES = {'fixed_count', 'stop_on_target'}
+# 因 soft 语义修正而整组豁免的策略（2026-10-06，§3.4.1）
+#   `SoftStepBehavior` 的转移量由「源组的 x%」改为「目标组 +x 个百分点」，
+#   且 `_expand_soft_to_deltas` 的首段由 start 改为 start-1。凡配置里带 soft 保底
+#   且抽数覆盖加成区间的策略，其逐抽序列与汇总字段都会变。
+#   与上面 EXEMPT_STRATEGIES 的区别：那三组是**时间冻结失效形态**的修复，
+#   这三组是**保底概率模型**的修正，故分列两集、各自记录理由。
+SOFT_SEMANTICS_EXEMPT = {'smart', 'pool_quota', 'draw_target'}
 
 
 def snapshot_name(strategy_key: str) -> str:
@@ -105,6 +112,15 @@ def main():
 
         diff = {k for k in set(baseline) | set(current)
                 if k not in SKIP_FIELDS and baseline.get(k) != current.get(k)}
+
+        if key in SOFT_SEMANTICS_EXEMPT:
+            ok = current['final_time'] == env.end_time
+            note = (f'final_time={current["final_time"]:.0f}（== end_time ✓）'
+                    if ok else f'final_time={current["final_time"]:.0f} != end_time ✗')
+            print(f'  {"OK  " if ok else "FAIL"} {key:26s} soft 语义豁免（{len(diff)} 字段变化）；{note}')
+            if not ok:
+                failures.append((key, ['final_time 未收敛到 env.end_time']))
+            continue
 
         if key in EXEMPT_STRATEGIES:
             # 整组豁免，但新值必须是「有意变更」描述的那个

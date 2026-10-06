@@ -303,24 +303,17 @@ class SoftStepBehavior(CounterBasedBehavior):
         if pool <= 0:
             return result
 
-        # 4. 重分配：非目标 → 目标（按基础权重比例分配）
-        steal = pool * boost_pct / 100.0
-        ratio = 1.0 - boost_pct / 100.0
-
+        # 4. 重分配：从 non_target 取 t 给 target（t 为百分点绝对量，§3.4.1 修正 ①）
+        t = min(boost_pct / 100.0, pool)
+        target_total = sum(result.get(s, 0.0) for s in target_slots)
+        if target_total <= 0:
+            return result          # 目标组当前无概率，不转移
+        k_t = (target_total + t) / target_total
+        k_q = (pool - t) / pool
+        for s in target_slots:
+            result[s] = result.get(s, 0.0) * k_t
         for s in non_target:
-            result[s] = result.get(s, 0.0) * ratio
-
-        # 按目标槽位的基础权重比例分配（非均分——均分会破坏 SSR 内部 featured/standard 比例）
-        target_weights = [ctx.draw.base_probabilities.get(s, 0.0) for s in target_slots]
-        total_weight = sum(target_weights)
-        if total_weight > 0:
-            for s, w in zip(target_slots, target_weights):
-                result[s] = result.get(s, 0.0) + steal * w / total_weight
-        else:
-            # 兜底：所有槽位基础权重为 0 时退化为均分
-            per_target = steal / len(target_slots)
-            for s in target_slots:
-                result[s] = result.get(s, 0.0) + per_target
+            result[s] = result.get(s, 0.0) * k_q
 
         return result
 

@@ -1588,7 +1588,7 @@ def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linea
             e = s + 1
         n_steps = e - s
         inc = 100.0 / n_steps
-        return ((s, 0.0), (n_steps, round(inc, 6)))
+        return ((max(0, s - 1), 0.0), (n_steps, round(inc, 6)))
 
     if btype == 'soft_additive':
         s = int(start) if start is not None else 0
@@ -1598,7 +1598,7 @@ def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linea
             n_steps = int(100.0 / inc) + 1
         else:
             n_steps = 1
-        return ((s, 0.0), (n_steps, inc))
+        return ((max(0, s - 1), 0.0), (n_steps, inc))
 
     # func 参数在 P55 后不再支持——仅 linear
     return ()
@@ -1641,7 +1641,7 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     n2, inc2 = deltas[1]
     if inc1 != 0.0:
         return None  # 首段增量非零——非 soft_interval 模式
-    return (n1, n1 + n2)
+    return (n1 + 1, n1 + n2 + 1)
 
 
 def _pitydef_to_toml(p) -> dict:

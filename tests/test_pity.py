@@ -28,8 +28,9 @@ class TestSoftStepProgress:
     def test_boost_zero_below_start(self):
         """counter < start → boost=0"""
         bh = self._make_soft_behavior(73, 90)
+        # §3.4.1 修正 ②：首段为 start-1 = 72，故第 73 抽即加成
         assert bh._cumulative_boost(72) == 0.0
-        assert bh._cumulative_boost(73) == 0.0  # first step is (73, 0.0)
+        assert bh._cumulative_boost(73) > 0.0
 
     def test_boost_increases_after_start(self):
         """counter 进入增量段后 boost 递增"""

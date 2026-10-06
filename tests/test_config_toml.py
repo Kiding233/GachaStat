@@ -21,29 +21,31 @@ class TestExpandSoftToDeltas:
     """soft_interval / soft_additive 语法糖 → deltas"""
 
     def test_soft_interval_linear(self):
-        """start=73, end=90 → ((73, 0.0), (17, 5.882353...))"""
+        """start=73, end=90 → ((72, 0.0), (17, 5.882353...))
+
+        首段为 start-1（§3.4.1 修正 ②）：第 73 抽即加成，而非第 74 抽。"""
         result = _expand_soft_to_deltas('soft_interval', 73, 90, None)
         assert len(result) == 2
-        assert result[0] == (73, 0.0)
+        assert result[0] == (72, 0.0)
         assert result[1][0] == 17  # 17 抽
         assert pytest.approx(result[1][1], abs=1e-4) == 100.0 / 17
 
     def test_soft_interval_start_zero(self):
         """start=0, end=10 → ((0, 0.0), (10, 10.0))"""
         result = _expand_soft_to_deltas('soft_interval', 0, 10, None)
-        assert result[0] == (0, 0.0)
+        assert result[0] == (0, 0.0)   # start=0 → max(0, -1) = 0
         assert result[1][0] == 10
 
     def test_soft_interval_end_equals_start(self):
         """end <= start → 防御性修正为 start+1"""
         result = _expand_soft_to_deltas('soft_interval', 90, 90, None)
-        assert result[0] == (90, 0.0)
+        assert result[0] == (89, 0.0)
         assert result[1][0] == 1  # 修正为 1
 
     def test_soft_additive(self):
         """start=74, increment=6.0 → ((74, 0.0), (N, 6.0))"""
         result = _expand_soft_to_deltas('soft_additive', 74, None, 6.0)
-        assert result[0] == (74, 0.0)
+        assert result[0] == (73, 0.0)
         assert result[1][1] == 6.0
         # 达到 100% 需要的抽数 = ceil(100/6) + 1 = 17
         assert result[1][0] > 0
@@ -51,7 +53,7 @@ class TestExpandSoftToDeltas:
     def test_soft_additive_zero_increment(self):
         """increment=0.0 → 退化为 1 段（无增长）"""
         result = _expand_soft_to_deltas('soft_additive', 10, None, 0.0)
-        assert result[0] == (10, 0.0)
+        assert result[0] == (9, 0.0)
         # increment=0.0 → 不计增长段
         assert result[1][1] == 0.0
 

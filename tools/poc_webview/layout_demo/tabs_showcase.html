@@ -182,7 +182,53 @@ body{
 .sk-top{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;
   border-bottom:1px solid var(--line2)}
 .sk-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.sk-note{color:var(--muted);font-size:11px;line-height:1.6;margin:8px 0 0}
+/* ── C 段：基于 8（card 式）的变体。8 的问题：tab 间 gap 3px + 各自左右边框，间隔显大 ── */
+.c .row{padding-top:5px}
+.c .tab{
+  display:inline-flex;align-items:center;gap:6px;
+  border:1px solid var(--line);border-bottom:0;background:var(--result);
+  border-radius:2px 2px 0 0;margin-bottom:-1px;
+}
+.c .tab.on{background:var(--panel);color:var(--ink);font-weight:600;border-bottom-color:var(--panel)}
+.c .pane{border-top:1px solid var(--line)}
+/* 收紧：相邻共边（负外边距吃掉重复边框），内边距收小 */
+.c .row.tight{gap:0;padding:5px 8px 0}
+.c .row.tight .tab{padding:5px 10px;margin-right:-1px}
+.c .row.tight .tab:last-child{margin-right:0}
+/* 标记 */
+.mk{flex:0 0 auto;background:var(--faint);opacity:.55}
+.mk.sq{width:6px;height:6px;border-radius:1px}
+.mk.cir{width:7px;height:7px;border-radius:50%}
+.mk.tri{width:0;height:0;background:transparent;opacity:1;
+  border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:7px solid var(--faint)}
+.mk.bar{width:3px;height:13px;border-radius:0}
+.mk.ico{width:12px;height:12px;background:transparent;opacity:1;display:inline-flex}
+.mk.ico svg{width:12px;height:12px;stroke:var(--faint);fill:none;stroke-width:1.6}
+/* 分组：同灰不同形状，与树上「按类型分形状」的语言一致，不动用语义色 */
+.c5 .tab.on .mk,.c .tab.on .mk{opacity:.9}
+
+/* ── C6：卡片外形但去掉边框，靠底色深浅 ── */
+.c6 .row.tight .tab{border-color:transparent;background:var(--bg)}
+.c6 .row.tight .tab.on{background:var(--panel);box-shadow:-1px 0 0 var(--line2),1px 0 0 var(--line2),0 -1px 0 var(--line2)}
+.c6 .pane{border-top:1px solid var(--line)}
+
+/* ── D 段：右侧可折叠时间线预览栏 ── */
+.wide{grid-column:1/-1}
+.rail-demo{display:flex;gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.rail-main{flex:1;min-width:0;background:var(--panel);padding:10px 12px}
+.rail-side{flex:0 0 300px;border-left:1px solid var(--line);background:var(--panel);
+  display:flex;flex-direction:column}
+.rail-side-head{display:flex;align-items:center;gap:8px;padding:6px 10px;
+  background:var(--header);border-bottom:1px solid var(--line);font-weight:600;font-size:12px}
+.rail-side-body{padding:10px;display:flex;flex-direction:column;gap:10px}
+.rail-block{border:1px solid var(--line2);border-radius:var(--radius);padding:8px}
+.rail-block b{font-size:11px;color:var(--muted);font-weight:400}
+.rail-collapsed{flex:0 0 30px;background:#eef1f5;border-left:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5a6272}
+.rail-collapsed .vtext{writing-mode:vertical-rl;line-height:1;font-size:12px;letter-spacing:5px}
+.rail-note{color:var(--muted);font-size:11px;line-height:1.6;margin:8px 0 0}
+.formish{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:8px}
+.formish div{border-bottom:1px solid var(--line3);padding-bottom:5px;color:var(--muted);font-size:11px}
 </style>
 </head>
 <body>
@@ -490,8 +536,176 @@ body{
       </div>
     </div>
   </section>
+  <!-- C 段：基于 8 的变体 -->
+  <section class="v wide" style="background:#fbfcfd">
+    <div class="v-head" style="background:#f2f5f8">
+      <b>C 段 · 基于 8（card 式）的六个变体</b>
+      <p>8 的 tag 间间隔显大，原因是 <code>gap:3px</code> 加上每个 tag 各自的左右边框，等于两条边框中间夹一条空缝。
+      C 段统一先把间距收紧（相邻 tag 共边，用负外边距吃掉重复的那一条），再逐项试「文字左边加点东西」。
+      标记全部用同一档灰，不占用语义色。</p>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>C1 · 只收紧间距</b>
+      <p>不动 8 的任何造型，只把 tag 相邻共边、内边距从 11px 收到 10px。先看间距这一项本身能补回多少。</p></div>
+    <div class="v-body">
+      <div class="demo plain c">
+        <div class="row tight"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>C2 · 收紧 + 统一小方块</b>
+      <p>每个 tag 左侧一个同样的小方块。它不带信息，纯粹给眼睛一个锚点，让一排文字读起来是「若干项」而不是「一句话」。</p></div>
+    <div class="v-body">
+      <div class="demo plain c">
+        <div class="row tight"><button class="tab on"><span class="mk sq"></span>卡牌定义</button><button class="tab"><span class="mk sq"></span>资源定义</button><button class="tab"><span class="mk sq"></span>资源获取</button><button class="tab"><span class="mk sq"></span>卡池管理</button><button class="tab"><span class="mk sq"></span>保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>C3 · 收紧 + 分组形状</b>
+      <p>方块 / 圆 / 三角分别代表三组功能（定义类、池与规则类、目标与策略类）。同一档灰，不占语义色；形状语言与左侧树上「按类型分形状」一致。</p></div>
+    <div class="v-body">
+      <div class="demo plain c">
+        <div class="row tight"><button class="tab on"><span class="mk sq"></span>卡牌定义</button><button class="tab"><span class="mk sq"></span>资源定义</button><button class="tab"><span class="mk cir"></span>卡池管理</button><button class="tab"><span class="mk cir"></span>保底机制</button><button class="tab"><span class="mk tri"></span>抽卡策略</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>C4 · 收紧 + 左侧竖条</b>
+      <p>每个 tag 左缘一条 3px 竖条（同灰）。比方块更贴边，视觉上更像「一列标签」；竖条也可以只在选中项上给色。</p></div>
+    <div class="v-body">
+      <div class="demo plain c">
+        <div class="row tight"><button class="tab on"><span class="mk bar"></span>卡牌定义</button><button class="tab"><span class="mk bar"></span>资源定义</button><button class="tab"><span class="mk bar"></span>资源获取</button><button class="tab"><span class="mk bar"></span>卡池管理</button><button class="tab"><span class="mk bar"></span>保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>C5 · 收紧 + 现成图标</b>
+      <p>用现成图标集（Element Plus Icons 约 300 个，随组件库已装，不用自己画）。这里形状是占位，看的是排版效果。比方块信息量大，但 11 个图标要挑得彼此不混。</p></div>
+    <div class="v-body">
+      <div class="demo plain c">
+        <div class="row tight">
+          <button class="tab on"><span class="mk ico"><svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11"/></svg></span>卡牌定义</button>
+          <button class="tab"><span class="mk ico"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/></svg></span>资源定义</button>
+          <button class="tab"><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6 5.5l3 3.5 2.2-2.5 2.3 5z"/></svg></span>资源获取</button>
+          <button class="tab"><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12"/></svg></span>卡池管理</button>
+          <button class="tab"><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M3 12V4l5 4 5-4v8"/></svg></span>保底机制</button>
+        </div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>C6 · 去边框版（靠底色深浅）</b>
+      <p>保留 card 的外形，但去掉所有边框，改用底色：未选中是页面灰，选中是白。与项目「不用硬边框、靠色块层次」的方向一致，代价是分隔弱于 C1。</p></div>
+    <div class="v-body">
+      <div class="demo plain c c6">
+        <div class="row tight"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- D 段：右侧可折叠时间线预览栏 -->
+  <section class="v wide" style="background:#fbfcfd">
+    <div class="v-head" style="background:#f2f5f8">
+      <b>D 段 · 右侧可折叠时间线预览栏</b>
+      <p>这就是「去掉文本栏之后，右栏放什么」的答案。它对应现行 WebUI 的 `ConfigPreview`：
+      上为累积资源曲线（各资源着色），中为池子开放区间（甘特），下为保底 / 累抽规则的作用池（台阶中点 + 竖直虚线）。
+      与文本栏的关键差别是：它是**全配置的视图**，不是文本的副本；而且改左边表单时右边立刻跟着变，所以「边改边看」这个价值保住了。</p>
+    </div>
+  </section>
+
+  <section class="v wide">
+    <div class="v-head"><b>D1 · 展开态</b>
+      <p>预览栏固定 300px 在右，左边是配置表单。下方还给了它与「分析窗」那条道的关系：收起时收成同样宽 34px 的一条，位置在右栏的右缘。</p></div>
+    <div class="v-body">
+      <div class="rail-demo">
+        <div class="rail-main">
+          <div style="font-weight:600;font-size:12px;margin-bottom:2px">卡池管理</div>
+          <div style="color:var(--muted);font-size:11px;margin-bottom:10px">Banner: 周年庆</div>
+          <div class="formish">
+            <div>开放时间：第 0 天</div><div>下架时间：第 21 天</div>
+            <div>池类型：角色</div><div>单抽消耗：160</div>
+            <div>保底：rotating</div><div>阈值：90</div>
+          </div>
+          <p class="rail-note">改动这里任一字段，右侧时间线即时跟着变（改下架时间，池子那条线段就伸缩）。</p>
+        </div>
+        <div class="rail-side">
+          <div class="rail-side-head">
+            <span>时间线</span>
+            <span style="margin-left:auto;color:var(--muted);font-weight:400;font-size:11px">天 0 → 120</span>
+          </div>
+          <div class="rail-side-body">
+            <div class="rail-block"><b>累积资源</b>
+              <svg viewBox="0 0 280 56" width="100%" height="56" style="margin-top:4px">
+                <polyline points="0,48 28,45 56,40 84,34 112,27 140,21 168,15 196,11 224,8 252,5 280,3"
+                  fill="none" stroke="#3f8fd9" stroke-width="1.8"/>
+                <polyline points="0,52 28,51 56,50 84,49 112,48 140,47 168,46 196,45 224,44 252,43 280,42"
+                  fill="none" stroke="#b9c4d2" stroke-width="1.4" stroke-dasharray="3 3"/>
+              </svg>
+            </div>
+            <div class="rail-block"><b>池子开放区间</b>
+              <svg viewBox="0 0 280 44" width="100%" height="44" style="margin-top:4px">
+                <rect x="0" y="3" width="98" height="9" fill="#8fbdf0" rx="1"/>
+                <rect x="0" y="17" width="98" height="9" fill="#8fbdf0" rx="1"/>
+                <rect x="0" y="31" width="280" height="9" fill="#d7dee8" rx="1"/>
+                <line x1="98" y1="0" x2="98" y2="44" stroke="#c8d0dc" stroke-width="1" stroke-dasharray="2 2"/>
+              </svg>
+            </div>
+            <div class="rail-block"><b>保底 / 累抽作用池</b>
+              <svg viewBox="0 0 280 34" width="100%" height="34" style="margin-top:4px">
+                <line x1="0" y1="22" x2="280" y2="22" stroke="#e0e5ec" stroke-width="1"/>
+                <circle cx="49" cy="22" r="3.5" fill="#3f8fd9"/>
+                <line x1="49" y1="6" x2="49" y2="30" stroke="#3f8fd9" stroke-width="1" stroke-dasharray="2 2"/>
+                <circle cx="147" cy="22" r="3.5" fill="#7aa9dd"/>
+                <line x1="147" y1="10" x2="147" y2="30" stroke="#7aa9dd" stroke-width="1" stroke-dasharray="2 2"/>
+                <rect x="220" y="19" width="10" height="6" fill="#c9d6e6"/>
+              </svg>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:2px">
+              <span style="border:1px solid var(--line);border-radius:2px;padding:3px 9px;font-size:11px;background:#fff">时间线</span>
+              <span style="border:1px solid var(--line);border-radius:2px;padding:3px 9px;font-size:11px;color:var(--muted)">日历</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v wide">
+    <div class="v-head"><b>D2 · 收起态（收成一条 34px 的道）</b>
+      <p>与「分析窗」那条道同构：都是 34px 的整高竖条、浅灰底、竖排文字。区别只在位置（这一条在右栏最右侧）。同一套语言，用户不必学第二种收起方式。</p></div>
+    <div class="v-body">
+      <div class="rail-demo">
+        <div class="rail-main">
+          <div style="font-weight:600;font-size:12px;margin-bottom:2px">卡池管理</div>
+          <div style="color:var(--muted);font-size:11px;margin-bottom:10px">Banner: 周年庆</div>
+          <div class="formish">
+            <div>开放时间：第 0 天</div><div>下架时间：第 21 天</div>
+            <div>池类型：角色</div><div>单抽消耗：160</div>
+            <div>保底：rotating</div><div>阈值：90</div>
+          </div>
+          <p class="rail-note">表单占满整个宽度（预览收起时，左栏不再被 300px 挤住）。</p>
+        </div>
+        <div class="rail-collapsed">
+          <span style="font-size:15px;line-height:1">‹</span>
+          <span class="vtext">时间线预览</span>
+        </div>
+      </div>
+    </div>
+  </section>
 
 </div>
-
-</body>
-</html>

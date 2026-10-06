@@ -38,9 +38,33 @@ body{
 
 .tool-bar{
   height:42px;display:flex;align-items:center;gap:8px;padding:0 10px;
-  background:var(--panel);border-bottom:1px solid var(--line);
+  background:var(--panel);border-bottom:1px solid var(--line);position:relative;
 }
 .tb-sep{width:1px;height:20px;background:var(--line);margin:0 4px}
+
+/* 运行模拟：分体按钮。主按钮用当前参数直接派发，右箭头开参数浮层 */
+.split-btn{display:inline-flex;border-radius:var(--radius);overflow:hidden}
+.split-btn button{
+  border:0;background:var(--accent);color:#fff;font:inherit;font-size:12px;
+  padding:7px 12px;cursor:pointer;white-space:nowrap;
+}
+.split-btn .sb-caret{padding:7px 9px;border-left:1px solid rgba(255,255,255,.4)}
+.split-btn button:hover:not(:disabled){background:#1565c0}
+.split-btn button:disabled{background:#c3c8d2;cursor:not-allowed}
+.split-btn .sb-main.running{background:var(--ok)}
+.split-btn .sb-main.running:hover{background:#256428}
+
+/* 运行参数浮层：挂在工具栏右下，含点击外部收起的遮罩 */
+.run-pop{
+  position:absolute;top:calc(100% - 6px);right:10px;z-index:30;width:326px;
+  padding:12px 14px;background:var(--panel);border:1px solid var(--line-strong);
+  border-radius:var(--radius);box-shadow:0 10px 26px rgba(20,30,50,.18);
+}
+.run-pop .rf-title{font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:10px}
+.rf-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.rf-row label{width:76px;flex:0 0 76px;color:var(--ink-3);font-size:12px;text-align:right}
+.rf-row .el-input{flex:1}
+.pop-catcher{position:fixed;inset:0;z-index:29}
 
 /* ---------- 主体 ---------- */
 .app-body{flex:1;display:flex;min-height:0;padding:8px;gap:0}
@@ -265,18 +289,47 @@ body{
       切换到{{ mode==='analysis' ? '详情' : '分析' }}
     </el-button>
     <span class="spacer"></span>
-    <!-- D1：运行模拟是上下文动作；且只对一级配置节点开放 -->
-    <el-tooltip :disabled="canRun" :content="runDisabledReason" placement="bottom">
-      <span>
-        <el-button size="small" type="primary" :disabled="!canRun" @click="runSim">
-          运行模拟{{ canRun ? '：' + subjectLabel : '' }}
-        </el-button>
-      </span>
+    <!-- D1：运行模拟是上下文动作，只对一级配置节点开放 -->
+    <el-tooltip :disabled="canRun && !runningForSubject" :content="runDisabledReason" placement="bottom">
+      <div class="split-btn">
+        <button class="sb-main" :class="{ running: runningForSubject }"
+                :disabled="!canRun || runningForSubject" @click="runNow">
+          {{ runningForSubject ? '运行中：' + subjectLabel
+             : '运行模拟' + (canRun ? '：' + subjectLabel : '') }}
+        </button>
+        <button class="sb-caret" :disabled="!canRun || runningForSubject"
+                @click="runPop = !runPop">▾</button>
+      </div>
     </el-tooltip>
     <el-button size="small" @click="openTasks">
       任务管理<span v-if="runningCount" class="tb-badge">{{ runningCount }}</span>
     </el-button>
+
+    <!-- 运行参数浮层：挂在工具栏右下 -->
+    <div v-if="runPop" class="run-pop">
+      <div class="rf-title">运行参数 · {{ subjectLabel }}</div>
+      <div class="rf-row"><label>模拟次数</label>
+        <el-input v-model.number="runParams.n" size="small"></el-input></div>
+      <div class="rf-row"><label>随机种子</label>
+        <el-input v-model.number="runParams.seed" size="small"></el-input>
+        <span class="tmeta">-1 = 随机</span></div>
+      <div class="rf-row"><label>并行进程数</label>
+        <el-input v-model.number="runParams.w" size="small"></el-input>
+        <span class="tmeta">本机 {{ workersMax }} 核心</span></div>
+      <p class="tmeta" style="margin:10px 0 4px;line-height:1.6">
+        运行参数不进入配置身份（P87 §3.1），改它不会产生新配置，也不会让配置变脏。
+      </p>
+      <p class="tmeta" style="margin:0 0 10px;line-height:1.6">
+        同配置同参数已跑过 {{ sameRunCount }} 次，本次会新建一个数据集（P87 O18）。
+      </p>
+      <el-button size="small" type="primary" style="width:100%" @click="runNow">
+        开始模拟
+      </el-button>
+    </div>
   </div>
+
+  <!-- 浮层的点击外部收起遮罩 -->
+  <div v-if="runPop" class="pop-catcher" @click="runPop = false"></div>
 
   <!-- ================= 主体 ================= -->
   <div class="app-body">
@@ -938,7 +991,18 @@ const app = createApp({
     const cpu = ref(38);
     const mem = ref(57);
     const workersMax = ref(navigator.hardwareConcurrency || 8);
-    setInterval(() => { now.value = Date.now(); }, 500);
+    setInterval(() => {
+      now.value = Date.now();
+      // 让派发出去的模拟真的走起来：进度推进，到 100% 转为完成
+      for (const t of tasks) {
+        if (t.status !== 'running') continue;
+        t.pct = Math.min(100, t.pct + 0.4);
+        if (t.pct >= 100) {
+          t.status = 'done';
+          t.elapsed = (Date.now() - t.startTime) / 1000;
+        }
+      }
+    }, 500);
     setInterval(() => {
       cpu.value = Math.max(4, Math.min(97, cpu.value + (Math.random() - 0.5) * 26));
       mem.value = Math.max(22, Math.min(92, mem.value + (Math.random() - 0.5) * 5));
@@ -1132,6 +1196,7 @@ const app = createApp({
         return '子配置的模拟由分析面板派发，不能在树里单独运行';
       if (nodeState.value.text.indexOf('已冻结') !== 0)
         return '配置未保存，按 P87 §3.10 不能派发模拟';
+      if (runningForSubject.value) return '该配置已有运行中的任务，等它结束或先取消';
       return '';
     });
     // 比较分析页签与一般分析页签同构但不同集；切主体时把页签拉回该集的第一项
@@ -1141,7 +1206,27 @@ const app = createApp({
       const cats = nv === 'compare' ? compareCategories : categories;
       if (!cats.some(c => c.key === analysisTab.value)) analysisTab.value = cats[0].key;
     });
-    function runSim() { flash('运行模拟：' + subjectLabel.value); }
+    // 运行参数：不进配置身份（P87 §3.1），每次派发一次性使用，字段与 GUI/WebUI 一致
+    const runParams = reactive({ n: 1000, seed: 42, w: 4 });
+    const runPop = ref(false);
+    // 当前配置是否已有运行中的任务：有则按钮转「运行中」并禁止重复提交
+    const runningForSubject = computed(() => subjectKind.value === 'config'
+      && tasks.some(t => t.status === 'running' && t.config === subjectLabel.value));
+    // 同配置已完成的次数（P87 O18：同配置同参数重复跑是新建数据集，界面要提示）
+    const sameRunCount = computed(() =>
+      tasks.filter(t => t.config === subjectLabel.value && t.status === 'done').length);
+    // 「运行」统一为「提交任务」（P87 J4）：进队列，进度在任务抽屉里看
+    function runNow() {
+      if (!canRun.value || runningForSubject.value) return;
+      const cfg = subjectLabel.value;
+      tasks.unshift({
+        name: '主模拟', type: 'sim', config: cfg, status: 'running',
+        pct: 0, elapsed: 0, w: runParams.w, startTime: Date.now(),
+      });
+      runPop.value = false;
+      flash('已提交任务：' + cfg + '（n=' + runParams.n + '，种子 ' + runParams.seed
+            + '，' + runParams.w + ' 进程）。进度见任务管理。');
+    }
     function saveDraft() {
       nodeState.value = { text: '已保存（未派生）', tagType: 'success', hint: '改动写回本配置' };
       flash('已保存');
@@ -1207,7 +1292,8 @@ const app = createApp({
       datasetOptions, excludedDatasets, anchorHint,
       canAnalyze, canRun, runDisabledReason, cfgTab, poolSubTab, activeCategories,
       taskDrawer, openTasks, runningCount, workersActive, workersMax, cpu, mem, now,
-      onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim, saveDraft,
+      onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runNow, saveDraft,
+      runParams, runPop, runningForSubject, sameRunCount,
       typeColor, shapeClass, itemRunnable, itemReason, bars, linePoints,
     };
   }

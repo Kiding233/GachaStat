@@ -54,12 +54,15 @@ body{
 .split-btn .sb-main.running{background:var(--ok)}
 .split-btn .sb-main.running:hover{background:#256428}
 
-/* 运行参数浮层：挂在工具栏右下，含点击外部收起的遮罩 */
+/* 运行参数浮层：与分体按钮同容器，右缘对齐；自上而下展开 */
+.run-anchor{position:relative;display:inline-flex}
 .run-pop{
-  position:absolute;top:calc(100% - 6px);right:10px;z-index:30;width:326px;
+  position:absolute;top:calc(100% + 6px);right:0;z-index:30;width:326px;
   padding:12px 14px;background:var(--panel);border:1px solid var(--line-strong);
   border-radius:var(--radius);box-shadow:0 10px 26px rgba(20,30,50,.18);
+  animation:popIn .18s cubic-bezier(.25,.8,.35,1);
 }
+@keyframes popIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
 .run-pop .rf-title{font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:10px}
 .rf-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .rf-row label{width:76px;flex:0 0 76px;color:var(--ink-3);font-size:12px;text-align:right}
@@ -290,42 +293,44 @@ body{
     </el-button>
     <span class="spacer"></span>
     <!-- D1：运行模拟是上下文动作，只对一级配置节点开放 -->
-    <el-tooltip :disabled="canRun && !runningForSubject" :content="runDisabledReason" placement="bottom">
-      <div class="split-btn">
-        <button class="sb-main" :class="{ running: runningForSubject }"
-                :disabled="!canRun || runningForSubject" @click="runNow">
-          {{ runningForSubject ? '运行中：' + subjectLabel
-             : '运行模拟' + (canRun ? '：' + subjectLabel : '') }}
-        </button>
-        <button class="sb-caret" :disabled="!canRun || runningForSubject"
-                @click="runPop = !runPop">▾</button>
+    <div class="run-anchor">
+      <el-tooltip :disabled="canRun && !runningForSubject" :content="runDisabledReason" placement="bottom">
+        <div class="split-btn">
+          <button class="sb-main" :class="{ running: runningForSubject }"
+                  :disabled="!canRun || runningForSubject" @click="runNow">
+            {{ runningForSubject ? '运行中：' + subjectLabel
+               : '运行模拟' + (canRun ? '：' + subjectLabel : '') }}
+          </button>
+          <button class="sb-caret" :disabled="!canRun || runningForSubject"
+                  @click="runPop = !runPop">▾</button>
+        </div>
+      </el-tooltip>
+
+      <!-- 运行参数浮层：右缘与按钮右缘对齐 -->
+      <div v-if="runPop" class="run-pop">
+        <div class="rf-title">运行参数 · {{ subjectLabel }}</div>
+        <div class="rf-row"><label>模拟次数</label>
+          <el-input v-model.number="runParams.n" size="small"></el-input></div>
+        <div class="rf-row"><label>随机种子</label>
+          <el-input v-model.number="runParams.seed" size="small"></el-input>
+          <span class="tmeta">-1 = 随机</span></div>
+        <div class="rf-row"><label>并行进程数</label>
+          <el-input v-model.number="runParams.w" size="small"></el-input>
+          <span class="tmeta">本机 {{ workersMax }} 核心</span></div>
+        <p class="tmeta" style="margin:10px 0 4px;line-height:1.6">
+          运行参数不进入配置身份（P87 §3.1），改它不会产生新配置，也不会让配置变脏。
+        </p>
+        <p class="tmeta" style="margin:0 0 10px;line-height:1.6">
+          同配置同参数已跑过 {{ sameRunCount }} 次，本次会新建一个数据集（P87 O18）。
+        </p>
+        <el-button size="small" type="primary" style="width:100%" @click="runNow">
+          开始模拟
+        </el-button>
       </div>
-    </el-tooltip>
+    </div>
     <el-button size="small" @click="openTasks">
       任务管理<span v-if="runningCount" class="tb-badge">{{ runningCount }}</span>
     </el-button>
-
-    <!-- 运行参数浮层：挂在工具栏右下 -->
-    <div v-if="runPop" class="run-pop">
-      <div class="rf-title">运行参数 · {{ subjectLabel }}</div>
-      <div class="rf-row"><label>模拟次数</label>
-        <el-input v-model.number="runParams.n" size="small"></el-input></div>
-      <div class="rf-row"><label>随机种子</label>
-        <el-input v-model.number="runParams.seed" size="small"></el-input>
-        <span class="tmeta">-1 = 随机</span></div>
-      <div class="rf-row"><label>并行进程数</label>
-        <el-input v-model.number="runParams.w" size="small"></el-input>
-        <span class="tmeta">本机 {{ workersMax }} 核心</span></div>
-      <p class="tmeta" style="margin:10px 0 4px;line-height:1.6">
-        运行参数不进入配置身份（P87 §3.1），改它不会产生新配置，也不会让配置变脏。
-      </p>
-      <p class="tmeta" style="margin:0 0 10px;line-height:1.6">
-        同配置同参数已跑过 {{ sameRunCount }} 次，本次会新建一个数据集（P87 O18）。
-      </p>
-      <el-button size="small" type="primary" style="width:100%" @click="runNow">
-        开始模拟
-      </el-button>
-    </div>
   </div>
 
   <!-- 浮层的点击外部收起遮罩 -->

@@ -32,11 +32,17 @@ class TestSoftStepProgress:
         assert bh._cumulative_boost(72) == 0.0
         assert bh._cumulative_boost(73) > 0.0
 
+    def test_first_increment_lands_exactly_at_start(self):
+        """§3.4.1 修正 ②：counter==start 恰为第一档增量，counter==start-1 为 0"""
+        bh = self._make_soft_behavior(73, 90)
+        assert bh._cumulative_boost(72) == 0.0
+        assert bh._cumulative_boost(73) == pytest.approx(100.0 / 17)
+
     def test_boost_increases_after_start(self):
         """counter 进入增量段后 boost 递增"""
         bh = self._make_soft_behavior(73, 90)
-        # deltas = ((73, 0.0), (17, 5.88235...)) → counter=74: boost=5.88%
-        assert bh._cumulative_boost(74) > 0
+        # deltas = ((72, 0.0), (17, 5.882353)) → counter=74: 2 档 = 11.7647%
+        assert bh._cumulative_boost(74) == pytest.approx(2 * 100.0 / 17)
         assert bh._cumulative_boost(80) > bh._cumulative_boost(74)
 
     def test_boost_reaches_100_at_end(self):

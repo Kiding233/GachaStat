@@ -108,14 +108,25 @@ class TestDeltasRoundTrip:
     """deltas ↔ soft_interval 往返可逆"""
 
     def test_round_trip(self):
-        """deltas → soft_interval → 展开 → 等价"""
-        deltas = ((73, 0.0), (17, 5.882353))
+        """deltas → soft_interval → 展开 → 逐段全等"""
+        deltas = _expand_soft_to_deltas('soft_interval', 73, 90, None)
+        assert deltas == ((72, 0.0), (17, 5.882353))  # §3.4.1 修正 ②：首段 = start-1
         result = _deltas_to_soft_interval(deltas)
-        assert result is not None
-        start, end = result
-        expanded = _expand_soft_to_deltas('soft_interval', start, end, None)
-        assert expanded[0] == deltas[0]
-        assert expanded[1][0] == deltas[1][0]
+        assert result == (73, 90)
+        assert _expand_soft_to_deltas('soft_interval', *result, None) == deltas
+
+    def test_start_zero_normalizes_to_equivalent_start_one(self):
+        """start=0 经反函数归一化到 (1, end+1)，deltas 逐段全等。
+
+        _expand_soft_to_deltas() 对 start=0 取 max(0, 0-1)=0，首段长 0；
+        反函数只能还原出「首段长 + 1」，故给 start=1 并同步把 end 加 1，
+        使 n_steps = end - start 保持不变。二者 deltas 完全相同，在
+        _cumulative_boost() 下行为一致，属表示不唯一而非语义丢失。
+        """
+        d0 = _expand_soft_to_deltas('soft_interval', 0, 10, None)
+        assert d0 == ((0, 0.0), (10, 10.0))
+        assert _deltas_to_soft_interval(d0) == (1, 11)
+        assert _expand_soft_to_deltas('soft_interval', 1, 11, None) == d0
 
     def test_non_soft_interval_returns_none(self):
         """首段增量非零 → 无法还原"""

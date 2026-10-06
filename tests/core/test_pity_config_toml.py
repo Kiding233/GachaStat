@@ -117,6 +117,12 @@ class TestP56TypeParsing:
             pdef = store.pity.pities[0]
             assert pdef.btype == btype
             assert pdef.scope == 'ssr'
+            # 软保底参数必须真的落进 deltas（TOML 键名为 start/end/increment，
+            # 写成字段名 soft_start 会被解析器静默忽略）
+            if 'start' in extra:
+                assert pdef.deltas is not None
+                assert pdef.soft_start == extra['start']
+                assert pdef.soft_end == extra.get('end')
         finally:
             os.unlink(path)
 
@@ -143,6 +149,10 @@ class TestP56TypeParsing:
             assert pdef2.btype == btype
             assert pdef2.scope == 'ssr'
             assert pdef2.name == f'pity_{btype}'
+            # 软保底语法糖参数与展开后的 deltas 均须保值
+            assert pdef2.soft_start == store.pity.pities[0].soft_start
+            assert pdef2.soft_end == store.pity.pities[0].soft_end
+            assert pdef2.deltas == store.pity.pities[0].deltas
         finally:
             os.unlink(path)
 
@@ -293,7 +303,7 @@ class TestMixedPityCompat:
 
     def test_counter_and_event_pities_coexist(self):
         toml = (_BASE_TOML +
-                _pity_section('soft_interval', 'soft73', soft_start=73, soft_end=90) +
+                _pity_section('soft_interval', 'soft73', start=73, end=90) +
                 _pity_section('rotating', 'rot_char') +
                 _pity_section('hard', 'hard180', threshold=180))
         store, path = _write_and_load(toml)
@@ -301,25 +311,27 @@ class TestMixedPityCompat:
             assert len(store.pity.pities) == 3
             btypes = {p.btype for p in store.pity.pities}
             assert btypes == {'soft_interval', 'rotating', 'hard'}
+            soft = next(p for p in store.pity.pities if p.btype == 'soft_interval')
+            assert soft.deltas == ((72, 0.0), (17, 5.882353))
         finally:
             os.unlink(path)
 
     def test_all_10_types_roundtrip(self):
         """全部 10 种 type 共存 → round-trip 保持每种 type。"""
         all_pities = (
-            _pity_section('soft_interval', 'p1', soft_start=73, soft_end=90) +
-            _pity_section('soft_additive', 'p2', soft_start=73) +
+            _pity_section('soft_interval', 'p1', start=73, end=90) +
+            _pity_section('soft_additive', 'p2', start=73) +
             _pity_section('soft_step', 'p3') +
             _pity_section('hard', 'p4', threshold=90) +
             _pity_section('rotating', 'p5') +
-            _pity_section('rotating_soft', 'p6', soft_start=74, soft_end=90) +
+            _pity_section('rotating_soft', 'p6', start=74, end=90) +
             _pity_section('rotating_cr', 'p7', cr_counter_threshold=3,
                            cr_state_probs=[0.0, 0.0, 0.0, 1.0]) +
-            _pity_section('rotating_cr_soft', 'p8', soft_start=74, soft_end=90,
+            _pity_section('rotating_cr_soft', 'p8', start=74, end=90,
                            cr_counter_threshold=3,
                            cr_state_probs=[0.0, 0.0, 0.0, 1.0]) +
             _pity_section('targeted', 'p9', fate_threshold=1) +
-            _pity_section('targeted_soft', 'p10', soft_start=63, soft_end=80,
+            _pity_section('targeted_soft', 'p10', start=63, end=80,
                            fate_threshold=1)
         )
         toml = _BASE_TOML + all_pities
@@ -331,5 +343,109 @@ class TestMixedPityCompat:
             btypes1 = sorted(p.btype for p in store.pity.pities)
             btypes2 = sorted(p.btype for p in store2.pity.pities)
             assert btypes1 == btypes2
+            # 逐条 deltas 保值（软保底语法糖不被往返改写）。
+            # 只有 soft_interval / soft_additive 在 _build_pity 展开到
+            # PityDef.deltas；三种 *_soft 后缀型由 SoftPityMixin 在
+            # create_behavior 时另经 soft_start/soft_end 展开，故此处为 None。
+            d1 = {p.name: p.deltas for p in store.pity.pities}
+            d2 = {p.name: p.deltas for p in store2.pity.pities}
+            assert d1 == d2
+            assert {k for k, v in d1.items() if v is not None} == {'p1', 'p2'}
+            # 后缀型：语法糖参数须保值（mixin 展开的唯一依据）
+            sfx1 = {p.name: (p.soft_start, p.soft_end) for p in store.pity.pities
+                    if p.btype.endswith('_soft')}
+            sfx2 = {p.name: (p.soft_start, p.soft_end) for p in store2.pity.pities
+                    if p.btype.endswith('_soft')}
+            assert sfx1 == sfx2 == {'p6': (74, 90), 'p8': (74, 90), 'p10': (63, 80)}
+        finally:
+            os.unlink(path)
+
+
+# ══════════════════════════════════════════════════════════════════
+# §3.4.1 修正 ①②：软保底语法糖的生产写回路径 round-trip
+# ══════════════════════════════════════════════════════════════════
+
+class TestSoftSugarRoundTrip:
+    """load_toml → save_toml → load_toml 后语法糖参数逐字段保值。
+
+    生产写回（_pitydef_to_toml）直接取 PityDef.soft_start / soft_end /
+    soft_increment，不经 _deltas_to_soft_interval，故这里钉住的是
+    「语法糖参数不被 deltas 往返改写」这一条。对应 GUI 的
+    main_window 载入 → 保存 路径。
+    """
+
+    def test_soft_interval_start_end_preserved(self):
+        toml = _BASE_TOML + _pity_section('soft_interval', 'si',
+                                          start=80, end=90)
+        store, path = _write_and_load(toml)
+        try:
+            p = store.pity.pities[0]
+            assert p.deltas == ((79, 0.0), (10, 10.0))  # 首段 = start-1
+            p2 = _roundtrip(store, path).pity.pities[0]
+            assert (p2.soft_start, p2.soft_end) == (80, 90)
+            assert p2.soft_increment is None
+            assert p2.deltas == p.deltas
+        finally:
+            os.unlink(path)
+
+    def test_soft_additive_start_increment_preserved(self):
+        toml = _BASE_TOML + _pity_section('soft_additive', 'sa',
+                                          start=65, increment=6.0)
+        store, path = _write_and_load(toml)
+        try:
+            p = store.pity.pities[0]
+            assert p.deltas == ((64, 0.0), (17, 6.0))  # 首段 = start-1
+            p2 = _roundtrip(store, path).pity.pities[0]
+            assert (p2.soft_start, p2.soft_increment) == (65, 6.0)
+            assert p2.deltas == p.deltas
+        finally:
+            os.unlink(path)
+
+    def test_soft_suffix_start_end_preserved(self):
+        """后缀型（rotating_soft / targeted_soft / rotating_cr_soft）的软保底
+        参数不经 PityDef.deltas 展开，须由 writer 独立写回。
+
+        修前这三项被丢弃，重载后落到注册表默认值（start=74 / end=90），
+        用户配置被静默改写。
+        """
+        for btype, extra in [('rotating_soft', dict(start=63, end=80)),
+                             ('targeted_soft', dict(start=50, end=70,
+                                                    fate_threshold=1)),
+                             ('rotating_cr_soft', dict(start=63, end=80,
+                                                       cr_counter_threshold=3))]:
+            toml = _BASE_TOML + _pity_section(btype, 'x', **extra)
+            store, path = _write_and_load(toml)
+            try:
+                p = store.pity.pities[0]
+                assert p.deltas is None  # 后缀型不走 PityDef.deltas
+                p2 = _roundtrip(store, path).pity.pities[0]
+                assert (p2.soft_start, p2.soft_end) == (extra['start'], extra['end'])
+                assert p2.soft_increment is None
+            finally:
+                os.unlink(path)
+
+    def test_soft_suffix_raw_deltas_preserved(self):
+        """后缀型直写 deltas 时，PityDef.deltas 非 None，走既有 deltas 分支写回。"""
+        toml = _BASE_TOML + _pity_section('rotating_soft', 'x',
+                                          deltas=[[62, 0.0], [17, 5.882353]])
+        store, path = _write_and_load(toml)
+        try:
+            p = store.pity.pities[0]
+            assert p.deltas == ((62, 0.0), (17, 5.882353))
+            p2 = _roundtrip(store, path).pity.pities[0]
+            assert p2.deltas == p.deltas
+            assert p2.soft_start is None
+        finally:
+            os.unlink(path)
+
+    def test_raw_deltas_preserved(self):
+        toml = _BASE_TOML + _pity_section('soft_interval', 'raw',
+                                          deltas=[[79, 0.0], [10, 10.0]])
+        store, path = _write_and_load(toml)
+        try:
+            p = store.pity.pities[0]
+            assert p.deltas == ((79, 0.0), (10, 10.0))
+            p2 = _roundtrip(store, path).pity.pities[0]
+            assert p2.deltas == p.deltas
         finally:
             os.unlink(path)

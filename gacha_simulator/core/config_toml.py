@@ -424,7 +424,7 @@ def _check_pity_format(pity_list: list) -> None:
         f"[[pity]] 条目「{names}」使用 P55 之前的旧格式（含 start/end/func 等字段），"
         f"已不再支持自动迁移——原迁移会把 reset='featured_ssr' 原样保留，使保底计数器永不重置。"
         f"请手工改写为新格式：type 用 soft_interval / soft_additive / hard 等，"
-        f"软保底爬升用 soft_start + soft_end + soft_increment（或直接写 deltas）。"
+        f"软保底爬升用 start + end + increment（或直接写 deltas）。"
     )
 
 
@@ -1573,13 +1573,24 @@ def _save_resource_lifecycle(store: ConfigStore, data: dict) -> None:
 def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linear') -> tuple:
     """将 soft_interval / soft_additive 语法糖展开为 deltas。
 
-    soft_interval: [[start, 0.0], [end-start, 100/(end-start)%]]
-      例：start=73, end=90 → ((73, 0.0), (17, 5.88235...))
-    soft_additive: [[start, 0.0], [1, increment], [1, increment], ...]
-      注：每抽递增 i% → 简化为 ((start, 0.0), (1, increment), (1, increment), ...)
-      但为了 RLE 效率，将连续相同 increment 合并为一段。
-      实际：((start, 0.0), (∞, increment)) 但 ∞ 不现实——
-      改为 ((start, 0.0), (remaining, increment))，remaining 取到 100% 为止。
+    deltas 为 RLE 格式 ((段长, 每抽增量), ...)，增量单位为「百分点」，由
+    SoftStepBehavior._cumulative_boost() 消费：第 n 抽的 boost = 前 n 段累计
+    （段内线性，逐抽递增）。
+
+    首段长度为 start-1 而非 start（§3.4.1 修正 ②：start 含首抽）：
+    counter == start-1 时 boost 仍为 0，counter == start 时已拿到第一档增量。
+
+    边界：start=0 与 start=1 的首段都被 max(0, ...) 夹为 0 长，二者的差别
+    只在档数 n_steps = end - start，即 start=0 等价于「start=1 且 end 加 1」。
+
+    soft_interval: ((start-1, 0.0), (end-start, 100/(end-start)))
+      例：start=73, end=90 → ((72, 0.0), (17, 5.882353))
+      end <= start 时兜底为 start+1（单档 100%）。
+
+    soft_additive: ((start-1, 0.0), (n_steps, increment))
+      n_steps = int(100/increment) + 1，即累计跨过 100% 所需的档数再多一档，
+      使末档不被 _cumulative_boost() 的 min(boost, 100) 提前截断。
+      increment <= 0 时退化为单档 n_steps=1。
     """
     if btype == 'soft_interval':
         s = int(start) if start else 0
@@ -1629,11 +1640,19 @@ def _parse_state_probs(value) -> Optional[tuple]:
 def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     """deltas → (soft_start, soft_end) 反向还原。
 
-    仅当 deltas 符合 soft_interval 模式时可用：
-    ((N, 0.0), (M, inc)) 其中 inc 为常数。
-    返回 ((start, end),) 或 None（若无法还原）。
+    仅当 deltas 符合 soft_interval 模式时可用：((N, 0.0), (M, inc))，
+    即恰两段、首段增量为 0（首段是「未起步」区间，其长度即 start-1）。
+    返回 (start, end) 或 None（若无法还原）。
 
-    例：((73, 0.0), (17, 5.882353)) → (73, 90)
+    例：((72, 0.0), (17, 5.882353)) → (73, 90)
+
+    边界：首段长为 0 时无从判断它来自 start=0 还是 start=1（两者都被
+    max(0, ...) 夹为 0），一律还原为 start=1，并把 end 同步加 1 以保住
+    档数 n_steps。还原结果与原始 start=0 展开出的 deltas 逐段相同，
+    故行为不变（例：(0, 10) → (1, 11)，两者 deltas 均为 ((0, 0.0), (10, 10.0))）。
+
+    调用方：当前仅测试（生产路径的 TOML 写回直接取 PityDef.soft_start/
+    soft_end，不经本函数）。
     """
     if not deltas or len(deltas) != 2:
         return None
@@ -1642,6 +1661,10 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     if inc1 != 0.0:
         return None  # 首段增量非零——非 soft_interval 模式
     return (n1 + 1, n1 + n2 + 1)
+
+
+# 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas
+_SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
 
 
 def _pitydef_to_toml(p) -> dict:
@@ -1661,7 +1684,17 @@ def _pitydef_to_toml(p) -> dict:
         entry['pools'] = list(p.pools)
 
     # 语法糖参数（优先写出直观形式，否则写出 deltas）
-    if p.btype == 'soft_interval' and p.soft_start is not None and p.soft_end is not None:
+    if p.btype in _SOFT_SUFFIX_TYPES and p.deltas is None and p.soft_start is not None:
+        # 后缀型的软保底不经 PityDef.deltas 展开——由 SoftPityMixin 在
+        # create_behavior() 时独立消费 soft_start / soft_end / soft_increment。
+        # 不写回则重载后这三项全为 None，mixin 落到注册表默认值（start=74 /
+        # end=90），用户配置被静默改写且无任何提示。
+        entry['start'] = p.soft_start
+        if p.soft_end is not None:
+            entry['end'] = p.soft_end
+        if p.soft_increment is not None:
+            entry['increment'] = p.soft_increment
+    elif p.btype == 'soft_interval' and p.soft_start is not None and p.soft_end is not None:
         entry['start'] = p.soft_start
         entry['end'] = p.soft_end
     elif p.btype == 'soft_additive' and p.soft_start is not None and p.soft_increment is not None:

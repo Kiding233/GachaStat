@@ -60,10 +60,15 @@ body{
 }
 .side-scroll{flex:1;min-height:0;overflow:auto}
 
-/* 树节点 */
+/* 树节点：形状按类型区分（不只靠颜色） */
 .el-tree{background:transparent;--el-tree-node-hover-bg-color:#f2f6fb;padding:4px 0}
 .tnode{display:flex;align-items:center;gap:6px;width:100%;padding-right:8px}
-.tdot{width:7px;height:7px;border-radius:2px;flex:0 0 7px}
+.tdot{flex:0 0 auto}
+.s-circle{width:9px;height:9px;border-radius:50%}
+.s-square{width:7px;height:7px}
+.s-diamond{width:8px;height:8px;transform:rotate(45deg)}
+.s-tri{width:9px;height:9px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.s-tri-right{width:9px;height:9px;clip-path:polygon(0 0,100% 50%,0 100%)}
 .tlabel{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tbadge{font-size:10px;line-height:14px;padding:0 5px;border-radius:8px;border:1px solid;}
 .b-frozen{color:var(--purple);border-color:#d9cdf5;background:#f5f1fd}
@@ -94,34 +99,22 @@ body{
   margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);
 }
 .page-head h3{margin:0;font-size:16px;font-weight:600}
-/* 外框 .workbench 与 .wb-body 在任何模式下都不动，动的只有页 */
-.wb-body{flex:1;min-height:0;overflow:hidden;position:relative}
-
-/* 甲：两页横向并排，锁在同一条 200% 宽的轨道上，切换即整条平移（推拉） */
-.wb-body.m-strip .strip{
-  display:flex;width:200%;height:100%;
-  transition:transform .34s cubic-bezier(.25,.8,.35,1);
-}
-.wb-body.m-strip .strip.analysis{transform:translateX(-50%)}
-.wb-body.m-strip .pane{
-  flex:0 0 50%;width:50%;height:100%;overflow:auto;padding:12px 46px;
-}
-
-/* 乙：详情页定住不动；分析窗从右侧滑入盖上来，窗的左边缘就是那条道。
+/* 详情页定住不动；分析窗从右侧滑入盖上来，窗的左边缘就是那条道。
    两页都显式给 z-index：分析窗带 transform（自建层叠上下文），
    不给序号时与详情页的相对层序会落到 UA 的默认判定上，出现两页互相透出 */
-.wb-body.m-overlay .strip{position:absolute;inset:0}
-.wb-body.m-overlay .pane-detail{
+.wb-body{flex:1;min-height:0;overflow:hidden;position:relative}
+.strip{position:absolute;inset:0}
+.pane-detail{
   position:absolute;inset:0;overflow:auto;padding:12px 46px;
   background:var(--panel);z-index:1;
 }
-.wb-body.m-overlay .pane-analysis{
+.pane-analysis{
   position:absolute;top:0;bottom:0;left:0;width:100%;overflow:auto;padding:12px 46px;
   background:var(--panel);z-index:2;
   transform:translateX(calc(100% - 34px));
   transition:transform .34s cubic-bezier(.25,.8,.35,1);
 }
-.wb-body.m-overlay .pane-analysis.open{transform:translateX(0)}
+.pane-analysis.open{transform:translateX(0)}
 
 .wb-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--ink-3)}
 
@@ -139,8 +132,10 @@ body{
 .lane:hover{background:#e2e7ee}
 .lane.at-right{left:calc(100% - 34px)}
 .lane.at-left{left:0}
-.lane .chev{font-size:20px;line-height:1;font-weight:700}
-.lane .vtext{writing-mode:vertical-rl;font-size:12px;letter-spacing:5px}
+/* 箭头用 SVG 画：墨迹边界即元素边界，能真正与竖排文字同轴居中；
+   用 CJK 的「》」字形时墨迹在字身框里偏一侧，对不齐 */
+.lane .chev{display:flex;align-items:center;justify-content:center}
+.lane .vtext{writing-mode:vertical-rl;line-height:1;font-size:12px;letter-spacing:5px}
 
 /* 分析面板 */
 .anchor-bar{
@@ -217,7 +212,7 @@ body{
     </span>
     <div class="tb-sep"></div>
     <!-- 切换控件：与右侧页面里的道并存，两者都能切换 -->
-    <el-button size="small" plain :disabled="!canToggle" @click="toggleMode">
+    <el-button size="small" plain :disabled="!canAnalyze" @click="toggleMode">
       切换到{{ mode==='analysis' ? '详情' : '分析' }}
     </el-button>
     <span class="spacer"></span>
@@ -250,7 +245,7 @@ body{
             @node-click="onNodeClick">
             <template #default="{ data }">
               <div class="tnode">
-                <span class="tdot" :style="{ background: typeColor(data) }"></span>
+                <span class="tdot" :class="shapeClass(data)" :style="{ background: typeColor(data) }"></span>
                 <span class="tlabel">{{ data.label }}</span>
                 <span v-if="data.type==='batch'" class="tmeta">{{ data.children.length }} 项</span>
                 <span v-if="data.badge" class="tbadge" :class="data.badgeClass">{{ data.badge }}</span>
@@ -267,7 +262,7 @@ body{
         <div class="side-scroll cmp-list">
           <div v-for="c in compareTasks" :key="c.id" class="cmp-item"
                :class="{active: subjectId===c.id}" @click="selectCompare(c)">
-            <span class="tdot" style="background:#0f8a8a"></span>
+            <span class="tdot s-tri-right" style="background:#0f8a8a"></span>
             <span class="tlabel">{{ c.label }}</span>
           </div>
         </div>
@@ -278,9 +273,9 @@ body{
       <!-- 临时提示 -->
       <el-alert v-if="notice" class="notice" :title="notice" type="info" :closable="false" show-icon></el-alert>
 
-      <div class="wb-body" :class="'m-' + layout">
-       <!-- 两页横向并排；轨道推拉（甲）或分析窗滑入（乙）由 .wb-body 的模式类决定 -->
-       <div class="strip" :class="{ analysis: mode==='analysis' }">
+      <div class="wb-body">
+       <!-- 详情页定住不动；分析窗从右滑入盖上来 -->
+       <div class="strip">
 
         <!-- 第 1 页：详情 / 任务管理 -->
         <div class="pane pane-detail">
@@ -558,11 +553,6 @@ body{
           <span class="tmeta" style="margin-left:8px">也可以点右侧页面最右侧的把手整页切换</span>
         </div>
 
-        <div v-else-if="subjectKind==='folder'" class="detail-view">
-          <div class="page-head"><h3>{{ subjectLabel }}</h3><el-tag size="small" effect="light" type="info">文件夹</el-tag></div>
-          <p class="tmeta">文件夹节点没有详情内容。</p>
-        </div>
-
         <div v-else class="wb-empty">点击左侧工作区打开配置 / 数据集 / 批次 / 对比任务</div>
         </div><!-- /第 1 页 -->
 
@@ -679,10 +669,21 @@ body{
        </div><!-- /strip -->
 
        <!-- 展开 / 收起分析的道：整条都是入口，随轨道被推到右端或左端 -->
-       <div v-if="canToggle" class="lane"
+       <div v-if="canAnalyze" class="lane"
             :class="mode==='analysis' ? 'at-left' : 'at-right'"
             @click="toggleMode">
-         <span class="chev">{{ mode==='analysis' ? '》' : '《' }}</span>
+         <span class="chev">
+           <svg viewBox="0 0 15 20" width="15" height="20" aria-hidden="true">
+             <template v-if="mode==='analysis'">
+               <polyline points="2,3 7,10 2,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+               <polyline points="8,3 13,10 8,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+             </template>
+             <template v-else>
+               <polyline points="13,3 8,10 13,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+               <polyline points="7,3 2,10 7,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+             </template>
+           </svg>
+         </span>
          <span class="vtext">{{ mode==='analysis' ? '收起分析' : '展开分析' }}</span>
        </div>
       </div>
@@ -690,8 +691,7 @@ body{
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.prod.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/element-plus/2.9.1/index.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.prod.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/element-plus/2.9.1/index.full.min.js"></script>
 <script>
 const { createApp, ref, reactive, computed, watch } = Vue;
 
@@ -730,11 +730,18 @@ const cfg1 = {
     }
   ]
 };
-const tree = [
-  {
-    id: 'root', type: 'folder', label: '崩坏3 主线', children: [cfg1]
-  }
-];
+// 第二个一级配置节点：用于观察在两级配置之间点选时的切换
+const cfg2 = {
+  id: 'cfg2', type: 'config', level: 1, label: '武器池专精配置',
+  badge: '未跑', badgeClass: 'b-dirty',
+  children: [
+    ds('ds5', 'weapon_01', 800, true, 'cfg2', true),
+    { id: 'w2', type: 'config', level: 2, label: '变体1（常驻池优先）',
+      children: [ds('ds6', 'weapon_02', 800, true, 'w2', true)] },
+  ]
+};
+// 新设计没有文件夹这一层，一级配置节点直接就是工作区的顶层条目
+const tree = [cfg1, cfg2];
 
 /* 分析项：分类与顺序取自 gui/analysis_panel.py 的 ANALYSIS_CATEGORIES（P86 §3.2 将迁移为注册表派生） */
 const categories = [
@@ -841,11 +848,9 @@ createApp({
     const analysisDatasetId = ref('ds1');
     const cfgTab = ref('cards');             // 配置详情的 tag，与 GUI 的 11 个标签页同名同序
     const poolSubTab = ref('pool');          // 「卡池管理」下的二级 tag：池 / 生命周期
-    const layout = ref('overlay');           // overlay=详情定住、分析窗滑入 | strip=两页轨道推拉
-    window.addEventListener('layout-mode', e => { layout.value = e.detail; });
     const analysisTab = ref('overall');
     const notice = ref('');
-    const expandedKeys = ref(['root', 'cfg1']);   // batch1 默认折叠
+    const expandedKeys = ref(['cfg1', 'cfg2']);   // batch 默认折叠；新设计无文件夹层级
     const draft = reactive({
       strategy: 'smart', target: '雷电芽衣', targetCount: 1,
       n: 1000, seedStart: 42, seedEnd: 42, workers: 4,
@@ -951,10 +956,12 @@ createApp({
       const top = topLevelConfigOf(subjectId.value);
       return top ? top.id : null;
     });
-    // 跨一级配置切换锚点时重置数据集选择；锚点消失则退出分析模式
+    // 能进分析模式：一级配置节点（含其子节点）或对比任务。
+    // 两者之间在左侧点选时直接换内容，不退出分析模式、不弹回详情。
+    const canAnalyze = computed(() => subjectKind.value === 'compare' || !!anchorId.value);
+    // 跨一级配置切换锚点时重置数据集选择
     watch(anchorId, (nv, ov) => {
-      if (nv === ov) return;
-      if (!nv) { if (mode.value === 'analysis') mode.value = 'detail'; return; }
+      if (nv === ov || !nv) return;
       const top = walk(tree, n => n.id === nv);
       analysisDatasetId.value = (top && walk([top], n => n.type === 'dataset') || {}).id || null;
     });
@@ -982,33 +989,25 @@ createApp({
         why: d.samples === 1 ? '单值产物，不作分布分析' : '未跑流式分析，缺分析所需数据',
       })));
     const anchorHint = computed(() => analysisTab.value === 'dispatch'
-      ? '锚点不随树选中变化'
-      : '锚点不随树选中变化；切换数据集在本栏内完成');
-
-    /* ---- 模式可用性 ---- */
-    const canToggle = computed(() => subjectKind.value === 'compare' || !!anchorId.value);
+      ? '在左侧换一级配置节点即换锚点'
+      : '在左侧换一级配置节点即换锚点；同子树内点选不变，切换数据集在本栏内完成');
 
     /* ---- 交互 ---- */
     function onNodeClick(data) {
-      const prevAnchor = anchorId.value;         // 计算属性，取变化前的值
       subjectId.value = data.id;
-      subjectKind.value = data.type === 'config' ? 'config'
-        : data.type === 'batch' ? 'batch'
-        : data.type === 'dataset' ? 'dataset' : 'folder';
+      subjectKind.value = data.type === 'batch' ? 'batch'
+        : data.type === 'dataset' ? 'dataset' : 'config';
 
       // 任务管理是全局页，点树即离开它
       if (mode.value === 'tasks') mode.value = 'detail';
-
-      const top = topLevelConfigOf(data.id);
-      // 同一一级配置子树内点击（含点一级节点本人），锚点不变，分析页面不发生变化
-      if (mode.value === 'analysis' && top && top.id === prevAnchor) {
-        flash('分析锚点不变：仍为「' + top.label + '」');
-      }
-      // 选中的节点不在任何一级配置之下（如根的文件夹）时，分析模式没有锚点可用
-      if (!top && mode.value === 'analysis') mode.value = 'detail';
+      // 分析模式不因点选退出：一级配置之间直接换内容
+      if (!canAnalyze.value && mode.value === 'analysis') mode.value = 'detail';
     }
     function selectCompare(c) {
-      subjectId.value = c.id; subjectKind.value = 'compare'; mode.value = 'detail';
+      subjectId.value = c.id;
+      subjectKind.value = 'compare';
+      // 不弹回详情：在分析模式下直接换成比较分析的内容
+      if (!canAnalyze.value && mode.value === 'analysis') mode.value = 'detail';
     }
     function toggleMode() { mode.value = mode.value === 'analysis' ? 'detail' : 'analysis'; }
 
@@ -1062,11 +1061,17 @@ createApp({
       return '';
     });
     function typeColor(n) {
-      if (n.type === 'folder') return '#b9c0cc';
       if (n.type === 'batch') return '#6941c6';
       if (n.type === 'config') return n.level === 1 ? '#2e7d32' : '#1976d2';
       if (n.type === 'dataset') return n.samples === 1 ? '#b26a00' : '#0f8a8a';
       return '#8b93a3';
+    }
+    // 形状也按类型区分，不只靠颜色
+    function shapeClass(n) {
+      if (n.type === 'config') return n.level === 1 ? 's-circle' : 's-square';
+      if (n.type === 'dataset') return 's-diamond';
+      if (n.type === 'batch') return 's-tri';
+      return 's-square';
     }
     function itemRunnable(it) {
       if (it.shape === 'dispatch') return !!anchorId.value;
@@ -1103,38 +1108,13 @@ createApp({
       notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
-      canToggle, canRun, runDisabledReason, layout, cfgTab, poolSubTab, activeCategories,
+      canAnalyze, canRun, runDisabledReason, cfgTab, poolSubTab, activeCategories,
       onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim, saveDraft,
-      typeColor, itemRunnable, itemReason, bars, linePoints,
+      typeColor, shapeClass, itemRunnable, itemReason, bars, linePoints,
     };
   }
 }).use(ElementPlus).mount('#app');
 </script>
 
-<!-- 探针自身的对照开关：不属于方案，只为裁决「切换控件放哪」 -->
-<div style="position:fixed;right:14px;bottom:14px;z-index:20;background:#fff;border:1px solid var(--line);
-            border-radius:6px;padding:8px 12px;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,.08)">
-  <b style="color:var(--ink-2)">切换动效</b>
-  <div id="lay" style="margin-top:6px;display:flex;gap:6px"></div>
-</div>
-<script>
-(function () {
-  const host = document.getElementById('lay');
-  [['overlay', '乙：详情定住，分析窗从右滑入'],
-   ['strip', '甲：两页横向轨道推拉']].forEach(([k, label], idx) => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    b.style.cssText = 'border:1px solid var(--line-strong);background:#fff;border-radius:4px;'
-      + 'padding:3px 8px;cursor:pointer;font:inherit;font-size:11px';
-    if (idx === 0) b.style.background = '#e8f1fb';
-    b.onclick = () => {
-      [...host.children].forEach(x => x.style.background = '#fff');
-      b.style.background = '#e8f1fb';
-      window.dispatchEvent(new CustomEvent('layout-mode', { detail: k }));
-    };
-    host.appendChild(b);
-  });
-})();
-</script>
 </body>
 </html>

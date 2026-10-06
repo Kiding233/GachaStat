@@ -227,6 +227,17 @@ body{
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5a6272}
 .rail-collapsed .vtext{writing-mode:vertical-rl;line-height:1;font-size:12px;letter-spacing:5px}
 .rail-note{color:var(--muted);font-size:11px;line-height:1.6;margin:8px 0 0}
+/* ── D 段：预览各归各家 ── */
+.page-sim{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel)}
+.page-sim-head{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line2)}
+.page-sim-head b{font-size:13px}
+.tabrow-mini{display:flex;padding:8px 12px 0}
+.tabrow-mini button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-bottom:0;background:var(--result);border-radius:2px 2px 0 0;padding:5px 10px;margin-right:-1px;font:inherit;font-size:12px;color:var(--muted);cursor:pointer}
+.tabrow-mini button.on{background:var(--panel);color:var(--ink);font-weight:600;border-bottom-color:var(--panel)}
+.band{border-top:1px solid var(--line);background:var(--result)}
+.band-head{display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--header);border-bottom:1px solid var(--line);font-size:12px}
+.band-body{padding:10px 12px}
+
 .formish{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:8px}
 .formish div{border-bottom:1px solid var(--line3);padding-bottom:5px;color:var(--muted);font-size:11px}
 </style>
@@ -618,67 +629,165 @@ body{
     </div>
   </section>
 
-  <!-- D 段：右侧可折叠时间线预览栏 -->
+  <!-- D 段：预览各归各家 -->
   <section class="v wide" style="background:#fbfcfd">
     <div class="v-head" style="background:#f2f5f8">
-      <b>D 段 · 右侧可折叠时间线预览栏</b>
-      <p>这就是「去掉文本栏之后，右栏放什么」的答案。它对应现行 WebUI 的 `ConfigPreview`：
-      上为累积资源曲线（各资源着色），中为池子开放区间（甘特），下为保底 / 累抽规则的作用池（台阶中点 + 竖直虚线）。
-      与文本栏的关键差别是：它是**全配置的视图**，不是文本的副本；而且改左边表单时右边立刻跟着变，所以「边改边看」这个价值保住了。</p>
+      <b>D 段 · 预览各归各家（第二个重做）</b>
+      <p><b>前两版都被否：</b>右缘全高道与「分析窗那条道」同缘同形，用户分不清点哪个；改成配置页内的页底带或页内右栏，又被「对多数页面是无关信息还占地方」否掉。<br>
+      <b>根因：</b>预览的三块内容只与 5 个标签页相关（资源定义、资源获取、卡池管理、保底机制、累抽奖励），另外 6 个（卡牌定义、抽卡策略、停止条件、目标卡、权重配置、满突溢出）看它毫无用处。做成全局的东西，等于让一半的页面养一个跟自己无关的面板。<br>
+      <b>新方向：拆开，各归各家。</b>每块可视化只出现在它解释的那一页里，形态也随该页的内容而定（时间轴 / 曲线 / 阈值尺），不是一套东西缩小了搬进去。</p>
     </div>
   </section>
 
-  <section class="v wide">
-    <div class="v-head"><b>D1 · 展开态</b>
-      <p>预览栏固定 300px 在右，左边是配置表单。下方还给了它与「分析窗」那条道的关系：收起时收成同样宽 34px 的一条，位置在右栏的右缘。</p></div>
+  <section class="v">
+    <div class="v-head"><b>D-A · 卡池管理（池）</b>
+      <p>页面内嵌一条本 Banner 的时间轴，画出各池的开放区间。当前编辑的池高亮，改下架时间时线段当场伸缩。这条只在这页出现。</p></div>
     <div class="v-body">
-      <div class="rail-demo">
-        <div class="rail-main">
-          <div style="font-weight:600;font-size:12px;margin-bottom:2px">卡池管理</div>
-          <div style="color:var(--muted);font-size:11px;margin-bottom:10px">Banner: 周年庆</div>
-          <div class="formish">
-            <div>开放时间：第 0 天</div><div>下架时间：第 21 天</div>
-            <div>池类型：角色</div><div>单抽消耗：160</div>
-            <div>保底：rotating</div><div>阈值：90</div>
-          </div>
-          <p class="rail-note">改动这里任一字段，右侧时间线即时跟着变（改下架时间，池子那条线段就伸缩）。</p>
+      <div class="page-sim">
+        <div class="tabrow-mini">
+          <button><span class="mk ico"><svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11"/></svg></span>卡牌定义</button>
+          <button class="on"><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6 5.5l3 3.5 2.2-2.5 2.3 5z"/></svg></span>卡池管理</button>
+          <button><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12"/></svg></span>保底机制</button>
         </div>
-        <div class="rail-side">
-          <div class="rail-side-head">
-            <span>时间线</span>
-            <span style="margin-left:auto;color:var(--muted);font-weight:400;font-size:11px">天 0 → 120</span>
+        <div style="border-top:1px solid var(--line);padding:10px 12px">
+          <div class="formish" style="margin-top:0">
+            <div>池子名：角色池 UP</div><div>开放：第 0 天</div>
+            <div>下架：第 21 天</div><div>单抽消耗：160</div>
           </div>
-          <div class="rail-side-body">
-            <div class="rail-block"><b>累积资源</b>
-              <svg viewBox="0 0 280 56" width="100%" height="56" style="margin-top:4px">
-                <polyline points="0,48 28,45 56,40 84,34 112,27 140,21 168,15 196,11 224,8 252,5 280,3"
-                  fill="none" stroke="#3f8fd9" stroke-width="1.8"/>
-                <polyline points="0,52 28,51 56,50 84,49 112,48 140,47 168,46 196,45 224,44 252,43 280,42"
-                  fill="none" stroke="#b9c4d2" stroke-width="1.4" stroke-dasharray="3 3"/>
-              </svg>
-            </div>
-            <div class="rail-block"><b>池子开放区间</b>
-              <svg viewBox="0 0 280 44" width="100%" height="44" style="margin-top:4px">
-                <rect x="0" y="3" width="98" height="9" fill="#8fbdf0" rx="1"/>
-                <rect x="0" y="17" width="98" height="9" fill="#8fbdf0" rx="1"/>
-                <rect x="0" y="31" width="280" height="9" fill="#d7dee8" rx="1"/>
-                <line x1="98" y1="0" x2="98" y2="44" stroke="#c8d0dc" stroke-width="1" stroke-dasharray="2 2"/>
-              </svg>
-            </div>
-            <div class="rail-block"><b>保底 / 累抽作用池</b>
-              <svg viewBox="0 0 280 34" width="100%" height="34" style="margin-top:4px">
-                <line x1="0" y1="22" x2="280" y2="22" stroke="#e0e5ec" stroke-width="1"/>
-                <circle cx="49" cy="22" r="3.5" fill="#3f8fd9"/>
-                <line x1="49" y1="6" x2="49" y2="30" stroke="#3f8fd9" stroke-width="1" stroke-dasharray="2 2"/>
-                <circle cx="147" cy="22" r="3.5" fill="#7aa9dd"/>
-                <line x1="147" y1="10" x2="147" y2="30" stroke="#7aa9dd" stroke-width="1" stroke-dasharray="2 2"/>
-                <rect x="220" y="19" width="10" height="6" fill="#c9d6e6"/>
-              </svg>
-            </div>
-            <div style="display:flex;gap:6px;margin-top:2px">
-              <span style="border:1px solid var(--line);border-radius:2px;padding:3px 9px;font-size:11px;background:#fff">时间线</span>
-              <span style="border:1px solid var(--line);border-radius:2px;padding:3px 9px;font-size:11px;color:var(--muted)">日历</span>
-            </div>
+        </div>
+        <div class="band">
+          <div class="band-head"><b>本 Banner 开放区间</b>
+            <span style="color:var(--muted);font-size:11px">天 0 → 84</span></div>
+          <div class="band-body">
+            <svg viewBox="0 0 820 66" width="100%" height="66">
+              <g font-size="9" fill="#9aa5b1">
+                <text x="0" y="9">0</text><text x="190" y="9">21</text><text x="385" y="9">42</text>
+                <text x="580" y="9">63</text><text x="775" y="9">84</text>
+              </g>
+              <rect x="0" y="16" width="205" height="11" fill="#3f8fd9" rx="1"/>
+              <rect x="150" y="32" width="290" height="11" fill="#a8c8ea" rx="1"/>
+              <rect x="0" y="48" width="820" height="11" fill="#d7dee8" rx="1"/>
+              <g font-size="10" fill="#6b7280">
+                <text x="212" y="25">角色池 UP</text>
+                <text x="446" y="41">武器池 UP</text>
+                <text x="760" y="57">常驻池</text>
+              </g>
+            </svg>
+            <p class="rail-note">高亮那条（角色池 UP）正被编辑；它和第 2 条的重叠区间一眼可见，这就是「池子互相抢时间」的地方。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>D-B · 资源获取</b>
+      <p>页面内嵌累积资源曲线，台阶对应收入规则。只在这页出现，改周期或数量时曲线当场变陡/变平。</p></div>
+    <div class="v-body">
+      <div class="page-sim">
+        <div class="tabrow-mini">
+          <button class="on"><span class="mk ico"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/></svg></span>资源获取</button>
+          <button><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12"/></svg></span>保底机制</button>
+        </div>
+        <div style="border-top:1px solid var(--line);padding:10px 12px">
+          <div class="formish" style="margin-top:0">
+            <div>规则：every_n_days</div><div>数量：60</div>
+            <div>周期：1 天</div><div>起始资源：66420</div>
+          </div>
+        </div>
+        <div class="band">
+          <div class="band-head"><b>累积资源（按当前规则推演）</b>
+            <span style="color:var(--muted);font-size:11px">120 天</span></div>
+          <div class="band-body">
+            <svg viewBox="0 0 820 60" width="100%" height="60">
+              <polyline points="0,54 82,50 164,46 246,42 328,38 410,34 492,30 574,26 656,22 738,18 820,14"
+                fill="none" stroke="#3f8fd9" stroke-width="1.8"/>
+              <line x1="0" y1="14" x2="820" y2="14" stroke="#e0e5ec" stroke-dasharray="3 3"/>
+              <g font-size="10" fill="#6b7280">
+                <text x="4" y="12">开始 66420</text>
+                <text x="700" y="12">120 天末 73620</text>
+              </g>
+            </svg>
+            <p class="rail-note">规则是线性的，所以是直线；换成每周 +5 的规则，台阶就会显出来。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>D-C · 保底机制</b>
+      <p>这页要的不是时间轴，而是<b>出率随抽数变化的曲线</b>（软保底递增 + 硬保底阈值）。它由 deltas 直接决定，是这一页唯一能一眼验证「我配的软保底对不对」的东西。</p></div>
+    <div class="v-body">
+      <div class="page-sim">
+        <div class="tabrow-mini">
+          <button class="on"><span class="mk ico"><svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11"/></svg></span>保底机制</button>
+          <button><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12"/></svg></span>累抽奖励</button>
+        </div>
+        <div style="border-top:1px solid var(--line);padding:10px 12px">
+          <div class="formish" style="margin-top:0">
+            <div>类型：soft_step</div><div>作用池：角色池 UP</div>
+            <div>阈值：90</div><div>计数器初始：0</div>
+          </div>
+        </div>
+        <div class="band">
+          <div class="band-head"><b>出率曲线</b>
+            <span style="color:var(--muted);font-size:11px">抽数 1 → 90</span></div>
+          <div class="band-body">
+            <svg viewBox="0 0 820 62" width="100%" height="62">
+              <polyline points="0,50 660,50 700,46 740,36 780,20 820,6"
+                fill="none" stroke="#3f8fd9" stroke-width="1.8"/>
+              <line x1="820" y1="0" x2="820" y2="62" stroke="#c62828" stroke-dasharray="3 3"/>
+              <g font-size="10" fill="#6b7280">
+                <text x="4" y="13">第 1 至 74 抽 0.6%</text>
+                <text x="640" y="60">第 90 抽硬保底 100%</text>
+              </g>
+            </svg>
+            <p class="rail-note">曲线的拐点位置就是软保底起点；把它画出来，比在 deltas 表里数数字直观得多。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="v">
+    <div class="v-head"><b>D-D · 累抽奖励</b>
+      <p>形态又是一样不同的东西：<b>阈值尺</b>。累抽奖励是一串离散阈值，画在抽数轴上，一眼看出分布与上限。</p></div>
+    <div class="v-body">
+      <div class="page-sim">
+        <div class="tabrow-mini">
+          <button class="on"><span class="mk ico"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12"/></svg></span>累抽奖励</button>
+          <button><span class="mk ico"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/></svg></span>满突溢出</button>
+        </div>
+        <div style="border-top:1px solid var(--line);padding:10px 12px">
+          <div class="formish" style="margin-top:0">
+            <div>阈值：100</div><div>重复：是</div>
+            <div>上限：5 次</div><div>奖励：抽卡资源 ×30</div>
+          </div>
+        </div>
+        <div class="band">
+          <div class="band-head"><b>阈值分布</b>
+            <span style="color:var(--muted);font-size:11px">累抽 0 → 600</span></div>
+          <div class="band-body">
+            <svg viewBox="0 0 820 62" width="100%" height="62">
+              <line x1="0" y1="30" x2="820" y2="30" stroke="#d7dee8" stroke-width="2"/>
+              <g fill="#3f8fd9">
+                <circle cx="120" cy="30" r="4"/><circle cx="256" cy="30" r="4"/>
+                <circle cx="392" cy="30" r="4"/><circle cx="528" cy="30" r="4"/><circle cx="664" cy="30" r="4"/>
+              </g>
+              <circle cx="800" cy="30" r="4" fill="#7aa9dd"/>
+              <g font-size="10" fill="#6b7280">
+                <text x="100" y="20">100</text><text x="236" y="20">200</text><text x="372" y="20">300</text>
+                <text x="508" y="20">400</text><text x="644" y="20">500</text><text x="770" y="20">600</text>
+              </g>
+              <g font-size="10" fill="#3f8fd9">
+                <text x="86" y="50">×30 资源</text>
+              </g>
+              <g font-size="10" fill="#7aa9dd">
+                <text x="748" y="50">自选券 ×1</text>
+              </g>
+            </svg>
+            <p class="rail-note">蓝点是「重复」那条规则的 5 次触发（到上限为止），浅蓝点是单独一条不重复的规则。</p>
           </div>
         </div>
       </div>
@@ -686,26 +795,12 @@ body{
   </section>
 
   <section class="v wide">
-    <div class="v-head"><b>D2 · 收起态（收成一条 34px 的道）</b>
-      <p>与「分析窗」那条道同构：都是 34px 的整高竖条、浅灰底、竖排文字。区别只在位置（这一条在右栏最右侧）。同一套语言，用户不必学第二种收起方式。</p></div>
-    <div class="v-body">
-      <div class="rail-demo">
-        <div class="rail-main">
-          <div style="font-weight:600;font-size:12px;margin-bottom:2px">卡池管理</div>
-          <div style="color:var(--muted);font-size:11px;margin-bottom:10px">Banner: 周年庆</div>
-          <div class="formish">
-            <div>开放时间：第 0 天</div><div>下架时间：第 21 天</div>
-            <div>池类型：角色</div><div>单抽消耗：160</div>
-            <div>保底：rotating</div><div>阈值：90</div>
-          </div>
-          <p class="rail-note">表单占满整个宽度（预览收起时，左栏不再被 300px 挤住）。</p>
-        </div>
-        <div class="rail-collapsed">
-          <span style="font-size:15px;line-height:1">‹</span>
-          <span class="vtext">时间线预览</span>
-        </div>
-      </div>
-    </div>
+    <div class="v-head"><b>D-E · 其余六页：没有预览，也不需要</b>
+      <p>卡牌定义 / 资源定义 / 抽卡策略 / 停止条件 / 目标卡 / 权重配置 / 满突溢出 这七页的内容没有时间维度，也不随参数连续变化，表格本身已经是最清楚的形态。给它们硬塞一块可视化只会占地方。这就是「各归各家」的直接结果：<b>只有需要的那几页有，其余页面干净</b>。</p></div>
   </section>
+
 
 </div>
+
+</body>
+</html>

@@ -38,13 +38,33 @@ def test_equivalence_verify_script_passes():
     assert '等价对照结果：PASS' in result.stdout
 
 
+# 已**有意重固化**的快照白名单（2026-10-06 软保底语义修正，P64 §3.4.1 / §3.4.1.2）。
+# 新增一份必须同时改本集合并在 P64 §3.4.1 登记「有意变更」——本断言的存在正是
+# 为了让「悄悄重固化」无法通过。
+REFROZEN = {'smart', 'pool_quota', 'draw_target'}
+
+
 def test_baseline_snapshots_are_pristine():
-    """基线快照是**改动前**的冻结产物：仍是版本 2、无 iterations / warnings。"""
+    """基线快照的形态契约（两类并存，均有据）。
+
+    - **未重固化**的（6 份）是改动前的冻结产物：版本 2、无 `iterations` / `warnings`
+      （该两字段是阶段 3 才进 `CompactResult` 的）。
+    - **已重固化**的（`REFROZEN`，3 份）是软保底语义修正后的新基线：当前格式，
+      版本 3、含该两字段。其 `meta.note` 记明重固化理由。
+
+    本断言防止的是「悄悄重固化」：把一份未登记的快照换成当前格式即失败。
+    """
     for path in sorted(GOLDEN_DIR.glob('*.json')):
+        key = path.stem.replace('__', '/')
         compact = json.load(open(path, encoding='utf-8'))['compact']
-        assert compact['result_version'] == 2, path.name
-        assert 'iterations' not in compact, path.name
-        assert 'warnings' not in compact, path.name
+        if key in REFROZEN:
+            assert compact['result_version'] == 3, path.name
+            assert 'iterations' in compact, path.name
+            assert 'warnings' in compact, path.name
+        else:
+            assert compact['result_version'] == 2, path.name
+            assert 'iterations' not in compact, path.name
+            assert 'warnings' not in compact, path.name
 
 
 # ══════════════════════════════════════════════════════════════════

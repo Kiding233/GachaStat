@@ -1310,7 +1310,7 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 | `test_pity.py::TestSoftStepProgress::test_boost_zero_below_start` | 断言 `_cumulative_boost(73) == 0` | 更新期望值 |
 | `test_p79_stop_condition_baseline::test_equivalence_verify_script_passes` | **golden 基线对照** | 见下 |
 
-**基线影响**：`tests/fixtures/p79_golden/` 共 **9 组**，其中 **5 组受影响**，分两类：① **3 组走 soft 语义豁免**（`smart` / `pool_quota` / `draw_target`，各 6 个字段变化，实测）；② **2 组整组豁免**（`stop_on_target` / `fixed_count`，各 13 个字段变化，属 P79 1c 的时间冻结失效形态修复，与乙无关）。另 **4 组逐字段一致**（`pity_reserve` / `target_hunting` / `no_draw` / `plugin__example_phased`）。处置走 P79 既有的「有意变更」流程（`scripts/p79_verify.py` 白名单），或重固化这 3 组快照。**该豁免的回归效力问题已由 2026-10-06 独立审查提出（见 §3.4.1.2 第 3 条），尚未处置**。
+**基线影响**：`tests/fixtures/p79_golden/` 共 **9 组**，其中 **5 组受影响**，分两类：① **3 组走 soft 语义豁免**（`smart` / `pool_quota` / `draw_target`，各 6 个字段变化，实测）；② **2 组整组豁免**（`stop_on_target` / `fixed_count`，各 13 个字段变化，属 P79 1c 的时间冻结失效形态修复，与乙无关）。另 **4 组逐字段一致**（`pity_reserve` / `target_hunting` / `no_draw` / `plugin__example_phased`）。处置：先以 `SOFT_SEMANTICS_EXEMPT` 整组豁免，后经 2026-10-06 独立审查指出该豁免把三组永久移出回归网（见 §3.4.1.2 第（三）1 条），**当日改为重固化这三组 golden**（用户裁决）：新基线已记入其 `meta.note`，三组重新纳入逐字段对照，`p79_verify.py` 不再有 soft 专属豁免集。**旧基线（乙前的值）见 git 历史**，即重固化提交的父提交 `f0fc5f5`。
 
 **风险评级：低**。依据：代码面 3 处共约 25 行；无 golden 之外的数值资产；项目未发布、无历史结果文件；基线处置有现成机制。**唯一需要留意的是第 3 处**（反推函数），漏改不会报错、只会让 GUI 静默改数。
 
@@ -1355,7 +1355,7 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 
 **（三）本轮登记、未处置的审查发现**
 
-1. **`SOFT_SEMANTICS_EXEMPT` 的回归效力**（`scripts/p79_verify.py:116-123`）：该分支只断言 `final_time == env.end_time` 后 `continue`，**不做任何字段比较**，且与 `EXEMPT_STRATEGIES` 分支逐行重复。后果是 `smart` / `pool_quota` / `draw_target` 三组**永久退出逐字段回归对照**，而这三组恰是软保底数值改动的核心风险面。本节的 6 个数值也无任何测试钉住（全库 grep 只命中本文档）。待裁决：重固化这 3 组 golden，或保留豁免但把本节期望数值写成断言。
+1. ~~**`SOFT_SEMANTICS_EXEMPT` 的回归效力**~~（**2026-10-06 已处置**，用户裁决取「重固化」）：该分支只断言 `final_time == env.end_time` 后 `continue`，**不做任何字段比较**，且与 `EXEMPT_STRATEGIES` 分支逐行重复，后果是 `smart` / `pool_quota` / `draw_target` 三组**永久退出逐字段回归对照**，而这三组恰是软保底数值改动的核心风险面。**处置**：重固化这三组 golden（`meta.note` 已记明为新基线），删除 `SOFT_SEMANTICS_EXEMPT` 与其分支，三组重新纳入逐字段对照。重固化前后的逐字段差异实测为 `card_counts` / `draw_card_ids` / `pool_card_counts` 三项（另加全局白名单三项）；同批重跑确认其余 6 组的 `compact` 未受任何非白名单字段影响。**连带改动**：`tests/test_p79_stop_condition_baseline.py::test_baseline_snapshots_are_pristine` 原断言「全部快照版本 2、无 `iterations` / `warnings`」（即「全是改动前产物」），重固化后该前提不再成立，故改为**两类形态契约**并新增 `REFROZEN` 白名单：未重固化的 6 份仍须是版本 2 无该两字段，`REFROZEN` 内的 3 份须是版本 3 含该两字段。新增一份重固化必须同时改该白名单，从而「悄悄重固化」仍然失败。**遗留**：本节 §3.4.1.1 的 6 个数值仍无测试钉住（全库 grep 只命中本文档），重固化把「新基线是对的」这一判断交给了本次裁决而非断言。
 2. **§3.4.1.1 表的第 2 行无法由表头所述池复现**（第 1 行可精确复现）：表头 base 的 f1:f2 = 2:1，旧实现保持目标组内当前比例，输出比必落在 `(2, ρ)` 开区间，而表内输出恰为 9.0（要求 steal = 0），同行 s1 上升又要求 steal > 0，两者矛盾。审查给出一组可逐位吻合的反解分布，但原始 harness 未留档，故记为「与表头所述池不符」，不定性为编造。
 3. **表下「差」的口径未写明**：两个值等于「全部槽位的最大绝对差」，不等于表内加粗的「featured 合计」列之差，易误读。
 4. `_check_pity_format` 的提示语自相矛盾（把 `start`/`end` 既当旧格式标志又当正确写法），且手册 §2244 的字面示例（`soft_interval` + `func="step"`）会被硬拒。

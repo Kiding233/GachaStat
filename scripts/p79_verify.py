@@ -9,11 +9,10 @@
    其 ``final_time`` / ``final_resources`` / ``total_waits`` / ``wait_durations``
    / ``banner_end_*`` 均按 8.3「有意变更」表变化），但须显式核对新值——
    ``final_time`` 必须收敛到 ``env.end_time``
-4. ``smart`` / ``pool_quota`` / ``draw_target`` 三组**走 soft 语义豁免**
-   （``SOFT_SEMANTICS_EXEMPT``，2026-10-06 软保底语义修正所致）——只断言
-   ``final_time`` 收敛到 ``env.end_time``，**不做字段比较**
-5. 其余 4 组（含插件策略）**逐字段严格一致**
-6. 两侧固定 ``sim_start_date`` 为 golden 的生成日：``config.toml`` 含 ``monthly_day``
+4. 其余 7 组（含插件策略）**逐字段严格一致**
+   （``smart`` / ``pool_quota`` / ``draw_target`` 三组曾因 2026-10-06 软保底
+   语义修正而整组豁免，同日已改为**重固化**这三组 golden 并重新纳入本档）
+5. 两侧固定 ``sim_start_date`` 为 golden 的生成日：``config.toml`` 含 ``monthly_day``
    收入规则，其日程锚定该字段，不固定则 ``draw_resources_gained`` 的归属抽次随墙上
    时钟差 1，对照在非生成日恒红（P79 R19 审计定位）
 
@@ -66,13 +65,12 @@ GLOBAL_ALLOWED = {'iterations', 'warnings', 'result_version'}
 SKIP_FIELDS = {'generated_at'}
 # 整组豁免的策略（1c 修复了其时间冻结失效形态，全字段按白名单变化）
 EXEMPT_STRATEGIES = {'fixed_count', 'stop_on_target'}
-# 因 soft 语义修正而整组豁免的策略（2026-10-06，§3.4.1）
-#   `SoftStepBehavior` 的转移量由「源组的 x%」改为「目标组 +x 个百分点」，
-#   且 `_expand_soft_to_deltas` 的首段由 start 改为 start-1。凡配置里带 soft 保底
-#   且抽数覆盖加成区间的策略，其逐抽序列与汇总字段都会变。
-#   与上面 EXEMPT_STRATEGIES 的区别：那三组是**时间冻结失效形态**的修复，
-#   这三组是**保底概率模型**的修正，故分列两集、各自记录理由。
-SOFT_SEMANTICS_EXEMPT = {'smart', 'pool_quota', 'draw_target'}
+# 2026-10-06：软保底语义修正（§3.4.1 修正 ① ② + §3.4.1.2 端点裁决）曾使
+#   `smart` / `pool_quota` / `draw_target` 三组的逐抽序列与汇总字段变化。
+#   当时以 `SOFT_SEMANTICS_EXEMPT` 整组豁免处置，但该分支只断言 `final_time`
+#   收敛、不做任何字段比较，等于把这三组永久移出回归网（独立审查提出）。
+#   现改为**重固化这三组 golden**（新基线已记入其 meta.note），三组重新纳入
+#   逐字段对照，故不再需要任何 soft 专属豁免集。
 
 
 def snapshot_name(strategy_key: str) -> str:
@@ -115,15 +113,6 @@ def main():
 
         diff = {k for k in set(baseline) | set(current)
                 if k not in SKIP_FIELDS and baseline.get(k) != current.get(k)}
-
-        if key in SOFT_SEMANTICS_EXEMPT:
-            ok = current['final_time'] == env.end_time
-            note = (f'final_time={current["final_time"]:.0f}（== end_time ✓）'
-                    if ok else f'final_time={current["final_time"]:.0f} != end_time ✗')
-            print(f'  {"OK  " if ok else "FAIL"} {key:26s} soft 语义豁免（{len(diff)} 字段变化）；{note}')
-            if not ok:
-                failures.append((key, ['final_time 未收敛到 env.end_time']))
-            continue
 
         if key in EXEMPT_STRATEGIES:
             # 整组豁免，但新值必须是「有意变更」描述的那个

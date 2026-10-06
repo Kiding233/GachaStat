@@ -1259,7 +1259,7 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 | 项 | 内容 | 归属 |
 |---|------|------|
 | **甲** | §3.4.1 的语义规格 + §3.1.5.2 的 `t` 定义 | **P64（已写入）** |
-| **乙** | 改 `SoftStepBehavior._compute_probabilities` 的分配式、改 `_expand_soft_to_deltas` 的首段边界、**同步改反推函数 `_deltas_to_soft_interval`** | **已于 2026-10-06 落地**（三处全改，全量 1953 passed / 35 skipped；基线对照经 `SOFT_SEMANTICS_EXEMPT` 豁免后 PASS） |
+| **乙** | 改 `SoftStepBehavior._compute_probabilities` 的分配式、改 `_expand_soft_to_deltas` 的首段边界、同步改反推函数 `_deltas_to_soft_interval`（**该反函数无生产调用方，仅测试**，见下表第 3 行） | **已于 2026-10-06 落地**（三处全改，全量 1953 passed / 35 skipped；基线对照经 `SOFT_SEMANTICS_EXEMPT` 豁免后 PASS） |
 
 **乙的改动清单（3 处，2026-10-06 试改实测）**：
 
@@ -1267,9 +1267,13 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 |---|------|------|
 | 1 | `pity.py` `SoftStepBehavior._compute_probabilities`（[pity.py:306-323](gacha_simulator/core/pity.py#L306-L323)） | 重分配段改为百分点语义 + 单组常数因子（19 行 → 12 行） |
 | 2 | `config_toml.py` `_expand_soft_to_deltas`（[config_toml.py:1592-1601](gacha_simulator/core/config_toml.py#L1592-L1601)） | 两条 `return` 的首段由 `s` 改为 `max(0, s - 1)` |
-| 3 | `config_toml.py` `_deltas_to_soft_interval`（[config_toml.py:1629-1644](gacha_simulator/core/config_toml.py#L1629-L1644)） | **隐藏耦合**：它是第 2 处的反函数，`return (n1, n1 + n2)` 须同步为 `(n1 + 1, n1 + n2 + 1)`，否则 GUI round-trip 不一致 |
+| 3 | `config_toml.py` `_deltas_to_soft_interval`（[config_toml.py:1640-1660](gacha_simulator/core/config_toml.py#L1640-L1660)） | 它是第 2 处的反函数，`return (n1, n1 + n2)` 须同步为 `(n1 + 1, n1 + n2 + 1)`，否则 `TestDeltasRoundTrip` 失败。**更正（2026-10-06 实测）**：该反函数无生产调用方，写回路径不经它，故此项不影响 GUI round-trip |
 
-**第 3 处不做则**：`tests/test_config_toml.py::TestDeltasRoundTrip` 失败（实测 `(72, 0.0) == (73, 0.0)`），且 GUI「加载 → 保存」会静默改小 `start` 与 `end`。
+**第 3 处不做则**：`tests/test_config_toml.py::TestDeltasRoundTrip` 失败（实测 `(72, 0.0) == (73, 0.0)`）。
+
+**更正（2026-10-06 实测）**：此处原写「且 GUI「加载 → 保存」会静默改小 `start` 与 `end`」，该断言不成立。`_pitydef_to_toml()` 直接取 `PityDef.soft_start` / `soft_end` 写回，全库无任何生产路径调用 `_deltas_to_soft_interval()`（仅 `tests/test_config_toml.py` 调用），故第 3 处漏改只影响测试，不影响 GUI。
+
+**GUI 写回路径实测（2026-10-06）**：真实 `config.toml` 经 `load_toml → save_toml → load_toml`，`PityDef` 逐字段差异 0、`[pity]` 段逐行一致；`soft_interval` / `soft_additive` / 直写 `deltas` 三种形态均保值。同轮实测查出并已修复一处独立缺陷：后缀型（`rotating_soft` / `rotating_cr_soft` / `targeted_soft`）的 `soft_start` / `soft_end` / `soft_increment` 此前被 `_pitydef_to_toml()` 整体丢弃，重载后落到注册表默认值 start=74 / end=90，用户配置被静默改写。修复见 commit `af9537c`。
 
 **为什么分开**：乙会改变所有 soft 配置的模拟数值。P64 的验收口径之一是「与旧实现逐场一致」，若现在就动乙，P64 的对照基准当场失效，两件事互相干扰。
 

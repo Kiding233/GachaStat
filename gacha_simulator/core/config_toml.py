@@ -420,11 +420,20 @@ def _check_pity_format(pity_list: list) -> None:
             f"[[pity]] 段内混用新旧格式：条目「{names}」仍是 P55 之前的写法，"
             f"其余条目已是新格式。请统一改写为新格式（旧格式自动迁移已于 P81 删除）。"
         )
+    # 判据两条（二者之一即旧）：① 带 start 但缺 scope；② 含 func。
+    # 提示语须与本判据一致——旧稿写「含 start/end/func 等字段」，紧接着又建议
+    # 「软保底爬升用 start + end」，把 start/end 同时当旧格式标志与正确写法。
+    has_func = any('func' in e for e in legacy)
+    func_hint = (
+        " 其中含 func 字段的条目：func 自 P55 起不再支持（软保底只有 linear 一种"
+        "爬升形态），请删除该字段；需要非线性爬升就直接写 deltas。"
+    ) if has_func else ""
     raise ConfigError(
-        f"[[pity]] 条目「{names}」使用 P55 之前的旧格式（含 start/end/func 等字段），"
-        f"已不再支持自动迁移——原迁移会把 reset='featured_ssr' 原样保留，使保底计数器永不重置。"
-        f"请手工改写为新格式：type 用 soft_interval / soft_additive / hard 等，"
-        f"软保底爬升用 start + end + increment（或直接写 deltas）。"
+        f"[[pity]] 条目「{names}」使用 P55 之前的旧格式（判据：带 start 却缺 scope，"
+        f"或含 func 字段）。已不再支持自动迁移——原迁移会把 reset='featured_ssr' "
+        f"原样保留，使保底计数器永不重置。请手工改写为新格式：每条须带 scope；"
+        f"type 用 soft_interval / soft_additive / hard 等；软保底爬升用 "
+        f"start + end + increment（或直接写 deltas）。{func_hint}"
     )
 
 
@@ -674,8 +683,7 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
 
         # P56：deactivate_on_early_hit 仅 counter 驱动型支持
         # 事件驱动型（rotating/targeted）没有「阈值前提前命中」的概念
-        _EVENT_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
-                                   'rotating_cr_soft', 'targeted', 'targeted_soft'})
+        _EVENT_TYPES = _EVENT_DRIVEN_TYPES  # 模块级常量，见文件下方定义
         if deactivate_on_early_hit and btype in _EVENT_TYPES:
             raise ConfigError(
                 f"保底 '{name}'：deactivate_on_early_hit=true 不适用于"
@@ -1667,8 +1675,14 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     return (n1 + 1, n1 + n2)
 
 
-# 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas
+# ── 与 pity.py 重复的两组 btype 集合（各存一份，靠测试防漂移）──
+# 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas。
+# 事件驱动型：`deactivate_on_early_hit` 对其不适用（_build_pity 据此硬拒）。
+# 对应 pity.py 的 `CounterBasedBehavior._SOFT_SUFFIX_TYPES` / `._EVENT_DRIVEN_TYPES`，
+# 两者由 tests/core/test_pity_config_toml.py::TestDuplicatedConstants 钉住相等。
 _SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
+_EVENT_DRIVEN_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
+                                 'rotating_cr_soft', 'targeted', 'targeted_soft'})
 
 
 def _sugar_matches_deltas(p, btype: str) -> bool:

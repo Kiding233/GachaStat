@@ -461,3 +461,27 @@ class TestSoftSugarRoundTrip:
             assert p2.deltas == p.deltas
         finally:
             os.unlink(path)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 跨模块重复常量的漂移守卫
+# ══════════════════════════════════════════════════════════════════
+
+class TestDuplicatedConstants:
+    """同名集合在 pity.py 与 config_toml.py 各存一份，此处钉住相等。
+
+    P64 计划要把它们升为 `pity_primitives.py` 的模块级常量（未实施）；
+    在那之前，两份拷贝靠本断言防漂移（2026-10-06 独立审查提出）。
+    """
+
+    def test_soft_suffix_types_match(self):
+        from gacha_simulator.core.pity import CounterBasedBehavior
+        from gacha_simulator.core import config_toml
+        assert (config_toml._SOFT_SUFFIX_TYPES
+                == CounterBasedBehavior._SOFT_SUFFIX_TYPES)
+
+    def test_event_driven_types_match(self):
+        from gacha_simulator.core.pity import CounterBasedBehavior
+        from gacha_simulator.core import config_toml
+        assert (config_toml._EVENT_DRIVEN_TYPES
+                == CounterBasedBehavior._EVENT_DRIVEN_TYPES)

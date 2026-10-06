@@ -104,6 +104,27 @@ class TestRejectLegacyPityFormat:
         with pytest.raises(ConfigError, match='legacy_one'):
             _check_pity_format([{'name': 'legacy_one', 'type': 'soft', 'start': 74}])
 
+    def test_func_hint_is_reported(self):
+        """新格式 + func（手册 §2244 的字面形态）：提示语须点名 func 已不支持。
+
+        该条目有 scope、type 也是新名，唯一的问题是 func。旧稿的提示语写
+        「含 start/end/func 等字段」，紧接着又建议「软保底爬升用 start + end」，
+        把 start/end 同时当旧格式标志与正确写法；现改为按判据陈述并附 func 专项提示。
+        """
+        with pytest.raises(ConfigError, match='func 自 P55 起不再支持'):
+            _check_pity_format([
+                {'name': 'p1', 'type': 'soft_interval', 'scope': 'ssr',
+                 'start': 70, 'end': 90, 'func': 'step'}
+            ])
+
+    def test_message_does_not_call_start_a_legacy_marker(self):
+        """提示语不得把 start/end 列为旧格式标志（它们正是新格式的软保底键）。"""
+        with pytest.raises(ConfigError) as ei:
+            _check_pity_format([{'name': 'p1', 'type': 'soft', 'start': 74}])
+        msg = str(ei.value)
+        assert '含 start/end/func 等字段' not in msg
+        assert 'start + end + increment' in msg
+
 
 class TestDeltasRoundTrip:
     """deltas ↔ soft_interval 往返可逆"""

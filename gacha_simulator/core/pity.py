@@ -113,6 +113,11 @@ class CounterBasedBehavior(PityBehavior, ABC):
     _HARD_TYPES = frozenset({'hard'})
     _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'targeted', 'targeted_soft',
                                      'rotating_cr', 'rotating_cr_soft', 'rotating_soft'})
+    # 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas。
+    # config_toml._SOFT_SUFFIX_TYPES 是同内容的另一份拷贝（写回侧用），
+    # 两者由 tests/core/test_pity_config_toml.py::TestDuplicatedConstants 钉住相等。
+    # （本组常量位于 CounterBasedBehavior，与 _SOFT_TYPES / _HARD_TYPES 同处。）
+    _SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
 
     def __init__(self, name: str, state: 'PityState', scope: str, btype: str,
                  reset: str = None, target_featured: bool = False,
@@ -851,7 +856,7 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     # btype 传递给 behavior——基类据此推导 is_soft/is_hard/is_event_driven
     params: Dict[str, Any] = {"btype": pdef.btype}
 
-    _SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
+    _SOFT_SUFFIX_TYPES = CounterBasedBehavior._SOFT_SUFFIX_TYPES
     _P56_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft', 'targeted', 'targeted_soft'})
 
     if getattr(pdef, 'deltas', None) is not None:

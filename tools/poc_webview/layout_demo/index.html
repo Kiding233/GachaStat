@@ -104,12 +104,14 @@ body{
    不给序号时与详情页的相对层序会落到 UA 的默认判定上，出现两页互相透出 */
 .wb-body{flex:1;min-height:0;overflow:hidden;position:relative}
 .strip{position:absolute;inset:0}
+/* 为道预留的边距加在道所在的那一侧：
+   详情页可见时道在右端，分析窗展开时道在左端（它就是窗的左边缘） */
 .pane-detail{
-  position:absolute;inset:0;overflow:auto;padding:12px 46px;
+  position:absolute;inset:0;overflow:auto;padding:12px 46px 12px 14px;
   background:var(--panel);z-index:1;
 }
 .pane-analysis{
-  position:absolute;top:0;bottom:0;left:0;width:100%;overflow:auto;padding:12px 46px;
+  position:absolute;top:0;bottom:0;left:0;width:100%;overflow:auto;padding:12px 14px 12px 46px;
   background:var(--panel);z-index:2;
   transform:translateX(calc(100% - 34px));
   transition:transform .34s cubic-bezier(.25,.8,.35,1);
@@ -173,6 +175,10 @@ body{
 .worker-line{display:flex;align-items:baseline;gap:4px;font-size:18px;font-weight:700;color:var(--ink-3)}
 .worker-line.ok{color:var(--accent)}
 .res-note{margin-top:auto;font-size:11px;color:var(--ink-3);line-height:1.6}
+/* 操作列：按钮与占位短横左缘对齐（el-button 自带左右内边距，会把文字推出去） */
+.op-cell{display:flex;align-items:center}
+.op-cell .el-button{padding:0;margin:0;height:auto}
+.op-cell .tmeta{line-height:1.2}
 
 /* 工具栏按钮上的运行中计数 */
 .tb-badge{
@@ -1257,10 +1263,12 @@ app.component('task-table', {
       </el-table-column>
       <el-table-column label="操作" width="78">
         <template #default="{ row }">
-          <el-button v-if="row.status === 'running' || row.status === 'queued'"
-                     size="small" text type="danger">取消</el-button>
-          <el-button v-else-if="row.status === 'done'" size="small" text>查看</el-button>
-          <span v-else class="tmeta">—</span>
+          <div class="op-cell">
+            <el-button v-if="row.status === 'running' || row.status === 'queued'"
+                       size="small" text type="danger">取消</el-button>
+            <el-button v-else-if="row.status === 'done'" size="small" text>查看</el-button>
+            <span v-else class="tmeta">—</span>
+          </div>
         </template>
       </el-table-column>
     </el-table>`

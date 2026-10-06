@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>标签页样式对照 · GachaStat</title>
+
+<!-- 一次性样式对照页：不属于方案，只为挑标签页样式。
+     纯 HTML + CSS，不依赖框架；每格的做法与代价写在标题行。 -->
+<style>
+:root{
+  --bg:#eef1f5; --panel:#ffffff; --result:#f5f6f8; --header:#f7f8fa;
+  --line:#d5dae2; --line2:#e5e9ee; --line3:#f0f2f5;
+  --ink:#1f2329; --muted:#6b7280; --faint:#9aa5b1;
+  --accent:#1976d2; --accent-9:#edf5fc;
+  --radius:2px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Microsoft YaHei","PingFang SC",sans-serif;font-size:12px;
+}
+.page-head{
+  position:sticky;top:0;z-index:10;background:var(--panel);
+  border-bottom:1px solid var(--line);padding:10px 16px;
+}
+.page-head b{font-size:14px}
+.page-head span{color:var(--muted);font-size:12px;margin-left:10px}
+.grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(470px,1fr));
+  gap:14px;padding:14px 16px 40px;
+}
+.v{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.v-head{padding:8px 10px;border-bottom:1px solid var(--line2);background:#fbfcfd}
+.v-head b{font-size:12px}
+.v-head p{margin:3px 0 0;color:var(--muted);font-size:11px;line-height:1.55}
+.v-body{padding:10px;background:#fbfcfd;flex:1}
+
+/* ── 演示件公共骨架：所有变体共用同一份 DOM，只换 CSS ── */
+.demo{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.demo.plain{border:0}
+.demo .row{display:flex;align-items:flex-end;padding:0 6px;min-height:32px}
+.demo .tab{
+  padding:6px 11px;border:0;background:transparent;font:inherit;font-size:12px;
+  color:var(--muted);cursor:pointer;white-space:nowrap;
+}
+.demo .pane{padding:10px 12px;min-height:104px}
+.demo table{width:100%;border-collapse:collapse}
+.demo th,.demo td{text-align:left;padding:4px 6px;font-weight:400;border-bottom:1px solid var(--line3)}
+.demo th{color:var(--muted);font-size:11px}
+.demo tr:last-child td{border-bottom:0}
+
+/* ── 1 下划线式（现状） ── */
+.v1 .row{border-bottom:1px solid var(--line)}
+.v1 .tab{border-bottom:2px solid transparent;margin-bottom:-1px}
+.v1 .tab.on{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ── 2 下划线式 + 内容区衬卡片 ── */
+.v2{padding:8px;background:var(--result)}
+.v2 .demo{border:0;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.v2 .row{border-bottom:1px solid var(--line)}
+.v2 .tab{border-bottom:2px solid transparent;margin-bottom:-1px}
+.v2 .tab.on{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ── 3 色块带（文件夹式）：选中项白，与内容连体 ── */
+.v3 .row{background:var(--header);border-bottom:1px solid var(--line)}
+.v3 .tab{margin-bottom:-1px;border-bottom:1px solid var(--line)}
+.v3 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;border-bottom-color:var(--panel)}
+
+/* ── 4 色块带 + 未选中项之间竖分隔 ── */
+.v4 .row{background:var(--header);border-bottom:1px solid var(--line)}
+.v4 .tab{margin-bottom:-1px;border-bottom:1px solid var(--line);border-right:1px solid var(--line2)}
+.v4 .tab:last-child{border-right:0}
+.v4 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;border-bottom-color:var(--panel);border-right-color:var(--panel)}
+
+/* ── 5 色块带 + 选中项顶部高亮条 ── */
+.v5 .row{background:var(--header);border-bottom:1px solid var(--line)}
+.v5 .tab{margin-bottom:-1px;border-bottom:1px solid var(--line);box-shadow:inset 0 2px 0 transparent}
+.v5 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;border-bottom-color:var(--panel);
+  box-shadow:inset 0 2px 0 var(--accent)}
+
+/* ── 6 色块带 + 内容区灰底、内部块白（双层色块） ── */
+.v6 .demo{background:var(--result)}
+.v6 .row{background:var(--header);border-bottom:1px solid var(--line)}
+.v6 .tab{margin-bottom:-1px;border-bottom:1px solid var(--line)}
+.v6 .tab.on{background:var(--result);color:var(--ink);font-weight:600;border-bottom-color:var(--result)}
+.v6 .pane{padding:10px}
+.v6 .card{background:var(--panel);border:1px solid var(--line2);border-radius:var(--radius);padding:8px 10px}
+
+/* ── 7 Qt 式：选中项带上左右边与上圆角，与内容连体 ── */
+.v7 .row{background:var(--header);border-bottom:1px solid var(--line)}
+.v7 .tab{margin-bottom:-1px;border:1px solid transparent;border-bottom:0;border-radius:2px 2px 0 0}
+.v7 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-color:var(--line);height:calc(100% + 1px)}
+
+/* ── 8 card 式 ── */
+.v8 .row{gap:3px;padding-top:5px}
+.v8 .tab{border:1px solid var(--line);border-bottom:0;background:var(--result);
+  border-radius:2px 2px 0 0;margin-bottom:-1px}
+.v8 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;border-bottom-color:var(--panel)}
+.v8 .pane{border-top:1px solid var(--line)}
+
+/* ── 9 border-card 式：整块包一层边框 ── */
+.v9 .demo{border:1px solid var(--line)}
+.v9 .row{background:var(--header);border-bottom:1px solid var(--line)}
+.v9 .tab.on{background:var(--panel);color:var(--ink);font-weight:600}
+
+/* ── 10 深色反白 ── */
+.v10 .row{background:#3f4654}
+.v10 .tab{color:#c3cad6}
+.v10 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-radius:2px 2px 0 0;margin-bottom:-1px}
+
+/* ── 11 分段控件 ── */
+.v11{padding:10px}
+.v11 .demo{border:0;background:transparent}
+.v11 .row{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
+  padding:2px;gap:2px;min-height:0}
+.v11 .tab{border-radius:2px;padding:5px 11px}
+.v11 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.v11 .pane{padding:10px 2px 0}
+
+/* ── 12 chip 式 ── */
+.v12 .demo{border:0}
+.v12 .row{padding:0;gap:6px;margin-bottom:8px}
+.v12 .tab{border:1px solid var(--line);border-radius:11px;padding:4px 11px;background:var(--panel)}
+.v12 .tab.on{background:var(--accent-9);border-color:#bcd8f2;color:var(--accent);font-weight:600}
+.v12 .pane{padding:0;border-top:1px solid var(--line2);padding-top:10px}
+
+/* ── 13 极简：加粗 + 左侧短竖条 ── */
+.v13 .demo{border:0}
+.v13 .row{padding:0;gap:14px;border-bottom:1px solid var(--line2)}
+.v13 .tab{padding:6px 0;box-shadow:inset 3px 0 0 transparent;padding-left:8px}
+.v13 .tab.on{color:var(--ink);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+.v13 .pane{padding:10px 0 0}
+
+/* ── 14 左侧竖排标签 ── */
+.v14 .demo{display:flex}
+.v14 .row{flex-direction:column;align-items:stretch;background:var(--header);
+  border-right:1px solid var(--line);padding:6px 0;min-height:0;flex:0 0 96px}
+.v14 .tab{text-align:left;border-left:2px solid transparent}
+.v14 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;border-left-color:var(--accent)}
+.v14 .pane{flex:1}
+
+/* ── 15 底部标签 ── */
+.v15 .demo{display:flex;flex-direction:column}
+.v15 .pane{order:1}
+.v15 .row{order:2;border-top:1px solid var(--line);align-items:flex-start;padding-top:0}
+.v15 .tab{margin-top:-1px;border-top:1px solid transparent}
+.v15 .tab.on{background:var(--panel);color:var(--ink);font-weight:600;border-top-color:var(--panel)}
+.v15 .row{background:var(--header)}
+
+/* ── 二级标签的三种处理（都叠在色块带式之下） ── */
+.sub{display:flex;gap:6px;margin-bottom:10px}
+.sub button{font:inherit;font-size:11px;cursor:pointer;padding:3px 9px;border-radius:var(--radius)}
+.s-a button{border:1px solid var(--line);background:var(--panel);color:var(--muted)}
+.s-a button.on{background:var(--header);color:var(--ink);font-weight:600}
+.s-b button{border:0;background:transparent;color:var(--muted);padding:3px 2px;margin-right:8px;
+  border-bottom:2px solid transparent}
+.s-b button.on{color:var(--accent);border-bottom-color:var(--accent)}
+.s-c button{border:1px solid var(--line);background:var(--result);color:var(--muted)}
+.s-c button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+
+/* ── B 段：分析页骨架 ── */
+.sk{border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);overflow:hidden}
+.sk-head{padding:6px 10px;background:var(--header);border-bottom:1px solid var(--line);
+  font-weight:600;font-size:12px}
+.sk-body{padding:10px;min-height:150px}
+.sk-cols{display:flex;gap:10px}
+.sk-params{flex:0 0 176px;border:1px solid var(--line2);background:var(--result);
+  border-radius:var(--radius);padding:8px}
+.sk-results{flex:1;display:flex;flex-direction:column;gap:8px}
+.sk-block{border:1px solid var(--line2);border-radius:var(--radius);padding:7px 9px;background:var(--panel)}
+.sk-block b{font-size:11px}
+.sk-block .bar{margin-top:6px;height:34px;background:linear-gradient(#8fbdf0,#3f8fd9);border-radius:1px}
+.sk-param-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.sk-param-row label{flex:0 0 60px;color:var(--muted);font-size:11px;text-align:right}
+.sk-param-row .inp{flex:1;height:20px;border:1px solid var(--line);border-radius:1px;background:#fff}
+.sk-top{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;
+  border-bottom:1px solid var(--line2)}
+.sk-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sk-note{color:var(--muted);font-size:11px;line-height:1.6;margin:8px 0 0}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <b>标签页样式对照</b>
+  <span>15 种一级样式 + 二级标签 3 种 + 分析页骨架 3 种。同一份 DOM，只换 CSS。数字编号对应下面的说明。</span>
+</div>
+
+<div class="grid">
+
+  <!-- 1 -->
+  <section class="v v1">
+    <div class="v-head"><b>1 · 下划线式（现状基线）</b>
+      <p>标签行与内容区共用白底，只靠整行底边线 + 选中项 2px 下划线分隔。分隔感最弱，但最轻。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="v v2">
+    <div class="v-head"><b>2 · 下划线式 + 内容区衬卡片</b>
+      <p>保留下划线做标签区分，但把内容区变成一张浮起的白卡，坐在浅灰底上。靠色块层次补上分隔感。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="v v3">
+    <div class="v-head"><b>3 · 色块带（文件夹式）</b>
+      <p>标签行铺浅灰底，选中项变白并去掉下边框，与内容区连成一体。观感接近 Qt 默认，但用设计系统的颜色。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="v v4">
+    <div class="v-head"><b>4 · 色块带 + 竖分隔</b>
+      <p>在 3 的基础上，未选中项之间加 1px 竖线。标签多时（11 个）边界更清楚，代价是竖线密。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="v v5">
+    <div class="v-head"><b>5 · 色块带 + 选中项顶部高亮条</b>
+      <p>色块带之上再给选中项一条 2px 顶部亮条。指向性最强，但引入了第二条强调线（底边线已在断开处形成断口）。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="v v6">
+    <div class="v-head"><b>6 · 双层色块</b>
+      <p>标签行灰底 + 内容区灰底 + 内容块白。三层色阶，分隔最强也最"重"，适合内容本身成块（卡片）的页面。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><div class="card"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr></table></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="v v7">
+    <div class="v-head"><b>7 · Qt 式（带边框的凸起标签）</b>
+      <p>选中项自己有左右边与上边，与内容区连体。观感最接近 GUI，但边框多，与「不用硬边框」的方向相背。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="v v8">
+    <div class="v-head"><b>8 · card 式（浏览器标签）</b>
+      <p>每个标签是一张独立卡片，选中项与内容连体。标签多时横向占位大（11 个会挤），且边框线条较多。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="v v9">
+    <div class="v-head"><b>9 · border-card 式</b>
+      <p>标签行与内容区一起包在一层边框里，标签行有独立底色。分隔最"硬"；外框会和所在面板的边框形成两层。</p></div>
+    <div class="v-body">
+      <div class="demo">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section class="v v10">
+    <div class="v-head"><b>10 · 深色反白</b>
+      <p>标签行深底，选中项反白并与内容连体。对比最强、最"稳"，但深色带会把视线从内容拉走，且与蓝白灰方向偏离。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section class="v v11">
+    <div class="v-head"><b>11 · 分段控件</b>
+      <p>整条做成一个凹槽，选中项是槽里浮起的白块。很"现代"，但把标签页表达成了开关，与「页」的语义略偏。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 -->
+  <section class="v v12">
+    <div class="v-head"><b>12 · chip 式</b>
+      <p>标签是独立胶囊，选中项浅蓝填充 + 描边，无底边线。轻，但标签多时像一排按钮，与「当前在哪一页」的指示偏弱。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 -->
+  <section class="v v13">
+    <div class="v-head"><b>13 · 极简（加粗 + 左侧短竖条）</b>
+      <p>没有底色也没有下划线，只有选中项加粗 + 一条 3px 竖条。最轻，但在浅底上的一排文字容易读成一整条。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 -->
+  <section class="v v14">
+    <div class="v-head"><b>14 · 左侧竖排标签</b>
+      <p>标签竖排在左，内容在右。标签多时反而省横向空间，且天然形成「导航栏 + 内容」的分隔。代价是内容区变窄。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th></tr><tr><td>yayi</td><td>雷电芽衣</td></tr><tr><td>kiana</td><td>琪亚娜</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15 -->
+  <section class="v v15">
+    <div class="v-head"><b>15 · 底部标签</b>
+      <p>标签行在内容下方。少见的做法；好处是内容区与上方标题贴得更紧，坏处是标签离手更远、与页面底边的关系别扭。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row"><button class="tab on">卡牌定义</button><button class="tab">资源定义</button><button class="tab">资源获取</button><button class="tab">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane"><table><tr><th>id</th><th>名称</th><th>稀有度</th></tr><tr><td>yayi</td><td>雷电芽衣</td><td>ssr</td></tr><tr><td>kiana</td><td>琪亚娜</td><td>ssr</td></tr><tr><td>mat1</td><td>合成玉</td><td>sr</td></tr></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 二级 1 -->
+  <section class="v">
+    <div class="v-head"><b>二级标签 · A 方框按钮</b>
+      <p>叠在色块带式之下。「池 / 生命周期」两个二级项做成方框，选中项灰底。层级清楚，但两个方框与一级的色块带容易混淆。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row" style="background:var(--header);border-bottom:1px solid var(--line)"><button class="tab on" style="background:var(--panel);margin-bottom:-1px;border-bottom:1px solid var(--panel);font-weight:600">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane">
+          <div class="sub s-a"><button class="on">池</button><button>生命周期</button></div>
+          <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr><tr><td>武器池 UP</td><td>targeted</td></tr></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 二级 2 -->
+  <section class="v">
+    <div class="v-head"><b>二级标签 · B 下划线</b>
+      <p>二级用下划线，与一级的色块带明显不同，层级一眼分开。轻，但同一屏里出现两种标签语言。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row" style="background:var(--header);border-bottom:1px solid var(--line)"><button class="tab on" style="background:var(--panel);margin-bottom:-1px;border-bottom:1px solid var(--panel);font-weight:600">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane">
+          <div class="sub s-b"><button class="on">池</button><button>生命周期</button></div>
+          <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr><tr><td>武器池 UP</td><td>targeted</td></tr></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 二级 3 -->
+  <section class="v">
+    <div class="v-head"><b>二级标签 · C 填充胶囊</b>
+      <p>二级用填充胶囊，选中项实心蓝。层级最清楚（形状+颜色都不同），代价是引入了彩色块，颜色在本项目里本该留给语义。</p></div>
+    <div class="v-body">
+      <div class="demo plain">
+        <div class="row" style="background:var(--header);border-bottom:1px solid var(--line)"><button class="tab on" style="background:var(--panel);margin-bottom:-1px;border-bottom:1px solid var(--panel);font-weight:600">卡池管理</button><button class="tab">保底机制</button></div>
+        <div class="pane">
+          <div class="sub s-c"><button class="on">池</button><button>生命周期</button></div>
+          <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr><tr><td>武器池 UP</td><td>targeted</td></tr></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B1 -->
+  <section class="v">
+    <div class="v-head"><b>B1 · 分析页骨架：左参数 + 右结果</b>
+      <p>参数栏固定在左（约 176px），结果纵向铺在右。GUI 的最差影响 / 过程分析 / 脆弱性都是这个骨架。适合「一项分析、若干结果块」的页。</p></div>
+    <div class="v-body">
+      <div class="sk">
+        <div class="sk-head">风险分析</div>
+        <div class="sk-body">
+          <div class="sk-cols">
+            <div class="sk-params">
+              <div class="sk-param-row"><label>alpha</label><div class="inp"></div></div>
+              <div class="sk-param-row"><label>scope</label><div class="inp"></div></div>
+              <div class="sk-param-row"><label>GDR</label><div class="inp"></div></div>
+              <div class="sk-note">参数作用于本页全部结果块</div>
+            </div>
+            <div class="sk-results">
+              <div class="sk-block"><b>VaR / CVaR</b><div class="bar" style="height:26px"></div></div>
+              <div class="sk-block"><b>最差情形</b><div class="bar" style="height:26px"></div></div>
+              <div class="sk-block"><b>条件分布</b><div class="bar" style="height:26px"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B2 -->
+  <section class="v">
+    <div class="v-head"><b>B2 · 分析页骨架：顶部参数横条</b>
+      <p>参数横排在顶部一条，结果占满下方。结果区更宽（图表受益），但参数多时横条会换行、把结果往下推。</p></div>
+    <div class="v-body">
+      <div class="sk">
+        <div class="sk-head">风险分析</div>
+        <div class="sk-body">
+          <div class="sk-top">
+            <div class="sk-param-row" style="margin:0"><label>alpha</label><div class="inp" style="width:80px;flex:none"></div></div>
+            <div class="sk-param-row" style="margin:0"><label>scope</label><div class="inp" style="width:110px;flex:none"></div></div>
+            <div class="sk-param-row" style="margin:0"><label>GDR</label><div class="inp" style="width:140px;flex:none"></div></div>
+          </div>
+          <div class="sk-grid">
+            <div class="sk-block"><b>VaR / CVaR</b><div class="bar" style="height:30px"></div></div>
+            <div class="sk-block"><b>最差情形</b><div class="bar" style="height:30px"></div></div>
+            <div class="sk-block"><b>条件分布</b><div class="bar" style="height:30px"></div></div>
+            <div class="sk-block"><b>最好情形</b><div class="bar" style="height:30px"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B3 -->
+  <section class="v">
+    <div class="v-head"><b>B3 · 分析页骨架：每项一张卡（现状）</b>
+      <p>每项自带参数与结果，互不共享。灵活，但同类项之间本该共享的参数（alpha、scope、GDR 指标）会被重复 N 遍。</p></div>
+    <div class="v-body">
+      <div class="sk">
+        <div class="sk-head">风险分析</div>
+        <div class="sk-body">
+          <div class="sk-grid">
+            <div class="sk-block"><b>VaR / CVaR</b>
+              <div class="sk-param-row" style="margin:6px 0"><label>alpha</label><div class="inp"></div></div>
+              <div class="bar" style="height:24px"></div></div>
+            <div class="sk-block"><b>最差情形</b>
+              <div class="sk-param-row" style="margin:6px 0"><label>scope</label><div class="inp"></div></div>
+              <div class="bar" style="height:24px"></div></div>
+          </div>
+          <div class="sk-note">同类项共享的参数在各卡里重复出现，改一次要改多处</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+</body>
+</html>

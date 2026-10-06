@@ -137,11 +137,11 @@ body{
 .lane .chev{display:flex;align-items:center;justify-content:center}
 .lane .vtext{writing-mode:vertical-rl;line-height:1;font-size:12px;letter-spacing:5px}
 
-/* 任务面板（丙）：从工作台顶部下滑的非模态抽屉。
-   方向与「分析窗左右滑」正交，语义不打架；打开时底下的树与分析仍可操作 */
+/* 任务面板：从工作台顶部下滑的非模态抽屉。
+   方向与「分析窗左右滑」正交，语义不打架 */
 .drawer{
   position:absolute;left:0;right:0;top:0;z-index:20;
-  display:flex;flex-direction:column;max-height:58%;
+  display:flex;flex-direction:column;max-height:74%;
   background:var(--panel);border-bottom:1px solid var(--line-strong);
   /* 关闭时只靠 translateY(-101%) 藏不住阴影：下缘（12px 偏移 + 26px 模糊）
      比那一层位移更长，会从工作台顶部漏出一条边，所以关着时阴影一并收掉 */
@@ -156,6 +156,23 @@ body{
 }
 .drawer-head b{font-size:13px}
 .drawer-body{padding:10px 14px 14px;overflow:auto}
+/* 点击抽屉下方任意处收起（标准 popover 行为：这一次点击不再穿透到下面内容） */
+.drawer-catcher{position:absolute;left:0;right:0;top:0;bottom:0;z-index:19}
+
+.run-main{display:flex;gap:12px;align-items:flex-start}
+.run-queue{flex:1;min-width:0}
+.run-res{flex:0 0 232px}
+.pane-head{
+  padding:3px 8px;font-size:11px;color:var(--ink-2);
+  background:#f4f6f9;border:1px solid var(--line);border-bottom:0;
+}
+.run-queue .el-table,.run-res .res-body{border:1px solid var(--line)}
+.res-body{display:flex;flex-direction:column;gap:10px;padding:10px;background:#fafbfc}
+.res-card{border:1px solid var(--line);background:#fff;padding:8px}
+.res-title{font-size:11px;color:var(--ink-3);margin-bottom:6px}
+.worker-line{display:flex;align-items:baseline;gap:4px;font-size:18px;font-weight:700;color:var(--ink-3)}
+.worker-line.ok{color:var(--accent)}
+.res-note{margin-top:auto;font-size:11px;color:var(--ink-3);line-height:1.6}
 
 /* 工具栏按钮上的运行中计数 */
 .tb-badge{
@@ -307,18 +324,7 @@ body{
 
         <!-- 第 1 页：详情 / 任务管理 -->
         <div class="pane pane-detail">
-        <div v-if="mode==='tasks'" class="task-view">
-          <div class="page-head">
-            <h3>任务管理</h3>
-            <span class="tmeta">甲：占满右侧的独立页（替换当前页面，需点树才能离开）</span>
-          </div>
-          <task-table :tasks="tasks"></task-table>
-          <p class="tmeta" style="margin-top:10px">
-            进度与取消在此；任务的产物（子配置与数据集）落在树上对应锚点的子节点。
-          </p>
-        </div>
-
-        <div v-else-if="subjectKind==='config'" class="detail-view">
+        <div v-if="subjectKind==='config'" class="detail-view">
           <div class="page-head">
             <h3>{{ subjectLabel }}</h3>
             <el-tag size="small" :type="nodeState.tagType" effect="light">{{ nodeState.text }}</el-tag>
@@ -701,33 +707,55 @@ body{
          <span class="vtext">{{ mode==='analysis' ? '收起分析' : '展开分析' }}</span>
        </div>
 
-       <!-- 任务面板（丙）：从工作台顶部下滑的非模态抽屉，不替换任何页面 -->
+       <!-- 点击抽屉下方任意处收起 -->
+       <div v-if="taskDrawer" class="drawer-catcher" @click="taskDrawer=false"></div>
+
+       <!-- 任务管理器：从工作台顶部下滑的抽屉，不替换任何页面 -->
        <div class="drawer" :class="{ open: taskDrawer }">
          <div class="drawer-head">
            <b>任务管理</b>
-           <el-tag size="small" type="info" effect="light">丙：非模态下拉栏</el-tag>
+           <el-tag v-if="runningCount" size="small" type="info" effect="light">
+             {{ runningCount }} 个运行中
+           </el-tag>
+           <span class="tmeta">运行对象：{{ subjectLabel }}</span>
            <span class="spacer"></span>
-           <span class="tmeta">打开时左侧树与右侧分析仍可操作，收起后回到原状态</span>
-           <el-button size="small" text @click="taskDrawer=false">收起</el-button>
+           <span class="tmeta">再点工具栏「任务管理」，或点抽屉下方任意处收起</span>
          </div>
          <div class="drawer-body">
-           <task-table :tasks="tasks"></task-table>
+           <div class="run-main">
+             <div class="run-queue">
+               <div class="pane-head">任务队列（{{ tasks.length }}）</div>
+               <task-table :tasks="tasks" :now="now"></task-table>
+             </div>
+             <div class="run-res">
+               <div class="pane-head">资源监控</div>
+               <div class="res-body">
+                 <div class="res-card">
+                   <div class="res-title">CPU</div>
+                   <el-progress :percentage="Math.round(cpu)" :stroke-width="10"></el-progress>
+                 </div>
+                 <div class="res-card">
+                   <div class="res-title">内存</div>
+                   <el-progress :percentage="Math.round(mem)" :stroke-width="10"></el-progress>
+                 </div>
+                 <div class="res-card">
+                   <div class="res-title">并行 worker</div>
+                   <div class="worker-line" :class="{ ok: workersActive > 0 }">
+                     {{ workersActive }}<span class="tmeta" style="font-weight:400"> / {{ workersMax }}</span>
+                   </div>
+                 </div>
+                 <div class="res-note">
+                   正式版由 js_api（psutil）采集，每 2 秒刷新：CPU 为 0.3s 短采样，
+                   worker = 运行中任务声明的并行数之和 / 逻辑核数。探针里为模拟值。
+                 </div>
+               </div>
+             </div>
+           </div>
          </div>
        </div>
       </div>
     </main>
   </div>
-
-  <!-- 任务面板（乙）：模态弹窗 -->
-  <el-dialog v-model="taskDialog" title="任务管理" width="840px" append-to-body>
-    <p class="tmeta" style="margin:0 0 10px">
-      乙：模态弹窗。随处可开、不破坏底下的状态，但打开期间不能操作底下的内容。
-    </p>
-    <task-table :tasks="tasks"></task-table>
-    <template #footer>
-      <el-button size="small" @click="taskDialog=false">关闭</el-button>
-    </template>
-  </el-dialog>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.prod.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/element-plus/2.9.1/index.full.min.js"></script>
@@ -870,13 +898,22 @@ const compareTasks = [
   { id: 'cmp2', type: 'compare', label: '对比：改保底前后', members: ['main_01', 'sa_01'] },
 ];
 
-const tasks = [
-  { name: '方案搜索 search-A', config: '主线毕业配置', pct: 100, status: '已完成' },
-  { name: '最差影响', config: '主线毕业配置', pct: 100, status: '已完成' },
-  { name: '敏感性扫描（模拟次数）', config: '主线毕业配置', pct: 100, status: '已取消' },
-  { name: '主模拟', config: '变体1（低配）', pct: 42, status: '运行中' },
-  { name: '基线（no_draw）', config: '基线（no_draw）', pct: 100, status: '已完成' },
-];
+// 任务对象字段对齐 WebUI 的 RunWorkbench：type=sim|search，
+// status=queued|running|done|failed，elapsed 单位秒，w=该任务声明的并行数
+const tasks = reactive([
+  { name: '方案搜索 search-A', type: 'search', config: '主线毕业配置', status: 'done',
+    pct: 100, elapsed: 1122.4, w: 1 },
+  { name: '最差影响', type: 'sim', config: '主线毕业配置', status: 'done',
+    pct: 100, elapsed: 186.3, w: 4 },
+  { name: '敏感性扫描（模拟次数）', type: 'search', config: '主线毕业配置', status: 'failed',
+    pct: 61, elapsed: 402.8, w: 1, error: '配置 configs/root-v7.toml 不存在（已在界面上被改名）' },
+  { name: '主模拟', type: 'sim', config: '变体1（低配）', status: 'running',
+    pct: 42, elapsed: 0, w: 4, startTime: Date.now() - 41000 },
+  { name: '基线（no_draw）', type: 'sim', config: '基线（no_draw）', status: 'done',
+    pct: 100, elapsed: 3.4, w: 1 },
+  { name: '主模拟', type: 'sim', config: '武器池专精配置', status: 'queued',
+    pct: 0, elapsed: 0, w: 4 },
+]);
 
 /* ============ 应用 ============ */
 const app = createApp({
@@ -888,18 +925,18 @@ const app = createApp({
     const cfgTab = ref('cards');             // 配置详情的 tag，与 GUI 的 11 个标签页同名同序
     const poolSubTab = ref('pool');          // 「卡池管理」下的二级 tag：池 / 生命周期
     const analysisTab = ref('overall');
-    // 任务管理的形式：page=独立页（甲）| dialog=模态弹窗（乙）| drawer=顶部非模态抽屉（丙）
-    const taskView = ref('drawer');
-    const taskDialog = ref(false);
     const taskDrawer = ref(false);
-    // 对照用：换形式时把另外两种表面收掉，避免叠加
-    window.addEventListener('task-view', e => {
-      taskView.value = e.detail;
-      taskDrawer.value = false;
-      taskDialog.value = false;
-      if (mode.value === 'tasks') mode.value = 'detail';
-    });
     const notice = ref('');
+    // 资源监控与任务耗时：探针里为模拟值（正式版由 js_api 的 psutil 每 2 秒采集）
+    const now = ref(Date.now());
+    const cpu = ref(38);
+    const mem = ref(57);
+    const workersMax = ref(navigator.hardwareConcurrency || 8);
+    setInterval(() => { now.value = Date.now(); }, 500);
+    setInterval(() => {
+      cpu.value = Math.max(4, Math.min(97, cpu.value + (Math.random() - 0.5) * 26));
+      mem.value = Math.max(22, Math.min(92, mem.value + (Math.random() - 0.5) * 5));
+    }, 2000);
     const expandedKeys = ref(['cfg1', 'cfg2']);   // batch 默认折叠；新设计无文件夹层级
     const draft = reactive({
       strategy: 'smart', target: '雷电芽衣', targetCount: 1,
@@ -1048,8 +1085,6 @@ const app = createApp({
       subjectKind.value = data.type === 'batch' ? 'batch'
         : data.type === 'dataset' ? 'dataset' : 'config';
 
-      // 任务管理是全局页，点树即离开它
-      if (mode.value === 'tasks') mode.value = 'detail';
       // 分析模式不因点选退出：一级配置之间直接换内容
       if (!canAnalyze.value && mode.value === 'analysis') mode.value = 'detail';
     }
@@ -1060,13 +1095,12 @@ const app = createApp({
       if (!canAnalyze.value && mode.value === 'analysis') mode.value = 'detail';
     }
     function toggleMode() { mode.value = mode.value === 'analysis' ? 'detail' : 'analysis'; }
-    // 同一个入口，按当前选定的形式落到不同的表面
-    function openTasks() {
-      if (taskView.value === 'page') { mode.value = 'tasks'; return; }
-      if (taskView.value === 'dialog') { taskDialog.value = true; return; }
-      taskDrawer.value = true;
-    }
-    const runningCount = computed(() => tasks.filter(t => t.status === '运行中').length);
+    // 同一个按钮开关抽屉：再点一次即收起
+    function openTasks() { taskDrawer.value = !taskDrawer.value; }
+    const runningCount = computed(() => tasks.filter(t => t.status === 'running').length);
+    // 与后端一致：运行中任务声明的并行数之和（模拟任务取 w，搜索任务按 1）
+    const workersActive = computed(() =>
+      tasks.filter(t => t.status === 'running').reduce((a, t) => a + (t.w || 1), 0));
 
     let timer = null;
     function flash(msg) {
@@ -1166,62 +1200,73 @@ const app = createApp({
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
       canAnalyze, canRun, runDisabledReason, cfgTab, poolSubTab, activeCategories,
-      taskView, taskDialog, taskDrawer, openTasks, runningCount,
+      taskDrawer, openTasks, runningCount, workersActive, workersMax, cpu, mem, now,
       onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim, saveDraft,
       typeColor, shapeClass, itemRunnable, itemReason, bars, linePoints,
     };
   }
 });
 
-// 任务表在三种表面（独立页 / 弹窗 / 抽屉）里共用同一份渲染
+// 任务表：列与 WebUI 的 RunWorkbench 对齐（任务/类型/状态/进度/耗时/操作），
+// 状态用标签着色，失败带原因 tooltip，耗时对运行中任务实时计算
 app.component('task-table', {
-  props: { tasks: { type: Array, default: () => [] } },
+  props: {
+    tasks: { type: Array, default: () => [] },
+    now: { type: Number, default: 0 },
+  },
+  methods: {
+    elapsedOf(row) {
+      if (row.status === 'running' && row.startTime) {
+        return ((this.now - row.startTime) / 1000).toFixed(1);
+      }
+      return row.elapsed ? row.elapsed.toFixed(1) : '—';
+    },
+  },
   template: `
     <el-table :data="tasks" size="small" style="width:100%">
-      <el-table-column prop="name" label="任务" min-width="200"></el-table-column>
-      <el-table-column prop="config" label="配置" min-width="150"></el-table-column>
-      <el-table-column label="进度" width="180">
+      <el-table-column label="任务" min-width="170" show-overflow-tooltip>
         <template #default="{ row }">
-          <el-progress :percentage="row.pct" :status="row.status==='失败' ? 'exception' : undefined"></el-progress>
+          {{ row.name }}<span class="tmeta"> · {{ row.config }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="status" label="状态" width="88"></el-table-column>
-      <el-table-column label="操作" width="80">
+      <el-table-column label="类型" width="66">
         <template #default="{ row }">
-          <el-button v-if="row.status==='运行中'" size="small" text type="danger">取消</el-button>
+          <span class="tmeta">{{ row.type === 'search' ? '搜索' : '模拟' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="82">
+        <template #default="{ row }">
+          <el-tag v-if="row.status === 'done'" size="small" type="success">完成</el-tag>
+          <el-tag v-else-if="row.status === 'failed'" size="small" type="danger">
+            <el-tooltip :content="row.error || '失败'" placement="top" :show-after="200">
+              <span>失败</span>
+            </el-tooltip>
+          </el-tag>
+          <el-tag v-else-if="row.status === 'running'" size="small">运行中</el-tag>
+          <el-tag v-else size="small" type="info">排队</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="进度" width="150">
+        <template #default="{ row }">
+          <el-progress :percentage="row.pct" :stroke-width="8"
+                       :status="row.status === 'failed' ? 'exception' : undefined"></el-progress>
+        </template>
+      </el-table-column>
+      <el-table-column label="耗时(s)" width="76">
+        <template #default="{ row }">{{ elapsedOf(row) }}</template>
+      </el-table-column>
+      <el-table-column label="操作" width="78">
+        <template #default="{ row }">
+          <el-button v-if="row.status === 'running' || row.status === 'queued'"
+                     size="small" text type="danger">取消</el-button>
+          <el-button v-else-if="row.status === 'done'" size="small" text>查看</el-button>
+          <span v-else class="tmeta">—</span>
         </template>
       </el-table-column>
     </el-table>`
 });
 
 app.use(ElementPlus).mount('#app');
-</script>
-
-<!-- 探针自身的对照开关：任务管理的形式，不属于方案本身 -->
-<div style="position:fixed;right:14px;bottom:14px;z-index:30;background:#fff;border:1px solid var(--line);
-            border-radius:6px;padding:8px 12px;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,.08)">
-  <b style="color:var(--ink-2)">任务管理的形式</b>
-  <div id="tv" style="margin-top:6px;display:flex;gap:6px"></div>
-</div>
-<script>
-(function () {
-  const host = document.getElementById('tv');
-  [['page', '甲：独立页'],
-   ['dialog', '乙：模态弹窗'],
-   ['drawer', '丙：顶部非模态抽屉']].forEach(([k, label], idx) => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    b.style.cssText = 'border:1px solid var(--line-strong);background:#fff;border-radius:4px;'
-      + 'padding:3px 8px;cursor:pointer;font:inherit;font-size:11px';
-    if (idx === 2) b.style.background = '#e8f1fb';
-    b.onclick = () => {
-      [...host.children].forEach(x => x.style.background = '#fff');
-      b.style.background = '#e8f1fb';
-      window.dispatchEvent(new CustomEvent('task-view', { detail: k }));
-    };
-    host.appendChild(b);
-  });
-})();
 </script>
 
 </body>

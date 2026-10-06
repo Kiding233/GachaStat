@@ -247,6 +247,48 @@ body{
 .lib-tag{flex:0 0 92px;display:flex;align-items:center;padding:0 10px;font-size:10px;
   color:var(--faint);letter-spacing:.3px;border-right:1px solid var(--line3)}
 .lib-tag.io{color:#5b7fb5}
+.lib-matrix-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+.lib-matrix{border-collapse:collapse;width:100%;min-width:1100px}
+.lib-matrix th,.lib-matrix td{border-bottom:1px solid var(--line3);border-right:1px solid var(--line3);
+  padding:8px 6px;text-align:center;vertical-align:middle}
+.lib-matrix thead th{background:var(--header);font-size:11px;color:var(--ink-2);font-weight:600;padding:7px 6px}
+.lib-matrix .rh{background:var(--header);font-size:11px;color:var(--ink-2);text-align:left;padding-left:10px;width:64px}
+.lib-matrix td{color:var(--ink-3)}
+.lib-matrix svg{display:block;margin:0 auto}
+.lib-matrix .nm{display:block;margin-top:3px;font-size:9px;color:var(--faint);font-family:Consolas,monospace}
+.lib-matrix .na{font-size:10px;color:#c3c8d2}
+.lic-table{margin-top:10px;border-collapse:collapse;font-size:11px}
+.lic-table th,.lic-table td{border:1px solid var(--line2);padding:3px 10px;text-align:left;color:var(--muted)}
+.lic-table th{background:var(--header);color:var(--ink-2)}
+
+.lib-matrix-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+.lib-matrix{border-collapse:collapse;width:100%;min-width:1100px}
+.lib-matrix th,.lib-matrix td{border-bottom:1px solid var(--line3);border-right:1px solid var(--line3);
+  padding:8px 6px;text-align:center;vertical-align:middle}
+.lib-matrix thead th{background:var(--header);font-size:11px;color:var(--ink-2);font-weight:600;padding:7px 6px}
+.lib-matrix .rh{background:var(--header);font-size:11px;color:var(--ink-2);text-align:left;padding-left:10px;width:64px}
+.lib-matrix td{color:var(--ink-3)}
+.lib-matrix svg{display:block;margin:0 auto}
+.lib-matrix .nm{display:block;margin-top:3px;font-size:9px;color:var(--faint);font-family:Consolas,monospace}
+.lib-matrix .na{font-size:10px;color:#c3c8d2}
+.lic-table{margin-top:10px;border-collapse:collapse;font-size:11px}
+.lic-table th,.lic-table td{border:1px solid var(--line2);padding:3px 10px;text-align:left;color:var(--muted)}
+.lic-table th{background:var(--header);color:var(--ink-2)}
+
+.lib-matrix-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+.lib-matrix{border-collapse:collapse;width:100%;min-width:1100px}
+.lib-matrix th,.lib-matrix td{border-bottom:1px solid var(--line3);border-right:1px solid var(--line3);
+  padding:8px 6px;text-align:center;vertical-align:middle}
+.lib-matrix thead th{background:var(--header);font-size:11px;color:var(--ink-2);font-weight:600;padding:7px 6px}
+.lib-matrix .rh{background:var(--header);font-size:11px;color:var(--ink-2);text-align:left;padding-left:10px;width:64px}
+.lib-matrix td{color:var(--ink-3)}
+.lib-matrix svg{display:block;margin:0 auto}
+.lib-matrix .nm{display:block;margin-top:3px;font-size:9px;color:var(--faint);font-family:Consolas,monospace}
+.lib-matrix .na{font-size:10px;color:#c3c8d2}
+.lic-table{margin-top:10px;border-collapse:collapse;font-size:11px}
+.lic-table th,.lic-table td{border:1px solid var(--line2);padding:3px 10px;text-align:left;color:var(--muted)}
+.lic-table th{background:var(--header);color:var(--ink-2)}
+
 
 .ic:last-child{border-right:0}
 .ic.rec{background:#f4f8fd}
@@ -291,6 +333,155 @@ body{
 </div>
 
 <div class="grid">
+
+  <!-- 图标库对照 -->
+  <section class="v wide" style="background:#fbfcfd">
+    <div class="v-head" style="background:#f2f5f8">
+      <b>跨图标库对照 · 谁家的旗子/分叉/仪表更像话</b>
+      <p>每个库的图标名都不一致（<code>flag</code> / <code>flag-outline</code> / <code>flag_24_regular</code>），
+      所以下面是<b>按关键词在各库的文件清单里检索</b>出来的真实文件，不是猜名。取不到的直接标「该库无对应名」，不编。</p>
+      <p>所有列出的库都是<b>宽松许可</b>（ISC / MIT / Apache-2.0），可直接商用与随包分发，唯一要求是保留许可声明。
+      取用方式是 jsdelivr 上的 <code>&lt;包&gt;@&lt;版本&gt;/&lt;路径&gt;</code>，把 SVG 抽出来内联即可，不需要引整套库。</p>
+    </div>
+    <div class="v-body">
+      <div class="lib-matrix-wrap">
+        <table class="lib-matrix"><thead><tr><th></th><th>Tabler</th><th>Phosphor</th><th>Bootstrap</th><th>Heroicons</th><th>Fluent</th><th>Carbon</th><th>Remix</th><th>Lucide</th></tr></thead><tbody><tr><th class="rh">旗子</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M5 5a5 5 0 0 1 7 0a5 5 0 0 0 7 0v9a5 5 0 0 1 -7 0a5 5 0 0 0 -7 0v-9z" />
+  <path d="M5 21v-7" />
+</svg><span class="nm">flag</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M42.76,50A8,8,0,0,0,40,56V224a8,8,0,0,0,16,0V179.77c26.79-21.16,49.87-9.75,76.45,3.41,16.4,8.11,34.06,16.85,53,16.85,13.93,0,28.54-4.75,43.82-18a8,8,0,0,0,2.76-6V56A8,8,0,0,0,218.76,50c-28,24.23-51.72,12.49-79.21-1.12C111.07,34.76,78.78,18.79,42.76,50ZM216,172.25c-26.79,21.16-49.87,9.74-76.45-3.41-25-12.35-52.81-26.13-83.55-8.4V59.79c26.79-21.16,49.87-9.75,76.45,3.4,25,12.35,52.82,26.13,83.55,8.4Z"/></svg><span class="nm">flag</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path d="M14.778.085A.5.5 0 0 1 15 .5V8a.5.5 0 0 1-.314.464L14.5 8l.186.464-.003.001-.006.003-.023.009a12 12 0 0 1-.397.15c-.264.095-.631.223-1.047.35-.816.252-1.879.523-2.71.523-.847 0-1.548-.28-2.158-.525l-.028-.01C7.68 8.71 7.14 8.5 6.5 8.5c-.7 0-1.638.23-2.437.477A20 20 0 0 0 3 9.342V15.5a.5.5 0 0 1-1 0V.5a.5.5 0 0 1 1 0v.282c.226-.079.496-.17.79-.26C4.606.272 5.67 0 6.5 0c.84 0 1.524.277 2.121.519l.043.018C9.286.788 9.828 1 10.5 1c.7 0 1.638-.23 2.437-.477a20 20 0 0 0 1.349-.476l.019-.007.004-.002h.001M14 1.221c-.22.078-.48.167-.766.255-.81.252-1.872.523-2.734.523-.886 0-1.592-.286-2.203-.534l-.008-.003C7.662 1.21 7.139 1 6.5 1c-.669 0-1.606.229-2.415.478A21 21 0 0 0 3 1.845v6.433c.22-.078.48-.167.766-.255C4.576 7.77 5.638 7.5 6.5 7.5c.847 0 1.548.28 2.158.525l.028.01C9.32 8.29 9.86 8.5 10.5 8.5c.668 0 1.606-.229 2.415-.478A21 21 0 0 0 14 7.655V1.222z"/>
+</svg><span class="nm">flag</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke-width="1.5" stroke="currentColor">
+  <path stroke-linecap="round" stroke-linejoin="round" d="M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5"/>
+</svg><span class="nm">flag</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M3 3.75c0-.42.34-.75.75-.75h16.5c.62 0 .98.7.6 1.2L16.7 9.75l4.16 5.55c.38.5.02 1.2-.6 1.2H4.5v4.75c0 .38-.28.7-.65.74l-.1.01a.75.75 0 0 1-.74-.65l-.01-.1V3.75Zm15.75.75H4.5V15h14.25l-3.6-4.8a.75.75 0 0 1 0-.9l3.6-4.8Z"/></svg><span class="nm">flag_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path d="M6,30H4V2H28l-5.8,9L28,20H6ZM6,18H24.33L19.8,11l4.53-7H6Z"/></svg><span class="nm">flag</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12.382 3C12.7607 3 13.107 3.214 13.2764 3.55279L14 5H20C20.5523 5 21 5.44772 21 6V17C21 17.5523 20.5523 18 20 18H13.618C13.2393 18 12.893 17.786 12.7236 17.4472L12 16H5V22H3V3H12.382ZM11.7639 5H5V14H13.2361L14.2361 16H19V7H12.7639L11.7639 5Z"/></svg><span class="nm">flag-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" />
+</svg><span class="nm">flag</span></td></tr>
+<tr><th class="rh">分叉</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M7 18m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+  <path d="M7 6m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+  <path d="M17 6m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+  <path d="M7 8l0 8" />
+  <path d="M9 18h6a2 2 0 0 0 2 -2v-5" />
+  <path d="M14 14l3 -3l3 3" />
+</svg><span class="nm">git-branch</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M232,64a32,32,0,1,0-40,31v17a8,8,0,0,1-8,8H96a23.84,23.84,0,0,0-8,1.38V95a32,32,0,1,0-16,0v66a32,32,0,1,0,16,0V144a8,8,0,0,1,8-8h88a24,24,0,0,0,24-24V95A32.06,32.06,0,0,0,232,64ZM64,64A16,16,0,1,1,80,80,16,16,0,0,1,64,64ZM96,192a16,16,0,1,1-16-16A16,16,0,0,1,96,192ZM200,80a16,16,0,1,1,16-16A16,16,0,0,1,200,80Z"/></svg><span class="nm">git-branch</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path d="M8.416.223a.5.5 0 0 0-.832 0l-3 4.5A.5.5 0 0 0 5 5.5h.098L3.076 8.735A.5.5 0 0 0 3.5 9.5h.191l-1.638 3.276a.5.5 0 0 0 .447.724H7V16h2v-2.5h4.5a.5.5 0 0 0 .447-.724L12.31 9.5h.191a.5.5 0 0 0 .424-.765L10.902 5.5H11a.5.5 0 0 0 .416-.777zM6.437 4.758A.5.5 0 0 0 6 4.5h-.066L8 1.401 10.066 4.5H10a.5.5 0 0 0-.424.765L11.598 8.5H11.5a.5.5 0 0 0-.447.724L12.69 12.5H3.309l1.638-3.276A.5.5 0 0 0 4.5 8.5h-.098l2.022-3.235a.5.5 0 0 0 .013-.507"/>
+</svg><span class="nm">tree</span></td><td class="na">库里无对应名</td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M4 5.5a3.5 3.5 0 1 1 4.49 3.36 5.5 5.5 0 0 0 5.26 3.89h.33a3.5 3.5 0 1 1 0 1.5h-.33a6.99 6.99 0 0 1-5.5-2.67v3.5a3.5 3.5 0 1 1-1.5 0V8.92A3.5 3.5 0 0 1 4 5.5Zm3.5-2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 13a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm8-3a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"/></svg><span class="nm">branch_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path stroke-width="0" d="m20,6c0,1.8587,1.2795,3.4109,3,3.858v4.142c0,1.6543-1.3457,3-3,3h-8c-1.1299,0-2.1617.391-3,1.0256v-8.1676c1.7203-.4471,3-1.9993,3-3.858,0-2.2061-1.7944-4-4-4s-4,1.7939-4,4c0,1.8587,1.2797,3.4108,3,3.858v12.142s0,.142,0,.142c-1.7203.4473-3,1.9997-3,3.858,0,2.2056,1.7944,4,4,4s4-1.7944,4-4c0-1.8583-1.2797-3.4107-3-3.858v-.142c0-1.6543,1.3457-3,3-3h8c2.7568,0,5-2.2432,5-5v-4.142c1.7205-.4471,3-1.9993,3-3.858,0-2.2061-1.7939-4-4-4s-4,1.7939-4,4Zm-14,0c0-1.1025.897-2,2-2s2,.8975,2,2c0,1.1025-.897,2-2,2s-2-.8975-2-2Zm4,20c0,1.103-.897,2-2,2s-2-.897-2-2,.897-2,2-2,2,.897,2,2ZM26,6c0,1.1025-.8975,2-2,2s-2-.8975-2-2c0-1.1025.8975-2,2-2s2,.8975,2,2Z"/></svg><span class="nm">branch</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M7.10508 15.2101C8.21506 15.6501 9 16.7334 9 18C9 19.6569 7.65685 21 6 21C4.34315 21 3 19.6569 3 18C3 16.6938 3.83481 15.5825 5 15.1707V8.82929C3.83481 8.41746 3 7.30622 3 6C3 4.34315 4.34315 3 6 3C7.65685 3 9 4.34315 9 6C9 7.30622 8.16519 8.41746 7 8.82929V11.9996C7.83566 11.3719 8.87439 11 10 11H14C15.3835 11 16.5482 10.0635 16.8949 8.78991C15.7849 8.34988 15 7.26661 15 6C15 4.34315 16.3431 3 18 3C19.6569 3 21 4.34315 21 6C21 7.3332 20.1303 8.46329 18.9274 8.85392C18.5222 11.2085 16.4703 13 14 13H10C8.61653 13 7.45179 13.9365 7.10508 15.2101ZM6 17C5.44772 17 5 17.4477 5 18C5 18.5523 5.44772 19 6 19C6.55228 19 7 18.5523 7 18C7 17.4477 6.55228 17 6 17ZM6 5C5.44772 5 5 5.44772 5 6C5 6.55228 5.44772 7 6 7C6.55228 7 7 6.55228 7 6C7 5.44772 6.55228 5 6 5ZM18 5C17.4477 5 17 5.44772 17 6C17 6.55228 17.4477 7 18 7C18.5523 7 19 6.55228 19 6C19 5.44772 18.5523 5 18 5Z"/></svg><span class="nm">git-branch-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <line x1="6" x2="6" y1="3" y2="15" />
+  <circle cx="18" cy="6" r="3" />
+  <circle cx="6" cy="18" r="3" />
+  <path d="M18 9a9 9 0 0 1-9 9" />
+</svg><span class="nm">git-branch</span></td></tr>
+<tr><th class="rh">堆叠卡</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M8.59 4.581c.362 -.359 .86 -.581 1.41 -.581h8a2 2 0 0 1 2 2v8c0 .556 -.227 1.06 -.594 1.422m-3.406 .578h-6a2 2 0 0 1 -2 -2v-6" />
+  <path d="M16 16v2a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2h2" />
+  <path d="M3 3l18 18" />
+</svg><span class="nm">layers-off</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M230.91,172A8,8,0,0,1,228,182.91l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,36,169.09l92,53.65,92-53.65A8,8,0,0,1,230.91,172ZM220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09ZM24,80a8,8,0,0,1,4-6.91l96-56a8,8,0,0,1,8.06,0l96,56a8,8,0,0,1,0,13.82l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,24,80Zm23.88,0L128,126.74,208.12,80,128,33.26Z"/></svg><span class="nm">stack</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path d="M8.235 1.559a.5.5 0 0 0-.47 0l-7.5 4a.5.5 0 0 0 0 .882L3.188 8 .264 9.559a.5.5 0 0 0 0 .882l7.5 4a.5.5 0 0 0 .47 0l7.5-4a.5.5 0 0 0 0-.882L12.813 8l2.922-1.559a.5.5 0 0 0 0-.882zm3.515 7.008L14.438 10 8 13.433 1.562 10 4.25 8.567l3.515 1.874a.5.5 0 0 0 .47 0zM8 9.433 1.562 6 8 2.567 14.438 6z"/>
+</svg><span class="nm">layers</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke-width="1.5" stroke="currentColor">
+  <path stroke-linecap="round" stroke-linejoin="round" d="m7.875 14.25 1.214 1.942a2.25 2.25 0 0 0 1.908 1.058h2.006c.776 0 1.497-.4 1.908-1.058l1.214-1.942M2.41 9h4.636a2.25 2.25 0 0 1 1.872 1.002l.164.246a2.25 2.25 0 0 0 1.872 1.002h2.092a2.25 2.25 0 0 0 1.872-1.002l.164-.246A2.25 2.25 0 0 1 16.954 9h4.636M2.41 9a2.25 2.25 0 0 0-.16.832V12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 12V9.832c0-.287-.055-.57-.16-.832M2.41 9a2.25 2.25 0 0 1 .382-.632l3.285-3.832a2.25 2.25 0 0 1 1.708-.786h8.43c.657 0 1.281.287 1.709.786l3.284 3.832c.163.19.291.404.382.632M4.5 20.25h15A2.25 2.25 0 0 0 21.75 18v-2.625c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125V18a2.25 2.25 0 0 0 2.25 2.25Z"/>
+</svg><span class="nm">inbox-stack</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M4 4h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6c0-1.1.9-2 2-2Zm11 1.5H4a.5.5 0 0 0-.5.5v7c0 .28.22.5.5.5h11a.5.5 0 0 0 .5-.5V6a.5.5 0 0 0-.5-.5ZM4.56 16a2 2 0 0 0 1.94 1.5h9a4 4 0 0 0 4-4v-5A2 2 0 0 0 18 6.56v6.94a2.5 2.5 0 0 1-2.5 2.5H4.56Zm2.5 2.5A2 2 0 0 0 9 20h7.25A5.75 5.75 0 0 0 22 14.25V11a2 2 0 0 0-1.5-1.94v5.19c0 2.35-1.9 4.25-4.25 4.25H7.06Z"/></svg><span class="nm">stack_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path d="M16,24a.9967.9967,0,0,1-.4741-.12l-13-7L3.4741,15.12,16,21.8643,28.5259,15.12l.9482,1.7607-13,7A.9967.9967,0,0,1,16,24Z"/><path d="M16 30a.9967.9967 0 01-.4741-.12l-13-7L3.4741 21.12 16 27.8643 28.5259 21.12l.9482 1.7607-13 7A.9967.9967 0 0116 30zM16 18a.9967.9967 0 01-.4741-.12l-13-7a1 1 0 010-1.7607l13-7a.9982.9982 0 01.9482 0l13 7a1 1 0 010 1.7607l-13 7A.9967.9967 0 0116 18zM5.1094 10L16 15.8643 26.8906 10 16 4.1358z"/></svg><span class="nm">layers</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M20.0833 15.1999L21.2854 15.9212C21.5221 16.0633 21.5989 16.3704 21.4569 16.6072C21.4146 16.6776 21.3557 16.7365 21.2854 16.7787L12.5144 22.0412C12.1977 22.2313 11.8021 22.2313 11.4854 22.0412L2.71451 16.7787C2.47772 16.6366 2.40093 16.3295 2.54301 16.0927C2.58523 16.0223 2.64413 15.9634 2.71451 15.9212L3.9166 15.1999L11.9999 20.0499L20.0833 15.1999ZM20.0833 10.4999L21.2854 11.2212C21.5221 11.3633 21.5989 11.6704 21.4569 11.9072C21.4146 11.9776 21.3557 12.0365 21.2854 12.0787L11.9999 17.6499L2.71451 12.0787C2.47772 11.9366 2.40093 11.6295 2.54301 11.3927C2.58523 11.3223 2.64413 11.2634 2.71451 11.2212L3.9166 10.4999L11.9999 15.3499L20.0833 10.4999ZM12.5144 1.30864L21.2854 6.5712C21.5221 6.71327 21.5989 7.0204 21.4569 7.25719C21.4146 7.32757 21.3557 7.38647 21.2854 7.42869L11.9999 12.9999L2.71451 7.42869C2.47772 7.28662 2.40093 6.97949 2.54301 6.7427C2.58523 6.67232 2.64413 6.61343 2.71451 6.5712L11.4854 1.30864C11.8021 1.11864 12.1977 1.11864 12.5144 1.30864ZM11.9999 3.33233L5.88723 6.99995L11.9999 10.6676L18.1126 6.99995L11.9999 3.33233Z"/></svg><span class="nm">stack-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" />
+  <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
+  <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />
+</svg><span class="nm">layers</span></td></tr>
+<tr><th class="rh">币</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+  <path d="M14.8 9a2 2 0 0 0 -1.8 -1h-2a2 2 0 1 0 0 4h2a2 2 0 1 1 0 4h-2a2 2 0 0 1 -1.8 -1" />
+  <path d="M12 7v10" />
+</svg><span class="nm">coin</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M207.58,63.84C186.85,53.48,159.33,48,128,48S69.15,53.48,48.42,63.84,16,88.78,16,104v48c0,15.22,11.82,29.85,32.42,40.16S96.67,208,128,208s58.85-5.48,79.58-15.84S240,167.22,240,152V104C240,88.78,228.18,74.15,207.58,63.84ZM128,64c62.64,0,96,23.23,96,40s-33.36,40-96,40-96-23.23-96-40S65.36,64,128,64Zm-8,95.86v32c-19-.62-35-3.42-48-7.49V153.05A203.43,203.43,0,0,0,120,159.86Zm16,0a203.43,203.43,0,0,0,48-6.81v31.31c-13,4.07-29,6.87-48,7.49ZM32,152V133.53a82.88,82.88,0,0,0,16.42,10.63c2.43,1.21,5,2.35,7.58,3.43V178C40.17,170.16,32,160.29,32,152Zm168,26V147.59c2.61-1.08,5.15-2.22,7.58-3.43A82.88,82.88,0,0,0,224,133.53V152C224,160.29,215.83,170.16,200,178Z"/></svg><span class="nm">coin</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path d="M5.5 9.511c.076.954.83 1.697 2.182 1.785V12h.6v-.709c1.4-.098 2.218-.846 2.218-1.932 0-.987-.626-1.496-1.745-1.76l-.473-.112V5.57c.6.068.982.396 1.074.85h1.052c-.076-.919-.864-1.638-2.126-1.716V4h-.6v.719c-1.195.117-2.01.836-2.01 1.853 0 .9.606 1.472 1.613 1.707l.397.098v2.034c-.615-.093-1.022-.43-1.114-.9zm2.177-2.166c-.59-.137-.91-.416-.91-.836 0-.47.345-.822.915-.925v1.76h-.005zm.692 1.193c.717.166 1.048.435 1.048.91 0 .542-.412.914-1.135.982V8.518z"/>
+  <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/>
+  <path d="M8 13.5a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11m0 .5A6 6 0 1 0 8 2a6 6 0 0 0 0 12"/>
+</svg><span class="nm">coin</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke-width="1.5" stroke="currentColor">
+  <path stroke-linecap="round" stroke-linejoin="round" d="m9 7.5 3 4.5m0 0 3-4.5M12 12v5.25M15 12H9m6 3H9m12-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+</svg><span class="nm">currency-yen</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M10.2 7.46c.62-.3 1.43-.46 2.3-.46.87 0 1.68.17 2.3.46.58.28 1.2.78 1.2 1.54s-.62 1.26-1.2 1.54c-.62.3-1.43.46-2.3.46-.87 0-1.68-.17-2.3-.46C9.62 10.26 9 9.76 9 9s.62-1.26 1.2-1.54Zm.54 1.13c-.47.22-.49.41-.49.41s.02.19.49.4c.42.2 1.04.35 1.76.35s1.34-.14 1.76-.34c.47-.22.49-.41.49-.41s-.02-.19-.49-.4a4.23 4.23 0 0 0-1.76-.35c-.72 0-1.34.14-1.76.34ZM12.5 12c1.41 0 2.67-.43 3.5-1.11V11c0 1.1-1.57 2-3.5 2S9 12.1 9 11v-.11A5.58 5.58 0 0 0 12.5 12Zm0 2c1.41 0 2.67-.43 3.5-1.11V13c0 1.1-1.57 2-3.5 2S9 14.1 9 13v-.11A5.58 5.58 0 0 0 12.5 14Zm-6-12A2.5 2.5 0 0 0 4 4.5v15A2.5 2.5 0 0 0 6.5 22h13.25a.75.75 0 0 0 0-1.5H6.5a1 1 0 0 1-1-1h14.25c.41 0 .75-.34.75-.75V4.5A2.5 2.5 0 0 0 18 2H6.5ZM19 18H5.5V4.5a1 1 0 0 1 1-1H18a1 1 0 0 1 1 1V18Z"/></svg><span class="nm">book_coins_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path d="M2 22H30V24H2zM2 26H30V28H2zM24 10a2 2 0 102 2 2 2 0 00-2-2zM16 16a4 4 0 114-4A4.0045 4.0045 0 0116 16zm0-6a2 2 0 102 2A2.002 2.002 0 0016 10zM8 10a2 2 0 102 2 2 2 0 00-2-2z"/><path d="M28,20H4a2.0051,2.0051,0,0,1-2-2V6A2.0051,2.0051,0,0,1,4,4H28a2.0051,2.0051,0,0,1,2,2V18A2.0027,2.0027,0,0,1,28,20ZM28,6H4V18H28Z"/></svg><span class="nm">money</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12.0049 4.00281C18.08 4.00281 23.0049 6.6891 23.0049 10.0028V14.0028C23.0049 17.3165 18.08 20.0028 12.0049 20.0028C6.03824 20.0028 1.18114 17.4116 1.00957 14.1797L1.00488 14.0028V10.0028C1.00488 6.6891 5.92975 4.00281 12.0049 4.00281ZM12.0049 16.0028C8.28443 16.0028 4.99537 14.9953 3.00466 13.4533L3.00488 14.0028C3.00488 15.885 6.88751 18.0028 12.0049 18.0028C17.0156 18.0028 20.8426 15.9723 20.9999 14.1207L21.0049 14.0028L21.0061 13.4525C19.0155 14.995 15.726 16.0028 12.0049 16.0028ZM12.0049 6.00281C6.88751 6.00281 3.00488 8.12061 3.00488 10.0028C3.00488 11.885 6.88751 14.0028 12.0049 14.0028C17.1223 14.0028 21.0049 11.885 21.0049 10.0028C21.0049 8.12061 17.1223 6.00281 12.0049 6.00281Z"/></svg><span class="nm">coin-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="8" cy="8" r="6" />
+  <path d="M18.09 10.37A6 6 0 1 1 10.34 18" />
+  <path d="M7 6h1v4" />
+  <path d="m16.71 13.88.7.71-2.82 2.82" />
+</svg><span class="nm">coins</span></td></tr>
+<tr><th class="rh">趋势</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M3 17l6 -6l4 4l8 -8" />
+  <path d="M14 7l7 0l0 7" />
+</svg><span class="nm">trending-up</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M240,56v64a8,8,0,0,1-16,0V75.31l-82.34,82.35a8,8,0,0,1-11.32,0L96,123.31,29.66,189.66a8,8,0,0,1-11.32-11.32l72-72a8,8,0,0,1,11.32,0L136,140.69,212.69,64H168a8,8,0,0,1,0-16h64A8,8,0,0,1,240,56Z"/></svg><span class="nm">trend-up</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path fill-rule="evenodd" d="M0 0h1v15h15v1H0zm14.817 3.113a.5.5 0 0 1 .07.704l-4.5 5.5a.5.5 0 0 1-.74.037L7.06 6.767l-3.656 5.027a.5.5 0 0 1-.808-.588l4-5.5a.5.5 0 0 1 .758-.06l2.609 2.61 4.15-5.073a.5.5 0 0 1 .704-.07"/>
+</svg><span class="nm">graph-up</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke-width="1.5" stroke="currentColor">
+  <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941"/>
+</svg><span class="nm">arrow-trending-up</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M4.5 3.75a.75.75 0 0 0-1.5 0v14C3 19.55 4.46 21 6.25 21h14a.75.75 0 0 0 0-1.5h-14c-.97 0-1.75-.78-1.75-1.75v-14ZM14.75 6a.75.75 0 0 0 0 1.5h3.19l-4.69 4.69-1.97-1.97a.75.75 0 0 0-1.06 0l-3.75 3.75a.75.75 0 1 0 1.06 1.06l3.22-3.22 1.97 1.97c.3.3.77.3 1.06 0L19 8.56v3.2a.75.75 0 0 0 1.5 0V6.75a.75.75 0 0 0-.75-.75h-5Z"/></svg><span class="nm">data_trending_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path d="M4.67,28l6.39-12,7.3,6.49a2,2,0,0,0,1.7.47,2,2,0,0,0,1.42-1.07L27,10.9,25.18,10,19.69,21l-7.3-6.49A2,2,0,0,0,10.71,14a2,2,0,0,0-1.42,1L4,25V2H2V28a2,2,0,0,0,2,2H30V28Z"/></svg><span class="nm">chart--line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M3 12H5V21H3V12ZM19 8H21V21H19V8ZM11 2H13V21H11V2Z"/></svg><span class="nm">bar-chart-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M16 7h6v6" />
+  <path d="m22 7-8.5 8.5-5-5L2 17" />
+</svg><span class="nm">trending-up</span></td></tr>
+<tr><th class="rh">仪表</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+  <path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+  <path d="M13.41 10.59l2.59 -2.59" />
+  <path d="M7 12a5 5 0 0 1 5 -5" />
+</svg><span class="nm">gauge</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M207.06,72.67A111.24,111.24,0,0,0,128,40h-.4C66.07,40.21,16,91,16,153.13V176a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V152A111.25,111.25,0,0,0,207.06,72.67ZM224,176H119.71l54.76-75.3a8,8,0,0,0-12.94-9.42L99.92,176H32V153.13c0-3.08.15-6.12.43-9.13H56a8,8,0,0,0,0-16H35.27c10.32-38.86,44-68.24,84.73-71.66V80a8,8,0,0,0,16,0V56.33A96.14,96.14,0,0,1,221,128H200a8,8,0,0,0,0,16h23.67c.21,2.65.33,5.31.33,8Z"/></svg><span class="nm">gauge</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path d="M8 2a.5.5 0 0 1 .5.5V4a.5.5 0 0 1-1 0V2.5A.5.5 0 0 1 8 2M3.732 3.732a.5.5 0 0 1 .707 0l.915.914a.5.5 0 1 1-.708.708l-.914-.915a.5.5 0 0 1 0-.707M2 8a.5.5 0 0 1 .5-.5h1.586a.5.5 0 0 1 0 1H2.5A.5.5 0 0 1 2 8m9.5 0a.5.5 0 0 1 .5-.5h1.5a.5.5 0 0 1 0 1H12a.5.5 0 0 1-.5-.5m.754-4.246a.39.39 0 0 0-.527-.02L7.547 7.31A.91.91 0 1 0 8.85 8.569l3.434-4.297a.39.39 0 0 0-.029-.518z"/>
+  <path fill-rule="evenodd" d="M6.664 15.889A8 8 0 1 1 9.336.11a8 8 0 0 1-2.672 15.78zm-4.665-4.283A11.95 11.95 0 0 1 8 10c2.186 0 4.236.585 6.001 1.606a7 7 0 1 0-12.002 0"/>
+</svg><span class="nm">speedometer</span></td><td class="na">库里无对应名</td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M7.93 16.07a.75.75 0 1 1-1.06 1.06 7.25 7.25 0 0 1 6.8-12.19.75.75 0 1 1-.34 1.46 5.75 5.75 0 0 0-5.4 9.67Zm9.96-6.93c.39-.14.82.07.95.46a7.25 7.25 0 0 1-1.71 7.53.75.75 0 1 1-1.06-1.06 5.75 5.75 0 0 0 1.36-5.97.75.75 0 0 1 .46-.96Zm-2.01-2.47a.63.63 0 0 1 .96.76l-.13.25a354.7 354.7 0 0 1-3.02 5.67c-.12.2-.24.4-.32.5a1.88 1.88 0 0 1-2.94-2.33 37.2 37.2 0 0 1 1.1-1.05 154.39 154.39 0 0 1 4.14-3.62l.2-.18ZM22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM3.5 12a8.5 8.5 0 1 0 17 0 8.5 8.5 0 0 0-17 0Z"/></svg><span class="nm">gauge_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path d="M30 4L24 4 24 6 27.75 6 24 10 24 12 30 12 30 10 26.38 10 30 6 30 4zM20 17.62L22.08 14l-1.73-1-2.18 3.76A12 12 0 002 28H4a10 10 0 0113.16-9.48L14 24a2 2 0 102 2 2 2 0 00-.27-1L19 19.35A10 10 0 0124 28h2A12 12 0 0020 17.62z"/></svg><span class="nm">operation--gauge</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M14 21C13.4477 21 13 20.5523 13 20V12C13 11.4477 13.4477 11 14 11H20C20.5523 11 21 11.4477 21 12V20C21 20.5523 20.5523 21 20 21H14ZM4 13C3.44772 13 3 12.5523 3 12V4C3 3.44772 3.44772 3 4 3H10C10.5523 3 11 3.44772 11 4V12C11 12.5523 10.5523 13 10 13H4ZM9 11V5H5V11H9ZM4 21C3.44772 21 3 20.5523 3 20V16C3 15.4477 3.44772 15 4 15H10C10.5523 15 11 15.4477 11 16V20C11 20.5523 10.5523 21 10 21H4ZM5 19H9V17H5V19ZM15 19H19V13H15V19ZM13 4C13 3.44772 13.4477 3 14 3H20C20.5523 3 21 3.44772 21 4V8C21 8.55228 20.5523 9 20 9H14C13.4477 9 13 8.55228 13 8V4ZM15 5V7H19V5H15Z"/></svg><span class="nm">dashboard-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m12 14 4-4" />
+  <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+</svg><span class="nm">gauge</span></td></tr>
+<tr><th class="rh">奖杯</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M8 21l8 0" />
+  <path d="M12 17l0 4" />
+  <path d="M7 4l10 0" />
+  <path d="M17 4v8a5 5 0 0 1 -10 0v-8" />
+  <path d="M5 9m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+  <path d="M19 9m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+</svg><span class="nm">trophy</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M232,64H208V48a8,8,0,0,0-8-8H56a8,8,0,0,0-8,8V64H24A16,16,0,0,0,8,80V96a40,40,0,0,0,40,40h3.65A80.13,80.13,0,0,0,120,191.61V216H96a8,8,0,0,0,0,16h64a8,8,0,0,0,0-16H136V191.58c31.94-3.23,58.44-25.64,68.08-55.58H208a40,40,0,0,0,40-40V80A16,16,0,0,0,232,64ZM48,120A24,24,0,0,1,24,96V80H48v32q0,4,.39,8Zm144-8.9c0,35.52-29,64.64-64,64.9a64,64,0,0,1-64-64V56H192ZM232,96a24,24,0,0,1-24,24h-.5a81.81,81.81,0,0,0,.5-8.9V80h24Z"/></svg><span class="nm">trophy</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path d="M2.5.5A.5.5 0 0 1 3 0h10a.5.5 0 0 1 .5.5q0 .807-.034 1.536a3 3 0 1 1-1.133 5.89c-.79 1.865-1.878 2.777-2.833 3.011v2.173l1.425.356c.194.048.377.135.537.255L13.3 15.1a.5.5 0 0 1-.3.9H3a.5.5 0 0 1-.3-.9l1.838-1.379c.16-.12.343-.207.537-.255L6.5 13.11v-2.173c-.955-.234-2.043-1.146-2.833-3.012a3 3 0 1 1-1.132-5.89A33 33 0 0 1 2.5.5m.099 2.54a2 2 0 0 0 .72 3.935c-.333-1.05-.588-2.346-.72-3.935m10.083 3.935a2 2 0 0 0 .72-3.935c-.133 1.59-.388 2.885-.72 3.935M3.504 1q.01.775.056 1.469c.13 2.028.457 3.546.87 4.667C5.294 9.48 6.484 10 7 10a.5.5 0 0 1 .5.5v2.61a1 1 0 0 1-.757.97l-1.426.356a.5.5 0 0 0-.179.085L4.5 15h7l-.638-.479a.5.5 0 0 0-.18-.085l-1.425-.356a1 1 0 0 1-.757-.97V10.5A.5.5 0 0 1 9 10c.516 0 1.706-.52 2.57-2.864.413-1.12.74-2.64.87-4.667q.045-.694.056-1.469z"/>
+</svg><span class="nm">trophy</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke-width="1.5" stroke="currentColor">
+  <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 0 1 3 3h-15a3 3 0 0 1 3-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 0 1-.982-3.172M9.497 14.25a7.454 7.454 0 0 0 .981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 0 0 7.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 0 0 2.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 0 1 2.916.52 6.003 6.003 0 0 1-5.395 4.972m0 0a6.726 6.726 0 0 1-2.749 1.35m0 0a6.772 6.772 0 0 1-3.044 0"/>
+</svg><span class="nm">trophy</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M15.25 2c1.16 0 2.12.88 2.24 2h1.27c.92 0 1.67.7 1.74 1.6v3.15a3.25 3.25 0 0 1-3.06 3.24l-.2.01a5.76 5.76 0 0 1-4.74 3.95v1.55h1.75a3.25 3.25 0 0 1 3.25 3.07V21.25c0 .38-.28.7-.64.74l-.1.01h-10a.75.75 0 0 1-.75-.65v-.6a3.25 3.25 0 0 1 3.06-3.24l.18-.01H11v-1.55A5.76 5.76 0 0 1 6.27 12h-.02A3.25 3.25 0 0 1 3 8.75v-3C3 4.78 3.78 4 4.75 4H6c.13-1.12 1.08-2 2.24-2h7Zm-1 17h-5c-.83 0-1.52.58-1.7 1.35l-.03.15h8.47A1.75 1.75 0 0 0 14.4 19h-.16Zm1-15.5h-7a.75.75 0 0 0-.75.75v6a4.25 4.25 0 0 0 8.5 0v-6a.75.75 0 0 0-.75-.75Zm3.5 2H17.5v4.98c.8-.11 1.43-.76 1.5-1.58V5.75a.25.25 0 0 0-.18-.24l-.06-.01ZM6 5.5H4.75a.25.25 0 0 0-.25.25v3c0 .88.65 1.61 1.5 1.73V5.5Z"/></svg><span class="nm">trophy_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path d="M26,7H24V6a2.0023,2.0023,0,0,0-2-2H10A2.0023,2.0023,0,0,0,8,6V7H6A2.0023,2.0023,0,0,0,4,9v3a4.0045,4.0045,0,0,0,4,4h.322A8.1689,8.1689,0,0,0,15,21.9341V26H10v2H22V26H17V21.9311A7.9661,7.9661,0,0,0,23.74,16H24a4.0045,4.0045,0,0,0,4-4V9A2.0023,2.0023,0,0,0,26,7ZM8,14a2.0023,2.0023,0,0,1-2-2V9H8Zm14,0a6,6,0,0,1-6.1855,5.9971A6.1991,6.1991,0,0,1,10,13.7065V6H22Zm4-2a2.0023,2.0023,0,0,1-2,2V9h2Z"/></svg><span class="nm">trophy</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M13.0049 16.9409V19.0027H18.0049V21.0027H6.00488V19.0027H11.0049V16.9409C7.05857 16.4488 4.00488 13.0824 4.00488 9.00275V3.00275H20.0049V9.00275C20.0049 13.0824 16.9512 16.4488 13.0049 16.9409ZM6.00488 5.00275V9.00275C6.00488 12.3165 8.69117 15.0027 12.0049 15.0027C15.3186 15.0027 18.0049 12.3165 18.0049 9.00275V5.00275H6.00488ZM1.00488 5.00275H3.00488V9.00275H1.00488V5.00275ZM21.0049 5.00275H23.0049V9.00275H21.0049V5.00275Z"/></svg><span class="nm">trophy-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" />
+  <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" />
+  <path d="M18 9h1.5a1 1 0 0 0 0-5H18" />
+  <path d="M4 22h16" />
+  <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" />
+  <path d="M6 9H4.5a1 1 0 0 1 0-5H6" />
+</svg><span class="nm">trophy</span></td></tr>
+<tr><th class="rh">靶心</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+  <path d="M12 12m-5 0a5 5 0 1 0 10 0a5 5 0 1 0 -10 0" />
+  <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+</svg><span class="nm">target</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M221.87,83.16A104.1,104.1,0,1,1,195.67,49l22.67-22.68a8,8,0,0,1,11.32,11.32l-96,96a8,8,0,0,1-11.32-11.32l27.72-27.72a40,40,0,1,0,17.87,31.09,8,8,0,1,1,16-.9,56,56,0,1,1-22.38-41.65L184.3,60.39a87.88,87.88,0,1,0,23.13,29.67,8,8,0,0,1,14.44-6.9Z"/></svg><span class="nm">target</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/>
+  <path d="M8 13A5 5 0 1 1 8 3a5 5 0 0 1 0 10m0 1A6 6 0 1 0 8 2a6 6 0 0 0 0 12"/>
+  <path d="M8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6m0 1a4 4 0 1 0 0-8 4 4 0 0 0 0 8"/>
+  <path d="M9.5 8a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+</svg><span class="nm">bullseye</span></td><td class="na">库里无对应名</td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-6-2a6 6 0 1 1 12 0 6 6 0 0 1-12 0Zm6-4.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9ZM2 12a10 10 0 1 1 20 0 10 10 0 0 1-20 0Zm10-8.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Z"/></svg><span class="nm">target_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><path d="M28 2H30V30H28zM20 10l-1.4141 1.4141L22.1719 15H11.8989a5 5 0 100 2h10.273l-3.586 3.5859L20 22l6-6zM7 19a3 3 0 113-3A3.0033 3.0033 0 017 19z"/></svg><span class="nm">connect--target</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M13 19.9381C16.6187 19.4869 19.4869 16.6187 19.9381 13H17V11H19.9381C19.4869 7.38128 16.6187 4.51314 13 4.06189V7H11V4.06189C7.38128 4.51314 4.51314 7.38128 4.06189 11H7V13H4.06189C4.51314 16.6187 7.38128 19.4869 11 19.9381V17H13V19.9381ZM12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22ZM12 14C10.8954 14 10 13.1046 10 12C10 10.8954 10.8954 10 12 10C13.1046 10 14 10.8954 14 12C14 13.1046 13.1046 14 12 14Z"/></svg><span class="nm">crosshair-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10" />
+  <circle cx="12" cy="12" r="6" />
+  <circle cx="12" cy="12" r="2" />
+</svg><span class="nm">target</span></td></tr>
+<tr><th class="rh">到顶</th><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M12 5l0 14" />
+  <path d="M18 11l-6 -6" />
+  <path d="M6 11l6 -6" />
+</svg><span class="nm">arrow-up</span></td><td><svg viewBox="0 0 256 256" width="26" height="26" fill="currentColor"><path d="M205.66,117.66a8,8,0,0,1-11.32,0L136,59.31V216a8,8,0,0,1-16,0V59.31L61.66,117.66a8,8,0,0,1-11.32-11.32l72-72a8,8,0,0,1,11.32,0l72,72A8,8,0,0,1,205.66,117.66Z"/></svg><span class="nm">arrow-up</span></td><td><svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor">
+  <path fill-rule="evenodd" d="M8 15a.5.5 0 0 0 .5-.5V2.707l3.146 3.147a.5.5 0 0 0 .708-.708l-4-4a.5.5 0 0 0-.708 0l-4 4a.5.5 0 1 0 .708.708L7.5 2.707V14.5a.5.5 0 0 0 .5.5"/>
+</svg><span class="nm">arrow-up</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke-width="1.5" stroke="currentColor">
+  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18"/>
+</svg><span class="nm">arrow-up</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" ><path d="M4.2 10.73a.75.75 0 0 0 1.1 1.04l5.95-6.25v14.73a.75.75 0 0 0 1.5 0V5.52l5.95 6.25a.75.75 0 0 0 1.1-1.04l-7.08-7.42a1 1 0 0 0-1.44 0L4.2 10.73Z"/></svg><span class="nm">arrow_up_24_regular</span></td><td><svg viewBox="0 0 32 32" width="26" height="26" ><circle cx="10" cy="28" r="2"/><circle cx="24" cy="28" r="2"/><path d="M4.9806,2.8039A1,1,0,0,0,4,2H0V4H3.18L7.0194,23.1961A1,1,0,0,0,8,24H26V22H8.82l-.8-4H26a1,1,0,0,0,.9762-.783L29.2445,7H27.1971l-1.9989,9H7.62Z"/><path d="M21.586 9.414L18 5.828 18 14 16 14 16 5.828 12.414 9.414 11 8 17 2 23 8 21.586 9.414z"/></svg><span class="nm">shopping--cart--arrow-up</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M13.0001 7.82843V20H11.0001V7.82843L5.63614 13.1924L4.22192 11.7782L12.0001 4L19.7783 11.7782L18.3641 13.1924L13.0001 7.82843Z"/></svg><span class="nm">arrow-up-line</span></td><td><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 3h14" />
+  <path d="m18 13-6-6-6 6" />
+  <path d="M12 7v14" />
+</svg><span class="nm">arrow-up-to-line</span></td></tr></tbody></table>
+      </div>
+      <table class="lic-table"><thead><tr><th>库</th><th>许可</th><th>可选图标数</th></tr></thead><tbody><tr><td>Tabler</td><td>MIT</td><td>4964 个</td></tr><tr><td>Phosphor</td><td>MIT</td><td>1512 个</td></tr><tr><td>Bootstrap</td><td>MIT</td><td>2050 个</td></tr><tr><td>Heroicons</td><td>MIT</td><td>324 个</td></tr><tr><td>Fluent</td><td>MIT</td><td>2526 个</td></tr><tr><td>Carbon</td><td>Apache-2.0</td><td>2349 个</td></tr><tr><td>Remix</td><td>Apache-2.0</td><td>1455 个</td></tr><tr><td>Lucide</td><td>ISC</td><td>1865 个</td></tr></tbody></table>
+    </div>
+  </section>
+
 
   <!-- 图标候选 -->
   <section class="v wide" style="background:#fbfcfd">

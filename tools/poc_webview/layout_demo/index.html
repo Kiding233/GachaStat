@@ -94,18 +94,32 @@ body{
   margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);
 }
 .page-head h3{margin:0;font-size:16px;font-weight:600}
-/* 两页横向并排，锁在同一条轨道上：切换就是整条轨道平移（推拉）。
-   外框 .workbench 与内的 .wb-body 都不动，动的只有 .strip */
+/* 外框 .workbench 与 .wb-body 在任何模式下都不动，动的只有页 */
 .wb-body{flex:1;min-height:0;overflow:hidden;position:relative}
-.strip{
+
+/* 甲：两页横向并排，锁在同一条 200% 宽的轨道上，切换即整条平移（推拉） */
+.wb-body.m-strip .strip{
   display:flex;width:200%;height:100%;
   transition:transform .34s cubic-bezier(.25,.8,.35,1);
 }
-.strip.analysis{transform:translateX(-50%)}
-.pane{
-  flex:0 0 50%;width:50%;height:100%;overflow:auto;
-  padding:12px 46px 12px 46px;
+.wb-body.m-strip .strip.analysis{transform:translateX(-50%)}
+.wb-body.m-strip .pane{
+  flex:0 0 50%;width:50%;height:100%;overflow:auto;padding:12px 46px;
 }
+
+/* 乙：详情页定住不动；分析窗从右侧滑入盖上来，窗的左边缘就是那条道 */
+.wb-body.m-overlay .strip{position:absolute;inset:0}
+.wb-body.m-overlay .pane-detail{
+  position:absolute;inset:0;overflow:auto;padding:12px 46px;
+}
+.wb-body.m-overlay .pane-analysis{
+  position:absolute;top:0;bottom:0;left:0;width:100%;overflow:auto;padding:12px 46px;
+  background:var(--panel);
+  transform:translateX(calc(100% - 34px));
+  transition:transform .34s cubic-bezier(.25,.8,.35,1);
+}
+.wb-body.m-overlay .pane-analysis.open{transform:translateX(0)}
+
 .wb-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--ink-3)}
 
 /* 展开 / 收起分析的道：整条竖直通道都是入口，不是挤出来的一条空白。
@@ -267,12 +281,12 @@ body{
       <!-- 临时提示 -->
       <el-alert v-if="notice" class="notice" :title="notice" type="info" :closable="false" show-icon></el-alert>
 
-      <div class="wb-body">
-       <!-- 两页横向并排，锁在同一条轨道上，切换即整条推拉；外框不动 -->
+      <div class="wb-body" :class="'m-' + layout">
+       <!-- 两页横向并排；轨道推拉（甲）或分析窗滑入（乙）由 .wb-body 的模式类决定 -->
        <div class="strip" :class="{ analysis: mode==='analysis' }">
 
         <!-- 第 1 页：详情 / 任务管理 -->
-        <div class="pane">
+        <div class="pane pane-detail">
         <div v-if="mode==='tasks'" class="task-view">
           <div class="page-head">
             <h3>任务管理</h3>
@@ -556,7 +570,7 @@ body{
         </div><!-- /第 1 页 -->
 
         <!-- 第 2 页：分析 -->
-        <div class="pane">
+        <div class="pane pane-analysis" :class="{ open: mode==='analysis' }">
         <div v-if="mode==='analysis'" class="analysis-view">
           <!-- 比较分析：本页自有头部，页签只有比较方法 -->
           <div v-if="subjectKind==='compare'" class="page-head">
@@ -831,7 +845,9 @@ createApp({
     const cfgTab = ref('cards');             // 配置详情的 tag，与 GUI 的 11 个标签页同名同序
     const poolSubTab = ref('pool');          // 「卡池管理」下的二级 tag：池 / 生命周期
     const laneColor = ref('mid');            // 道配色，无色系四选一
+    const layout = ref('overlay');           // overlay=详情定住、分析窗滑入 | strip=两页轨道推拉
     window.addEventListener('lane-color', e => { laneColor.value = e.detail; });
+    window.addEventListener('layout-mode', e => { layout.value = e.detail; });
     const analysisTab = ref('overall');
     const notice = ref('');
     const expandedKeys = ref(['root', 'cfg1']);   // batch1 默认折叠
@@ -1092,7 +1108,7 @@ createApp({
       notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
-      canToggle, canRun, runDisabledReason, laneColor, cfgTab, poolSubTab, activeCategories,
+      canToggle, canRun, runDisabledReason, laneColor, layout, cfgTab, poolSubTab, activeCategories,
       onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runSim, saveDraft,
       typeColor, itemRunnable, itemReason, bars, linePoints,
     };
@@ -1103,31 +1119,40 @@ createApp({
 <!-- 探针自身的对照开关：不属于方案，只为裁决「切换控件放哪」 -->
 <div style="position:fixed;right:14px;bottom:14px;z-index:20;background:#fff;border:1px solid var(--line);
             border-radius:6px;padding:8px 12px;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,.08)">
-  <b style="color:var(--ink-2)">道的配色（全部无色系，颜色留给语义）</b>
+  <b style="color:var(--ink-2)">切换动效</b>
+  <div id="lay" style="margin-top:6px;display:flex;gap:6px"></div>
+  <b style="color:var(--ink-2);display:block;margin-top:8px">道的配色（全部无色系，颜色留给语义）</b>
   <div id="sw" style="margin-top:6px;display:flex;gap:6px"></div>
 </div>
 <script>
 (function () {
-  const opts = [
+  const BTN = 'border:1px solid var(--line-strong);background:#fff;border-radius:4px;'
+    + 'padding:3px 8px;cursor:pointer;font:inherit;font-size:11px';
+  function build(hostId, opts, def, evt) {
+    const host = document.getElementById(hostId);
+    opts.forEach(([k, label], idx) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = BTN;
+      if (idx === def) b.style.background = '#e8f1fb';
+      b.onclick = () => {
+        [...host.children].forEach(x => x.style.background = '#fff');
+        b.style.background = '#e8f1fb';
+        window.dispatchEvent(new CustomEvent(evt, { detail: k }));
+      };
+      host.appendChild(b);
+    });
+  }
+  build('lay', [
+    ['overlay', '乙：详情定住，分析窗从右滑入'],
+    ['strip', '甲：两页横向轨道推拉'],
+  ], 0, 'layout-mode');
+  build('sw', [
     ['light', '浅灰 #eef1f5'],
     ['mid', '中灰 #d7dce3'],
     ['graphite', '石墨 #3f4654'],
     ['slate', '蓝灰 #64748b'],
-  ];
-  const host = document.getElementById('sw');
-  opts.forEach(([k, label], idx) => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    b.style.cssText = 'border:1px solid var(--line-strong);background:#fff;border-radius:4px;'
-      + 'padding:3px 8px;cursor:pointer;font:inherit;font-size:11px';
-    if (idx === 1) b.style.background = '#e8f1fb';
-    b.onclick = () => {
-      [...host.children].forEach(x => x.style.background = '#fff');
-      b.style.background = '#e8f1fb';
-      window.dispatchEvent(new CustomEvent('lane-color', { detail: k }));
-    };
-    host.appendChild(b);
-  });
+  ], 1, 'lane-color');
 })();
 </script>
 </body>

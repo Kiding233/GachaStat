@@ -2,7 +2,7 @@
 
 # P64 保底状态机引擎——Tracker + Modifier 双层纯函数架构
 
-> 日期：2026-08-24（2026-09-16 补三条强制约束 + §3.1.5 形式化 + target_featured 反例；**2026-09-18 事实同步**：全量行号刷新至 P81 清理后的代码 + GUI 两处事实修正 + legacy 迁移描述更新；**同日裁决 P82 并入的三项**：接线 / 保留 priority / 顺序两层定性，见 §1.5；**2026-09-21 概率操作乘法化 + 状态可见性裁决**：§3.1.5 重写为乘性因子版 + §3.1.2 D20 分布空间归属 + §3.9 S8 实施方案 + §3.10 状态可见性与 G3 真实建模 + S8/S9 子块；跨保底读状态裁决为不纳入；G15 按「精确建模原则」重估为缺口；**同日增补三项架构改进**：§3.11 表达能力与边界、§3.12 组合正确性验收、§3.13 不变式运行时校验 + S10/S11 子块；**§3.14 条件外置**（条件提为独立对象 + ConditionalModifier 包装器；三方案比较与 R/F 等价性实测）+ S12 子块；**2026-09-22 GATE 加里程碑划分**：M1（S1–S7 + S10 + S11，口径「与旧类逐场一致」）/ M2（S8 + S9 + S12，口径「与 M1 产物容差一致」），M1 结束为暂停与交付点，计划文件不拆分；**同日第四轮（Fixer）**：**S12 由 M2 前移进 M1**（排在 S2 之后、S3/S4 之前，ISSUE-101，里程碑边界与 M2 回滚单元同步调整）、三个 `_soft` 复合类型的 M4 差异登记与方向更正（ISSUE-102）、`PityContext.state` 类型注记与 `ctx.state` 读取纪律（ISSUE-103）、Tracker 契约表签名回写定稿形态（ISSUE-104）、`rotating_inverse` 的类型集合与排序键取值（ISSUE-105）） | 状态：设计中（2026-08-23 初版 → 2026-08-24 双层纯函数重建）；**2026-09-22 审查修复轮**：新增 §3.1.6 模块归属与依赖方向（叶子原语层 `pity_primitives.py`）、骨架补 `is_soft`/`is_hard` 推导与 view 重建与「退役先于 commit」、preset 统一为工厂函数 + registry `class` 置 None、跨进程 pickle 约束、配置透传链（`priority`/`reads`）、`worst_impact` 卡集合对齐、外部状态填充点改 `GachaService` 与 `owns` 含初始持有、归一性断言改 scope 感知、`scope` 键缺失边界、文档同步面（CLAUDE.md / 模块状态矩阵），逐处标记 `ISSUE-xxx`；**同日第二轮**：`§3.14.2` 示例改 `.get(scope, ())`（ISSUE-020/016）、`§3.9.2` 归一化论证前提修正（ISSUE-021）、`factor_redistribute` 签名统一为 4 参（ISSUE-022）、`_soft` 族双命名空间与 S1–S5 快照口径对齐（ISSUE-023）、三类型集合随叶子层升为模块级常量（ISSUE-024）、`core/__init__.py` 10 个旧行为类导出面（ISSUE-025）、`compute_scope_mappings` 的改造归属 `pity.py`（ISSUE-026）、`Banner.draw` 送达路径定稿（ISSUE-027）、子系统 01-理论/02-实施 与手册路径入文档同步面（ISSUE-028）；**同日第三轮（Fixer，2026-09-22）**：`pity_primitives.py` 行补记三个类型集合常量与 `PityContext.external`（ISSUE-024 / ISSUE-034）、Tracker / Modifier / Lifecycle 三族 `rebind` 接口显式定义 + `ConditionalModifier` 转发（ISSUE-029）、preset 工厂签名定稿为 `preset(pdef)` 并补取值来源表（ISSUE-030）、§3.2 / §3.3 正文同步条件外置形态与「组装时的条件」列（ISSUE-031）、`OnceActive` 声明为「无配置对应物、本期只实现类」（ISSUE-032）、`reads` 并集来源与 `get_reads_for_pool()` 访问器（ISSUE-033）；**同日第五轮（Fixer，2026-09-22）**：Lifecycle 协议补第五个方法 `initialize` 并同步 §3.1.4 骨架 / §四 行 / §3.13 不变式行 / §六 断言（`_active` 的构造期写入自此有归属，ISSUE-202）、§3.6 M3 的 `priority` 透传机制统一为构造形参 `Pity(..., priority=pdef.priority)`（ISSUE-203）、`worst_impact` 卡集合断言改为 `{r.id for r, _ in pool.rewards}`（`Pool.rewards` 元素是 `(Reward, prob)` 二元组，ISSUE-201）、`PityEngine.__init__` 构造期 `except Exception` 静默吞异常的处置定稿为抛 `ConfigError` 并补 §六 断言（ISSUE-204）；**同日第六轮（Fixer，2026-09-22）**：`deactivate_on_early_hit` / `depends_on` 到 Lifecycle 对象的构造来源全链补齐——§3.1.3 新增唯一转换点 `build_lifecycle(pdef)` 与旧路径逐行对照表、§3.2 取值来源表补 `lifecycle=` 行 + registry 校验与 `create_behavior` 的 `ConfigError` 防线 + 四份 preset 代码块补该键、§3.1.6 与 §四 四行登记、§五 风险行、§六 断言、§七 S1/S4 任务项；`LifecycleConfig` 去留定稿为「保留、角色改为 Lifecycle 构造参数袋」（ISSUE-301）；**同日第七轮（Fixer，2026-09-22）三 GATE 问题处置**：① `ISSUE-GATE-granularity` — §七 主线 12 步细分为 26 子块（S1a 至 S1d / S2a 至 S2b / S12 / S3 / S4-1 至 S4-5 / S4b / S5a 至 S5c / S6a 至 S6c / S7a 至 S7c / S10-1 至 S10-2 / S11），逐块补目标文件 + 人时预算 + 验收命令，进度合计由「~10 人时」修正为「约 16.4 人时」，并把「每块独立 commit」写入 GATE-1 与 GATE-5（回滚单元 = 任务单元）；② `ISSUE-GATE-file-list` — 五处行号与计数事实修正（`_EVENT_DRIVEN_TYPES` `:114-115`、`_build_activation_graph` `:1205-1229`、`ctx = PityContext(...)` `:1335`、测试文件 6 改 5、`pentry` 26 键改 24 键）并补齐 S3 / S5 / S10 / S11 四处缺失的目标文件（`core/invariants.py` 独立新模块登记 + 两个新测试文件行）；③ `ISSUE-GATE-dependency-order` — Modifier 方法名定稿为 `apply(ctx, view, dist, readonly)`（`factor` 自 S8 引入，§3.1.4 骨架据此）、`StateView` 由「S9 独占」改为「S3 落薄版 / S9 收紧」、`PityDef.reads` 字段与解析归 S9 而 `Pity.reads` 形参归 S3、`_soft` 族 view 命名空间分配定稿（软计数留 `X`、`X_soft` 只承 `_active`，§3.10.3）；**2026-09-22 第八轮（Fixer 定稿，GATE 五项）**：GATE-1 粒度（S1b / S3 / S12 各细分、M2 补逐子项预算与目标文件、S8-4 与 S8-5 分立）、GATE-3 依赖序（`priority` 字段定义前移至 S4b 且置于 S4-2 之前、`_pools` 由 S1a 改归 S3-1、registry `class` 置 `None` 后旧类改由 harness 直接 import 且回滚改 `git revert`）、GATE-4 风险（快照面取 ①统一写入、ISSUE-102 不加 hit 门控、ISSUE-032 维持只验类不接线，三项均已登记为 §五 风险行）、GATE-5 回滚（主线 29 块逐块回滚、M2 按子项回滚 + 依赖闭包规则）、GATE-6 测试（S11 补专属测试文件、验收命令与 §六 断言），五项定稿的落点见 §七 粒度裁定 / GATE-5 / §六「S10 / S11（保障层）」段 / 文末「自动化审查阻塞项」。**2026-09-22 第九轮（Fixer，GATE-3 / GATE-5 复核）**：① `build_lifecycle(pdef)` 的**定义自 S4-4 移入 S1d**（其依赖 S1a 的 `LifecycleConfig` 与 S1d 的四个 Lifecycle 类此时齐备），S4-4 只留 `lifecycle` 键的 `ConfigError` 防线与旧 `lifecycle_kwargs` 段删除（删除时机须待 10 个 preset 全部落地）——preset 工厂（S4-2 / S4-3）返回 dict 已写 `lifecycle=build_lifecycle(pdef)`，名字在调用时解析，留到 S4-4 才定义则 S4-3 的验收即 `NameError`；② 「`apply()` 保留为默认实现」落成**公共基类 `Modifier`**（§3.9.2 补默认 `apply` = `_apply_factor(dist, self.factor(...) or {})`，§3.2 / §3.14.2 的 Modifier 示例统一改为继承它，§3.14.2 的 `apply` 转发自此有承载处；备选「S8 删除 `apply`」已否决），§六 断言补「**实际调用一次**不抛 `AttributeError`」（纯存在性断言捕获不到该缺口）；③ S9-1 措辞改为「签名沿用 S8-1 定稿的 `factor` 形态」，改名不再记在本步；④ GATE-5 补 **M1 的依赖闭包回退规则**（向消费方闭包，逐块列出连带范围）与「低层块回退 = 部分回退，须重跑受影响验收」强制条。**2026-09-22 第十轮（Fixer，GATE 复核）**：① 文件清单（`ISSUE-GATE-FAIL-2`）——S10-2 补目标文件（唯一未标步）、§四 补 `core/worst_impact.py` 与 `tests/core/test_pity_condition.py` 两行缺失文件、`PityEngine.__init__` 构造兜底的行号由 `:1166-1172` 修正为 `:1164-1172`；② 测试策略（`ISSUE-GATE-FAIL-6`）——S4-2 / S4-5 / S5c / S7a / S7b / S10-1 / S10-2 七块补「验收命令」（S7b 目标文件由泛写 `tests/` 具体化），顺带补 M2 的 S8-6 / S9-4 两个验收子项，M1 的 29 子块自此**逐块**具备「目标文件 + 人时预算 + 验收命令」（落点见文末「自动化审查阻塞项」）。**2026-09-22 第十一轮（Fixer，代码审计 9 项 AUDIT-BREAK-1 至 AUDIT-BREAK-9）**：字段枚举透传升级为「同 commit 同步 + dataclass 驱动 + 字段往返守卫测试」（三处透传点行级表，AUDIT-BREAK-1）；`create_behavior` 的 `target_featured` / `reset` 注入限定旧类分支（AUDIT-BREAK-2）；preset 返回 dict 按键集恰五键定稿并新增 `flags` / `counters` 消费端（AUDIT-BREAK-3）；`gacha_service.py` 四处同源改动改为端到端非抽卡动作断言（AUDIT-BREAK-4）；新增 S8 跨文件同步清单 A/B/C 三段与 `grep` / `__all__` 两道验收（AUDIT-BREAK-5 / 6 / 8）；「S4-3 后收集期即 ImportError」经核实不成立，改按真实断裂点设 **S7d**（M1）与 **S8-7**（M2）两块（AUDIT-BREAK-7，M1 由 29 块 / 16.4 人时改为 30 块 / 16.9 人时，M2 的 S8 由 3.1 改为 3.5、M2 由 5.5 改为 5.9 人时）；`reads` 双通道（管道 vs 策略查询）各自独立验收（AUDIT-BREAK-9）；其中 AUDIT-BREAK-2 / 3 各存一条 veto 备选（落点见 §3.1.4 与文末「自动化审查阻塞项」）。 **2026-09-27/28（用户裁决，第二批）**：① **ISSUE-032 改判**——`OnceActive` / `DependentOnceActive` 的配置接线**纳入本期**（**否决**上述第八轮「只验类不接线」的定稿），连带 `PityDef.max_triggers` + `config_toml` 解析 + GUI 控件 + `build_lifecycle` 产出路径（§3.1.3）；② **Lifecycle 正交化**——由「三个互斥类」改为「两个正交维度（激活 × 退役）四个组合」，新增 `DependentOnceActive`（第四组合的退役计数**自「激活后」起算**），原「`depends_on` 优先、`max_triggers` 被忽略」的写法作废（§3.1.3）；③ **G3 定稿为独立 type `hard_exclude_owned`**（**该单一 type 名已于 2026-09-30 第二轮按用户裁决拆为两个，见末条 ①**），其 `ForceNotOwnedModifier` 的触发条件为 `CounterCondition('counter', pdef.threshold)`（**非** `Always()`——条件极性于 2026-09-28 独立审查出并修正，§3.10.4）；④ **`_PITY_TYPES` 改为由 `BEHAVIOR_REGISTRY` 生成**（新增 type 自动出现在下拉，S6a / S9-3 的「手工追加」步骤删除，§3.6）；⑤ **ISSUE-027 送达路径重梳为方案 A**——`initial_counts` 由 `GachaService` 局部变量提升为 `GachaState` 字段、新增 `GachaState.external_view()`、两条通道就地构造、`Banner.draw` **不新增形参**；并新增 §六 的 `GachaState.clone()` 保真独立验收项（§3.10.2）；⑥ 上述改动涉及的「三个 Lifecycle」类表述同步为四类。 **2026-09-30（G3 定位同步 + 待确认项如实记录，用户裁定）**：① §1.3 的 G3 行补「所涉卡池均已下线，定位改为**历史机制建模能力**」（依据 2026-09-29 官方公告 API 全量穷举 2759 条），并写明「S9 的正当性不依赖 G3 是否现行」；② §二 目标行的 G3 括注同步该定位；③ **修正两处手册行号引用漂移**：手册 §7 重写（`e0a4bda`）后，§1.3 的 `#L963` 与 §3.10.4 的 `#L959` 已指向无关内容，改指 `§7.1:938` / `§7.2:970` / `§7.3:1001`；④ §3.10.4 开头补「所涉卡池已下线」段（含「第二部装备补给不是同一机制」的区分）；⑤ **§3.10.4「全部已拥有」条重写为完整的分歧记录**：列 2026-09-29 专项查证（零直接信源、四候选）、两倾向对照表（候选 (a) 保底不生效 / 候选 (b) 仍给一个 UP）及其依据强度、**两处不一致（给不给 + 给的是什么）与「两者各违背规则原文的一半」**，**裁定维持「待确认」、不按旁证定稿**，实现侧按 (a) 占位但随之挂起；⑥ **§六 G3 专项 ③ 与 §七 S9-4 验收命令加注**：该断言是候选 (a) 的实现形态，定稿前不得当作已定稿验收；⑦ 手册 §7.4 补「模拟器侧取值同样未定稿」的指针。 **2026-09-30 第二轮（G3 双实现 + 三处事实修正，用户裁决）**：① **G3 的「全部已拥有」由「按候选 (a) 占位并挂起」改为双实现并列**：`ForceNotOwnedModifier` 加 `on_all_owned` 构造参数，注册 `hard_exclude_owned_skip`（形态 a，「硬保底·排除已获得（全拥有时保底不触发）」）与 `hard_exclude_owned_any`（形态 b，「硬保底·排除已获得（全拥有时仍给一件 UP）」）两个 type；上一条 ⑤ 的「实现侧按 (a) 占位但随之挂起」**由本条取代**；命名口径定为「形态写进 type key 与 display_name」，手册登记为一条待确认项、两个候选实现；② **「关于」页面两处保底文本改为由 `BEHAVIOR_REGISTRY` 生成**（`gui/about_dialog.py:67` / `:207`，原为硬编码且已漂移，P56 的 6 个 type 至今未登记），§四 补该文件行，落点归 S9-3；③ **删除三处不存在的「`config_toml` 类型白名单」引用**（§3.10.4 配套第 2 条、§四 `core/config_toml.py` 行、§七 S9-3 目标文件）：实测 `_build_pity` 只校验 `name` 与 `scope`，两个未知 type 直接通过；真实后果在引擎侧，`BEHAVIOR_REGISTRY[btype]` 抛 `KeyError` 后被 `PityEngine.__init__` 吞成 `logger.warning`、保底静默消失（实测 `behaviors == []`），即 S4-5 要修的问题；④ **§四 与 §七 目标文件清单对齐**：`core/state.py` / `core/milestone.py` / `tests/test_p60_gacha_state.py` / `tests/test_p63_overflow_integration.py` 四者 §四 已标 S9 而 §七 S9 子块漏列，已补入 S9-2 与 S9-4；⑤ §六 G3 专项 ③ 拆为 ③a / ③b 两条，§七 S9-4 的验收命令、目标文件与预算同步（S9-3 0.7 → 0.9 人时，新增 `tests/gui/test_about_dialog.py`）。 **2026-09-30 第三轮（引用层机械刷新，四路独立审查后的核查修正）**：① **`service/batch_simulator.py` 全部 13 处行号失效**（09-28 / 09-30 三次 P83 并行性能提交把该文件从 1149 行推到 1392 行，文档 09-30 仍在做「事实修正」却未刷新该文件）：`pentry` `:899-925` → `:1143-1168`、`_PityDef` 别名 `:163` → `:193`、`_PityDef(...)` 重建 `:179-204` → `:209-234`、五元组解包与 `PoolPitySpec` 构造 `:183-192` → `:264-274`、`initial_counts` `:398-408` → `:460-470`、`_ms_initial` `:415-421` → `:461-470`、`GachaState(...)` `:430`/`:446` → `:492`、`MPPool(initializer=...)` `:638-641` → `:848-850`、`pity_names` `:173-177` → `:254-266`；② **`pity.py` 六处**：`_active` Flag 写入 `:118-121` → `:128`、`reset`/`target_featured` 形参 `:130-131` → `:118`、`guaranteed_init` truthy 块 `:1013-1015` → `:1009-1010`、`create_behavior` `:836-892` → `:837-915`、`SoftPityMixin` 方法区间 `:509-537` → `:509-543`（原区间漏掉 `_rebind_state`）、§3.9.5 的「统一 `.get` + 空集早退」三处改按族标注（`SoftStepBehavior` `:273`/`:303`、`RotatingBehavior` `:467`、`TargetedBehavior` `:646`；原写「`total <= 0` 在 `SoftStepBehavior`/`HardPityBehavior` 内」类归属有误）；③ **手册 10 处锚点**（§21 缺口表随手册重写整体位移）：G1 `:2283` → `:2396`、G2 `:2284` → `:2397`、G16 `:2287`/`:775` → `:2400`、G5 `:2296` → `:2409`、G13 `:2304` → `:2417`、G14 `:2305` → `:2418`、G15 `:2306` → `:2419`、G5 正文 `:554` → `:560`、§20.2 `:2039` → `:2143`；④ 其余：`strategy.py:100` → `:96`、`cli.py:266-267` → `:285-286`、`config_panel.py:3534-3539` → `:3535-3539`、失效的相对链接改为纯文本指向（目标在仓库外）；⑤ **计数与描述更正**：§七「共 43 子块……主线 29」三项相加仅 33，改为 **45**（G16 2 + P82 2 + M1 30 + M2 11）；§四 对 `模块状态矩阵.md` 的描述「仍写『覆盖 G1 + G5 priority』」经实测已不成立（该行自 2026-09-22 起已含 G3 / S9 / S10 / S11 / S12 与 M1/M2 划分），更新点收窄为 G3 双实现与待确认项。 **2026-10-01 第六轮（Fixer，独立复核 12 项）**：① ISSUE-901 的改判（槽位字段 / `compute_scope_mappings` 减量 / 两处构造点改造推迟到 GATE-5 末条）补同步到**四处残留的「S8 施工语」**（§3.9.3 `worst_impact` 行、§四 `worst_impact` 行、§四 `pity.py` 的 ISSUE-026 追加、§七 S8-5）并逐处挂 `ISSUE-904` 标记（**ISSUE-904**）；② **GATE-5 末条扩为完整收口清单**（七项同批：函数本体 / 4 调用点 / 10 旧类 / 6 个槽位字段 / `compute_scope_mappings` 槽位产出 / 两处构造点改造 / S8-7 的 5 个测试文件），此前全篇十余处引用的那一条本身只列三项（**ISSUE-905**）；③ S7d 的「失败时点②」与 S8-7 的回滚说明按改判前因果描述修正（S8 不删字段、不删函数本体，故②与①同一 commit；S8-7 与 S8-4 不再共享删除面）（**ISSUE-906**）；④ §3.9.3 的 `tests/` 行补登记**等价性装置**这一例外消费方（**ISSUE-907**）；⑤ 删去 §3.9.3 中「`_resolve_selected_slots` 仍改为直接给出卡集合」这句旧稿残留（该名字是旧 `TargetedBehavior` 的槽位级私有方法，照改会破坏 S5a 对照基准与旧类槽位语义）（**ISSUE-908**）；⑥ `factor_override` 的 `exempt` 改为一律只读 `scope_cards`，并把该函数补登记进 §3.1.6 叶子层与 §四（**ISSUE-909**）；⑦ AUDIT-BREAK-1 补「四个别名键必须先废弃」这一改造前提（`pentry` 的 `type`/`start`/`end`/`increment` 对 `btype`/`soft_start`/`soft_end`/`soft_increment`，写读两端须同 commit 改名，否则 dataclass 驱动式静默算错、键集断言恒红）（**ISSUE-910**）；⑧ 透传面由「三处」扩为「引擎侧三处 + GUI 侧五处」，并定稿 `reads` 的 GUI 通路为「不加控件但五处原样透传」（**ISSUE-911**）；⑨ H3 删分支所破坏的两处正断言与 GUI 的 `_PITY_TYPES` 写死计数补进 S6a / S9-3 与 §四（**ISSUE-912**）；⑩ `config/config.toml` 的 P79 常驻护栏波及面补登记，示例段定稿为**注释形态**（**ISSUE-913**）；⑪ `initial_counts` 的推导点位于 `if env.milestone_defs:` 块内的事实与「定稿为 `run_simulation` 内 clone 之后赋值」写入 §四，并把 `batch_simulator` 的**四处行号批量刷新**（`:492`→`:501`、`:461-470`→`:466-479`、`:1143-1168`→`:1161-1186`、`:209-234`→`:218-243`）（**ISSUE-914**）——**限定**：该四处是第六轮**全部**的刷新面；同文件另有两处旧引用（`MPPool(...)` 块、`_PityDef` 别名）与一条 `run_batch_parallel` 定义行未随该轮更正，已由第七轮补正（**ISSUE-915**）；⑫ `factor_override` 的模块归属随之补进 §3.1.6 / §四（并入 ⑥）。<!-- REVIEW-R1-FIX: ISSUE-915 -->**2026-10-01 第七轮（Fixer；独立复核 5 项 + 上一轮 ISSUE-914 的 3 条子项归并）**：① 两处旧引用未随第六轮的批量刷新更正（`MPPool(...)` 块 `:848-850` → `:866-869`、`_PityDef` 别名 `:193` → `:202`），同段 `run_batch_parallel` 定义行 `:638` → `:721` 一并补正，并把第六轮末句「全篇引用已按此批量刷新」收窄为「点名的四处已刷新，其余三处同批补正」（**ISSUE-915**）；② `initial_counts` 的三处表述互斥（`core/state.py` 行写「`_ms_initial` 计算点删除」、`batch_simulator` 行写「构造点须补 `initial_counts`」+「推导上提到块外」、`gacha_service` 行定稿「`run_simulation` 内 `clone()` 之后赋值」），统一为**一处推导源（`run_simulation` :310-315）+ 一处赋值点（`clone()` 之后）**——`batch_simulator` 侧只做删除（`_ms_initial` 与 `initial_counts=` 形参），里程碑 handler 改从 `state` 形参取，「上提到块外」写法作废（**ISSUE-916**）；③ `initialize` 已扩为多命名空间而 `rebind` 仍收单 `name`，`X_soft` 的 `_active` Flag 无重绑通道——定稿取「每个命名空间各持一个 Flag + `rebind(state, name, namespaces=())` 对称重绑」（与旧实现内层 `SoftStepBehavior` 的 Flag 形态同构），备选（只持 `name` 的 Flag、`namespaces` 直接写 state）记为未采用（**ISSUE-917**）；④ `get_config` 的别名键改名未登记两处既有消费面——`_do_update_preview` 的 `pdef.get('type', '?')`（预览逐条打印 `?`，且无任何测试覆盖的静默失真）与 `tests/gui/test_config_panel_pity.py:220` 的正断言（必红），并入 S7a 同批改造（**ISSUE-918**）；⑤ §3.1.3「归属定稿」段仍把骨架调用写成两实参 `initialize`，改为三实参（**ISSUE-919**）。**2026-10-01 第五轮（Fixer，独立复核 6 项）**：① 三族协议补**声明键集**只读成员 `state_keys()`（**ISSUE-501**）——§3.12.1 的「状态键合法」、§3.12.2 判据 1/2、§3.13 状态层 checker 与 S10-2 的构造期 `ConfigError` 四处都以「声明集」为输入，而三张协议表此前无任何承载成员，S10-2 / S11 无可用比对集；落点为 §3.1.1 / §3.1.2 / §3.1.3 三张协议表 + §3.1.4 骨架的 `self._declared_keys` 汇总 + §3.9.2 的 `Modifier.state_keys()` 默认实现与 §3.14.2 的转发 + §3.12.1 / §3.12.2 / §3.13 回指该成员名；② `_redistribute_scope` 的删除时点定稿为「S8 不删函数本体，只删 `core/__init__.py` 导出，本体并入发布前移除旧类的 commit」（**ISSUE-502**）——pity.py 内 4 处旧类调用点（:477 / :589 / :655 / :659）按 GATE-5 保留到发布前，只删函数即那 4 处在调用时 `NameError`；③ scope 取值统一为模块级 `_norm_scope(pdef, default='ssr')`（**ISSUE-503**）——原稿取值列写 `pdef.scope` 原值而依据列引的却是 `create_behavior` 的 `.lower()` 归一化式，直构路径下 `scope_cards.get('SSR')` 取空致保底静默恒等；④ `infer_rarity_from_spec` 的处置由「保留」改判「随 `aggregate_probs_by_rarity` 一并删除」（**ISSUE-504**）——其三类消费者全在 S8 的删除面内、函数本体零消费者，原「保留」使 §六 / S8-2 的 grep 零命中验收恒红；⑤ §3.9.2 的 S8 内循环写死 `self._view` 改为 `self._view_for(mod)`（**ISSUE-505**）——与同计划 ISSUE-407 的强制纪律冲突；⑥ `_EVENT_DRIVEN_TYPES` 的后果表述收窄为「仅规则 3 互斥校验失效」（**ISSUE-506**）——`is_active` 早退已由骨架对全部类型无条件承担，原表述为旧架构残留。 **2026-09-30 第四轮（Fixer，独立复核 8 项）**：① `ConditionalModifier.apply` 补条件判定（**ISSUE-401**，原只在 `factor` 判 → S12-2 至 S7 期间条件包装器全部退化为无条件）；② `Pity.after_draw` 补 `fired` 实参（**ISSUE-402**，原三实参调用 → `triggers` 退化为「激活后的抽数」或 `TypeError`）；③ `pdef.target_featured` 的 preset 承接（**ISSUE-403**，新增 `_target_of(pdef)` 选择子 + `ThresholdForceModifier` / `BoostModifier` 的 `target=` 形参，原「`judge="featured"` 即承接」不成立）；④ `reads` 门控落点为派生 ctx 的 `Pity._gated_ctx`（**ISSUE-404**，禁止就地改写**本调用内的**共享 ctx——每次调用构造一个 ctx，在同池全部保底之间复用；「每池共享」的旧口径已于 2026-10-01 更正）<!-- REVIEW-R1-FIX: ISSUE-926 -->；⑤ `_validate_registry()` 口径写死为「导入期只判 `preset` 可调用」（**ISSUE-405**，键集校验归运行期 `create_behavior`）；⑥ `Lifecycle` 基类统一代理 `depends_on`（**ISSUE-406**，`_build_activation_graph` 对每条 behavior 都读它）；⑦ 零件 `namespace` 声明面 + `NamespaceTracker` + `initialize(state, name, namespaces)` + `Pity._ns_views` / `_view_for`（**ISSUE-407**，原 `X_soft` 无产出者）；⑧ §四 的 `ForceNotOwnedModifier` 归属改回 `core/pity_modifier.py`（**ISSUE-408**，只留 registry 条目）。**2026-10-01 第八轮（Fixer，GATE 四项门控复核）**：① **GATE-2 文件清单**——`gui/config_panel.py` 的「`_PITY_TYPES` 已改为由 `BEHAVIOR_REGISTRY` 生成」六处为**既成事实误记**（实测仍为硬编码 10 项字面量、全仓与全历史检索生成式写法零命中，`1dbc9b0` 只改了本计划文件），六处逐条改判为「**待改造**、施工落 S6a」并写明三项代码改动（字面量→生成式 / registry 5 处 `display_name` 对齐 GUI 现值 / registry 条目顺序对齐 GUI 现值），§3.6 的 1125 与 1126 互斥表述随之消解（**ISSUE-929**）；`core/config_toml.py` 四处失效锚点更正（`:611`→`:636`、`:654-660`→`:677-682`、`:669`→`:692`、`:687`→`:710`）并对该文件锚点做全量复核（`:385-421`→`:392-428`）；② **GATE-3 依赖顺序**——S4-1 的验收在自身位置不可达（preset 工厂属 S4-2 / S4-3，而 `_validate_registry()` 在 `pity.py:834` 导入期即被调用），定稿为「S4-1 只改 validator 与 `create_behavior` 分支 + 写入**过渡判据**，条目按**原子**地在 S4-2 / S4-3 置 `class: None` 并写 `preset`，S4-3 收口时删除过渡分支」，两条原属 S4-1 的验收下移 S4-2、终局验收移入 S4-3，§3.2 与 GATE-5 的 S4-1 回退面同步（**ISSUE-930**）；③ **GATE-4 风险缓解**——ISSUE-926 的两个子项修复（`:1444` 派生 ctx 的归因改为 `SoftPityMixin.before_draw`、`:5` 的「每池共享」改为「本调用内的共享 ctx」），并**清空文末阻塞章节**、6 轮熔断记录移入「自动化审查记录」的第 6 次审查 details（**ISSUE-926**）；④ **GATE-6 测试策略**——M2 的 S8-1 至 S8-5、S9-1、S9-3 七个条目补**块级验收命令**（对齐 GATE-5「低层块回退后须重跑受影响块的验收命令」），S7a 的 `rotating_inverse` 断言加注「前提 = S6a 的生成式改造已落地」并给出未落地时的替代断言（**ISSUE-931**）。 **2026-10-01 第九轮（Fixer，GATE-6 测试策略续修）**：块级验收命令与其断言对象未绑定，三处存在「假通过」失效面（**实测**：S8-5 的 `-k "scope_cards or boundary"` 零命中（11 deselected，pytest **exit code 5**）；S8-3 的 `-k redistribute` 只命中 3 条**既有**旧函数用例（退出码 0 而 `factor_redistribute` 零覆盖）；S10-2 的 `-k "illegal or cycle"` 用例命名未约束）。定稿「验收命令与断言对象绑定纪律」三条（计划内写死用例名 / 收集 ≥1 条 / 命中项不得全为既有用例）写入 §七 引言；三处逐条补命名约束与收集守卫（S8-3 过滤词改为 `factor_redistribute`，目标文件补 `tests/core/test_pity_rotating.py`）；其余四处带 `-k` 的命令（S5c / S8-6 / S9-1 / S9-3）补同款收集守卫；S4-5 记为合规范例（**GATE-6-测试策略**）。
+> 日期：2026-08-24（2026-09-16 补三条强制约束 + §3.1.5 形式化 + target_featured 反例；**2026-09-18 事实同步**：全量行号刷新至 P81 清理后的代码 + GUI 两处事实修正 + legacy 迁移描述更新；**同日裁决 P82 并入的三项**：接线 / 保留 priority / 顺序两层定性，见 §1.5；**2026-09-21 概率操作乘法化 + 状态可见性裁决**：§3.1.5 重写为乘性因子版 + §3.1.2 D20 分布空间归属 + §3.9 S8 实施方案 + §3.10 状态可见性与 G3 真实建模 + S8/S9 子块；跨保底读状态裁决为不纳入；G15 按「精确建模原则」重估为缺口；**同日增补三项架构改进**：§3.11 表达能力与边界、§3.12 组合正确性验收、§3.13 不变式运行时校验 + S10/S11 子块；**§3.14 条件外置**（条件提为独立对象 + ConditionalModifier 包装器；三方案比较与 R/F 等价性实测）+ S12 子块；**2026-09-22 GATE 加里程碑划分**：M1（S1–S7 + S10 + S11，口径「与旧类逐场一致」）/ M2（S8 + S9 + S12，口径「与 M1 产物容差一致」），M1 结束为暂停与交付点，计划文件不拆分；**同日第四轮（Fixer）**：**S12 由 M2 前移进 M1**（排在 S2 之后、S3/S4 之前，ISSUE-101，里程碑边界与 M2 回滚单元同步调整）、三个 `_soft` 复合类型的 M4 差异登记与方向更正（ISSUE-102）、`PityContext.state` 类型注记与 `ctx.state` 读取纪律（ISSUE-103）、Tracker 契约表签名回写定稿形态（ISSUE-104）、`rotating_inverse` 的类型集合与排序键取值（ISSUE-105）） | 状态：设计中（2026-08-23 初版 → 2026-08-24 双层纯函数重建）；**2026-09-22 审查修复轮**：新增 §3.1.6 模块归属与依赖方向（叶子原语层 `pity_primitives.py`）、骨架补 `is_soft`/`is_hard` 推导与 view 重建与「退役先于 commit」、preset 统一为工厂函数 + registry `class` 置 None、跨进程 pickle 约束、配置透传链（`priority`/`reads`）、`worst_impact` 卡集合对齐、外部状态填充点改 `GachaService` 与 `owns` 含初始持有、归一性断言改 scope 感知、`scope` 键缺失边界、文档同步面（CLAUDE.md / 模块状态矩阵），逐处标记 `ISSUE-xxx`；**同日第二轮**：`§3.14.2` 示例改 `.get(scope, ())`（ISSUE-020/016）、`§3.9.2` 归一化论证前提修正（ISSUE-021）、`factor_redistribute` 签名统一为 4 参（ISSUE-022）、`_soft` 族双命名空间与 S1–S5 快照口径对齐（ISSUE-023）、三类型集合随叶子层升为模块级常量（ISSUE-024）、`core/__init__.py` 10 个旧行为类导出面（ISSUE-025）、`compute_scope_mappings` 的改造归属 `pity.py`（ISSUE-026）、`Banner.draw` 送达路径定稿（ISSUE-027）、子系统 01-理论/02-实施 与手册路径入文档同步面（ISSUE-028）；**同日第三轮（Fixer，2026-09-22）**：`pity_primitives.py` 行补记三个类型集合常量与 `PityContext.external`（ISSUE-024 / ISSUE-034）、Tracker / Modifier / Lifecycle 三族 `rebind` 接口显式定义 + `ConditionalModifier` 转发（ISSUE-029）、preset 工厂签名定稿为 `preset(pdef)` 并补取值来源表（ISSUE-030）、§3.2 / §3.3 正文同步条件外置形态与「组装时的条件」列（ISSUE-031）、`FiniteActive` 声明为「无配置对应物、本期只实现类」（ISSUE-032）、`reads` 并集来源与 `get_reads_for_pool()` 访问器（ISSUE-033）；**同日第五轮（Fixer，2026-09-22）**：Lifecycle 协议补第五个方法 `initialize` 并同步 §3.1.4 骨架 / §四 行 / §3.13 不变式行 / §六 断言（`_active` 的构造期写入自此有归属，ISSUE-202）、§3.6 M3 的 `priority` 透传机制统一为构造形参 `Pity(..., priority=pdef.priority)`（ISSUE-203）、`worst_impact` 卡集合断言改为 `{r.id for r, _ in pool.rewards}`（`Pool.rewards` 元素是 `(Reward, prob)` 二元组，ISSUE-201）、`PityEngine.__init__` 构造期 `except Exception` 静默吞异常的处置定稿为抛 `ConfigError` 并补 §六 断言（ISSUE-204）；**同日第六轮（Fixer，2026-09-22）**：`deactivate_on_early_hit` / `depends_on` 到 Lifecycle 对象的构造来源全链补齐——§3.1.3 新增唯一转换点 `build_lifecycle(pdef)` 与旧路径逐行对照表、§3.2 取值来源表补 `lifecycle=` 行 + registry 校验与 `create_behavior` 的 `ConfigError` 防线 + 四份 preset 代码块补该键、§3.1.6 与 §四 四行登记、§五 风险行、§六 断言、§七 S1/S4 任务项；`LifecycleConfig` 去留定稿为「保留、角色改为 Lifecycle 构造参数袋」（ISSUE-301）；**同日第七轮（Fixer，2026-09-22）三 GATE 问题处置**：① `ISSUE-GATE-granularity` — §七 主线 12 步细分为 26 子块（S1a 至 S1d / S2a 至 S2b / S12 / S3 / S4-1 至 S4-5 / S4b / S5a 至 S5c / S6a 至 S6c / S7a 至 S7c / S10-1 至 S10-2 / S11），逐块补目标文件 + 人时预算 + 验收命令，进度合计由「~10 人时」修正为「约 16.4 人时」，并把「每块独立 commit」写入 GATE-1 与 GATE-5（回滚单元 = 任务单元）；② `ISSUE-GATE-file-list` — 五处行号与计数事实修正（`_EVENT_DRIVEN_TYPES` `:114-115`、`_build_activation_graph` `:1205-1229`、`ctx = PityContext(...)` `:1335`、测试文件 6 改 5、`pentry` 26 键改 24 键）并补齐 S3 / S5 / S10 / S11 四处缺失的目标文件（`core/invariants.py` 独立新模块登记 + 两个新测试文件行）；③ `ISSUE-GATE-dependency-order` — Modifier 方法名定稿为 `apply(ctx, view, dist, readonly)`（`factor` 自 S8 引入，§3.1.4 骨架据此）、`StateView` 由「S9 独占」改为「S3 落薄版 / S9 收紧」、`PityDef.reads` 字段与解析归 S9 而 `Pity.reads` 形参归 S3、`_soft` 族 view 命名空间分配定稿（软计数留 `X`、`X_soft` 只承 `_active`，§3.10.3）；**2026-09-22 第八轮（Fixer 定稿，GATE 五项）**：GATE-1 粒度（S1b / S3 / S12 各细分、M2 补逐子项预算与目标文件、S8-4 与 S8-5 分立）、GATE-3 依赖序（`priority` 字段定义前移至 S4b 且置于 S4-2 之前、`_pools` 由 S1a 改归 S3-1、registry `class` 置 `None` 后旧类改由 harness 直接 import 且回滚改 `git revert`）、GATE-4 风险（快照面取 ①统一写入、ISSUE-102 不加 hit 门控、ISSUE-032 维持只验类不接线，三项均已登记为 §五 风险行）、GATE-5 回滚（主线 29 块逐块回滚、M2 按子项回滚 + 依赖闭包规则）、GATE-6 测试（S11 补专属测试文件、验收命令与 §六 断言），五项定稿的落点见 §七 粒度裁定 / GATE-5 / §六「S10 / S11（保障层）」段 / 文末「自动化审查阻塞项」。**2026-09-22 第九轮（Fixer，GATE-3 / GATE-5 复核）**：① `build_lifecycle(pdef)` 的**定义自 S4-4 移入 S1d**（其依赖 S1a 的 `LifecycleConfig` 与 S1d 的四个 Lifecycle 类此时齐备），S4-4 只留 `lifecycle` 键的 `ConfigError` 防线与旧 `lifecycle_kwargs` 段删除（删除时机须待 10 个 preset 全部落地）——preset 工厂（S4-2 / S4-3）返回 dict 已写 `lifecycle=build_lifecycle(pdef)`，名字在调用时解析，留到 S4-4 才定义则 S4-3 的验收即 `NameError`；② 「`apply()` 保留为默认实现」落成**公共基类 `Modifier`**（§3.9.2 补默认 `apply` = `_apply_factor(dist, self.factor(...) or {})`，§3.2 / §3.14.2 的 Modifier 示例统一改为继承它，§3.14.2 的 `apply` 转发自此有承载处；备选「S8 删除 `apply`」已否决），§六 断言补「**实际调用一次**不抛 `AttributeError`」（纯存在性断言捕获不到该缺口）；③ S9-1 措辞改为「签名沿用 S8-1 定稿的 `factor` 形态」，改名不再记在本步；④ GATE-5 补 **M1 的依赖闭包回退规则**（向消费方闭包，逐块列出连带范围）与「低层块回退 = 部分回退，须重跑受影响验收」强制条。**2026-09-22 第十轮（Fixer，GATE 复核）**：① 文件清单（`ISSUE-GATE-FAIL-2`）——S10-2 补目标文件（唯一未标步）、§四 补 `core/worst_impact.py` 与 `tests/core/test_pity_condition.py` 两行缺失文件、`PityEngine.__init__` 构造兜底的行号由 `:1166-1172` 修正为 `:1164-1172`；② 测试策略（`ISSUE-GATE-FAIL-6`）——S4-2 / S4-5 / S5c / S7a / S7b / S10-1 / S10-2 七块补「验收命令」（S7b 目标文件由泛写 `tests/` 具体化），顺带补 M2 的 S8-6 / S9-4 两个验收子项，M1 的 29 子块自此**逐块**具备「目标文件 + 人时预算 + 验收命令」（落点见文末「自动化审查阻塞项」）。**2026-09-22 第十一轮（Fixer，代码审计 9 项 AUDIT-BREAK-1 至 AUDIT-BREAK-9）**：字段枚举透传升级为「同 commit 同步 + dataclass 驱动 + 字段往返守卫测试」（三处透传点行级表，AUDIT-BREAK-1）；`create_behavior` 的 `target_featured` / `reset` 注入限定旧类分支（AUDIT-BREAK-2）；preset 返回 dict 按键集恰五键定稿并新增 `flags` / `counters` 消费端（AUDIT-BREAK-3）；`gacha_service.py` 四处同源改动改为端到端非抽卡动作断言（AUDIT-BREAK-4）；新增 S8 跨文件同步清单 A/B/C 三段与 `grep` / `__all__` 两道验收（AUDIT-BREAK-5 / 6 / 8）；「S4-3 后收集期即 ImportError」经核实不成立，改按真实断裂点设 **S7d**（M1）与 **S8-7**（M2）两块（AUDIT-BREAK-7，M1 由 29 块 / 16.4 人时改为 30 块 / 16.9 人时，M2 的 S8 由 3.1 改为 3.5、M2 由 5.5 改为 5.9 人时）；`reads` 双通道（管道 vs 策略查询）各自独立验收（AUDIT-BREAK-9）；其中 AUDIT-BREAK-2 / 3 各存一条 veto 备选（落点见 §3.1.4 与文末「自动化审查阻塞项」）。 **2026-09-27/28（用户裁决，第二批）**：① **ISSUE-032 改判**——`FiniteActive` / `DependentFiniteActive` 的配置接线**纳入本期**（**否决**上述第八轮「只验类不接线」的定稿），连带 `PityDef.max_triggers` + `config_toml` 解析 + GUI 控件 + `build_lifecycle` 产出路径（§3.1.3）；② **Lifecycle 正交化**——由「三个互斥类」改为「两个正交维度（激活 × 退役）四个组合」，新增 `DependentFiniteActive`（第四组合的退役计数**自「激活后」起算**），原「`depends_on` 优先、`max_triggers` 被忽略」的写法作废（§3.1.3）；③ **G3 定稿为独立 type `hard_exclude_owned`**（**该单一 type 名已于 2026-09-30 第二轮按用户裁决拆为两个，见末条 ①**），其 `ForceNotOwnedModifier` 的触发条件为 `CounterCondition('counter', pdef.threshold)`（**非** `Always()`——条件极性于 2026-09-28 独立审查出并修正，§3.10.4）；④ **`_PITY_TYPES` 改为由 `BEHAVIOR_REGISTRY` 生成**（新增 type 自动出现在下拉，S6a / S9-3 的「手工追加」步骤删除，§3.6）；⑤ **ISSUE-027 送达路径重梳为方案 A**——`initial_counts` 由 `GachaService` 局部变量提升为 `GachaState` 字段、新增 `GachaState.external_view()`、两条通道就地构造、`Banner.draw` **不新增形参**；并新增 §六 的 `GachaState.clone()` 保真独立验收项（§3.10.2）；⑥ 上述改动涉及的「三个 Lifecycle」类表述同步为四类。 **2026-09-30（G3 定位同步 + 待确认项如实记录，用户裁定）**：① §1.3 的 G3 行补「所涉卡池均已下线，定位改为**历史机制建模能力**」（依据 2026-09-29 官方公告 API 全量穷举 2759 条），并写明「S9 的正当性不依赖 G3 是否现行」；② §二 目标行的 G3 括注同步该定位；③ **修正两处手册行号引用漂移**：手册 §7 重写（`e0a4bda`）后，§1.3 的 `#L963` 与 §3.10.4 的 `#L959` 已指向无关内容，改指 `§7.1:938` / `§7.2:970` / `§7.3:1001`；④ §3.10.4 开头补「所涉卡池已下线」段（含「第二部装备补给不是同一机制」的区分）；⑤ **§3.10.4「全部已拥有」条重写为完整的分歧记录**：列 2026-09-29 专项查证（零直接信源、四候选）、两倾向对照表（候选 (a) 保底不生效 / 候选 (b) 仍给一个 UP）及其依据强度、**两处不一致（给不给 + 给的是什么）与「两者各违背规则原文的一半」**，**裁定维持「待确认」、不按旁证定稿**，实现侧按 (a) 占位但随之挂起；⑥ **§六 G3 专项 ③ 与 §七 S9-4 验收命令加注**：该断言是候选 (a) 的实现形态，定稿前不得当作已定稿验收；⑦ 手册 §7.4 补「模拟器侧取值同样未定稿」的指针。 **2026-09-30 第二轮（G3 双实现 + 三处事实修正，用户裁决）**：① **G3 的「全部已拥有」由「按候选 (a) 占位并挂起」改为双实现并列**：`ForceNotOwnedModifier` 加 `on_all_owned` 构造参数，注册 `hard_exclude_owned_skip`（形态 a，「硬保底·排除已获得（全拥有时保底不触发）」）与 `hard_exclude_owned_any`（形态 b，「硬保底·排除已获得（全拥有时仍给一件 UP）」）两个 type；上一条 ⑤ 的「实现侧按 (a) 占位但随之挂起」**由本条取代**；命名口径定为「形态写进 type key 与 display_name」，手册登记为一条待确认项、两个候选实现；② **「关于」页面两处保底文本改为由 `BEHAVIOR_REGISTRY` 生成**（`gui/about_dialog.py:67` / `:207`，原为硬编码且已漂移，P56 的 6 个 type 至今未登记），§四 补该文件行，落点归 S9-3；③ **删除三处不存在的「`config_toml` 类型白名单」引用**（§3.10.4 配套第 2 条、§四 `core/config_toml.py` 行、§七 S9-3 目标文件）：实测 `_build_pity` 只校验 `name` 与 `scope`，两个未知 type 直接通过；真实后果在引擎侧，`BEHAVIOR_REGISTRY[btype]` 抛 `KeyError` 后被 `PityEngine.__init__` 吞成 `logger.warning`、保底静默消失（实测 `behaviors == []`），即 S4-5 要修的问题；④ **§四 与 §七 目标文件清单对齐**：`core/state.py` / `core/milestone.py` / `tests/test_p60_gacha_state.py` / `tests/test_p63_overflow_integration.py` 四者 §四 已标 S9 而 §七 S9 子块漏列，已补入 S9-2 与 S9-4；⑤ §六 G3 专项 ③ 拆为 ③a / ③b 两条，§七 S9-4 的验收命令、目标文件与预算同步（S9-3 0.7 → 0.9 人时，新增 `tests/gui/test_about_dialog.py`）。 **2026-09-30 第三轮（引用层机械刷新，四路独立审查后的核查修正）**：① **`service/batch_simulator.py` 全部 13 处行号失效**（09-28 / 09-30 三次 P83 并行性能提交把该文件从 1149 行推到 1392 行，文档 09-30 仍在做「事实修正」却未刷新该文件）：`pentry` `:899-925` → `:1143-1168`、`_PityDef` 别名 `:163` → `:193`、`_PityDef(...)` 重建 `:179-204` → `:209-234`、五元组解包与 `PoolPitySpec` 构造 `:183-192` → `:264-274`、`initial_counts` `:398-408` → `:460-470`、`_ms_initial` `:415-421` → `:461-470`、`GachaState(...)` `:430`/`:446` → `:492`、`MPPool(initializer=...)` `:638-641` → `:848-850`、`pity_names` `:173-177` → `:254-266`；② **`pity.py` 六处**：`_active` Flag 写入 `:118-121` → `:128`、`reset`/`target_featured` 形参 `:130-131` → `:118`、`guaranteed_init` truthy 块 `:1013-1015` → `:1009-1010`、`create_behavior` `:836-892` → `:837-915`、`SoftPityMixin` 方法区间 `:509-537` → `:509-543`（原区间漏掉 `_rebind_state`）、§3.9.5 的「统一 `.get` + 空集早退」三处改按族标注（`SoftStepBehavior` `:273`/`:303`、`RotatingBehavior` `:467`、`TargetedBehavior` `:646`；原写「`total <= 0` 在 `SoftStepBehavior`/`HardPityBehavior` 内」类归属有误）；③ **手册 10 处锚点**（§21 缺口表随手册重写整体位移）：G1 `:2283` → `:2396`、G2 `:2284` → `:2397`、G16 `:2287`/`:775` → `:2400`、G5 `:2296` → `:2409`、G13 `:2304` → `:2417`、G14 `:2305` → `:2418`、G15 `:2306` → `:2419`、G5 正文 `:554` → `:560`、§20.2 `:2039` → `:2143`；④ 其余：`strategy.py:100` → `:96`、`cli.py:266-267` → `:285-286`、`config_panel.py:3534-3539` → `:3535-3539`、失效的相对链接改为纯文本指向（目标在仓库外）；⑤ **计数与描述更正**：§七「共 43 子块……主线 29」三项相加仅 33，改为 **45**（G16 2 + P82 2 + M1 30 + M2 11）；§四 对 `模块状态矩阵.md` 的描述「仍写『覆盖 G1 + G5 priority』」经实测已不成立（该行自 2026-09-22 起已含 G3 / S9 / S10 / S11 / S12 与 M1/M2 划分），更新点收窄为 G3 双实现与待确认项。 **2026-10-01 第六轮（Fixer，独立复核 12 项）**：① ISSUE-901 的改判（槽位字段 / `compute_scope_mappings` 减量 / 两处构造点改造推迟到 GATE-5 末条）补同步到**四处残留的「S8 施工语」**（§3.9.3 `worst_impact` 行、§四 `worst_impact` 行、§四 `pity.py` 的 ISSUE-026 追加、§七 S8-5）并逐处挂 `ISSUE-904` 标记（**ISSUE-904**）；② **GATE-5 末条扩为完整收口清单**（七项同批：函数本体 / 4 调用点 / 10 旧类 / 6 个槽位字段 / `compute_scope_mappings` 槽位产出 / 两处构造点改造 / S8-7 的 5 个测试文件），此前全篇十余处引用的那一条本身只列三项（**ISSUE-905**）；③ S7d 的「失败时点②」与 S8-7 的回滚说明按改判前因果描述修正（S8 不删字段、不删函数本体，故②与①同一 commit；S8-7 与 S8-4 不再共享删除面）（**ISSUE-906**）；④ §3.9.3 的 `tests/` 行补登记**等价性装置**这一例外消费方（**ISSUE-907**）；⑤ 删去 §3.9.3 中「`_resolve_selected_slots` 仍改为直接给出卡集合」这句旧稿残留（该名字是旧 `TargetedBehavior` 的槽位级私有方法，照改会破坏 S5a 对照基准与旧类槽位语义）（**ISSUE-908**）；⑥ `factor_override` 的 `exempt` 改为一律只读 `scope_cards`，并把该函数补登记进 §3.1.6 叶子层与 §四（**ISSUE-909**）；⑦ AUDIT-BREAK-1 补「四个别名键必须先废弃」这一改造前提（`pentry` 的 `type`/`start`/`end`/`increment` 对 `btype`/`soft_start`/`soft_end`/`soft_increment`，写读两端须同 commit 改名，否则 dataclass 驱动式静默算错、键集断言恒红）（**ISSUE-910**）；⑧ 透传面由「三处」扩为「引擎侧三处 + GUI 侧五处」，并定稿 `reads` 的 GUI 通路为「不加控件但五处原样透传」（**ISSUE-911**）；⑨ H3 删分支所破坏的两处正断言与 GUI 的 `_PITY_TYPES` 写死计数补进 S6a / S9-3 与 §四（**ISSUE-912**）；⑩ `config/config.toml` 的 P79 常驻护栏波及面补登记，示例段定稿为**注释形态**（**ISSUE-913**）；⑪ `initial_counts` 的推导点位于 `if env.milestone_defs:` 块内的事实与「定稿为 `run_simulation` 内 clone 之后赋值」写入 §四，并把 `batch_simulator` 的**四处行号批量刷新**（`:492`→`:501`、`:461-470`→`:466-479`、`:1143-1168`→`:1161-1186`、`:209-234`→`:218-243`）（**ISSUE-914**）——**限定**：该四处是第六轮**全部**的刷新面；同文件另有两处旧引用（`MPPool(...)` 块、`_PityDef` 别名）与一条 `run_batch_parallel` 定义行未随该轮更正，已由第七轮补正（**ISSUE-915**）；⑫ `factor_override` 的模块归属随之补进 §3.1.6 / §四（并入 ⑥）。<!-- REVIEW-R1-FIX: ISSUE-915 -->**2026-10-01 第七轮（Fixer；独立复核 5 项 + 上一轮 ISSUE-914 的 3 条子项归并）**：① 两处旧引用未随第六轮的批量刷新更正（`MPPool(...)` 块 `:848-850` → `:866-869`、`_PityDef` 别名 `:193` → `:202`），同段 `run_batch_parallel` 定义行 `:638` → `:721` 一并补正，并把第六轮末句「全篇引用已按此批量刷新」收窄为「点名的四处已刷新，其余三处同批补正」（**ISSUE-915**）；② `initial_counts` 的三处表述互斥（`core/state.py` 行写「`_ms_initial` 计算点删除」、`batch_simulator` 行写「构造点须补 `initial_counts`」+「推导上提到块外」、`gacha_service` 行定稿「`run_simulation` 内 `clone()` 之后赋值」），统一为**一处推导源（`run_simulation` :310-315）+ 一处赋值点（`clone()` 之后）**——`batch_simulator` 侧只做删除（`_ms_initial` 与 `initial_counts=` 形参），里程碑 handler 改从 `state` 形参取，「上提到块外」写法作废（**ISSUE-916**）；③ `initialize` 已扩为多命名空间而 `rebind` 仍收单 `name`，`X_soft` 的 `_active` Flag 无重绑通道——定稿取「每个命名空间各持一个 Flag + `rebind(state, name, namespaces=())` 对称重绑」（与旧实现内层 `SoftStepBehavior` 的 Flag 形态同构），备选（只持 `name` 的 Flag、`namespaces` 直接写 state）记为未采用（**ISSUE-917**）；④ `get_config` 的别名键改名未登记两处既有消费面——`_do_update_preview` 的 `pdef.get('type', '?')`（预览逐条打印 `?`，且无任何测试覆盖的静默失真）与 `tests/gui/test_config_panel_pity.py:220` 的正断言（必红），并入 S7a 同批改造（**ISSUE-918**）；⑤ §3.1.3「归属定稿」段仍把骨架调用写成两实参 `initialize`，改为三实参（**ISSUE-919**）。**2026-10-01 第五轮（Fixer，独立复核 6 项）**：① 三族协议补**声明键集**只读成员 `state_keys()`（**ISSUE-501**）——§3.12.1 的「状态键合法」、§3.12.2 判据 1/2、§3.13 状态层 checker 与 S10-2 的构造期 `ConfigError` 四处都以「声明集」为输入，而三张协议表此前无任何承载成员，S10-2 / S11 无可用比对集；落点为 §3.1.1 / §3.1.2 / §3.1.3 三张协议表 + §3.1.4 骨架的 `self._declared_keys` 汇总 + §3.9.2 的 `Modifier.state_keys()` 默认实现与 §3.14.2 的转发 + §3.12.1 / §3.12.2 / §3.13 回指该成员名；② `_redistribute_scope` 的删除时点定稿为「S8 不删函数本体，只删 `core/__init__.py` 导出，本体并入发布前移除旧类的 commit」（**ISSUE-502**）——pity.py 内 4 处旧类调用点（:477 / :589 / :655 / :659）按 GATE-5 保留到发布前，只删函数即那 4 处在调用时 `NameError`；③ scope 取值统一为模块级 `_norm_scope(pdef, default='ssr')`（**ISSUE-503**）——原稿取值列写 `pdef.scope` 原值而依据列引的却是 `create_behavior` 的 `.lower()` 归一化式，直构路径下 `scope_cards.get('SSR')` 取空致保底静默恒等；④ `infer_rarity_from_spec` 的处置由「保留」改判「随 `aggregate_probs_by_rarity` 一并删除」（**ISSUE-504**）——其三类消费者全在 S8 的删除面内、函数本体零消费者，原「保留」使 §六 / S8-2 的 grep 零命中验收恒红；⑤ §3.9.2 的 S8 内循环写死 `self._view` 改为 `self._view_for(mod)`（**ISSUE-505**）——与同计划 ISSUE-407 的强制纪律冲突；⑥ `_EVENT_DRIVEN_TYPES` 的后果表述收窄为「仅规则 3 互斥校验失效」（**ISSUE-506**）——`is_active` 早退已由骨架对全部类型无条件承担，原表述为旧架构残留。 **2026-09-30 第四轮（Fixer，独立复核 8 项）**：① `ConditionalModifier.apply` 补条件判定（**ISSUE-401**，原只在 `factor` 判 → S12-2 至 S7 期间条件包装器全部退化为无条件）；② `Pity.after_draw` 补 `fired` 实参（**ISSUE-402**，原三实参调用 → `triggers` 退化为「激活后的抽数」或 `TypeError`）；③ `pdef.target_featured` 的 preset 承接（**ISSUE-403**，新增 `_target_of(pdef)` 选择子 + `ThresholdForceModifier` / `BoostModifier` 的 `target=` 形参，原「`judge="featured"` 即承接」不成立）；④ `reads` 门控落点为派生 ctx 的 `Pity._gated_ctx`（**ISSUE-404**，禁止就地改写**本调用内的**共享 ctx——每次调用构造一个 ctx，在同池全部保底之间复用；「每池共享」的旧口径已于 2026-10-01 更正）<!-- REVIEW-R1-FIX: ISSUE-926 -->；⑤ `_validate_registry()` 口径写死为「导入期只判 `preset` 可调用」（**ISSUE-405**，键集校验归运行期 `create_behavior`）；⑥ `Lifecycle` 基类统一代理 `depends_on`（**ISSUE-406**，`_build_activation_graph` 对每条 behavior 都读它）；⑦ 零件 `namespace` 声明面 + `NamespaceTracker` + `initialize(state, name, namespaces)` + `Pity._ns_views` / `_view_for`（**ISSUE-407**，原 `X_soft` 无产出者）；⑧ §四 的 `ForceNotOwnedModifier` 归属改回 `core/pity_modifier.py`（**ISSUE-408**，只留 registry 条目）。**2026-10-01 第八轮（Fixer，GATE 四项门控复核）**：① **GATE-2 文件清单**——`gui/config_panel.py` 的「`_PITY_TYPES` 已改为由 `BEHAVIOR_REGISTRY` 生成」六处为**既成事实误记**（实测仍为硬编码 10 项字面量、全仓与全历史检索生成式写法零命中，`1dbc9b0` 只改了本计划文件），六处逐条改判为「**待改造**、施工落 S6a」并写明三项代码改动（字面量→生成式 / registry 5 处 `display_name` 对齐 GUI 现值 / registry 条目顺序对齐 GUI 现值），§3.6 的 1125 与 1126 互斥表述随之消解（**ISSUE-929**）；`core/config_toml.py` 四处失效锚点更正（`:611`→`:636`、`:654-660`→`:677-682`、`:669`→`:692`、`:687`→`:710`）并对该文件锚点做全量复核（`:385-421`→`:392-428`）；② **GATE-3 依赖顺序**——S4-1 的验收在自身位置不可达（preset 工厂属 S4-2 / S4-3，而 `_validate_registry()` 在 `pity.py:834` 导入期即被调用），定稿为「S4-1 只改 validator 与 `create_behavior` 分支 + 写入**过渡判据**，条目按**原子**地在 S4-2 / S4-3 置 `class: None` 并写 `preset`，S4-3 收口时删除过渡分支」，两条原属 S4-1 的验收下移 S4-2、终局验收移入 S4-3，§3.2 与 GATE-5 的 S4-1 回退面同步（**ISSUE-930**）；③ **GATE-4 风险缓解**——ISSUE-926 的两个子项修复（`:1444` 派生 ctx 的归因改为 `SoftPityMixin.before_draw`、`:5` 的「每池共享」改为「本调用内的共享 ctx」），并**清空文末阻塞章节**、6 轮熔断记录移入「自动化审查记录」的第 6 次审查 details（**ISSUE-926**）；④ **GATE-6 测试策略**——M2 的 S8-1 至 S8-5、S9-1、S9-3 七个条目补**块级验收命令**（对齐 GATE-5「低层块回退后须重跑受影响块的验收命令」），S7a 的 `rotating_inverse` 断言加注「前提 = S6a 的生成式改造已落地」并给出未落地时的替代断言（**ISSUE-931**）。 **2026-10-01 第九轮（Fixer，GATE-6 测试策略续修）**：块级验收命令与其断言对象未绑定，三处存在「假通过」失效面（**实测**：S8-5 的 `-k "scope_cards or boundary"` 零命中（11 deselected，pytest **exit code 5**）；S8-3 的 `-k redistribute` 只命中 3 条**既有**旧函数用例（退出码 0 而 `factor_redistribute` 零覆盖）；S10-2 的 `-k "illegal or cycle"` 用例命名未约束）。定稿「验收命令与断言对象绑定纪律」三条（计划内写死用例名 / 收集 ≥1 条 / 命中项不得全为既有用例）写入 §七 引言；三处逐条补命名约束与收集守卫（S8-3 过滤词改为 `factor_redistribute`，目标文件补 `tests/core/test_pity_rotating.py`）；其余四处带 `-k` 的命令（S5c / S8-6 / S9-1 / S9-3）补同款收集守卫；S4-5 记为合规范例（**GATE-6-测试策略**）。
 > 触发：P56 审查发现的「触发器 × 选择器 × 拓扑 × 效果」四维抽象 + 组合爆炸。**2026-08-24 设计重建**：用户追问「最优雅架构」，从领域本质重新理解保底 → 提出 Tracker + Modifier + Lifecycle 三元组纯函数架构；用户裁决命名 Tracker+Modifier。
 > 依赖：P55✅（counter 驱动正交分解 + deltas 展开）+ P56✅（6 个事件驱动类 + Flag/Counter/_redistribute_scope + LifecycleConfig，作为等价性基准）
 > 合并：**P82（保底管道顺序接通）于 2026-09-16 并入本计划**，见 §1.5；其结论直接影响 §1.3 的 G5 项与 §3.6 的 priority 设计，P82 文件已归档
@@ -300,7 +300,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 
 > **2026-09-21 修订**：本表已由 **§3.14** 修订（**条件外置**：触发条件从各 Modifier 内部提出为独立的 Condition 对象，效果实现不变）。本表保留作历史形态与术语索引，实施以 §3.14 为准。
 >
-> **S2 与 S12 的先后（ISSUE-101 补，强制）**：**S2 按本表形态实现**（触发条件写在 Modifier 内部），**S12 随即外置**为 §3.14.2 的 `ConditionalModifier` 形态——S12 已前移进 M1、排在 S2 之后、S4 之前（§七）。故本表不是「永不实施的死稿」，而是 **M1 内 S2 阶段的有效实现形态**；S12 之后以 §3.14 为准。S4 的 preset 工厂与 S5 的等价性测试一律消费**外置后**的形态（§3.2 / §3.3 / §3.14.2 的代码即该形态）。
+> ~~**S2 与 S12 的先后（ISSUE-101 补）**~~（**2026-10-06 随 §3.14 改判删除**）：S12 已整块取消，条件自始内联。原内容：**S2 按本表形态实现**（触发条件写在 Modifier 内部），**S12 随即外置**为 §3.14.2 的 `ConditionalModifier` 形态——S12 已前移进 M1、排在 S2 之后、S4 之前（§七）。故本表不是「永不实施的死稿」，而是 **M1 内 S2 阶段的有效实现形态**；S12 之后以 §3.14 为准。S4 的 preset 工厂与 S5 的等价性测试一律消费**外置后**的形态（§3.2 / §3.3 / §3.14.2 的代码即该形态）。
 >
 > **Modifier 方法名定稿（ISSUE-GATE-dependency-order，2026-09-22）**：M1（S2 起至 S7）期间的 Modifier 方法名一律为 **`apply(ctx, view, dist, readonly) -> 分布`**（骨架 §3.1.4 按此调用），`ConditionalModifier` 也实现 `apply` 并转发到内层；**`factor(...) -> 因子向量` 自 S8 引入**（§3.9.2 定稿），此后骨架改调 `factor`、`apply` 保留为默认实现。全篇三处（本表 / §3.1.4 骨架 / §3.14.2 包装器）以本条统一，见 §3.9.2 的「与 §3.1.4 骨架的关系」段与 §3.14.2 的 `apply` 转发实现。
 
@@ -308,24 +308,59 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 
 | Modifier | 语义 | 对应现有 | 触发条件 |
 |----------|------|---------|---------|
-| `TransferModifier(u_of, t_of, mode, ratio_of=None)` | **唯一的组级 Modifier**。三项即 §3.1.5.2 的操作三元组：`u_of` / `t_of` 是**目标解析器**（`(ctx, view, dist) -> tuple[card id]`，非静态集合，理由见 §3.1.5.2），`mode ∈ {'share', 'assign'}`，`ratio_of` 仅 `share` 需要、同样是解析器 | 见下方「旧类到新形态的映射」 | 由外层条件决定（§3.14） |
+| `Modifier.factor(view, dist, ctx)` | **唯一接口**：返回因子向量 `{card_id: m}`，未列出的卡 `m = 1`，`None` 表示恒等。框架统一归一化 | 见下方「七个机制」 | 由各机制自己的 `factor()` 开头判定（条件内联） |
 
-**旧类到新形态的映射（2026-10-05 裁决 1B / 5B）**：原 7 个 Modifier 中，6 个是同一个 `TransferModifier` 的不同参数，1 个取消、1 个删除：
+**`ctx` 的字段（2026-10-06 定稿）**：
 
-| 原 Modifier | `u_of` | `t_of` | `mode` |
-|------------|--------|--------|--------|
-| `BoostModifier(deltas, scope, target='scope')` | `pool`（全池减更高稀有度） | `scope` | `share`（`ratio_of` 由 deltas 与 dist 推） |
-| `ThresholdForceModifier(scope, target='scope')` | `pool` | `_target_of(pdef)` | `assign` |
-| `ForceFeaturedModifier(scope)` | `scope` | `featured_cards[scope]` | `share`，r = 1 |
-| `ForceNonFeaturedModifier(scope)`（G1） | `scope` | `scope \ featured_cards[scope]` | `share`，r = 1 |
-| `ForceSelectedModifier(flag, card)` | `scope` | `(selected,)` | `share`，r = 1 |
-| `ForceNotOwnedModifier(scope, on_all_owned=…)`（G3） | `pool` | `featured_cards[scope]` 中未拥有者 | `assign` |
-| ~~`InterceptModifier(probs, base_rate)`~~ | **取消**：掷骰移入 Tracker（裁决 6B，§3.1.1） | | |
-| ~~`BaseRatioModifier(scope)`~~ | **删除**：其 `ratio` 恒等于当前份额，即 `identity`（§3.1.5.2.3 第 8 行）。预设里不写该零件即可 | | |
+| 字段 | 内容 |
+|------|------|
+| `scope_cards` | `{稀有度: tuple[card_id]}`，该稀有度的全部卡 |
+| `featured_cards` | `{稀有度: tuple[card_id]}`，该稀有度内的 UP 卡（**只对有 UP 卡的稀有度建键**） |
+| `rarity_rank` | `{稀有度: int}`，**0 = 最高** |
 
-**为什么合并（改判 §3.14.5 的方案 C）**：上表 6 行里 4 行只差 `t_of`，2 行只差 `mode`。原设计的 5 个类各自在类内推导 (U, T, 运算)，没有任何机制强制它们一致，两处实现错误（§3.1.5.2.5）都是这一形态的产物。合并后「soft 的 U 是什么」可以与「hard 的 U 是什么」并排看到。
+> **`ctx` 保留扩展能力（强制）**：三字段是**当前机制需要的全部**，但 `ctx` 的类型是开放的。新机制若需要新的静态事实（池子类型、banner 开放时刻、已拥有集合等），**加字段，不改签名**。`factor(view, dist, ctx)` 三参数是定稿，**不得再增形参**（G3 的 `owns` 即按此走 `ctx.external`，见 §3.10.2）。
 
-**用户可见的变化为零**：TOML 字段、GUI 控件、关于页文本均不变，`target_featured` 的消费者从 Modifier 内部改为 `_target_of` 解析器（§3.2 取值来源表）。
+**七个机制（一机制一类，每类只写一个 `factor()`，方法体里只算四样）**：
+
+| 类 | 条件 | A（加组） | Q（减组） | 转移量 |
+|----|------|----------|----------|--------|
+| `HardModifier`（`target_featured=false`） | `counter >= τ` | `scope_cards[scope]` | 更低稀有度 | `p(Q)` |
+| `HardModifier`（`target_featured=true`） | 同上 | `featured_cards[scope]` | 更低稀有度 ∪ `scope\featured` | `p(Q)` |
+| `SoftModifier` | `boost > 0` | `scope_cards[scope]` | 更低稀有度 | `boost/100` |
+| `RotatingModifier` | `guaranteed` | `featured_cards[scope]` | `scope\featured` | `p(Q)` |
+| `NonFeaturedModifier`（G1） | `forced_loss` | `scope\featured` | `featured_cards[scope]` | `p(Q)` |
+| `SelectedModifier`（targeted） | `guaranteed ∨ fate_ready` | `(selected,)` | `scope\selected` | `p(Q)` |
+| `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\featured` | `p(Q)` |
+
+**四样都是 `factor()` 方法体内的局部量**，不是构造形参、不进接口。「更低稀有度」= `rarity_rank` 中 `rank > rank(scope)` 的稀有度下的全部卡；「`scope\X`」= scope 卡集去掉 X。
+
+**表里只有两列变出花样**：A/Q 的取法（5 种）与转移量（2 种：`p(Q)` 与 `boost/100`）。条件各不相同，但与 A/Q/转移量无关。
+
+> **边界一：`hard` 的 scope 为最低稀有度时，本族表达不了（2026-10-06 实测）**。`Q = 更低稀有度` 为空 → `amount = 0` → `transfer_factors` 返回恒等，**保底完全不生效**。旧实现靠「绝对赋值 + 更高稀有度豁免」造出 Σ > 1 的分布（实测 `hard(scope='r')` 得 Σ = 1.061），这是**造质量**，不属于「A 加 Q 减」族。**手册无此配置**（全部 `hard` 的 scope 为 `ssr`，除 `sr_pity` 为 `sr`），故登记为**边界**而非缺口。真要支持，须另写一个 `factor()`（直接返回自定义因子表），**接口不变**。
+
+> **边界二：`hard` 的 scope 为中间稀有度时与旧实现有差（2026-10-06 实测）**。`hard(scope='sr')`：新模型 `sr = 0.9890、ssr = 0.0110（原值不动）`；旧实现 `sr = 0.9891、ssr = 0.0109`。差 1.2e-04，成因是**旧实现在此情形 Σ = 1.011**（更高稀有度被「豁免」保留了绝对值），归一化后按比例缩水；新模型 `⟨m,p⟩ ≡ 1`，更高稀有度**不写因子即精确保留**。量级 1e-4 ~ 3.5e-3（scope 越低差越大），属 §3.9.5 已登记的差异类。
+
+**条件内联（2026-10-06 裁决）**：条件写在各类 `factor()` 开头，不生效即 `return None`。**取消 §3.14 的 `ConditionalModifier` 与整个条件类族**（理由见 §3.14 的改判）。
+
+**旧类到新类的映射**：
+
+| 原类 | 新类 | 说明 |
+|------|------|------|
+| `BoostModifier` | `SoftModifier` | |
+| `ThresholdForceModifier` | `HardModifier` | |
+| `ForceFeaturedModifier` | `RotatingModifier` | |
+| `ForceNonFeaturedModifier`（G1） | `NonFeaturedModifier` | |
+| `ForceSelectedModifier` | `SelectedModifier` | |
+| `ForceNotOwnedModifier`（G3） | `NotOwnedModifier` | |
+| ~~`InterceptModifier`~~ | **取消** | 掷骰移入 `StreakTracker.commit`（裁决 6B，§3.1.1） |
+| ~~`BaseRatioModifier`~~ | **删除** | 其转移量为 0（恒等），预设里不写该零件即可 |
+
+**用户可见的变化为零**：TOML 字段、GUI 控件、关于页文本均不变。`target_featured` 的消费者是 `HardModifier` 自己的 `factor()`（§3.2 取值来源表）。
+
+<!-- REVIEW-R1-FIX: RULING-1B -->
+<!-- REVIEW-R1-FIX: RULING-5B -->
+<!-- REVIEW-R1-FIX: RULING-7B -->
+<!-- REVIEW-R1-FIX: MODIFIER-IFACE -->
 
 <!-- REVIEW-R1-FIX: ISSUE-407 -->
 **Modifier 也暴露 `namespace` 属性（默认 `None`，ISSUE-407）**：声明了命名空间的 Modifier 由 `Pity` 传 `StateView(state, mod.namespace)` 而非默认 view；取值面与 Tracker / Lifecycle 同源，见 §3.1.1 的「零件的命名空间声明面」与 §3.10.3 的两级 view 分配定稿。
@@ -354,9 +389,11 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 | Lifecycle | 语义 | 激活维 / 退役维 | 配置来源 |
 |-----------|------|---------------|---------|
 | `AlwaysActive` | 永远生效 | Always / Never | 默认（两者都未配） |
-| `OnceActive(max_triggers=N)` | 触发 N 次后退役（福利保底） | Always / AfterN(N) | `PityDef.max_triggers > 0` |
+| `FiniteActive(max_triggers=N)` | 触发 N 次后退役（福利保底） | Always / AfterN(N) | `PityDef.max_triggers > 0` |
 | `DependentActive` | 依赖另一个 Pity 激活 | Dependent / Never | `PityDef.depends_on` 非空 |
-| `DependentOnceActive(max_triggers=N)` | 被激活后，触发 N 次退役 | Dependent / AfterN(N) | `depends_on` 与 `max_triggers` 同时配置 |
+| `DependentFiniteActive(max_triggers=N)` | 被激活后，触发 N 次退役 | Dependent / AfterN(N) | `depends_on` 与 `max_triggers` 同时配置 |
+
+> **类名变更（2026-10-06 用户裁决）**：原名 `OnceActive` / `DependentOnceActive` 与语义不符：`max_triggers` 可以是任意 N，不只 1 次。现名按计划自身声明的**两个正交维度**取：激活维（`Always` / `Dependent`）× 退役维（`Always` = 永不 / `Finite` = 触发 N 次后退役）。其余两名 `AlwaysActive` / `DependentActive` 不变。
 
 **两个维度正交（2026-09-28 修正）**：`activation`（`Always` / `Dependent`）× `retirement`（`Never` / `AfterN`）各二值，**四个组合全部合法**——「被谁激活」与「触发几次后退役」是两件独立的事，不存在覆盖关系。上表四个具名类是这四个组合的现成写法（维度固定为二，故不构成组合爆炸）。除 `AlwaysActive` 外，其余三个均为 P64 新增或本期接线。
 
@@ -365,15 +402,15 @@ Lifecycle 独立于 Tracker/Modifier，只管 `is_active` 判定和 `deactivate_
 <!-- REVIEW-FIX-PREV: ISSUE-029 -->
 <!-- REVIEW-FIX-PREV: ISSUE-032 -->
 <!-- REVIEW-FIX-PREV: ISSUE-202 -->
-**Lifecycle 协议（强制；ISSUE-029 补 `rebind`；ISSUE-202 补 `initialize`；ISSUE-407 补第三实参 `namespaces`）**：`Pity` 骨架调用以下**五个**方法——`initialize(state, name, namespaces=())`（**构造期**写入初始 `_active`，归属论证见下段 ISSUE-202 专段）、`is_active(state, name)`（`before_draw` / `after_draw` 首行早退）、`should_deactivate(ctx, state, name, fired)`（退役判定，**先于** `commit`，见 §3.1.4 的 ISSUE-018；**`fired` 形参为 2026-09-28 独立复核补**——它是「本次抽卡是否命中」的布尔值，由 `Pity` 用 `any(tr.did_reset(...))` 算好后传入，**Lifecycle 自身拿不到该判据**，因为 `LifecycleConfig` 只有 `deactivate_on_early_hit` / `depends_on`、无 `scope` / `reset`，而「命中」的定义依赖后者）、`deactivate(state, name)`（清 `_active`）、`rebind(state, name, namespaces=())`（重绑本生命周期为 `name` 与 `namespaces` 中**每个**命名空间持有的 `_active` Flag 到 per-call `state`；**实参面与 `initialize` 严格对称**，见下段 ISSUE-917 专段；与 Tracker / Modifier 同名同义，但后两族仍是两实参；`Pity._rebind_state` 无条件调用）。<!-- REVIEW-R1-FIX: ISSUE-917 --><!-- REVIEW-R1-FIX: ISSUE-919 -->。另须暴露**两个只读属性**——`deactivate_on_early_hit`（供 `Pity.after_draw` 判定「本次退役是否跳过重置」）与 **`depends_on`**（**ISSUE-406**：`PityEngine._build_activation_graph` 对**每一条** behavior **无条件**读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)，非只读 `Dependent` 族）；改造后 `bh._lifecycle` 是**对象**（`getattr` 恒真），只要 `AlwaysActive` / `OnceActive` 不代理该属性，**每次 `PityEngine(...)` 构造**都会 `AttributeError`。同一路径还被 S3-1 的验收「`_pools` 注入后同池 `depends_on` 不再触发池交集警告」与 §3.12.2 的池交集校验依赖）。两个属性**一并在 `Lifecycle` 基类里由 `self._cfg` 统一代理**——原稿「`depends_on` 由 `DependentActive` 从同一 `cfg` 读出」的写法**已废止**（它使该属性只存在于一个子类上，与本条要求的统一代理冲突）；`DependentActive` 自此只多一个「依赖激活」语义，不再单独持有该字段的读法。四个内置 Lifecycle 均须实现这**五**个方法（无状态可空实现），`rebind` 尤其不可省——`Pity` 不设守卫。<!-- REVIEW-R1-FIX: ISSUE-407 --> 另与其他两族一致暴露 **`namespace` 属性**（默认 `None`），由 `Pity` 决定给它传默认 view 还是 `StateView(state, lc.namespace)`（取值面见 §3.1.1 的「零件的命名空间声明面」；`Lifecycle.initialize` 对**本保底声明的全部命名空间**写 `_active` 的推广见 §3.10.3）。**并同样暴露 `state_keys() -> tuple[str, ...]`（ISSUE-501）**——Lifecycle 的声明集为 `('triggers',)`（`OnceActive` / `DependentOnceActive` 且 `max_triggers > 0` 时），其余三个 Lifecycle 返回 `()`；该成员是 §3.12.2 判据第 1/2 条的输入之一（`Pity` 汇总三族声明集，见 §3.1.4 骨架的 `_declared_keys`）。**早退不依赖任何类型集合**：**`before_draw` / `after_draw` 首行的 `is_active` 早退由骨架无条件承担**（§3.1.4 骨架对全部类型生效），`_EVENT_DRIVEN_TYPES` 只影响 `_validate_behaviors` 规则 3 的互斥校验、**不参与早退判定**（ISSUE-506）。<!-- REVIEW-R1-FIX: ISSUE-501 --> <!-- REVIEW-R1-FIX: ISSUE-506 -->
+**Lifecycle 协议（强制；ISSUE-029 补 `rebind`；ISSUE-202 补 `initialize`；ISSUE-407 补第三实参 `namespaces`）**：`Pity` 骨架调用以下**五个**方法——`initialize(state, name, namespaces=())`（**构造期**写入初始 `_active`，归属论证见下段 ISSUE-202 专段）、`is_active(state, name)`（`before_draw` / `after_draw` 首行早退）、`should_deactivate(ctx, state, name, fired)`（退役判定，**先于** `commit`，见 §3.1.4 的 ISSUE-018；**`fired` 形参为 2026-09-28 独立复核补**——它是「本次抽卡是否命中」的布尔值，由 `Pity` 用 `any(tr.did_reset(...))` 算好后传入，**Lifecycle 自身拿不到该判据**，因为 `LifecycleConfig` 只有 `deactivate_on_early_hit` / `depends_on`、无 `scope` / `reset`，而「命中」的定义依赖后者）、`deactivate(state, name)`（清 `_active`）、`rebind(state, name, namespaces=())`（重绑本生命周期为 `name` 与 `namespaces` 中**每个**命名空间持有的 `_active` Flag 到 per-call `state`；**实参面与 `initialize` 严格对称**，见下段 ISSUE-917 专段；与 Tracker / Modifier 同名同义，但后两族仍是两实参；`Pity._rebind_state` 无条件调用）。<!-- REVIEW-R1-FIX: ISSUE-917 --><!-- REVIEW-R1-FIX: ISSUE-919 -->。另须暴露**两个只读属性**——`deactivate_on_early_hit`（供 `Pity.after_draw` 判定「本次退役是否跳过重置」）与 **`depends_on`**（**ISSUE-406**：`PityEngine._build_activation_graph` 对**每一条** behavior **无条件**读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)，非只读 `Dependent` 族）；改造后 `bh._lifecycle` 是**对象**（`getattr` 恒真），只要 `AlwaysActive` / `FiniteActive` 不代理该属性，**每次 `PityEngine(...)` 构造**都会 `AttributeError`。同一路径还被 S3-1 的验收「`_pools` 注入后同池 `depends_on` 不再触发池交集警告」与 §3.12.2 的池交集校验依赖）。两个属性**一并在 `Lifecycle` 基类里由 `self._cfg` 统一代理**——原稿「`depends_on` 由 `DependentActive` 从同一 `cfg` 读出」的写法**已废止**（它使该属性只存在于一个子类上，与本条要求的统一代理冲突）；`DependentActive` 自此只多一个「依赖激活」语义，不再单独持有该字段的读法。四个内置 Lifecycle 均须实现这**五**个方法（无状态可空实现），`rebind` 尤其不可省——`Pity` 不设守卫。<!-- REVIEW-R1-FIX: ISSUE-407 --> 另与其他两族一致暴露 **`namespace` 属性**（默认 `None`），由 `Pity` 决定给它传默认 view 还是 `StateView(state, lc.namespace)`（取值面见 §3.1.1 的「零件的命名空间声明面」；`Lifecycle.initialize` 对**本保底声明的全部命名空间**写 `_active` 的推广见 §3.10.3）。**并同样暴露 `state_keys() -> tuple[str, ...]`（ISSUE-501）**——Lifecycle 的声明集为 `('triggers',)`（`FiniteActive` / `DependentFiniteActive` 且 `max_triggers > 0` 时），其余三个 Lifecycle 返回 `()`；该成员是 §3.12.2 判据第 1/2 条的输入之一（`Pity` 汇总三族声明集，见 §3.1.4 骨架的 `_declared_keys`）。**早退不依赖任何类型集合**：**`before_draw` / `after_draw` 首行的 `is_active` 早退由骨架无条件承担**（§3.1.4 骨架对全部类型生效），`_EVENT_DRIVEN_TYPES` 只影响 `_validate_behaviors` 规则 3 的互斥校验、**不参与早退判定**（ISSUE-506）。<!-- REVIEW-R1-FIX: ISSUE-501 --> <!-- REVIEW-R1-FIX: ISSUE-506 -->
 
 <!-- REVIEW-R1-FIX: ISSUE-406 -->
 **`should_deactivate` 的调用形态（ISSUE-402，2026-09-30 独立复核补，强制）**：`Pity.after_draw` 的调用行必须是 `self._lifecycle.should_deactivate(ctx, self._state, self._name, fired)` 形态——**四实参、第四实参为 `fired`**，`fired = self.did_fire(ctx)` 在退役判定**之前**取值（§3.1.4 骨架已写死）。**不得写成三实参**：三实参下，若 Lifecycle 按本协议（四参）实现即每次抽卡 `TypeError`；若迁就三参，则 `triggers` 只能无条件累加、退化为「激活后的**抽数**」而非「**触发次数**」，`max_triggers=2` 在第 2 抽就退役，与「触发 N 次后退役」相反，本条条第 4 条与 §六 ISSUE-032 ⑤ 因此**全部不可达**。**验收分两层**（缺第二层则缺口不可见）：① S1d 单测直构 Lifecycle 并**显式传 `fired`**（覆盖四参语义）；② 一条**经 `Pity.after_draw` 的端到端断言**（覆盖调用形态——S1d 与 S3-2 的既有验收只断言构造期 `_active`，都不经过该调用行）。
 
-**`max_triggers` 的计数载体（2026-09-28 独立审查补，原缺口）**：`OnceActive` / `DependentOnceActive` 的「已触发次数」必须落在 **state 的保底命名空间**下，键名定为 **`triggers`**（与 `counter` / `guaranteed` / `fate_points` 等既有键同层）。四条约束：
+**`max_triggers` 的计数载体（2026-09-28 独立审查补，原缺口）**：`FiniteActive` / `DependentFiniteActive` 的「已触发次数」必须落在 **state 的保底命名空间**下，键名定为 **`triggers`**（与 `counter` / `guaranteed` / `fate_points` 等既有键同层）。四条约束：
 
 1. **不可放在 Lifecycle 对象内**——Lifecycle 实例在同一 worker 内**跨模拟复用**（`rebind` 每次调度都被调用），对象内计数会跨模拟泄漏，破坏「固定种子可复现」。
-2. **键集声明**——该键须登记进 §3.12.1 的「状态键合法」不变式检查集；声明者是 **Lifecycle** 而非 Tracker（它是生命周期状态，不属追踪器）。**声明通道 = 三族统一的 `state_keys()`**（ISSUE-501）：`OnceActive` / `DependentOnceActive` 在 `max_triggers > 0` 时返回 `('triggers',)`，其余返回 `()`；该成员同时是 §3.12.2 判据与 §3.13 状态层 checker 的输入（§3.1.1 的「声明键集」段）。<!-- REVIEW-R1-FIX: ISSUE-501 -->
+2. **键集声明**——该键须登记进 §3.12.1 的「状态键合法」不变式检查集；声明者是 **Lifecycle** 而非 Tracker（它是生命周期状态，不属追踪器）。**声明通道 = 三族统一的 `state_keys()`**（ISSUE-501）：`FiniteActive` / `DependentFiniteActive` 在 `max_triggers > 0` 时返回 `('triggers',)`，其余返回 `()`；该成员同时是 §3.12.2 判据与 §3.13 状态层 checker 的输入（§3.1.1 的「声明键集」段）。<!-- REVIEW-R1-FIX: ISSUE-501 -->
 3. **与等价性口径的关系**——该键**仅在 `max_triggers > 0` 时**创建（与 `*_init` 的 truthy 规则一致），而旧实现无此能力（`deactivate_on_early_hit` 只覆盖 N=1 且不计数），故属**增量能力**，**不在「S1–S5 状态快照逐场一致」范围内**，须按 §3.5 的增量能力口径单独验收。
 4. **读写都在 `should_deactivate`，且只在 `fired` 时累加**——`if fired: n = state.get(name, "triggers", 0) + 1; state.set(name, "triggers", n); if n >= max_triggers: return True`。**2026-09-28 独立复核补**：原稿只写了「读」、未写「谁累加」，而最自然的落点（无条件累加）会让 `triggers` 变成「激活后的**抽数**」而非「**触发次数**」——`max_triggers=2` 会在第 2 抽就退役，与「触发 N 次后退役」相反。加上 `fired` 判据后语义才正确，且与 §3.1.1 M4 的「命中 ≡ 回到初始状态」同源。
 5. **未激活期间不累加**——`after_draw` 首行 `is_active` 早退（§3.1.4 骨架）在 `should_deactivate` 之前，故「自激活后起算」（§五 风险行 / §六 ⑥）由调用位置天然保证。
@@ -383,7 +420,7 @@ Lifecycle 独立于 Tracker/Modifier，只管 `is_active` 判定和 `deactivate_
 
 `pdef.deactivate_on_early_hit` / `pdef.depends_on` 是两个**跨 type 共享**的字段（§1.4 第 2 条：与驱动类型无关的正交包装层，P55 只给 counter 驱动用，P64 要补到全部类型）。旧代码里它们的唯一转换点是 `create_behavior` 末尾的 `lifecycle_kwargs` 段（[pity.py:893-900](gacha_simulator/core/pity.py#L893-L900)：`params['lifecycle'] = LifecycleConfig(**lifecycle_kwargs)`），而新架构的 `Pity` 形参类型是 **Lifecycle 对象**（§3.1.4 骨架 `lifecycle: Lifecycle = AlwaysActive()`）。因此必须有且只有一处定义「参数袋 → 哪个 Lifecycle 类」的分工。若缺，实施者极易「preset 不写 `lifecycle` + 旧 `LifecycleConfig` 构造段又不删」两处各留一半，后果是**全部 `deactivate_on_early_hit` 与全部 `depends_on` 配置静默失效**——前者使 §六 的 N1 例外断言与「事件驱动型退役」断言双双不可达，后者使激活传播与「`depends_on` 引用不存在名」的 `ConfigError` 一并消失；且旧类已退役，没有任何旧实现可作对照发现。
 
-**定稿：转换点唯一，位于 `core/pity.py` 的模块级 helper。** **落地步骤（ISSUE-GATE-3-dependency-order，2026-09-22）**：本 helper 的**定义随 S1d** 写入 `core/pity.py`（即 `AlwaysActive` / `OnceActive` / `DependentActive` 与 `LifecycleConfig` 参数袋同批落地的那一块——其依赖 S1a 的 `LifecycleConfig` 与 S1d 的四个 Lifecycle 类此时已全部就位），**S4-4 不再定义它**、只留 `lifecycle` 键的校验防线与旧 `lifecycle_kwargs` 段清理（§七 S1d / S4-4）。**不可留到 S4-4 才定义**：§3.2 / §3.3 / §3.14.2 的 preset 工厂返回 dict 已写 `lifecycle=build_lifecycle(pdef)`，而 S4-2 / S4-3 排在 S4-4 之前，S4-3 的验收命令「全部 10 个 preset 构造成功」会**实际调用**工厂（模块级名字在调用时解析），晚定义即 `NameError`。<!-- REVIEW-FIX-PREV: ISSUE-GATE-3-dependency-order -->
+**定稿：转换点唯一，位于 `core/pity.py` 的模块级 helper。** **落地步骤（ISSUE-GATE-3-dependency-order，2026-09-22）**：本 helper 的**定义随 S1d** 写入 `core/pity.py`（即 `AlwaysActive` / `FiniteActive` / `DependentActive` 与 `LifecycleConfig` 参数袋同批落地的那一块——其依赖 S1a 的 `LifecycleConfig` 与 S1d 的四个 Lifecycle 类此时已全部就位），**S4-4 不再定义它**、只留 `lifecycle` 键的校验防线与旧 `lifecycle_kwargs` 段清理（§七 S1d / S4-4）。**不可留到 S4-4 才定义**：§3.2 / §3.3 / §3.14.2 的 preset 工厂返回 dict 已写 `lifecycle=build_lifecycle(pdef)`，而 S4-2 / S4-3 排在 S4-4 之前，S4-3 的验收命令「全部 10 个 preset 构造成功」会**实际调用**工厂（模块级名字在调用时解析），晚定义即 `NameError`。<!-- REVIEW-FIX-PREV: ISSUE-GATE-3-dependency-order -->
 
 ```python
 def build_lifecycle(pdef) -> Lifecycle:
@@ -395,27 +432,27 @@ def build_lifecycle(pdef) -> Lifecycle:
     # 两维独立取值（2026-09-28 修正：非「depends_on 优先」）
     _dep, _n = cfg.depends_on, getattr(pdef, 'max_triggers', 0) or 0
     if _dep and _n > 0:
-        return DependentOnceActive(cfg, max_triggers=_n)
+        return DependentFiniteActive(cfg, max_triggers=_n)
     if _dep:
         return DependentActive(cfg)
     if _n > 0:
-        return OnceActive(cfg, max_triggers=_n)
+        return FiniteActive(cfg, max_triggers=_n)
     return AlwaysActive(cfg)
 ```
 
 | 激活维（`pdef.depends_on`） | 退役维（`pdef.max_triggers`） | `build_lifecycle` 产出 | 旧路径对照（[pity.py:893-900](gacha_simulator/core/pity.py#L893-L900)） |
 |---|---|---|---|
 | 空 / None | `0`（不限） | `AlwaysActive(cfg)` | 无 `lifecycle_kwargs`、`params` 不带 `lifecycle` 键 → behavior 落到默认 `LifecycleConfig()` |
-| 空 / None | `> 0` | `OnceActive(cfg, max_triggers=n)` | 旧路径无对应物（旧 `deactivate_on_early_hit` 只覆盖「首次命中即退役」） |
+| 空 / None | `> 0` | `FiniteActive(cfg, max_triggers=n)` | 旧路径无对应物（旧 `deactivate_on_early_hit` 只覆盖「首次命中即退役」） |
 | 非空 | `0`（不限） | `DependentActive(cfg)` | `LifecycleConfig(depends_on=…, …)` |
-| 非空 | `> 0` | `DependentOnceActive(cfg, max_triggers=n)` | 旧路径无对应物（两维正交后的新增组合） |
+| 非空 | `> 0` | `DependentFiniteActive(cfg, max_triggers=n)` | 旧路径无对应物（两维正交后的新增组合） |
 
 （`cfg` = `LifecycleConfig(depends_on=pdef.depends_on, deactivate_on_early_hit=pdef.deactivate_on_early_hit)`，四个组合都带入。**注意退役维取 `max_triggers`，不是 `deactivate_on_early_hit`**——后者是与两维正交的**第三个开关**（布尔，命中即退役），四组合下均由 `should_deactivate` 一并判定。原表把 `deactivate_on_early_hit` 误作第二轴，是本表被修正的原因。）
 
 三条配套纪律：
 
 1. **`LifecycleConfig` 的去留定稿 = 保留，角色改为「Lifecycle 对象的构造参数袋」**。四个 Lifecycle 实现共用一个基类 `Lifecycle`（住 `pity_tracker.py`），基类持有 `self._cfg`；`deactivate_on_early_hit` **与 `depends_on`** 两个属性**都由基类对 `self._cfg` 统一代理**（协议要求暴露这两个属性，见上段；**ISSUE-406** 已把原稿「`depends_on` 由 `DependentActive` 从同一 `cfg` 读出」的写法废止——`_build_activation_graph` 对每条 behavior 都读该属性，[pity.py:1216](gacha_simulator/core/pity.py#L1216)）。`core/__init__.py` 的导出面**不变**（ISSUE-025 的保留清单已含 `LifecycleConfig`），`core/pity_primitives.py` 仍承载其定义（§3.1.6 叶子层）。**旧 `create_behavior` 的 `lifecycle_kwargs` 段（:893-900）随之删除**——同一转换不得留两处。
-2. **`OnceActive` / `DependentOnceActive` 的产出条件**：由 `build_lifecycle` 按两维独立取值（激活维看 `depends_on`、退役维看 `max_triggers > 0`），**两维同时配置时两者都生效**（产出 `DependentOnceActive`）。2026-09-28 修正：原稿写「`depends_on` 非空时以 `DependentActive` 优先、`max_triggers` 被忽略」——该写法把一个二维空间压成了一维三选一，与两维正交的设计相悖。
+2. **`FiniteActive` / `DependentFiniteActive` 的产出条件**：由 `build_lifecycle` 按两维独立取值（激活维看 `depends_on`、退役维看 `max_triggers > 0`），**两维同时配置时两者都生效**（产出 `DependentFiniteActive`）。2026-09-28 修正：原稿写「`depends_on` 非空时以 `DependentActive` 优先、`max_triggers` 被忽略」——该写法把一个二维空间压成了一维三选一，与两维正交的设计相悖。
 3. **调用点**：每个 preset 工厂的返回 dict 一律含 `lifecycle=build_lifecycle(pdef)`（§3.2 取值来源表已补该行；§3.2 / §3.3 / §3.14.2 的四份 preset 代码块已同步写入）。§3.1.4 骨架的 `lifecycle: Lifecycle = AlwaysActive()` 只是**兜底默认值**，不是正常路径。**三处落点的步骤分工（ISSUE-GATE-3-dependency-order）**：helper 定义在 **S1d**、`lifecycle=` 键由 **S4-2 / S4-3** 的工厂写入、旧 `lifecycle_kwargs` 段的删除与 `lifecycle` 键防线留在 **S4-4**——删除时机不可前移，S4-2 / S4-3 期间未迁移的类型仍走 `create_behavior` 旧类兼容路径、仍需该段注入 `LifecycleConfig`，提前删除会让这些类型的 `deactivate_on_early_hit` / `depends_on` 静默失效（§七 S4-4）。
 
 **防线（禁止静默回退）**：`create_behavior` 在 `preset(pdef)` 之后**校验返回 dict 含 `lifecycle` 键**，缺失即抛 `ConfigError`（与 preset 构造失败的处置同层，§四 `core/pity.py` 行 / ISSUE-204）。若改成「缺失时静默取骨架默认 `AlwaysActive()`」，任何忘了写该键的 preset 都会让该类保底的 `deactivate_on_early_hit` / `depends_on` 全部失效且无任何报错——这正是本条要消除的失效模式。§六 已补对应断言。
@@ -438,9 +475,9 @@ if self._lifecycle.depends_on is None:
 | Lifecycle | `initialize(state, name, namespaces=())`（**ISSUE-407**：对 `name` 与 `namespaces` 中每个命名空间都按本表写入；`namespaces` = `Pity` 收集的零件命名空间集合；**同一组 `namespaces` 亦为 `rebind` 的第二实参**——**ISSUE-917**：两方法的实参面必须对称，见下专段） |
 |-----------|---------------------------|
 | `AlwaysActive` | 写 `_active = True`（对应旧 `depends_on is None` 分支） |
-| `OnceActive(max_triggers=N)` | 写 `_active = True`（首触发前生效，与 `AlwaysActive` 同） |
+| `FiniteActive(max_triggers=N)` | 写 `_active = True`（首触发前生效，与 `AlwaysActive` 同） |
 | `DependentActive(depends_on=…)` | 空实现（激活由引擎的 `depends_on` 传播写入，[pity.py:1342](gacha_simulator/core/pity.py#L1342)） |
-| `DependentOnceActive(depends_on=…, max_triggers=N)` | 同 `DependentActive`：空实现（不写 `_active`，由引擎激活传播置位）；退役计数自激活后起算 |
+| `DependentFiniteActive(depends_on=…, max_triggers=N)` | 同 `DependentActive`：空实现（不写 `_active`，由引擎激活传播置位）；退役计数自激活后起算 |
 
 `Pity.__init__` 在创建 `_view` **之前**调用 `self._lifecycle.initialize(state, self._name, self._namespaces)`（§3.1.4 骨架那行注释已改写为真实调用；**ISSUE-919**：实参形态须与骨架的调用行、§3.1.3 协议表、§六 与 §七 同口径——漏传 `namespaces` 则 `X_soft` 的 `_active` 无处产生，`rebind` 亦无对象可重绑，见下段 ISSUE-917）。<!-- REVIEW-R1-FIX: ISSUE-919 -->
 
@@ -460,7 +497,7 @@ if self._lifecycle.depends_on is None:
 
 **实施者按 ① 落笔，S3 开工前不再需要二次决策**；§六 对应断言的备选分支已删除。
 
-**`OnceActive` 的配置层落点（ISSUE-032，2026-09-27 用户裁决：本期接线）**：`OnceActive(max_triggers=N)` 的配置接线**纳入本期范围**（原 2026-09-22 第八轮定稿为「只实现类、不做配置接线」，2026-09-27 用户否决该定稿）。
+**`FiniteActive` 的配置层落点（ISSUE-032，2026-09-27 用户裁决：本期接线）**：`FiniteActive(max_triggers=N)` 的配置接线**纳入本期范围**（原 2026-09-22 第八轮定稿为「只实现类、不做配置接线」，2026-09-27 用户否决该定稿）。
 
 **为什么它本该有配置**：`max_triggers`（触发 N 次后退役）是 Lifecycle 的**基本能力**——旧实现里 `deactivate_on_early_hit` 就是它在 N=1 时的特例（[pity.py:329-337](gacha_simulator/core/pity.py#L329-L337) 与 [pity.py:405-413](gacha_simulator/core/pity.py#L405-L413) 两处 `_active.clear()` 后返回 True、跳过 counter 重置）。把次数上限做成可配置的 N 是能力完备性的自然要求；只实现类而不给配置入口，等于该能力对用户不可见。手册 G5 的 `hard(max_triggers=1)`（[手册:560](docs/主流抽卡游戏卡池机制配置转换手册.md#L560)）正是它的真实用例，当前只是散写、无字段承载。
 
@@ -468,10 +505,10 @@ if self._lifecycle.depends_on is None:
 
 1. **`PityDef` 新增 `max_triggers: int = 0`**（0 = 不限，与 `MilestoneDef.max_triggers` 的零值约定一致）——`core/config_store.py`
 2. **`config_toml` 解析与该键 round-trip**（`_build_pity` 读取 + `_pitydef_to_toml` 写回）；范围校验：负值抛 `ConfigError`（防「写了 -1 却静默当 0」）
-3. **`build_lifecycle(pdef)` 按两个正交维度独立取值**：激活维 = `depends_on` 非空 ? `Dependent` : `Always`；退役维 = `max_triggers > 0` ? `AfterN(n)` : `Never`。**两维同时配置时两者都生效**（产出 `DependentOnceActive`）。配置来源：激活维取 `PityDef.depends_on`、退役维取 `PityDef.max_triggers`（0 = 不限）。**2026-09-28 修正**：原稿写「`depends_on` 优先、`max_triggers` 被忽略」是错的——「被谁激活」与「触发几次后退役」互不干涉，不存在覆盖关系
+3. **`build_lifecycle(pdef)` 按两个正交维度独立取值**：激活维 = `depends_on` 非空 ? `Dependent` : `Always`；退役维 = `max_triggers > 0` ? `AfterN(n)` : `Never`。**两维同时配置时两者都生效**（产出 `DependentFiniteActive`）。配置来源：激活维取 `PityDef.depends_on`、退役维取 `PityDef.max_triggers`（0 = 不限）。**2026-09-28 修正**：原稿写「`depends_on` 优先、`max_triggers` 被忽略」是错的——「被谁激活」与「触发几次后退役」互不干涉，不存在覆盖关系
 4. **`gui/config_panel.py` 新增「触发次数上限」数值控件**（0 = 不限），与既有 pity 编辑区同列；`_apply_pity_edit` 与 load/save 路径同步该键
 
-**验收**见 §六 与 §七（`PityDef(max_triggers=2)` 经 `build_lifecycle` 产出 `OnceActive`；TOML round-trip 保留；GUI 编辑→保存→重载一致；触发 N 次后 `is_active` 为假；`depends_on` 优先；负值抛 `ConfigError`）。<!-- REVIEW-FIX-PREV: ISSUE-032 -->
+**验收**见 §六 与 §七（`PityDef(max_triggers=2)` 经 `build_lifecycle` 产出 `FiniteActive`；TOML round-trip 保留；GUI 编辑→保存→重载一致；触发 N 次后 `is_active` 为假；`depends_on` 优先；负值抛 `ConfigError`）。<!-- REVIEW-FIX-PREV: ISSUE-032 -->
 
 **`is_active` 早退对事件驱动型是行为变更（2026-09-16 补，须与等价性范围显式隔离）**：旧实现中只有 `CounterBasedBehavior` 读写 `_active`（[pity.py:180](gacha_simulator/core/pity.py#L180)、[pity.py:190](gacha_simulator/core/pity.py#L190)），`RotatingBehavior` / `TargetedBehavior` **完全不读它**；而引擎的 depends_on 传播会**写** `_active`（[pity.py:1342](gacha_simulator/core/pity.py#L1342)）。即旧实现里「事件驱动型配了 `depends_on`」是**惰性**的：标志被写入但无人读，`before_draw` / `after_draw` 照常执行。
 
@@ -533,7 +570,7 @@ class Pity(PityBehavior):
         self.is_event_driven = btype in _EVENT_DRIVEN_TYPES
         # 状态键由各 Tracker 声明，Pity 统一创建 Flag/Counter 遥控器
         # ← ISSUE-202：构造期写入 _active 有归属方法，不得只留注释。
-        #   AlwaysActive / OnceActive 在其中写 _active = True，DependentActive 为空实现
+        #   AlwaysActive / FiniteActive 在其中写 _active = True，DependentActive 为空实现
         #   （激活由引擎 depends_on 传播写）。漏掉即非 depends_on 保底 _active 恒 False、
         #   before_draw / after_draw 首行双双早退，全部计数型保底静默失效（§3.1.3）。
         # ← ISSUE-407：先收集零件声明的命名空间（去 None），再调 initialize——
@@ -557,8 +594,8 @@ class Pity(PityBehavior):
             'lifecycle': tuple(lifecycle.state_keys()),
         }
         # ← ISSUE-202：构造期写入 _active 有归属方法，不得只留注释。
-        #   AlwaysActive / OnceActive 对 name 与 _namespaces 中每个命名空间都写 True，
-        #   DependentActive / DependentOnceActive 为空实现
+        #   AlwaysActive / FiniteActive 对 name 与 _namespaces 中每个命名空间都写 True，
+        #   DependentActive / DependentFiniteActive 为空实现
         #   （激活由引擎 depends_on 传播写）。漏掉即非 depends_on 保底 _active 恒 False、
         #   before_draw / after_draw 首行双双早退，全部计数型保底静默失效（§3.1.3）。
         self._lifecycle.initialize(state, name, self._namespaces)   # ← ISSUE-202 / ISSUE-407，须先于 _view 创建
@@ -766,123 +803,71 @@ def _target_of(pdef) -> str:
 
 **性质 2（良定义条件）**：⟨m, p⟩ > 0 当且仅当 m 在 p 的支撑上不全为零。这是本形式化唯一的边界来源，见 3.1.5.6。
 
-#### 3.1.5.2 操作模型：(全域 U、目标组 T、运算) 三元组
+#### 3.1.5.2 操作模型：因子向量与「A 加 Q 减」族
 
-> **本节取代原「三个基本算子 R/F/B」的表述（2026-10-05 用户裁决重写）**。重写缘由见 §3.14.5 的方案改判：R/F/B 是**槽位级**实现的三条公式，不是三个代数上同级的算子。它们的差别混在「作用范围」「目标集」「是否保持总量」三件事里，导致同一件事在计划中有四种写法（本节原表、§3.9.4 的一句话、§3.14.3 的一段说明、§3.9.4 的 `factor_override` 代码各执一词），并直接造成两处实现错误（见 3.1.5.2.5）。
+> **本节经 2026-10-05 与 2026-10-06 两轮用户裁决重写。** 原「三个基本算子 R/F/B」与其次的「(全域 U、目标组 T、运算) 三元组」两版表述**均作废**，理由见 §3.14.5。
 
-每个 Modifier 只做一件事：**改变目标组 T 在一个全域 U 中的份额**。故一个 Modifier 由三项唯一确定：
-
-| 项 | 含义 | 取值来源 |
-|----|------|---------|
-| **U**（全域） | 本次操作的作用范围。**U 之外的卡完全不动** | 解析器 `u_of(ctx, view, dist) -> tuple[card id]` |
-| **T**（目标组） | 被抬高的卡集合，须满足 T ⊆ U | 解析器 `t_of(ctx, view, dist) -> tuple[card id]` |
-| **运算** | `'share'` / `'assign'` / `'identity'` | 构造期常量 |
-
-**源组不是独立参数。** 被压低的卡恒为 `U \ T`。若希望某些卡既不被抬高也不被压低，把它们**排除在 U 之外**即可，它们即「不变集」。三个集合的关系因此是：
+**Modifier 的定义只有一条**：给定 `(view, dist, ctx)`，返回**因子向量** `{card_id: m}`；未列出的卡 `m = 1`；`None` 表示恒等。框架逐元素相乘后统一归一化。
 
 ```
-加组 = T          减组 = U \ T          不变集 = 全池 \ U
+Φ_m(p) = (m ⊙ p) / ⟨m, p⟩
 ```
 
-> **三元组是「加/减/不变」的受限特例（2026-10-05 补，强制阅读）**：上式的「减组 = U\T」**多带一条约束**：减组内部**等比缩放**（`share` 下 U\T 的所有成员共用同一个因子 `(1−r)·p(U)/(p(U)−p(T))`）。因此：
->
-> - **能表达**：「加组 T，减组 = 某个集合 Q，Q 内等比」，取 `U = T ∪ Q` 即可（你说的「一部分加、一部分不变」也在此列：不进 U 的卡就是不变集）
-> - **不能表达**：「加组 T，减组 Q 内**分档**」，例如「从 SR 抽 30%、从 R 抽 10%」。`r` 是单一标量，无法给 Q 的不同子集不同比例
->
-> 当前 8 个机制**全部落在可表达范围内**（§3.1.5.2.3），故三元组够用。需要分档时须拆成多个 `share`（若各档的目标相同、只比例不同，两个 `share` 复合即可；若还要让某些卡只进一次，则须另立运算）。**不要把「源组 = U\T」当成普遍定律**，它是本表示的约定而非机制领域的性质。
+**这是接口，不是实现约束。** 因子向量可以是任意形状：逐卡不同、只覆盖一部分卡、不配平（⟨m,p⟩ ≠ 1）都合法。**归一化由框架承担，对任意形状都正确。**
 
-**解析器而非静态集合（强制）**：`u_of` / `t_of` 必须是**可调用对象**。G3 的目标集依赖 `ctx.external.owns(c)`，每抽才知道；若是静态元组，G3 无法表达。构造期常量集合写成返回常量的 lambda 即可。计划中既有的 `_target_of(pdef)`（§3.2 取值来源表）就是 `t_of` 的第一个实例。
+##### 3.1.5.2.1 当前八个机制所属的一族：「A 加 Q 减」
 
-##### 3.1.5.2.1 两个运算
+八个机制恰好都能写成同一个形状：
 
-记 `p(A) = Σ_{c∈A} p_c`。
+```
+A 内每卡  ×  (p(A) + amount) / p(A)
+Q 内每卡  ×  (p(Q) − amount) / p(Q)
+其余      不写（= 1）
+```
 
-| 运算 | 语义 | 因子 m_c | 零和 |
-|------|------|---------|------|
-| **`share`** | T 占 U 总量的比例变为 r，`U \ T` 陪跑 | c ∈ T：`r·p(U) / p(T)`（**组内常数**）；c ∈ U\T：`(1−r)·p(U) / (p(U) − p(T))`；其余：1 | 是（U 内总量不变） |
-| **`assign`** | T 的值被**绝对写入**，不随当前 p 缩放 | c ∈ T：`目标值_c / p_c`（**逐卡不同，且依赖当前 p**）；c ∈ U\T：`0`；其余：1 | 否 |
-| **`identity`** | 不动 | 空（`None`） | 是 |
+`amount` 是从 Q 搬到 A 的概率质量。该形状的因子在 A 内、Q 内**各自是常数**，且**配平**（`⟨m,p⟩ ≡ 1`，实测六组差 0），故归一化退化为恒等。
 
-**统一写法**：一切因子都是 `m_c = 该卡的目标值 / 该卡当前值`。`share` 的目标值正比于当前值（故因子在组内是常数），`assign` 的目标值是绝对量（故因子逐卡不同）。两者同形，差别只在目标值怎么来。**不要再按「算子名」分派，按「目标值怎么算」分派。**
+**这不是定义，是一个族。** 三条前提都不是「Modifier 必须如此」：
 
-> **`assign` 的输出与输入分布无关（2026-10-05 实测确认，可交换性判据的基础）**：`assign` 的目标值取自 `base_probabilities`（基础分布），不读当前 `dist`。故 `[X, assign] ≡ assign 的输出`，而 `[assign, X] ≡ X 作用于 assign 的输出`。据此可得一条判据：**`X` 与 `assign` 可交换 ⟺ `X` 在「`assign` 的输出」这个分布上恒等**。实测验证与逐条验算见 §3.1.5.5。
+| 前提 | 当前八个机制 | 若不满足 |
+|------|-------------|---------|
+| 恰好两个组 | 满足 | 直接写自定义因子表 |
+| 组内因子为常数 | 满足 | 同上 |
+| 配平（⟨m,p⟩ = 1） | 满足 | 同上；框架归一化会真的干活 |
 
-> **`assign` 的因子必须除以当前值（本轮修正的第一处实现错误）**：旧实现写的目标值是「T 按基础权重归一」（`w_c / Σ_T w`）。直接把它当因子（即 §3.9.4 原稿的 `factor_override` 写 `w.get(c, 0.0)`）得到的是目标值 `∝ w_c·p_c`，会把组内比例**平方放大**：基础 3:1 会变成 9:1。正确写法是 `(w_c' / Σ_T w') / p_c`。
+**因此 `transfer_factors(dist, A, Q, amount)` 是助手函数，不是接口的一部分**（§3.9.4）。新机制若不属于该族，直接实现 `factor()` 即可，**接口不变**。
 
-> **`assign` 的目标值怎么分（裁决 3B，2026-10-05）**：T 有一个「绝对总量」时，组内分配有三种候选。
+##### 3.1.5.2.2 `amount` 的两种取法
 
-| 口径 | 内容 |
-|------|------|
-| 口径 1 | 按卡的基础权重 `w_c / Σ_T w` |
-| 口径 2 | 保持当前比例（组内常数因子） |
-| **口径 3（S8 采用）** | **先按 featured / 非 featured 分两组，组间按基础权重和，组内保持当前比例** |
+| 取法 | 用于 | 语义 |
+|------|------|------|
+| `amount = p(Q)` | hard / rotating / targeted / G1 / G3 | 源组**全部**搬走（夺取型） |
+| `amount = boost%(counter) / 100` | soft | 目标组概率**增加 boost 个百分点**（软保底） |
 
-**为什么是口径 3**：旧实现的实际行为就是口径 3。`banner.py:226-248` 的 `scale_factors` 是**整槽同乘**，故槽内比例永远是保持的；槽间的 `w_s / Σw` 用的是**槽位基础权重**（`w_s = Σ_{c∈槽 s} w_c`）。§六 的 S8 验收口径为「与 S5 产物容差 1e-12 一致」，取口径 1 会引入一条须单独登记的差异。口径 1 更接近「按基础权重」的字面意图且实现更简单；若日后判定机制确实如此，改口径 1 须同步登记差异。**口径 2 不成立**：它使 `assign` 退化为 `share`，目标值不再是绝对的。<!-- REVIEW-R1-FIX: RULING-3B -->
+`amount` 是 `factor()` 内的**局部量**：不是构造形参、不进接口、不在设计表里占一列。soft 的 `boost%` 由 `deltas` 经 `_cumulative_boost` 得出（§3.4.1）。
 
-##### 3.1.5.2.2 全域 U 的选取
+##### 3.1.5.2.3 与旧槽位级实现的对应
 
-U 由**机制性质**决定，不是约定。当前 8 个机制恰好落在两种：
+| 旧名 | 本族对应 |
+|------|---------|
+| `R_r(T)` | 夺取型：A = T，Q = scope − T，`amount = p(Q)` |
+| `F(T)` | 夺取型：A = T，Q = 全池减 A 再减更高稀有度，`amount = p(Q)` |
+| `B_β(T; Q)` | soft 型：A = T，Q = 源集，`amount = β·p(Q)` |
 
-| U 的取法 | 适用机制 | 为什么 |
-|---------|---------|--------|
-| **单个稀有度组** `scope_cards[scope]` | 大小保底（rotating）、定轨（targeted）、CR 拦截、G1 | 改的是「出了这个稀有度之后出哪张」，**稀有度总率不变** |
-| **全池减更高稀有度** | soft、hard、G3 | 改的是「能不能出这个稀有度」，**必须动全池的量** |
+旧实现跑在**槽位级**，目标恒为单槽。S8 降到卡级后 |A| 可大于 1，此时「A 内部按什么分」才第一次成为问题。**本族的答案是：A 内常数因子（保持当前比例）**，依据见 §3.1.5.4 的三行表。
 
-「更高稀有度」由 `[rarities].ranks` 的层级推导：取所有 `rank < rank(scope)` 的稀有度下的卡。**U 的构建必须由公共代码完成**（内置的 `u_of` 解析器，见 §3.9.4 的 `u_kind` 段），不得在每个 Modifier 内部各推一遍。
-
-> **口径修正（2026-10-05，取代原稿的「U 只有两种取值」表述）**：U 的正确表述是「**由解析器给出，当前 8 个机制恰好落在两种上**」，不是「只有两种」。U 可以是任意集合，例如「featured ∪ SR」（只从 SR 抽、不动 R）就是合法的第三个 U。写成「只有两种」会把当前实现的现状说成普遍规律，封死后续扩展。<!-- REVIEW-R1-FIX: RULING-2B -->
-
-##### 3.1.5.2.3 全 Modifier 操作分解表（总参考）
-
-> **本表是新增 Modifier 时的唯一参照。** 先在本表占一行，看清 U / T / 运算，再动手写代码。若某机制的 U 或 T 无法用现有解析器表达，是本表要扩列，不是新写一个类。
-
-| # | 机制 | U（全域） | T（目标组） | 运算 | r / 目标值的来源 | 零和 |
-|---|------|----------|------------|------|-----------------|------|
-| 1 | **soft**（软保底） | 全池减更高稀有度 | `scope_cards[scope]` | `share` | `r = (p(T) + β·p(U\T)) / p(U)`，β 由 counter 经 deltas 累积 | 是 |
-| 2 | **hard**（硬保底） | 全池减更高稀有度 | `scope_cards[scope]` | `assign` | 目标值 = 按口径 3 归一 | 否 |
-| 3 | **rotating 必中** | `scope_cards[scope]` | `featured_cards[scope]` | `share` | r = 1 | 是 |
-| 4 | **G1 必歪** | `scope_cards[scope]` | `scope_cards[scope] \ featured_cards[scope]` | `share` | r = 1 | 是 |
-| 5 | **targeted 定轨** | `scope_cards[scope]` | `(selected,)` | `share` | r = 1 | 是 |
-| 6 | **CR 拦截** | `scope_cards[scope]` | `featured_cards[scope]` | `share` | r = 1，**是否执行由 Tracker 置的 flag 决定**（裁决 6B，§3.1.1） | 是 |
-| 7 | **G3 排除已拥有** | 全池减更高稀有度 | `featured_cards[scope]` 中未拥有者 | `assign` | 同第 2 行 | 否 |
-| 8 | **BaseRatio**（兜底） | `scope_cards[scope]` | `scope_cards[scope]` | `identity` | 不适用 | 是 |
-
-**读表得到的三件事**：
-
-1. **只有两个运算**。8 行里 6 行是 `share`、2 行是 `assign`、1 行是恒等。原表的三个名字里，`B` 就是 `share` 取一个由 β 推出的 r（不是独立算子），`R` 是 `share`，`F` 是 `assign`。
-2. **U 只有两种**，且与「机制是稀有度级还是卡级」一一对应（第 1/2/7 行与第 3/4/5/6/8 行两组）。原实现把这两种混用一个形参名 `scope_cards`，见 §3.9.4。
-3. **目标组 T 有 5 种取法**（第 2 与第 7 行 U 相同而 T 不同；第 3 与第 6 行同；第 4 行取补集）。原实现为此写了 5 个类（`ForceFeatured` / `ForceNonFeatured` / `ForceSelected` / `ForceNotOwned` / `BaseRatio`），其中 4 个只差 T，见 §3.14.5 的方案改判。
-
-##### 3.1.5.2.4 与旧槽位级实现的对应
-
-| 旧名 | 本表对应 | 旧实现 |
-|------|---------|--------|
-| `R_r(T)` | `share`，U = scope | `_redistribute_scope(ctx, r, ...)` |
-| `F(T)` | `assign`，U = 全池减更高稀有度 | `HardPityBehavior._compute_probabilities` |
-| `B_β(T; Q)` | `share`，U = 全池减更高稀有度，`r` 由 β 推出 | `SoftStepBehavior._compute_probabilities` |
-
-旧实现跑在**槽位级**，目标恒为单槽，故 `share` 与 `assign` 在数值上分不开（单槽时「T 占 U 的 r 倍」与「T 写成绝对量」能取到同一个值）。S8 降到卡级后 |T| 可以大于 1，两者的差别才第一次显现，这也是下面两处错误此前未被发现的直接原因。
-
-**原表的 `R`/`F`/`B` 三行公式作废，勿再引用。** 其中 `F` 那行（`c ∈ T：P / p(T)`）描述的是 `share` 取 r=1，与实际的 `assign` 语义不符。
-
-##### 3.1.5.2.5 本轮修正的两处实现错误（2026-10-05）
+##### 3.1.5.2.4 本轮修正的两处实现错误（2026-10-05）
 
 | # | 位置 | 错在哪 | 正确形态 | 数值后果 |
 |---|------|-------|---------|---------|
-| ① | `factor_override`（§3.9.4） | T 的因子写成 `w_c`，等于把目标值当成了 `∝ w_c·p_c` | `(w_c' / Σ_T w') / p_c`，`w'` 按口径 3 取 | 组内比例平方放大：基础 3:1 变为 9:1 |
-| ② | `BoostModifier` 的 U（§3.14.2 条件表原写「源集 Q = scope \ T」） | U 取成了 scope，soft 变成**组内换位** | U = 全池减更高稀有度（3.1.5.2.3 第 1 行） | **soft 整体不生效**：实测 β=0.5、基础 0.005/0.004/0.05/0.941 时，U 取 scope 得 SSR 总率 0.009（与不触发时相同），取全池得 0.5045 |
+| ① | 原 `factor_override` | T 的因子写成 `w_c`，等于把目标值算成了 `∝ w_c·p_c` | 本族无此形态：A 内因子是常数 | 组内比例平方放大：基础 3:1 变 9:1 |
+| ② | 原 `BoostModifier` 的 U | 写成 scope，soft 退化为**组内换位** | Q = 更低稀有度（§3.1.2 表第 3 行） | **soft 整体不生效**：SSR 总率不变 |
 
-两处都是**槽位级公式直接升到卡级**的产物：① 忘了因子须除以当前值；② 忘了旧的「非目标槽位」取的是全池而非 scope。旧代码的实际取法见 `pity.py:295-302`（`non_target` 遍历的是全池 `result`，只排除目标与更高稀有度）。
+两处都是**槽位级公式直接升到卡级**的产物。**① 随「绝对赋值」形态的删除而消失**（本族不再有它）；**② 已按正确取法写死在 §3.1.2 的机制表里。**
 
-> **⟨m,p⟩ 的取值**：`share` 在 `T ⊊ U` 时恒为 1；`assign`、以及「T 占满 U」的 `share` 不为 1。归一化因此**不是恒等化简而是必需步骤**（§3.9.2 已按此定稿），实测见 §3.9.5。
+> **基底的完备性**：还须计入恒等元（返回 `None`）。所有早退路径（条件不成立、`p(A) <= 0`、目标集为空等）返回的都是它。
 
-> **基底的完备性**：还须计入恒等元 `identity`（m ≡ 1，实现为返回 `None`）。所有早退路径（`counter < τ`、`p(U) <= 0`、U 为空、T 为空等）返回的都是它。
-
-<!-- REVIEW-R1-FIX: RULING-1B -->
-<!-- REVIEW-R1-FIX: RULING-2B -->
-<!-- REVIEW-R1-FIX: RULING-3B -->
-
-
+<!-- REVIEW-R1-FIX: MODIFIER-IFACE -->
 
 #### 3.1.5.3 复合律与顺序敏感的两类来源
 
@@ -1025,13 +1010,13 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 
 | 层 | 模块 | 承载 | 依赖方向 |
 |----|------|------|---------|
-| **叶子（原语层）** | `core/pity_primitives.py`（**新增**） | `Counter` / `Flag` / `PityState` / `DrawInfo` / `PityContext` / `LifecycleConfig` + 卡级重分配原语 `factor_redistribute`（R 语义）与 **`factor_override`（F 语义）**（§3.9.4；**ISSUE-909**：两式同属叶子层，`factor_override` 自 2026-09-28 引入后一直零归属，本处补登记）+ **类型集合常量 `_SOFT_TYPES` / `_HARD_TYPES` / `_EVENT_DRIVEN_TYPES`**（ISSUE-024：自 `CounterBasedBehavior` 的类属性升为模块级常量，供 §3.1.4 骨架的 `Pity` 使用；**ISSUE-105：`_EVENT_DRIVEN_TYPES` 的内容须追加 `rotating_inverse`，不是原样迁移**） | 仅依赖标准库 | <!-- REVIEW-FIX-PREV: ISSUE-024 -->
+| **叶子（原语层）** | `core/pity_primitives.py`（**新增**） | `Counter` / `Flag` / `PityState` / `DrawInfo` / `PityContext` / `LifecycleConfig` + **助手函数 `transfer_factors`**（§3.9.4；**2026-10-06 改**：原 `factor_redistribute` / `factor_override` 两个「卡级原语」已合并为它，定位由「原语」降为「助手」）+ **类型集合常量 `_SOFT_TYPES` / `_HARD_TYPES` / `_EVENT_DRIVEN_TYPES`**（ISSUE-024：自 `CounterBasedBehavior` 的类属性升为模块级常量，供 §3.1.4 骨架的 `Pity` 使用；**ISSUE-105：`_EVENT_DRIVEN_TYPES` 的内容须追加 `rotating_inverse`，不是原样迁移**） | 仅依赖标准库 | <!-- REVIEW-FIX-PREV: ISSUE-024 -->
 | 实现层 | `core/pity_tracker.py` / `core/pity_modifier.py` / `core/pity_condition.py` | Tracker 家族 + Lifecycle / Modifier 家族 / Condition 家族 | **单向**依赖 `pity_primitives`，不 import `pity` |
 | 编排层 | `core/pity.py` | `Pity` 骨架、`PityEngine`、`BEHAVIOR_REGISTRY`、preset 工厂、`build_lifecycle`（**ISSUE-301**：`PityDef` → Lifecycle 对象的唯一转换点，与 preset 工厂同住一处，见 §3.1.3）、`create_behavior`、`StateView`（**S3 落薄版 / S9 收紧**，定义见 §3.10.3；**ISSUE-034：本行是其归属登记**，`Pity` 骨架与 `PityEngine` 的 `reads` 访问器同住此处） | 依赖 `pity_primitives` + 三个实现层模块 | <!-- REVIEW-FIX-PREV: ISSUE-034 --> <!-- REVIEW-FIX-PREV: ISSUE-301 -->
 
 - **既有导入路径不变**：`pity.py` 顶部 `from .pity_primitives import Counter, Flag, PityState, DrawInfo, PityContext, LifecycleConfig`（re-export），故 `from gacha_simulator.core.pity import PityState` 等既有写法继续可用，`core/__init__.py` 的导出亦不变。这是本节与「PityState/DrawInfo/PityContext 完全保留」（§四「不受影响」）的关系：**语义与接口完全保留，仅换存放文件**。
-- **`factor_redistribute` / `factor_override` 归属（ISSUE-909 补后者）**：现址 `pity.py:418` 的 `_redistribute_scope` 在 S8 被**新增的**卡级 `factor_redistribute` 取代为新骨架的落点（**旧函数本体保留至发布前**，ISSUE-502 / ISSUE-901；§3.9.3 / §3.9.4），而 §3.9.4 又把该函数定位为「所有组级 Modifier 的公共落点」。它住在 `pity_primitives.py`（叶子层），Modifier 层单向依赖它——**不得放在 `pity_modifier.py` 内**（否则 Tracker 侧与 `pity.py` 侧复用时会再次形成循环）。
-- **过渡期（S1–S5）**：`_redistribute_scope`（槽位级）暂留 `pity.py`；**S8 只新增 `pity_primitives.factor_redistribute` 并让新骨架改用它，不删旧函数本体**（ISSUE-502）。函数本体、其 4 处旧类调用点、10 个旧保底类、**以及旧类所依赖的 `PoolPitySpec` / `DrawInfo` 槽位三字段与 `compute_scope_mappings` 的槽位产出**，一律并入 GATE-5 末条「发布前一次性移除旧保底类」的同一个 commit（**ISSUE-901**；原稿「S8 一次性迁为 `factor_redistribute` 并删除旧函数」与 ISSUE-502 互斥，已改；§3.9.3 组件处置表与「跨文件同步清单」D 段为准）。
+- **`transfer_factors` 归属**：现址 `pity.py:418` 的 `_redistribute_scope` 在 S8 被**新增的** `transfer_factors` 取代为新骨架的落点（**旧函数本体保留至发布前**，ISSUE-502 / ISSUE-901；§3.9.3 / §3.9.4），而 §3.9.4 又把该函数定位为「所有组级 Modifier 的公共落点」。它住在 `pity_primitives.py`（叶子层），Modifier 层单向依赖它——**不得放在 `pity_modifier.py` 内**（否则 Tracker 侧与 `pity.py` 侧复用时会再次形成循环）。
+- **过渡期（S1–S5）**：`_redistribute_scope`（槽位级）暂留 `pity.py`；**S8 只新增 `pity_primitives.transfer_factors` 并让新骨架改用它，不删旧函数本体**（ISSUE-502）。函数本体、其 4 处旧类调用点、10 个旧保底类、**以及旧类所依赖的 `PoolPitySpec` / `DrawInfo` 槽位三字段与 `compute_scope_mappings` 的槽位产出**，一律并入 GATE-5 末条「发布前一次性移除旧保底类」的同一个 commit（**ISSUE-901**；原稿「S8 一次性迁为 `factor_redistribute` 并删除旧函数」与 ISSUE-502 互斥，已改；§3.9.3 组件处置表与「跨文件同步清单」D 段为准）。
 - §四的文件清单已按本条补齐 `core/pity_primitives.py`。
 
 ---
@@ -1099,7 +1084,7 @@ preset 工厂**接受一个形参 `pdef`**（`PityDef` 实例），签名统一�
 | `CounterTracker(reset_on=…)` | `pdef.reset or _norm_scope(pdef)` | 对齐 `create_behavior` 的 `if pdef.reset:` 透传口径（[pity.py:879-880](gacha_simulator/core/pity.py#L879-L880)）；回退分支与 `Tracker(scope=…)` 同源（ISSUE-503，原写 `pdef.scope` 原值） | <!-- REVIEW-R1-FIX: ISSUE-503 -->
 | **`hard` / `hard_exclude_owned_*` 的 `t_of`**（**ISSUE-403：不写即目标集静默放宽，不报错**；**2026-10-05 裁决 7B：`soft_*` 不再消费本项**） | `_target_of(pdef)`——`pdef.target_featured` 为 `True` → `'featured'`（目标集 = scope 内 featured 卡集，**空集回退 scope 全集**），否则 `'scope'` | 旧 `HardPityBehavior._compute_probabilities` / `SoftStepBehavior._compute_probabilities` 的 `target_slots = ctx.draw.featured_slots.get(scope, scope_slots) if self._target_featured else scope_slots`（[pity.py:376-379](gacha_simulator/core/pity.py#L376-L379) / [pity.py:281-284](gacha_simulator/core/pity.py#L281-L284)）。`create_behavior` 的注入（[pity.py:877-878](gacha_simulator/core/pity.py#L877-L878)）在 preset 分支**不可用**（`Pity.__init__` 无该形参，AUDIT-BREAK-2），故必须由工厂承接；完整论证与选择子定义见 §3.1.4 的 ISSUE-403 专段 | <!-- REVIEW-R1-FIX: ISSUE-403 -->
 | `FateTracker` / `StreakTracker` 参数 | `pdef.fate_threshold` / `fate_points_init` / `cr_counter_threshold` / `cr_base_rate` / `cr_state_probs` | 同 `create_behavior` 的 P56 透传清单（[pity.py:883-885](gacha_simulator/core/pity.py#L883-L885)） |
-| **`lifecycle=`**（preset 返回 dict 的必需键，**不写即静默失效**） | 由 `core/pity.py` 的 `build_lifecycle(pdef)` 按**两个正交维度**产出：激活维 = `pdef.depends_on` 非空 ? `Dependent` : `Always`；退役维 = `pdef.max_triggers > 0` ? `AfterN(n)` : `Never`（四组合：`AlwaysActive` / `OnceActive` / `DependentActive` / `DependentOnceActive`）——**工厂不自行拼装** | **旧 `create_behavior` 的 `lifecycle_kwargs` 段（[pity.py:893-900](gacha_simulator/core/pity.py#L893-L900)）是这两个字段唯一的转换点**；preset 化后必须由工厂承接**且旧段须同步删除**。定稿与三条配套纪律见 §3.1.3；`create_behavior` 对缺失该键有 `ConfigError` 防线、§六 有断言 | <!-- REVIEW-FIX-PREV: ISSUE-301 --> |
+| **`lifecycle=`**（preset 返回 dict 的必需键，**不写即静默失效**） | 由 `core/pity.py` 的 `build_lifecycle(pdef)` 按**两个正交维度**产出：激活维 = `pdef.depends_on` 非空 ? `Dependent` : `Always`；退役维 = `pdef.max_triggers > 0` ? `AfterN(n)` : `Never`（四组合：`AlwaysActive` / `FiniteActive` / `DependentActive` / `DependentFiniteActive`）——**工厂不自行拼装** | **旧 `create_behavior` 的 `lifecycle_kwargs` 段（[pity.py:893-900](gacha_simulator/core/pity.py#L893-L900)）是这两个字段唯一的转换点**；preset 化后必须由工厂承接**且旧段须同步删除**。定稿与三条配套纪律见 §3.1.3；`create_behavior` 对缺失该键有 `ConfigError` 防线、§六 有断言 | <!-- REVIEW-FIX-PREV: ISSUE-301 --> |
 
 ### 3.2.1 `target_featured` 的适用范围收窄（裁决 7B，2026-10-05）
 
@@ -1141,11 +1126,7 @@ def _preset_rotating(pdef):          # ISSUE-030：形参 pdef，逐条可配值
         lifecycle=build_lifecycle(pdef),         # ISSUE-301：生命周期唯一转换点（§3.1.3）
         trackers=[FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")],
         modifiers=[
-            # 裁决 1B：TransferModifier 单类；原 ForceFeatured + BaseRatio 两件合并为一件
-            ConditionalModifier(
-                TransferModifier(u_of=_u_scope(scope), t_of=_t_featured(scope),
-                                 mode='share', ratio_of=_one),
-                FlagCondition("guaranteed")),
+            RotatingModifier(scope),      # 条件（guaranteed）内联在 factor() 里（§3.14）
         ],
         flags={"guaranteed": pdef.guaranteed_init},  # 初值走状态声明（H2），不加 Tracker 形参
     )
@@ -1178,11 +1159,9 @@ def _preset_hard(pdef):
         trackers=[CounterTracker(scope=_norm_scope(pdef), reset_on=pdef.reset or _norm_scope(pdef),
                                  init=pdef.counter_init)],
         modifiers=[
-            # ISSUE-403：t_of 由 pdef.target_featured 决定（_target_of），不写即目标集静默放宽为 scope 全集
-            # 裁决 1B：assign 分支；裁决 7B：本类型是 target_featured 的合法消费者
-            ConditionalModifier(
-                TransferModifier(u_of=_u_pool(scope), t_of=_target_of(pdef), mode='assign'),
-                CounterCondition("counter", tau)),
+            # ISSUE-403：target_featured 由本类自己的 factor() 消费
+            # 裁决 7B：本类型是 target_featured 的合法消费者
+            HardModifier(scope, threshold=tau, target_featured=pdef.target_featured),
         ],
         counters={"counter": pdef.counter_init},
     )
@@ -1195,12 +1174,9 @@ def _preset_soft_step(pdef):
         trackers=[CounterTracker(scope=_norm_scope(pdef), reset_on=pdef.reset or _norm_scope(pdef),
                                  init=pdef.counter_init)],
         modifiers=[
-            # 裁决 7B：soft 不再消费 target_featured，t_of 恒为 scope 卡集；
-            # 裁决 2B：u_of 必须是 _u_pool（全池减更高稀有度），写成 scope 会让 soft 整体不生效
-            ConditionalModifier(
-                TransferModifier(u_of=_u_pool(scope), t_of=_t_scope(scope),
-                                 mode='share', ratio_of=_soft_ratio(deltas, scope)),
-                Always()),
+            # 裁决 7B：soft 不消费 target_featured；Q 恒为「更低稀有度」
+            # 2026-10-05 错误 ②：Q 若写成 scope 内部，soft 整体不生效（§3.1.5.2.4）
+            SoftModifier(scope, deltas=deltas),
         ],
         counters={"counter": pdef.counter_init},
     )
@@ -1210,24 +1186,37 @@ def _preset_soft_step(pdef):
 <!-- REVIEW-FIX-PREV: ISSUE-030 -->
 <!-- REVIEW-FIX-PREV: ISSUE-031 -->
 <!-- REVIEW-FIX-PREV: ISSUE-301 -->
-> **形态以 §3.14.2 为准（ISSUE-031）**：上例的三处 `modifiers` 已按 **§3.14 的条件外置**定稿——Modifier 只算因子、**不带 `flag` 形参**，触发条件由 `ConditionalModifier` 的第二个实参承载。**该形态自 S12 起可用，而 S12 已前移进 M1、排在 S4 之前（ISSUE-101，§七）**，故 S4 开工时 `core/pity_condition.py` 与 `ConditionalModifier` 均已存在——本节与 §3.3 / §3.14.2 是本计划**唯一**的 preset 代码形态，不存在「S12 之前另有一版 preset」的过渡稿。原稿的 `ForceFeaturedModifier(flag="guaranteed")` / `ForceNonFeaturedModifier(flag="forced_loss")` 形态**已废弃**（按原样构造会 `TypeError`：定稿的 `ForceFeaturedModifier.__init__(self, scope)` 无 `flag` 形参，§3.14.2）。同理 `ThresholdForceModifier` 的 `threshold` 已外置到 `CounterCondition('counter', τ)`（§3.14.2 的重组列表），构造只保留 `scope`（F 语义需要它判定「更高稀有度豁免」）**与 `target`**（`'featured'` / `'scope'`，由 `_target_of(pdef)` 给出——**ISSUE-403**：`pdef.target_featured` 的目标集收窄只能由此承接，`judge="featured"` 是命中判定、不是同一件事）；其**因子计算仍是 `assign`，不得改为 `share`**（§3.14.3）。`InterceptModifier` 的例外已随裁决 6B 取消（§3.14.2 末段），Modifier 层无非纯函数零件。
+> **形态以 §3.14 为准（2026-10-06 改判）**：上例的 `modifiers` 已按 **条件内联**定稿，Modifier 只算因子，触发条件写在它自己的 `factor()` 开头。原「由 `ConditionalModifier` 的第二个实参承载」的写法**已废弃**。
 
 > **本表已按裁决 1B / 5B / 6B / 7B 改写（2026-10-05）**：Modifier 一栏由原来的类名列表改为 **`TransferModifier` 的三参数**（§3.1.5.2.3 的分解表是本表的依据），`BaseRatioModifier` / `InterceptModifier` / `ForceFeaturedModifier` 等类名不再出现。**`target_featured` 的可用类型收窄**：仅 `hard` 与 `hard_exclude_owned_*` 消费它；`soft_*` 类型若配置 `target_featured = true` **抛 `ConfigError`**（裁决 7B，理由见本表下方专段）。
 
-| 现有 type | preset 三元组（含完整状态声明，H2 补全） | 组装时的条件（§3.14.2；ISSUE-031 补列） |
+| 现有 type | preset 三元组（含完整状态声明，H2 补全） | 条件（内联在各机制 `factor()` 内，§3.14） |
 |-----------|------------------------------------------|-----------------------------------|
-| hard | Tracker: CounterTracker(scope=_norm_scope(pdef), reset_on=pdef.reset or _norm_scope(pdef))；Modifier: `ConditionalModifier(TransferModifier(u_of=pool, t_of=**_target_of(pdef)**, mode='assign'), CounterCondition('counter', tau))`（原 `ThresholdForce + BaseRatio` 两件合并为一件）；counter 初值 = pdef.counter_init | `CounterCondition('counter', pdef.threshold or 90)`——**τ 由条件承载，不再进 Modifier**（F 语义的因子计算保留，§3.14.3） |
-| soft_step | Tracker: CounterTracker(scope=_norm_scope(pdef), reset_on=…)；Modifier: `ConditionalModifier(TransferModifier(u_of=pool, t_of=scope_cards[_norm_scope(pdef)], mode='share', ratio_of=由 deltas 与 dist 推), Always())` | `Always()`（计数驱动，恒真） |
-| soft_interval/soft_additive | 同 soft_step（**含 `target=_target_of(pdef)`**——该两类的 `target_featured` 同样由 `_preset_soft_step` 承接），deltas 由 preset 工厂展开（M6：`_SOFT_SUFFIX_TYPES` 展开职责从 `SoftPityMixin._init_soft_pity` 移入工厂；显式 `pdef.deltas` 优先） | `Always()` |
-| rotating | Tracker: `FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`（**ISSUE-104 统一为定稿形态**，原写 `FlagTracker(judge="featured")` 单参简写）；Modifier: `ConditionalModifier(TransferModifier(u_of=scope, t_of=featured_cards[scope], mode='share', ratio_of=1.0), FlagCondition('guaranteed'))`；Flag: guaranteed（**初值** = `pdef.guaranteed_init`，走 `flags` 状态声明，不加 Tracker 形参——但**标记名经 `flag=` 传入**） | `FlagCondition('guaranteed')`；BaseRatio 无条件 |
-| rotating_soft | rotating + CounterTracker + Boost 与 ForceFeatured 两个 `TransferModifier`（各自条件）（含 **触发稀有度重置抽数 counter**：hit/miss 两分支都 ResetCounter，对齐 [pity.py:534-537](gacha_simulator/core/pity.py#L534-L537)） | ForceFeatured → `FlagCondition('guaranteed')`；Boost → `Always()`；BaseRatio 无条件 |
-| rotating_cr | rotating + StreakTracker(judge="featured", **was_guaranteed 守卫**：仅抽前 guaranteed 未置位时更新，对齐 [pity.py:590-600](gacha_simulator/core/pity.py#L590-L600))；Modifier: **两件 `TransferModifier`，均无 RNG**（u=scope, t=featured_cards[scope], share, r=1），条件分别为 `FlagCondition('guaranteed')` 与 `FlagCondition('cr_intercepted')`（掷骰移入 `StreakTracker.commit`，裁决 6B） | 两条 `FlagCondition`，**无例外** |
-| rotating_cr_soft | rotating_cr + BoostModifier（含 counter 重置 + was_guaranteed 守卫） | 同 rotating_cr；Boost → `Always()` |
-| targeted | Tracker: `FateTracker(judge="selected", hit="clear", miss="accumulate", keys=("fate_points", "losses", "guaranteed", "lost_rotating"))`（**ISSUE-104 统一为定稿形态**：原写 `FateTracker(judge="selected")`，未表达多键集；`keys` 即 [pity.py:666-669](gacha_simulator/core/pity.py#L666-L669)、[pity.py:672-675](gacha_simulator/core/pity.py#L672-L675) 的**补全后的四键**，`hit`/`miss` 形参名与 `FlagTracker` 同口径、由 S1 定稿）；Modifier: `ConditionalModifier(TransferModifier(u_of=scope, t_of=(selected,), mode='share', ratio_of=1.0), Or(FlagCondition('guaranteed'), FateReadyCondition(tau)))`；Flags: guaranteed, lost_rotating；Counters: fate_points, losses | `Or(FlagCondition('guaranteed'), FateReadyCondition(pdef.fate_threshold))`；BaseRatio 无条件 |
-| targeted_soft | targeted + BoostModifier（含 counter 重置） | 同 targeted；Boost → `Always()` |
+| hard | Tracker: `CounterTracker(scope, reset_on, init)`；Modifier: `HardModifier(scope, threshold=τ, target_featured=pdef.target_featured)` | `counter >= τ` |
+| soft_step / soft_interval / soft_additive | Tracker: `CounterTracker(scope, reset_on, init)`；Modifier: `SoftModifier(scope, deltas=deltas)`（`deltas` 由工厂经 `_expand_soft_to_deltas` 展开，M6） | `boost > 0` |
+| rotating | Tracker: `FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`；Modifier: `RotatingModifier(scope)` | `guaranteed` |
+| rotating_soft | rotating 的 Tracker + `CounterTracker`；Modifier: `SoftModifier` + `RotatingModifier` | 各自 |
+| rotating_cr | rotating 的 Tracker + `StreakTracker(judge="featured", …, flag='cr_intercepted', guard_flag='guaranteed')`；Modifier: `RotatingModifier(scope, extra_flag='cr_intercepted')` | `guaranteed ∨ cr_intercepted` |
+| rotating_cr_soft | rotating_cr 的 Tracker；Modifier: 再加 `SoftModifier` | 各自 |
+| targeted | Tracker: `FateTracker(judge="selected", hit="clear", miss="accumulate", keys=("fate_points","losses","guaranteed","lost_rotating"))`；Modifier: `SelectedModifier(scope)` | `guaranteed ∨ fate_ready` |
+| targeted_soft | targeted 的 Tracker；Modifier: 再加 `SoftModifier` | 各自 |
+
+> **`RotatingModifier` 的 `extra_flag` 形参（2026-10-06 补）**：`rotating_cr` 与 `rotating` 的效果完全相同（「出金必是 UP」），差别只在条件多一个 `cr_intercepted`。条件内联后，用一个可选形参表达：
+
+```python
+class RotatingModifier(Modifier):
+    def __init__(self, scope, extra_flag=None):
+        self._scope, self._extra_flag = scope, extra_flag
+    def factor(self, view, dist, ctx):
+        if not (view.get('guaranteed') or (self._extra_flag and view.get(self._extra_flag))):
+            return None
+        ...
+```
+
+> 这是「条件内联」的代价之一：**条件若有变体，用构造形参表达，而不是新写一个类**。判据同 §3.1.2 的四样：形参只影响「条件」，不影响 A/Q/转移量。
 
 <!-- REVIEW-FIX-PREV: ISSUE-301 -->
-> **表中 10 行的 Lifecycle 组件统一为 `build_lifecycle(pdef)`（ISSUE-301，强制）**：上表「preset 三元组」列只列 Tracker 与 Modifier 两项，**不逐行重复 Lifecycle**——10 行的 Lifecycle 一律由 `build_lifecycle(pdef)` 产出并作为返回 dict 的 `lifecycle=` 键（§3.1.3 定稿的四组合取值：激活维 = `pdef.depends_on` 空/非空、退役维 = `pdef.max_triggers` 0/正，`AlwaysActive` / `OnceActive` / `DependentActive` / `DependentOnceActive` 四者之一；`deactivate_on_early_hit` 四组合都带入 `cfg`）。**漏写该键即全部 `deactivate_on_early_hit` / `depends_on` / `max_triggers` 配置静默失效**，故 `create_behavior` 对此设 `ConfigError` 防线（§3.2 首段）、§六 设断言。
+> **表中 10 行的 Lifecycle 组件统一为 `build_lifecycle(pdef)`（ISSUE-301，强制）**：上表「preset 三元组」列只列 Tracker 与 Modifier 两项，**不逐行重复 Lifecycle**——10 行的 Lifecycle 一律由 `build_lifecycle(pdef)` 产出并作为返回 dict 的 `lifecycle=` 键（§3.1.3 定稿的四组合取值：激活维 = `pdef.depends_on` 空/非空、退役维 = `pdef.max_triggers` 0/正，`AlwaysActive` / `FiniteActive` / `DependentActive` / `DependentFiniteActive` 四者之一；`deactivate_on_early_hit` 四组合都带入 `cfg`）。**漏写该键即全部 `deactivate_on_early_hit` / `depends_on` / `max_triggers` 配置静默失效**，故 `create_behavior` 对此设 `ConfigError` 防线（§3.2 首段）、§六 设断言。
 
 <!-- REVIEW-FIX-PREV: ISSUE-001 -->
 **「零改动」的前提（ISSUE-001）**：`Pity` 必须继续由 `btype` 推导 `is_soft` / `is_hard` / `is_event_driven` 三个标志（§3.1.4 骨架已按此写入，删除了「统一后不再区分 counter/event」的写死行）。`_validate_behaviors`（[pity.py:933-985](gacha_simulator/core/pity.py#L933-L985)）按 `is_hard` → `is_event_driven` → `is_soft` 的 `elif` 链分派规则 2/3/4，标志缺失会让三个规则全部错判（实测：只打 `is_event_driven=True` 后，soft_interval + soft_additive 同 scope 由「通过」变抛 `ConfigError`，rotating + hard 同 scope 被拒，规则 2 静默失效）。若将来确要废掉这三个标志，必须与 §3.12.2 的合法组合判据**合并重写**分派逻辑并在 §六 补相应断言，不得只删标志。
@@ -1244,10 +1233,7 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
         lifecycle=build_lifecycle(pdef),         # ISSUE-301
         trackers=[FlagTracker(judge="featured", hit="set", miss="clear", flag="forced_loss")],
         modifiers=[
-            ConditionalModifier(
-                TransferModifier(u_of=_u_scope(scope), t_of=_t_non_featured(scope),
-                                 mode='share', ratio_of=_one),
-                FlagCondition("forced_loss")),
+            NonFeaturedModifier(scope),     # 条件（forced_loss）内联
         ],
         # forced_loss 是 preset 内部标志，PityDef 无对应初始值字段（区别于 rotating 的
         # guaranteed_init），故初值恒为 False——与旧实现（无该机制）一致。scope 取自 pdef。
@@ -1481,12 +1467,16 @@ pool._apply_probabilities(adjusted)
 
 ```python
 class Modifier:
-    def factor(self, ctx, view, dist, readonly) -> Optional[Dict[str, float]]:
+    def factor(self, view, dist, ctx) -> Optional[Dict[str, float]]:
         """返回因子向量 {card_id: m}；未列出的卡默认 m = 1；None 表示恒等。
+
+        **三参数是定稿（2026-10-06 用户裁决），不得再增形参**（§3.1.2）。
 
         view：状态视图。S8 期间是 PityState 的薄包装（可读全部命名空间），
               S9 后收紧为「只含自身命名空间」的 StateView（§3.10.3）。
-              签名按最终形态定型，避免两阶段各改一次。
+        dist：当前分布 {card_id: p}。
+        ctx ：本次抽卡的静态事实（scope_cards / featured_cards / rarity_rank）。
+              需要新的事实时**加字段，不改签名**。
         """
 
     def rebind(self, state, name) -> None:      # ISSUE-029：P75 纪律的统一接口
@@ -1497,7 +1487,7 @@ class Modifier:
         """**声明键集（ISSUE-501）**：本 Modifier 读或写的 `PityState` 键名，只读常量、
         不依赖 state。基类默认 `()`（不碰状态的 Modifier 不覆写）；读状态的 Modifier
         （如 `BoostModifier` 读 `counter`、`ForceFeaturedModifier` 读 `guaranteed`）
-        覆写为本类的键集。`ConditionalModifier` **须转发内层**（§3.14.2）。
+        覆写为本类的键集。**条件内联后无需转发**（§3.14 已取消包装器）。
         消费面：§3.12.2 判据第 2 条「Modifier 引用了不存在的状态键」，比对基准为
         `Pity._declared_keys` 的 `trackers` ∪ `lifecycle` 并集（§3.1.4 骨架）。"""
         return ()
@@ -1510,7 +1500,7 @@ class Modifier:
         骨架逐项调用 `factor`，本默认实现成为唯一的 `apply` 定义。
 
         **这是「`apply()` 保留为默认实现」的承载处**（§3.1.2 / §3.9.2 原稿只写该句、未指明它住哪）：
-        `ConditionalModifier.apply`（§3.14.2）转发 `self._mod.apply(...)`，被包裹的 Modifier 在 S8 之后
+        （原 `ConditionalModifier.apply` 转发段落已随 §3.14 改判删除；本基类的 `apply` 默认实现仍保留）
         只写 `factor`——没有本基类即 `AttributeError: 内层对象无 apply`，而该调用点在每个抽卡的调度
         入口，后果是全部保底不可用（§六 的存在性断言不触发调用，捕获不到该缺口，故本条必须落成代码）。"""
         return _apply_factor(dist, self.factor(ctx, view, dist, readonly) or {})
@@ -1540,7 +1530,7 @@ def _apply_factor(dist, m):
 
 > **与 §3.1.4 骨架的关系（ISSUE-GATE-dependency-order 定稿，2026-09-22）**：S1–S5 期间 Modifier 的方法名是 **`apply(ctx, view, dist, readonly)`**（返回修正后的分布，§3.1.2 历史形态），骨架按此调用、本节的内循环不实施；S8 引入 **`factor(...)`** 返回因子向量，内循环改为 `mod.factor(...)` + `_apply_factor`，`apply()` 保留为默认实现、`factor()` 缺省时回退到它。**视图形参同源（ISSUE-505，强制）**：S8 的内循环**只换方法名**，`view` 实参一律继承 §3.1.4 骨架的 `self._view_for(mod)`（ISSUE-407 的零件级 view 取值，**不得写死 `self._view`**）——原稿本节内循环写死 `self._view`，与同计划 ISSUE-407 的强制纪律冲突；现全部 `Modifier` 的 `namespace` 均为 `None`（只有 `NamespaceTracker` 声明 `X_soft`），故今日无行为差异，但 ISSUE-407 的意义正是「为后续声明命名空间的零件留出读取通道」，写死 `self._view` 会让该通道在 Modifier 侧空转。<!-- REVIEW-R1-FIX: ISSUE-505 -->
 >
-> **包装器的转发义务（缺一头即每个抽卡入口 `AttributeError`）**：`ConditionalModifier` **必须同时转发三个方法**——`rebind(state, name)`（自 S12 起，§3.14.2）、`apply(ctx, view, dist, readonly)`（自 S12 起，M1 骨架调用它）与 `factor(...)`（自 S8 起）。骨架对 `modifiers` 列表**逐项无守卫**调用，被包裹的 Modifier 缺任一名字即整条保底链不可用。§3.14.2 的代码块与 §六 的断言已按下述形态写死；**原稿「§3.14.2 只实现 `factor` + `rebind`」的形态与骨架的 `mod.apply(...)` 互斥**，按本段统一。
+> **~~包装器的转发义务~~（2026-10-06 随 §3.14 改判删除）**：原 `ConditionalModifier` 须转发 `rebind` / `apply` / `factor` / `state_keys` 四个方法，漏一个即每个抽卡入口 `AttributeError`。**包装器取消后本条作废**；`rebind` 与 `apply` 的默认实现仍由 `Modifier` 基类提供（§3.14.3）。
 
 <!-- REVIEW-FIX-PREV: ISSUE-004 -->
 > **`self._view` 的生命周期（ISSUE-004，强制）**：`self._view` 是 `Pity` 的成员，**每次 `_rebind_state` 必须重建**（§3.1.4 骨架已写），且 `StateView` 自身**不得在构造期缓存命名空间 dict**（§3.10.3 已改为每次 `get` 现取）。两条缺一：worker 内同一 engine 连跑 N 场模拟，第 2..N 场读的是第 1 场的账本；若 view 建于命名空间尚未创建之时（`depends_on` 依赖方构造期不写 `_active`），`state.data.get(name, {})` 会拿到一个与 state 脱联的空 dict，此后引擎 `state.set` 新建的命名空间与该 view 无关，所有读取恒返回 default 且不报错。此条同时是 §五 风险表「Pity 统一实现 Trackers/Modifiers/Lifecycle 的 rebind 委托」的落地条件。
@@ -1557,7 +1547,7 @@ def _apply_factor(dist, m):
 | `PoolPitySpec.scope_slots` / `featured_slots` / `card_to_slot` | **推迟删除**（ISSUE-901，改判；随 GATE-5 末条「发布前一次性移除旧保底类」的同一 commit） | 槽位名与卡→槽位映射在**卡级管道**下确无消费者，但**旧保底类及其调用链仍在读它们**：`SoftStepBehavior._compute_probabilities`（[pity.py:277-284](gacha_simulator/core/pity.py#L277-L284)）、`HardPityBehavior`（:372-398）、`RotatingBehavior`（:494-498）、`TargetedBehavior`（:648-698）一律以 `ctx.draw.scope_slots.get(self._scope, ())` 取源集，`_redistribute_scope` 的函数体（[pity.py:432](gacha_simulator/core/pity.py#L432)）亦然。**ISSUE-502 只保住了函数本体、没有保住它的输入**——同批删字段即让该函数「在而不可调用」（模块级名字在调用时解析，导入期与 ruff 都不报错），S5a harness 的旧实现对照基准与 S8-6 的「对 S5 产物容差 1e-12」双双落空。**旧稿残留句已删（ISSUE-908，2026-10-01）**：原句写「`_resolve_selected_slots` 的目标定位**仍**改为直接给出卡集合 `(selected,)`（新骨架不依赖槽位）」——该名字全库只有一个定义，即旧 `TargetedBehavior._resolve_selected_slots`（[pity.py:681](gacha_simulator/core/pity.py#L681)），其返回值直接喂给 `_redistribute_scope(ctx, featured_ratio, total, targeted_slots, self._scope)`（[:655](gacha_simulator/core/pity.py#L655)）。照该句施工会同时造成两件坏事：(a) 动了 ISSUE-502 / ISSUE-901 明令**保留至发布前**的旧类，S8-6 的「现跑旧类」基线当场变质；(b) 该旧类下游是槽位级函数（`result[s] = featured_total * w / f_total_w`、`base_probabilities.get(s, 0.0)`），传入卡 id 只会**新增键**而不命中目标槽，目标槽拿不到 100%。**新架构下该职责由 §3.14.6 的 `ForceSelectedModifier`（`target_cards=(selected,)`）承担；旧 `TargetedBehavior` 的该私有方法一律不改** | <!-- REVIEW-R1-FIX: ISSUE-908 --> <!-- REVIEW-R1-FIX: ISSUE-901 -->
 | `compute_scope_mappings` | **推迟改造（减量部分）** | **卡集合本就存在**：该函数五元组的前两项即 `scope_cards` / `featured_cards`（[pity.py:1067-1068](gacha_simulator/core/pity.py#L1067-L1068)），且 `PityEngine` 三个调度入口已把它们透传进 `DrawInfo`（[pity.py:1295-1299](gacha_simulator/core/pity.py#L1295-L1299)）——**S8-4 对卡级路径零改动，无「增量」可做**。原定的「不再生成槽位名」是**减量**改造，必须与槽位三字段同批（同一函数无法只留一半产出），随 GATE-5 末条「发布前一次性移除旧保底类」commit（**ISSUE-901**）。**不得在 S8-4 提前减量**：三个解包点（[batch_simulator.py:273](gacha_simulator/service/batch_simulator.py#L273) / [worst_impact.py:506](gacha_simulator/core/worst_impact.py#L506) / [test_pity_integration.py:107](tests/core/test_pity_integration.py#L107)、:160）一律按五元组解包，提前改返回值元数会同时波及 `PoolPitySpec` 构造与 `DrawInfo` 构造，波及面反而大于「本步不动」 | <!-- REVIEW-R1-FIX: ISSUE-901 -->
 | `aggregate_probs_by_rarity` | **删除** | 唯一调用点在 [banner.py:227](gacha_simulator/core/banner.py#L227)；同时清 `core/__init__.py` 的导出 |
-| `_redistribute_scope(ctx, ratio, total, target_slots, scope)` | **替换（下游切换到新函数；函数本体保留至「发布前一次性移除旧类」的 commit）** | 新骨架（`Pity` + 卡级 Modifier 链）改用卡级版 `factor_redistribute(dist, scope_cards, target_cards, ratio)`（**4 参，定稿签名以 §3.9.4 的定义为准**；无 `base_weights`——组内按「当前比例」而非基础权重，理由见 §3.9.4 的三点差别 ②），产出因子向量而非新分布。**ISSUE-022**：原稿此表写 5 参（多 `base_weights`）、§3.9.4 写 4 参、§3.14.3 写关键字 `scope=`，三处互不兼容，已统一为 4 参。<br>**ISSUE-502（2026-10-01 补，强制）**：**函数本体在 S8 不删**。`pity.py` 内仍有 4 处调用点（:477 `RotatingBehavior`、:589 `RotatingCRBehavior._force_featured`、:655/:659 `TargetedBehavior`），全部位于**按 GATE-5 要保留到发布前的旧类体内**——删函数本体即 `NameError`（模块级名字在**调用时**解析，导入期与 ruff 都不报错），而 S5a 等价性 harness 与 S8-6 的对照基准正是这些旧类。故 S8 的处置是：**新增 `factor_redistribute` + 让新骨架改用**，`_redistribute_scope` 与 `factor_redistribute` 并存；**只删 `core/__init__.py` 的导出**（:20 import + :117 `__all__` 条目，随 S8-4），不删 `pity.py` 内的定义。函数本体的删除并入 GATE-5 末条的「发布前一次性移除旧保底类」commit（旧类与其调用点同时消失） | <!-- REVIEW-FIX-PREV: ISSUE-022 --> <!-- REVIEW-R1-FIX: ISSUE-502 -->
+| `_redistribute_scope(ctx, ratio, total, target_slots, scope)` | **替换（下游切换到新函数；函数本体保留至「发布前一次性移除旧类」的 commit）** | 新骨架（`Pity` + 卡级 Modifier 链）改用卡级版 `transfer_factors(dist, A, Q, amount)`（**4 参，定稿签名以 §3.9.4 的定义为准**；无 `base_weights`——组内按「当前比例」而非基础权重，理由见 §3.9.4 的三点差别 ②），产出因子向量而非新分布。**ISSUE-022**：原稿此表写 5 参（多 `base_weights`）、§3.9.4 写 4 参、§3.14.3 写关键字 `scope=`，三处互不兼容，已统一为 4 参。<br>**ISSUE-502（2026-10-01 补，强制）**：**函数本体在 S8 不删**。`pity.py` 内仍有 4 处调用点（:477 `RotatingBehavior`、:589 `RotatingCRBehavior._force_featured`、:655/:659 `TargetedBehavior`），全部位于**按 GATE-5 要保留到发布前的旧类体内**——删函数本体即 `NameError`（模块级名字在**调用时**解析，导入期与 ruff 都不报错），而 S5a 等价性 harness 与 S8-6 的对照基准正是这些旧类。故 S8 的处置是：**新增 `factor_redistribute` + 让新骨架改用**，`_redistribute_scope` 与 `factor_redistribute` 并存；**只删 `core/__init__.py` 的导出**（:20 import + :117 `__all__` 条目，随 S8-4），不删 `pity.py` 内的定义。函数本体的删除并入 GATE-5 末条的「发布前一次性移除旧保底类」commit（旧类与其调用点同时消失） | <!-- REVIEW-FIX-PREV: ISSUE-022 --> <!-- REVIEW-R1-FIX: ISSUE-502 -->
 | `infer_rarity_from_spec` | **删除**（**随 `aggregate_probs_by_rarity` 一并删**，含 `core/__init__.py` 的 import 与 `__all__` 导出） | **ISSUE-504（2026-10-01 复核，推翻原「保留」定稿）**：全库引用实测只有 4 类——① 定义 [pool.py:234](gacha_simulator/core/pool.py#L234)；② 内部消费 [pool.py:270](gacha_simulator/core/pool.py#L270) / [pool.py:275](gacha_simulator/core/pool.py#L275)，两者都在将随本表删除的 `aggregate_probs_by_rarity` 内；③ [banner.py:242](gacha_simulator/core/banner.py#L242) / [banner.py:244](gacha_simulator/core/banner.py#L244) 与 [banner.py:209](gacha_simulator/core/banner.py#L209) 的局部 import，全在将随 S8-2 删除的 `scale_factors` 段内；④ 导出 [core/\_\_init\_\_.py:3](gacha_simulator/core/__init__.py#L3) 与 [:101](gacha_simulator/core/__init__.py#L101)。①②③ 消灭后本函数**零消费者**（`_infer_rarity`（[pity.py:1344](gacha_simulator/core/pity.py#L1344)）用的是 `spec.ssr_ids` / `scope_cards`，与本函数无关），故 S8 后保留它只会留下无人调用的死代码，并与 §六 / S8-2 的 `grep` 零命中验收**恒冲突**（原「保留」定稿下该 grep 永远为红）。**原稿的「S8 时再复核」已由本节复核取代** | <!-- REVIEW-R1-FIX: ISSUE-504 -->
 | `DrawInfo.scope_slots` / `featured_slots` / `card_to_slot` | **推迟删除**（ISSUE-901，随 `PoolPitySpec` 同步） | `PityEngine` 的三个调度入口（`before_draw` / `after_draw` / `get_probabilities`）在此期间**继续透传**三字段（[pity.py:1290-1300](gacha_simulator/core/pity.py#L1290-L1300)），否则旧类首次读 `ctx.draw.scope_slots` 即 `AttributeError`，S5a harness 连 `DrawInfo` 都构造不出来。`DrawInfo.base_probabilities` 语义由「槽位级」改为「卡级」**仍按 S8 执行**（该字段是卡级管道的输入，与槽位三字段的存废无关） | <!-- REVIEW-R1-FIX: ISSUE-901 -->
 | `service/batch_simulator.py` | **改造（推迟，ISSUE-901）** | [batch_simulator.py:274-283](gacha_simulator/service/batch_simulator.py#L274-L283) 解包 `compute_scope_mappings` 的五元组并构造含槽位字段的 `PoolPitySpec`——与 worst_impact 同属构造点。**S8-4 对它零改动**：槽位三字段推迟删除（见上两行），`PoolPitySpec` 的 8 字段构造在 S8 期间保持原样，新骨架读的 `scope_cards` / `featured_cards` 本就由同一五元组产出并存入该 spec。与 worst_impact 的构造点改造、`compute_scope_mappings` 的减量**同批**并入 GATE-5 末条 commit。**2026-09-21 审查补** | <!-- REVIEW-R1-FIX: ISSUE-901 -->
@@ -1596,135 +1586,77 @@ def _apply_factor(dist, m):
 现状不一致（实测）：[worst_impact.py:508](gacha_simulator/core/worst_impact.py#L508) 用参考池的**原始卡 id** 生成 `scope_cards` / `featured_cards`，而同一 spec 的 `featured_ids` / `ssr_ids` 是**重命名后**的 `_wi_featured_{i}`，池子 `rewards` 的 id 也是 `_wi_featured_{i}`（[worst_impact.py:538-539](gacha_simulator/core/worst_impact.py#L538-L539)）——原始 id 根本不在分布里。
 
 - **当前为何不崩**：槽位级管道下 `aggregate_probs_by_rarity` 只把 `scope_cards` 当加速缓存用（取不到时回退 `infer_rarity_from_spec` → `spec.ssr_ids`，后者恰含 `_wi_featured_0`）。
-- **S8 后为何崩或静默归零**：`scope_cards` / `featured_cards` 成为管道**唯一真相源**（§3.9.4 的 `factor_redistribute` 直接 `sum(dist[c] for c in scope_cards)`）。实测该式对原始 id 抛 `KeyError`；若实现改用 `.get` 兜底，则所有保底调整**静默归零**。
+- **S8 后为何崩或静默归零**：`scope_cards` / `featured_cards` 成为管道**唯一真相源**（§3.9.4 的 `transfer_factors` 直接 `sum(dist[c] for c in A)`）。实测该式对原始 id 抛 `KeyError`；若实现改用 `.get` 兜底，则所有保底调整**静默归零**。
 - **顺带实测的死代码**：[worst_impact.py:504](gacha_simulator/core/worst_impact.py#L504) 的 `ref_pool = getattr(self, '_ref_pool', None)` 分支恒不执行（全库只有 `_ref_pool_entry`（[worst_impact.py:83](gacha_simulator/core/worst_impact.py#L83)、:373），无 `_ref_pool` 赋值点），即「用 `compute_scope_mappings` 在池上重建映射」这条**本可自愈的路径根本不走**。
 - **改造口径**：S8 时按池重建卡集合（优先复活 `_ref_pool_entry` 路径，或统一把原始 id 重命名为池内 id），并**断言 `set(scope_cards[scope]) ⊆ {r.id for r, _ in pool.rewards}`**（**ISSUE-201**：`Pool.rewards` 的类型是 `List[Tuple[Reward, float]]`（[pool.py:152](gacha_simulator/core/pool.py#L152)），迭代元素是 `(Reward, prob)` 二元组——原稿写的 `{r.id for r in …}` 单变量解包形式（把元素当成 `Reward`）会立即抛 `AttributeError: 'tuple' object has no attribute 'id'`；同文件 [:162](gacha_simulator/core/pool.py#L162) / [:181](gacha_simulator/core/pool.py#L181) 的消费方式与 §3.9.1 的 `{r.id: p for r, p in pool.rewards}` 均按二元组解包，本处与之一致）。<!-- REVIEW-FIX-PREV: ISSUE-201 -->
 - **差异归因**：本改造会**改变最差影响分析的数值**（超出「与 M1 产物容差 1e-12 一致」的口径），须写入 §六 的差异归因清单，不得当作回归。
 
-#### 3.9.4 两个卡级原语：`factor_redistribute`（share）与 `factor_override`（assign）
+#### 3.9.4 助手函数 `transfer_factors`
 
-> **本节按 3.1.5.2 的操作模型重写（2026-10-05，裁决 1B / 2B / 3B）**。两个函数就是 3.1.5.2.1 两个运算在卡级上的落点。函数名保留（全库引用多），形参与语义按新词汇校正。**所有组级 Modifier 的公共落点。**
+> **本节经 2026-10-06 用户裁决重写。** 原两个「卡级原语」（`factor_redistribute` = share / `factor_override` = assign）**均作废**，其职责合为一个助手。
 
-##### 3.9.4.1 `share`：`factor_redistribute`
-
-```python
-def factor_redistribute(dist, u_cards, target_cards, ratio):
-    """share 语义：把 U 内总量按 ratio 分给目标组 T，U 总量不变。
-
-    形参改名（2026-10-05，裁决 2B）：原 `scope_cards` → `u_cards`。原名的误导在于
-    三个调用方传的是三种不同的全域（scope / Q∪T / 全池减更高稀有度），名实不符，
-    见 3.1.5.2.2 与 3.1.5.2.5 的错误 ②。
-
-    关键：ratio >= 1 时源侧必须**显式写 0 因子**而非跳过。跳过会让 ⟨m,p⟩ = 1 + (P − T) ≠ 1，
-    归一化不再是恒等操作，目标组只能拿到 P/(1+P−T)。实测 ratio=1、T/P=0.3 时目标仅占
-    U 的 58.8% 而非 100%，直接破坏所有 Force 型路径（rotating / targeted / G3）。
-    """
-    if not target_cards:
-        return None                     # 目标集为空 = 本次操作无目标，恒等。
-                                        # 2026-10-05 补：缺此守卫时 T=0 且 ratio>=1 会把
-                                        # **整个 U 置零**，实测 factor_redistribute(
-                                        # dist, ('ssr_featured','ssr'), (), 1.0) 返回
-                                        # {'ssr_featured': 0.0, 'ssr': 0.0}，归一化后全 scope 归零。
-                                        # rotating 绑定到无 featured 卡的池（PityDef.pools 默认
-                                        # ('*',)）即触发该路径。§3.14.2 原注「空集合时返回 None」
-                                        # 描述的是改后的行为，改前代码不满足。
-    P = sum(dist[c] for c in u_cards)
-    T = sum(dist[c] for c in target_cards)
-    tset = set(target_cards)
-    m = {}
-    if T > 0 and ratio > 0:
-        k = ratio * P / T
-        for c in target_cards:
-            m[c] = k
-    if P - T > 0:
-        if ratio >= 1:
-            for c in u_cards:
-                if c not in tset:
-                    m[c] = 0.0
-        else:
-            k2 = (1 - ratio) * P / (P - T)
-            for c in u_cards:
-                if c not in tset:
-                    m[c] = k2
-    return m or None
-```
-
-三处与旧实现的差别：① U 与 T 都是**卡集合**而非槽位名；② 组内按**当前比例**（因子在组内是常数）而非基础权重，口径的适用范围见 §3.1.5.4 的三行表；③ 返回因子而非分布。
-
-**单卡定向的写法**：`target_cards = (selected,)`，`T` 即该卡当前概率，因子 `k = ratio · P / T` 把它抬到 `ratio·P`。这就是 S8 解决双 UP 定轨失真（§3.7）的机制。
-
-##### 3.9.4.2 `assign`：`factor_override`
-
-`factor_redistribute` 是 **`share`**（U 内重分配，U 总量不变）；「必出」类机制需要 **`assign`**（目标被绝对写入）。两者不可互相替代：§3.14.3 已实测 `share(r=1)` 只让 U 内部重新分配（SSR 总量仍 0.9%），只有 `assign` 才让 SSR 占 100%，**按比例抽样下前者根本不是「必出」**。
+**定位：助手，不是接口。** Modifier 的接口是 `factor(view, dist, ctx)` 返回任意因子向量（§3.1.2）；当前八个机制恰好都落在「A 加 Q 减」这一族（§3.1.5.2.1），故提供本函数供其复用。**不属于该族的新机制直接实现 `factor()`，不经过本函数。**
 
 ```python
-def factor_override(ctx, dist, u_cards, target_cards, scope):
-    """assign 语义：T 被**绝对写入**（总量 1.0），U \ T 置零，U 之外（更高稀有度）保持原值。
+def transfer_factors(dist, A, Q, amount):
+    """把 amount 的概率质量从 Q 搬到 A，返回因子向量。
 
-    目标值按 3.1.5.2.1 的**口径 3** 计算：先按 featured / 非 featured 分成两组，
-    **组间按基础权重和**分配，**组内保持当前比例**（组内常数因子）。
-    口径 3 逐位复现旧实现：旧码在槽级写 `w_s/Σw`，卡级扩张是整槽同乘（banner.py:246
-    的 scale_factors），故组内比例永远是保持的，且不需要「组内比例 = 基础权重比例」不变式。
+    A 内每卡 × (p(A) + amount) / p(A)
+    Q 内每卡 × (p(Q) − amount) / p(Q)
+    其余不写（= 1）
 
-    因子写法（本轮修正的错误 ①）：目标组内每卡取 k = 组目标总量 / 组当前总量，
-    **不是** w_c 本身。写成 w_c 等于把目标值算成了 ∝ w_c·p_c，会把组内比例平方放大
-    （基础 3:1 变 9:1）。统一规则是 m_c = 该卡的目标值 / 该卡当前值。
+    配平：⟨m,p⟩ = (p(A) + amount) + (p(Q) − amount) + p(其余) = 1，
+    故框架归一化退化为恒等（§3.1.5.2.1）。
     """
-    if not target_cards:
-        return None                     # 无目标：恒等
-    total = sum(dist[c] for c in target_cards)
-    if total <= 0:
-        return None                     # 目标组当前无概率：不作绝对写入（§3.9.5 边界）
-    w = ctx.draw.base_probabilities
-    featured = set(ctx.draw.featured_cards.get(scope, ()))
-    groups = [g for g in (tuple(c for c in target_cards if c in featured),
-                          tuple(c for c in target_cards if c not in featured)) if g]
-    wsum = [sum(w.get(c, 0.0) for c in g) for g in groups]
-    denom = sum(wsum)
-    if denom <= 0:
-        return None                     # 基础权重全零：绝对量无可依据，退化为恒等
-    tset = set(target_cards)
-    m = {}
-    for g, wg in zip(groups, wsum):
-        gt = sum(dist[c] for c in g)
-        if gt <= 0:
-            continue                    # 组内无概率：不写因子（源侧仍会置零）
-        k = (wg / denom) / gt           # 组目标总量 = wg/denom（绝对值），组内保比例
-        for c in g:
-            m[c] = k
-    for c in u_cards:
-        if c not in tset:
-            m[c] = 0.0                  # U \ T 置零
-    return m or None
+    pA = sum(dist[c] for c in A)
+    pQ = sum(dist[c] for c in Q)
+    m = {c: (pA + amount) / pA for c in A}
+    for c in Q:
+        m[c] = (pQ - amount) / pQ if pQ > 0 else 1.0
+    return m
 ```
 
-**`u_cards` 必须由调用方给出，不得在函数内推导。** 旧稿从 `ctx.draw.rarity_rank` 现算 `exempt`（「更高稀有度」），带两个问题：① 魔数 `rarity_rank.get(scope, 99)`，scope 名不在 `[rarities].ranks` 时 rank 落 99，「更高稀有度」变成「所有稀有度」，`exempt` 变成全池豁免、`assign` 退化为**什么都不置零且不报错**；② `exempt` 按 `rarity_rank.items()` 遍历而目标组按 `scope_cards` 取，**两套键空间**，只在下层出现的稀有度会被静默漏掉。新形态由 §3.9.4.3 的 `u_kind` 统一构建，并使「scope 不在 ranks 内」在**构造期抛 `ConfigError`**。<!-- REVIEW-R1-FIX: RULING-2B -->
+**调用方须保证的前置条件**（不满足时由调用方早退，助手不做防御）：
 
-##### 3.9.4.3 `u_kind`：全域的唯一构建点（裁决 2B）
+| 条件 | 不满足时 |
+|------|---------|
+| `A` 与 `Q` 不交 | 因子冲突，结果无定义 |
+| `p(A) > 0` | 除零。调用方须先判并 `return None`（恒等） |
+| `amount <= p(Q)` | 否则 Q 侧因子为负。soft 的 `boost%` 封顶 100，故 `amount <= 1`；夺取型 `amount = p(Q)` 恒满足 |
+
+**三个机制的实际调用**：
 
 ```python
-def resolve_universe(ctx, scope, u_kind):
-    """按 u_kind 构建全域 U 的卡集合。**U 的唯一构建点**，两个内置取值：
+class RotatingModifier(Modifier):
+    def factor(self, view, dist, ctx):
+        if not view.get('guaranteed'):
+            return None
+        scope = ctx.scope_cards[self._scope]
+        feat = ctx.featured_cards.get(self._scope, ())
+        A = feat
+        Q = tuple(c for c in scope if c not in set(feat))
+        if not A or sum(dist[c] for c in A) <= 0:
+            return None
+        return transfer_factors(dist, A, Q, sum(dist[c] for c in Q))
 
-    'scope' → ctx.draw.scope_cards.get(scope, ())
-    'pool'  → 全池卡减去「更高稀有度」的卡
-    """
+
+class SoftModifier(Modifier):
+    def factor(self, view, dist, ctx):
+        boost = self._cumulative_boost(view.get('counter'))   # deltas → boost%
+        if boost <= 0:
+            return None
+        A = ctx.scope_cards[self._scope]
+        Q = _lower_rarities(ctx, self._scope)
+        if not A or sum(dist[c] for c in A) <= 0:
+            return None
+        return transfer_factors(dist, A, Q, boost / 100.0)
 ```
 
-- `'scope'`：用于 rotating / targeted / CR / G1（3.1.5.2.3 第 3..6、8 行）
-- `'pool'`：用于 soft / hard / G3（同表第 1、2、7 行）
+**模块归属**：`transfer_factors` 住叶子层 `core/pity_primitives.py`（§3.1.6 叶子行 / §四 该文件行）。理由：八个机制分居 `pity_modifier.py` 与预设工厂两处，放在任一处都会造成重复；**它与 `Pity` 骨架之间无依赖，故放叶子层不构成循环。**
 
-**「更高稀有度」的推导（强制）**：从 `[rarities].ranks`（`config.toml` 的列表的列表）取所有 `rank < rank(scope)` 的稀有度名，再取这些稀有度下的卡集合。**`scope` 不在 `ranks` 内时抛 `ConfigError`**，不得回退魔数。`base_probabilities` 与 `scope_cards` 的键空间须一致，构建后断言 `set(U) ⊆ set(dist)`。
+**已删除的两个符号**：`factor_redistribute`、`factor_override`。全库（含 §3.1.6、§四、§七 各任务块）的引用须同步替换为本函数或「按 §3.1.2 表直接写 `factor()`」。
 
-`assign` 的「U 之外保持原值」由此自然成立：更高稀有度的卡不在 U 内，因子不被写入，值为 1。**旧稿的 `exempt` 特判随之删除。**
-
-**共享者**：`ThresholdForceModifier`（hard）与 `ForceNotOwnedModifier`（G3）共用 `factor_override`，两者差别只在目标组解析器。§3.14.3 的「`assign` 独立实现、不复用 `factor_redistribute`」由此落为「独立于 `share`、但 `assign` 内部共用」。
-
-**模块归属（ISSUE-909 沿用）**：`factor_redistribute`、`factor_override`、`resolve_universe` 三者同住叶子层 `core/pity_primitives.py`（§3.1.6 叶子行 / §四 该文件行），**不得下沉到 `pity_modifier.py`**——`share` 与 `assign` 两侧的多个 Modifier 共用它们，放进实现层会让编排层与实现层之间再形成一次循环依赖。
-
-<!-- REVIEW-R1-FIX: RULING-1B -->
-<!-- REVIEW-R1-FIX: RULING-2B -->
-<!-- REVIEW-R1-FIX: RULING-3B -->
+<!-- REVIEW-R1-FIX: MODIFIER-IFACE -->
 
 #### 3.9.5 边界处理
 
@@ -1957,18 +1889,14 @@ def _preset_rotating_soft(pdef):
             CounterTracker(scope=_norm_scope(pdef), reset_on=_norm_scope(pdef), init=pdef.counter_init),
             NamespaceTracker(namespace=f'{pdef.name}_soft'),   # ← ISSUE-407：X_soft 的唯一产出者
         ],
-        modifiers=[ConditionalModifier(
-                       TransferModifier(u_of=_u_pool(scope), t_of=_t_scope(scope),
-                                        mode='share', ratio_of=_soft_ratio(deltas, scope)), Always()),
-                   ConditionalModifier(
-                       TransferModifier(u_of=_u_scope(scope), t_of=_t_featured(scope),
-                                        mode='share', ratio_of=_one), FlagCondition("guaranteed")],
+        modifiers=[SoftModifier(scope, deltas=deltas),
+                   RotatingModifier(scope)],
         flags={"guaranteed": pdef.guaranteed_init},
         counters={"counter": pdef.counter_init},
     )
 ```
 
-2. **`_active` 写入的作用域推广**：`Lifecycle.initialize` 的写入对象由「本保底命名空间」推广为「**本保底声明的全部命名空间**」——**接口定稿为 `initialize(state, name, namespaces=())`**，`namespaces` = `Pity` 收集到的零件命名空间集合（`{getattr(p, 'namespace', None) for p in _trackers + _modifiers + [_lifecycle]} - {None}`）；`AlwaysActive` / `OnceActive` 对 `name` 与其中**每个**命名空间各写 `_active = True`，`DependentActive` / `DependentOnceActive` 仍为空实现；`deactivate(state, name)` **只清默认命名空间**（退役只作用于本保底）；**`rebind` 同批收 `namespaces`**（**ISSUE-917**）：两接口实参面必须对称，否则 `X_soft` 的 `_active` Flag 在 worker 内跨场重绑后仍指上一场 state（§3.1.3 有专段）。<!-- REVIEW-R1-FIX: ISSUE-917 -->否则 `X_soft: {_active: True}` 无处产生，ISSUE-023 的快照断言与「统一 `_active` 写入」互相牵制。**调用次序**：`Pity.__init__` 先收集零件命名空间、再调 `initialize`、再建 view（§3.1.4 骨架的 ISSUE-202 行已按此写）。
+2. **`_active` 写入的作用域推广**：`Lifecycle.initialize` 的写入对象由「本保底命名空间」推广为「**本保底声明的全部命名空间**」——**接口定稿为 `initialize(state, name, namespaces=())`**，`namespaces` = `Pity` 收集到的零件命名空间集合（`{getattr(p, 'namespace', None) for p in _trackers + _modifiers + [_lifecycle]} - {None}`）；`AlwaysActive` / `FiniteActive` 对 `name` 与其中**每个**命名空间各写 `_active = True`，`DependentActive` / `DependentFiniteActive` 仍为空实现；`deactivate(state, name)` **只清默认命名空间**（退役只作用于本保底）；**`rebind` 同批收 `namespaces`**（**ISSUE-917**）：两接口实参面必须对称，否则 `X_soft` 的 `_active` Flag 在 worker 内跨场重绑后仍指上一场 state（§3.1.3 有专段）。<!-- REVIEW-R1-FIX: ISSUE-917 -->否则 `X_soft: {_active: True}` 无处产生，ISSUE-023 的快照断言与「统一 `_active` 写入」互相牵制。**调用次序**：`Pity.__init__` 先收集零件命名空间、再调 `initialize`、再建 view（§3.1.4 骨架的 ISSUE-202 行已按此写）。
 3. **`_view` 的语义不变 + 按零件分发**：§3.1.4 骨架的 `self._view` 是**默认 view**（`self._name`）；`Pity` 另按命名空间建 `self._ns_views: Dict[str, StateView]`，调用某零件时取 `self._ns_views.get(getattr(part, 'namespace', None)) or self._view`（`Pity` 对 `trackers` / `modifiers` 的遍历点一律走该取值，不得写死 `self._view`）。`_rebind_state` 重建默认 view 的**同时**按同一 state 重建 `_ns_views`（否则 worker 内连跑 N 场模拟时零件 view 指向旧账本，与 ISSUE-004 同一失效模式）。<!-- REVIEW-R1-FIX: ISSUE-407 -->
 
 > **为何不给「soft 计数并入 `X` 单命名空间」留口子**：ISSUE-023 已论证 `X_soft` 必须原样保留（快照逐场一致的前提），两种写法择一写死，本计划取上表方案；实施时不得既合并命名空间、又保留原断言。
@@ -2016,7 +1944,7 @@ def _t_not_owned(scope, field='featured_cards', on_all_owned='skip'):
     return resolve
 ```
 
-> **原类本体的 `factor` 后半段（`return factor_override(ctx, dist, target, self._scope)`）已删除**：该职责由 §3.9.4.2 的 `factor_override` 承担，而 `u_cards` 改由 `resolve_universe(ctx, scope, 'pool')` 构建（原稿在函数内现算 `exempt`，带魔数 99 与两套键空间的问题，见 §3.9.4.2）。**这是裁决 1B / 2B 的核心简化：类消失，只剩解析器与两个原语。**
+> **原类本体的 `factor` 后半段已删除**：该职责由 §3.1.2 机制表的 `NotOwnedModifier` 承担（`factor()` 内直接调 `transfer_factors`），Q 由「更低稀有度 ∪ scope 减 A」就地算出，**不再需要 `resolve_universe` 与 `exempt` 特判**（更高稀有度不写因子即自动不变）。**这是 2026-10-06 简化的核心：类消失，只剩一个 `factor()` 与一个助手。**
 
 
 配套（**2026-09-28 定稿**，原写「待 S9 实施时定」；**2026-09-30 用户裁决改为双实现**，见下第 1 条与末段「双实现的形态选择」）：
@@ -2026,7 +1954,7 @@ def _t_not_owned(scope, field='featured_cards', on_all_owned='skip'):
    - **`hard_exclude_owned_any`**：display_name「硬保底·排除已获得（全拥有时仍给一件 UP）」、`on_all_owned='any'`（候选 b / 形态 b）
    - **命名口径（2026-09-30，强制）**：形态写进 **type key**（TOML 里自解释，不得留一个读不出形态的裸名）与 **display_name**（GUI 下拉与「关于」页面同源呈现，见第 4 条）；两条 display_name 必须带形态括注，禁止只差一个字的短名
    - `trackers=[CounterTracker(scope=_norm_scope(pdef), reset_on=pdef.reset or _norm_scope(pdef))]`——**`reset_on` 取 `pdef.reset or _norm_scope(pdef)`**，原稿写死 `"scope"` 会让 `reset` 配置被静默忽略（§3.2 取值来源表已定该口径）
-   - `modifiers=[ConditionalModifier(TransferModifier(u_of=_u_pool(scope), t_of=_t_not_owned(scope, on_all_owned=<形态>), mode='assign'), CounterCondition('counter', tau))]`（原 `ForceNotOwnedModifier + BaseRatioModifier` 两件合并为一件，裁决 1B），其中 **`tau = pdef.threshold if pdef.threshold is not None else 50`**——`PityDef.threshold` 默认 `None`（[config_store.py:162](gacha_simulator/core/config_store.py#L162)）且 `_build_pity` 直取 `p.get('threshold')`（[config_toml.py:692](gacha_simulator/core/config_toml.py#L692)<!-- REVIEW-R1-FIX: ISSUE-929 -->），不回退则 TOML 不写该键时条件成 `counter >= None`（TypeError）；`_preset_hard` 的同一回退见 §3.2 取值来源表
+   - `modifiers=[NotOwnedModifier(scope, threshold=tau, on_all_owned=<形态>)]`，其中 **`tau = pdef.threshold if pdef.threshold is not None else 50`**——`PityDef.threshold` 默认 `None`（[config_store.py:162](gacha_simulator/core/config_store.py#L162)）且 `_build_pity` 直取 `p.get('threshold')`（[config_toml.py:692](gacha_simulator/core/config_toml.py#L692)<!-- REVIEW-R1-FIX: ISSUE-929 -->），不回退则 TOML 不写该键时条件成 `counter >= None`（TypeError）；`_preset_hard` 的同一回退见 §3.2 取值来源表
    - `lifecycle=build_lifecycle(pdef)`——**原稿未给**，缺则该类保底的 `deactivate_on_early_hit` / `depends_on` / `max_triggers` 全部静默失效（§3.1.3 与 §3.2 均要求每个 preset 必含该键，`create_behavior` 有 `ConfigError` 防线）
    - `counters={"counter": pdef.counter_init}`——**原稿未给**，缺则「已垫抽数」静默归零（对照 `_preset_hard`）
    - registry 两条的 `params` 中 `threshold` 的 `default` 取 **50**（与机制一致，`hard` 为 90）；`default_scope` 一律取 `"ssr"`
@@ -2173,327 +2101,67 @@ class InvariantChecker:
 
 ---
 
-### 3.14 条件外置（2026-09-21 新增）
+### 3.14 条件外置的取消（2026-10-06 改判）
 
-> **本节是对 §3.1.2 Modifier 表的修订**：把「条件」从各 Modifier 内部提出来成为独立对象，**效果部分保持不变**。§3.1.2 的表格保留作历史形态与术语索引，实施以本节为准。
->
-> **方案取舍**：本轮在三种方案中选定「只拆条件」。另两种（保持现状、彻底骨架化）的比较见 3.14.5。
+> **本节结论已反转。** 原方案（2026-09-21）把触发条件从各 Modifier 内部提出来，成为独立的 Condition 类族 + `ConditionalModifier` 包装器。**2026-10-06 用户裁决取消该抽象，条件回到各机制的 `factor()` 内部。**
 
-#### 3.14.1 问题：条件散落在 Modifier 内部
+#### 3.14.1 改判理由
 
-§3.1.2 表里 Modifier 的「触发条件」列各不相同（`state[flag] == True` / `counter >= threshold` / `fate 就绪` / 恒真），且都写在类的 `factor` 方法里。后果有三：
+**① 条件与效果在游戏规则里是绑死的，抽出来不产生新组合。**
 
-- **条件不可组合**：要表达「两个前提同时成立才触发」必须写新类
-- **条件不可单测**：测判断逻辑要构造完整 Modifier 与上下文
-- **G14 要写新类**：战双命运池的「counter ≥ 随机阈值 T」与「counter ≥ 常数」形状不同，按现状须新增一个 Modifier
-
-而 §3.1.5.4 的构造表早已把结构写成三元表达式（`hard` 的算子 = `c ≥ τ ? F : id`），那个条件部分就是这里要提出来的东西。
-
-#### 3.14.2 设计：条件作为包装器
-
-**不改 Modifier 的效果实现**，只把内部的 `if` 换成一层包装：
-
-```python
-class ConditionalModifier(Modifier):        # ISSUE-GATE-3-dependency-order：继承 §3.9.2 的公共基类
-    """给内层 Modifier 加触发条件；条件不成立时返回 None（恒等）。"""
-    def __init__(self, modifier, condition):
-        self._mod, self._cond = modifier, condition
-
-    def factor(self, ctx, view, dist, readonly):
-        if not self._cond.test(ctx, view, dist):
-            return None
-        return self._mod.factor(ctx, view, dist, readonly)
-
-    def apply(self, ctx, view, dist, readonly):
-        # ← ISSUE-401（2026-09-30 独立复核补，阻塞级）：**条件判定必须先于转发**。
-        #   M1 骨架调的是 `apply`（§3.1.4 骨架 / §3.1.2 历史形态），S8 之前内层 Modifier
-        #   也是自己实现 `apply`、`factor` 尚未引入（§3.9.2 的默认 `apply` 自 S8 起才成为
-        #   唯一 `apply` 定义）。若只在 `factor` 里判条件，则 **S12-2 落地直到 S8 这段区间内
-        #   本包装器退化为无条件**：hard 的 `ThresholdForceModifier` 每抽强制 F、`BoostModifier`
-        #   每抽按 deltas 抬概率、`ForceFeatured` / `ForceSelected` 恒生效。这与 S12-2 自身的
-        #   验收（「条件不成立时返回 None（恒等）与改前的内部判断逐场一致」）直接冲突，
-        #   且 S12 排在 S3 / S4 之前——S1 起的中间产物全部不可用。
-        #   **`apply` 与 `factor` 的条件判定必须逐字一致**；两处任一漏判都不会报错，只让
-        #   概率流静默偏移。
-        if not self._cond.test(ctx, view, dist):
-            return None
-        # ISSUE-GATE-dependency-order：M1（S12 起至 S7）骨架调 `apply`（§3.1.4 骨架 /
-        # §3.1.2 历史形态），S8 之后骨架改调 `factor`。**两个名字都必须转发**——
-        # 骨架对 modifiers 列表逐项无守卫调用，缺任一即每个抽卡入口 AttributeError，
-        # 等价于全部保底不可用（与 rebind 同一失效模式）。
-        # 转发目标不会落空：内层 Modifier 自 S8 起只写 `factor`，其 `apply` 由公共基类
-        # `Modifier` 的默认实现提供（§3.9.2），故本转发在 S8 之后仍有定义。
-        return self._mod.apply(ctx, view, dist, readonly)
-
-    def rebind(self, state, name):           # ISSUE-029：**必须转发**，不得吞掉
-        """S12 后 preset 里的 Modifier 一律被本类包裹，`Pity._rebind_state` 对
-        `modifiers` 列表逐项无守卫调用 `rebind`——不转发则首次抽卡即
-        `AttributeError: 'ConditionalModifier' object has no attribute 'rebind'`，
-        发生在每个抽卡的调度入口，等价于全部保底不可用。"""
-        self._mod.rebind(state, name)
-
-    def state_keys(self) -> tuple:           # ISSUE-501 / ISSUE-902：**内外两层都要转发**
-        """转发**内层 Modifier** 与**条件**的声明集（并集，去重保序）。
-
-        不转发内层的后果不是崩溃而是**判据静默失效**：S12 起 preset 里的 Modifier 一律被
-        本类包裹，若本类落回 `Modifier` 基类的 `()`，则 §3.12.2 判据第 2 条「Modifier 引用了
-        不存在的状态键」对**全部 preset** 恒真通过（比对集恒空），而 S10-2 的负例用例恰因
-        未被包裹而仍能抛错——即负例绿、真实配置全盲。
-
-        **必须同时转发条件（ISSUE-902）**：§3.14 条件外置之后，真正读状态键的已不是内层
-        Modifier 而是 Condition（`FlagCondition('guaranteed')` / `CounterCondition('counter', τ)` /
-        `FateReadyCondition(pdef.fate_threshold)` / `Or(...)`），内层 Modifier 只算因子。只转发
-        内层 ⇒ 条件读键（如把 `'counter'` 拼成 `'countr'`）不在比对集内，四条防线（构造期两条
-        判据、§3.13 checker、§六 负例）**全部静默通过**，运行时 `view.get` 恒返默认值、该保底
-        永不触发且不报错。"""
-        return tuple(dict.fromkeys(self._mod.state_keys() + self._cond.state_keys()))
-```
-<!-- REVIEW-R1-FIX: ISSUE-401 -->
-<!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order -->
-> **本类的转发面（定稿）**：`apply`（M1 骨架调用）/ `rebind`（P75 纪律）/ `factor`（S8 起骨架调用，本类须新增同名转发）三者**缺一不可**；`factor` 的转发在 S8 落地时随接口一起加，不得只改内层 Modifier 而漏掉包装器。
->
-> **`apply` 与 `factor` 的条件判定必须一致（ISSUE-401，2026-09-30 独立复核补，强制）**：两个方法**首行都必须是 `if not self._cond.test(ctx, view, dist): return None`**，一字不差。「只在 `factor` 里判条件」是错的——骨架自 S12-2 起至 S7 调的都是 `apply`（§3.1.4 骨架 / §3.1.2 历史形态），S8 之前内层 Modifier 也自己实现 `apply`。漏判的后果不是报错，而是**S12-2 至 S7 期间 preset 内全部条件包装器退化为无条件**（hard 每抽强制 F、soft 每抽抬概率、ForceFeatured / ForceSelected 恒生效），与 S12-2 自身的验收口径（条件不成立返回 `None` 且与改前内部判断逐场一致）直接矛盾，M1 的中间产物自 S3 起全部不可用。S12-2 的验收项与 §六 的 S12 断言行已按本条写死。
->
-> **内层 `apply` 的承载处（ISSUE-GATE-3-dependency-order，2026-09-22）**：`self._mod.apply(...)` 的目标**不是**「内层对象必须自己写 `apply`」，而是**公共基类 `Modifier` 的默认实现**（§3.9.2，由 `factor` 导出）——S8 之后内层只写 `factor`、`apply` 由基类提供，故本类**无须**在 S8 时删掉 `apply` 转发（备选「S8 删除 `apply`」已否决）。**同步纪律**：§3.2 / §3.14.2 的 Modifier 示例一律继承 `Modifier`，裸类形态会让该转发在 S8 之后落空。<!-- REVIEW-FIX-PREV: ISSUE-GATE-3-dependency-order -->
-<!-- REVIEW-FIX-PREV: ISSUE-029 -->
-
-各 Modifier 去掉内部判断，只剩因子计算。合并为唯一的组级类后（裁决 1B，§3.1.2），形态如下：
-
-```python
-class TransferModifier(Modifier):           # ISSUE-GATE-3-dependency-order：继承公共基类——
-                                            # apply / rebind 由其默认实现提供（§3.9.2）
-    """改变目标组 T 在全域 U 中的份额（§3.1.5.2 的操作三元组）。
-
-    u_of / t_of / ratio_of 一律是**解析器**（可调用），不是静态集合：G3 的目标依赖
-    ctx.external.owns(c)，每抽才知道（§3.1.5.2）。
-    """
-    def __init__(self, u_of, t_of, mode, ratio_of=None):
-        self._u_of, self._t_of = u_of, t_of
-        self._mode, self._ratio_of = mode, ratio_of
-
-    def factor(self, ctx, view, dist, readonly):
-        # ISSUE-016 / ISSUE-020：解析器内部一律 .get(scope, ())，禁止
-        # ctx.draw.scope_cards[self._scope] 直接下标（§3.9.5）。compute_scope_mappings
-        # 只对池中实际出现的稀有度建 scope_cards 键、只对「有 featured 卡」的稀有度建
-        # featured_cards 键，无 featured 卡的池该键不存在，直接下标抛 KeyError。
-        u = self._u_of(ctx, view, dist)
-        t = self._t_of(ctx, view, dist)
-        if not u or not t:
-            return None                      # 空集合 = 恒等（§3.9.5 的「目标集为空」行）
-        if self._mode == 'assign':
-            return factor_override(ctx, dist, u, t, ctx.draw.scope_of(u))
-        return factor_redistribute(dist, u, t, self._ratio_of(ctx, view, dist))
-```
-
-**`scope` 不再作为构造形参逐零件携带**：`assign` 需要它区分 featured / 非 featured 两组（口径 3），由解析结果与 `ctx.draw` 反查即可。这是「解析器统一」的附带简化，原稿中每个 Modifier 各存一份 `self._scope` 的形态随之消失。
-
-preset 组装时套上条件：
-
-<!-- REVIEW-FIX-PREV: ISSUE-005 -->
-```python
-def _preset_rotating(pdef):                      # ISSUE-005：必须是工厂函数（带 pdef 形参），不得模块级赋值
-    scope = _norm_scope(pdef)                    # ISSUE-503：唯一归一化点
-    return dict(                                 # ISSUE-030：逐条可配字段一律取自 pdef
-        lifecycle=build_lifecycle(pdef),         # ISSUE-301：生命周期唯一转换点（§3.1.3）
-        trackers=[FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")],
-        modifiers=[
-            ConditionalModifier(
-                TransferModifier(u_of=_u_scope(scope), t_of=_t_featured(scope),
-                                 mode='share', ratio_of=lambda ctx, view, dist: 1.0),
-                FlagCondition("guaranteed")),
-            # 原 BaseRatioModifier 已删除：其 ratio 恒等于当前份额，即 identity，不写零件即可
-        ],
-        flags={"guaranteed": pdef.guaranteed_init},       # 初值走状态声明（H2），不加 Tracker 形参
-    )
-```
-<!-- REVIEW-FIX-PREV: ISSUE-030 -->
-<!-- REVIEW-FIX-PREV: ISSUE-031 -->
-<!-- REVIEW-FIX-PREV: ISSUE-301 -->
-<!-- REVIEW-R1-FIX: RULING-1B -->
-
-> **形态纪律（ISSUE-005，强制）**：本节与 §3.2 的 preset 写法**统一为工厂函数**。原稿此处写模块级赋值 `_preset_rotating = dict(...)`、§3.2 写 `def _preset_rotating(): return dict(...)`，而本节开头又声明「实施以本节为准」，三者不一致，且模块级赋值会引入跨保底 / 跨模拟的状态串扰。以工厂函数形态实施。**解析器也必须工厂化**：`_u_scope(scope)` / `_t_featured(scope)` 这类 helper **每个 preset 调用时新建闭包**，不得写成模块级常量 lambda 上挂共享状态（与 ISSUE-005 同一失效模式）。
-
-| 机制 | 因子计算（`TransferModifier` 三参数） | 组装时的条件 |
-|---|---|---|
-| `rotating` 必中 | `u_of=scope`, `t_of=featured_cards[scope]`, `mode='share'`, r = 1 | `FlagCondition('guaranteed')` |
-| G1 必歪 | `u_of=scope`, `t_of=scope \ featured_cards[scope]`, `mode='share'`, r = 1 | `FlagCondition('forced_loss')` |
-| `targeted` 定轨 | `u_of=scope`, `t_of=(selected,)`, `mode='share'`, r = 1 | `Or(FlagCondition('guaranteed'), FateReadyCondition(τ))` |
-| G3 排除已拥有 | `u_of=pool`, `t_of=featured_cards[scope]` 中未拥有者, `mode='assign'` | `CounterCondition('counter', τ)`——仅在该抽保底触发时（2026-09-28 两处修正：① 原写 `Always()` 与 §3.10.4「不能沿用 pool 层近似」自相矛盾；② 原用 `share` 不产生「必出」，见 §3.10.4 代码注释） |
-| `hard` | `u_of=pool`, `t_of=_target_of(pdef)`, `mode='assign'` | `CounterCondition('counter', τ)` |
-| `soft` | `u_of=pool`, `t_of=scope_cards[scope]`, `mode='share'`, `ratio_of` 由 deltas 与 dist 推 | `Always()` |
-| `rotating_cr` 拦截 | `u_of=scope`, `t_of=featured_cards[scope]`, `mode='share'`, r = 1 | `Or(FlagCondition('guaranteed'), FlagCondition('cr_intercepted'))`——**掷骰在 `StreakTracker.commit`，本类无例外**（裁决 6B） |
-| ~~`BaseRatioModifier`~~ | **删除**：即 `identity`（§3.1.5.2.3 第 8 行） | 不适用 |
-
-> **`u_of` 的两个内置取值（`'scope'` / `'pool'`）由 `resolve_universe` 统一构建（§3.9.4.3）**，不是在本表各行的 Modifier 内部各推一遍。原稿把 U 混用一个形参名 `scope_cards`，三个调用方却传三种不同的全域，这是 §3.1.5.2.5 错误 ② 的成因。
-
-> **本表与 S8 的时序（ISSUE-101 补）**：本表「因子计算」列中的 `factor_redistribute` / `factor_override` 是 **S8 之后**的卡级形态。S12 现排在 S8 **之前**（同属 M1，§七），故 S12 只交付**条件包装**这一层，内层 Modifier 的因子计算在 M1 内仍沿用槽位法（§3.9 的过渡期纪律：S1–S5 期间本节内容全部不实施）。「组装时的条件」一列与 S8 无关，S12 起即生效。
-
-**Condition 类族**（纯读，无副作用）：`Always` / `Flag` / `Counter`（≥ 阈值）/ `FateReady` / `Ratio`（某组占比 ≥ r）/ `Owned`（持有数 == n）/ `RandomThreshold`（G14：counter ≥ 随机阈值）；组合子 `And` / `Or` / `Not`（与 `stop_condition` 的树形结构同构）。
-
-**Condition 协议另含 `state_keys() -> tuple[str, ...]`（ISSUE-902，强制）**：返回该条件**读**的 `PityState` 键名，与 Tracker / Modifier / Lifecycle 三族同口径（只读、由构造形参决定、不依赖 state）。取值：`Always` → `()`；`FlagCondition(flag)` → `(flag,)`；`CounterCondition(key, τ)` → `(key,)`；`FateReadyCondition(τ)` → `('fate_points',)`；`And` / `Or` / `Not` → 子条件的**并集**（去重保序）。`Ratio` / `Owned` / `RandomThreshold` 若读外部来源（分布或 `external`）则返回 `()`。**为什么必须有**：§3.14 把条件从 Modifier 内部提出来之后，**真正读状态键的已经是 Condition**（§3.2 preset 表的 `hard` / `rotating` / `targeted` 三行读键者全是条件），而 Modifier 侧只剩「算因子」；条件无声明通道时，§3.12.2 判据第 2 条的比对集恒不含条件读键，条件里把键名拼错（`'counter'` → `'countr'`、`'guaranteed'` → `'guarnteed'`）会让构造期两条判据、§3.13 的 checker 与 §六 的负例**四道防线全部静默通过**，该保底永不触发且不报错——正是本计划反复要消除的失效形态。消费面与三族一致：`Pity.__init__` 经 `ConditionalModifier.state_keys()` 汇总进 `self._declared_keys['modifiers']`（§3.1.4 骨架 / §3.12.1 / §3.12.2 / §3.13）<!-- REVIEW-R1-FIX: ISSUE-902 -->
-
-**~~`InterceptModifier` 是唯一例外~~（2026-10-05 裁决 6B 后取消）**：原稿的例外理由是它的「条件」要消费全局 `random`，而 `ConditionalModifier` 要求条件纯读。裁决 6B 把掷骰移入 `StreakTracker.commit`（§3.1.1 的 CR 掷骰相位段）后，**Modifier 层不再有任何消费 RNG 的零件**，该例外随之消失：
-
-- `InterceptModifier` 整个删除（§3.1.2 的映射表）
-- Modifier 侧退化为普通 `share`，条件为 `Or(FlagCondition('guaranteed'), FlagCondition('cr_intercepted'))`
-- §3.9.2 那句「Modifier 是 pure 函数（除 `InterceptModifier` 显式依赖 RNG）」的括号一并删除
-
-**代价（须登记，不得当作回归）**：随机流消费位置改变，`rotating_cr` / `rotating_cr_soft` 在固定种子下与旧类的样本路径分叉，**无法通过 §六 的 M1「与旧类逐场一致」**，须进差异归因清单。<!-- REVIEW-R1-FIX: RULING-6B -->
-
-**不进 TOML**：Condition 作为代码级 building block，与 P69 的复合策略同构（`_strategy_key = None` 哨兵）。依据是 §3.7 已裁决的「`type="custom"` 完全声明式 TOML 状态机不实现（过度设计）」。
-
-#### 3.14.3 等价性依据（2026-09-21 实跑；2026-10-05 按 `share` / `assign` 重述）
-
-> **本节的「本方案不改任何因子的计算路径」前提已作废（裁决 1B 改判，§3.14.5）**：因子路径本就有两处错误（§3.1.5.2.5），改判后要重写。故等价性**不再是结构性保证**，须逐项实测，下列实测数据是重验的基线。
-
-**`share`（单槽或单卡目标）：与旧实现逐卡一致，无需附加前提。**
-
-```
-场景：U=(ssr, ssr_featured)，target=(up)，base=(0.005, 0.004, 0.05, 0.941)
-对比：旧实现（_redistribute_scope 槽位级 + banner 的 scale_factors 还原） vs 卡级 factor_redistribute
-
-ratio=1.0 : 旧 {ssr_featured:0.009, ssr:0.0, sr:0.05, r:0.941}      新 同  ✓
-ratio=0.5 : 旧 {ssr_featured:0.0045, ssr:0.0045, ...}               新 同  ✓
-ratio=0.25: 旧 {ssr_featured:0.00225, ssr:0.00675, ...}             新 同  ✓
-（逐卡差异 < 1e-15）
-```
-
-原因：rotating / targeted / CR / G1 的目标恒为**单槽或单卡**（`compute_scope_mappings` 每稀有度只生成一个 featured 槽；`_resolve_selected_slots` 亦返回单槽元组）。单元素目标下不存在「组内分配」这一层，组内常数因子与按基础权重退化为同一式子。**故 §3.1.5.4 的「不变式下包含」对这几类可升级为严格包含。**
-
-**`assign`（hard）与 `share` 不等价，其因子计算不可复用 `factor_redistribute`。**
-
-```
-hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 0.0, r: 0.0}
-若改用 share(r=1) 作用于 U=scope  →  {ssr_featured: 0.009, ssr: 0.0, sr: 0.05, r: 0.941}
-```
-
-差 100 倍，非精度问题：`share(r=1)` 只让 **U 内部**重新分配（SSR 总量仍 0.9%），`assign` 要求**全局占满**（SSR 占 100%）。按比例抽样下前者根本不是「必出」。
-
-**`assign` 与旧实现的两处对应（2026-10-05 逐项核对）**：
-
-| 项 | 旧实现 | 新形态 | 一致性 |
-|----|-------|-------|-------|
-| 作用范围 | 全池置零，更高稀有度还原原值（`result[s] = ctx.current.get(s, 0.0)`，[pity.py:395-397](gacha_simulator/core/pity.py#L395-L397)） | `u_cards = resolve_universe(ctx, scope, 'pool')`（全池减更高稀有度），U 之外因子不写即保持 1 | ✓ 一致 |
-| 组内分配 | 槽级 `result[s] = w / total_weight`（[pity.py:385-390](gacha_simulator/core/pity.py#L385-L390)），卡级扩张时整槽同乘（`banner.py:246` 的 `scale_factors`） | 口径 3：组间按 `w_g/Σw`，组内常数因子 | ✓ 一致（对「约 50% 概率落在 featured 槽」等实测配置须逐卡验） |
-
-**`hard(scope='sr')` 的 Σ ≠ 1**：旧实现实测 Σ = 1.009（SSR 原值被保留），新形态由 `_apply_factor` 归一化到 Σ = 1。该差异已登记（§3.9.5 的 `⟨m,p⟩ ≠ 1` 行、§六 差异归因清单）。
-
-**结论**：`hard` / G3 走 `assign` 分支，不改为 `share`。这与「彻底骨架化」并不矛盾——**合并的是类，不是运算**：`TransferModifier` 内部就按 `mode` 分派到两个原语，两个原语各自保留自己的实现在叶子层（§3.9.4）。原稿「这是本方案与彻底骨架化的关键差别」一句随之作废：方案 C 合并的是**类的个数**，`share` / `assign` 的**运算差异**原样保留。
-
-<!-- REVIEW-R1-FIX: RULING-1B -->
-<!-- REVIEW-R1-FIX: RULING-3B -->
-
-##### 3.14.3.1 `assign` 的口径 3 实测验证（2026-10-05）
-
-**验证对象**：§3.9.4.2 的 `factor_override`（口径 3 + `resolve_universe`）对旧 `HardPityBehavior` 的复现程度。**对照口径**：旧实现在**槽位级**产出 → `banner.py:226-248` 的 `scale_factors` 还原到卡级 → 归一化；新实现在**卡级**直接产出因子 → `_apply_factor`。两侧均归一化后逐卡比较（`pool.draw` 的 `_adjusted_total_weight` 隐含归一化，§3.9.5）。
-
-**测试池**（刻意让 featured 组含两张卡，使「组内分配」这一层真正起作用）：
-`f1`(SSR/UP, 0.004) · `f2`(SSR/UP, 0.002) · `s1`(SSR/非UP, 0.005) · `sr1`(SR, 0.05) · `r1`(R, 0.939)；
-`rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}`（小写键，与 `batch_simulator.py:1193` 的 `{k.lower(): v ...}` 同口径）。
-
-| # | 场景 | U（全域） | 最大差 | 结论 |
-|---|------|----------|-------|------|
-| 1 | `scope='ssr'`，`tf=False` | 全池（ssr 为最高，无豁免） | 0.00e+00 | ✓ |
-| 2 | `scope='ssr'`，`tf=True` | 全池 | 0.00e+00 | ✓ |
-| 3 | `scope='sr'`，`tf=False` | `{sr1, r1}`（ssr 被豁免出 U） | 0.00e+00 | ✓ |
-| 4 | `scope='sr'`，`tf=True` | `{sr1, r1}` | 0.00e+00 | ✓ |
-| 5 | `scope='r'`，`tf=False` | `{r1}` | 0.00e+00 | ✓ |
-| 6 | `scope='r'`，`tf=True` | `{r1}` | 0.00e+00 | ✓ |
-
-**6/6 逐位一致（差 0）**，含「更高稀有度豁免」的 U 构建路径（场景 3..6：ssr / sr 的卡不在 U 内，因子不写即保持原值）。
-
-**不变式无关性（第二组实测）**：把输入分布人为扰动为 featured 组内 **9:1**（基础是 2:1），即「组内比例 = 基础权重比例」的不变式被破坏：
-
-```
-输入        f1=0.009 f2=0.001 s1=0.020 sr1=0.030 r1=0.940   （f1:f2 = 9.0）
-旧实现       f1=0.490909090909 f2=0.054545454545 s1=0.454545454545 sr1=0 r1=0
-新（口径 3） f1=0.490909090909 f2=0.054545454545 s1=0.454545454545 sr1=0 r1=0
-最大差 0.00e+00；组内比例 旧 9.0 / 新 9.0
-```
-
-**结论：`assign` 不需要「组内比例 = 基础权重比例」不变式**（旧实现在槽内整槽同乘，卡级扩张天然保比例；口径 3 的组内常数因子同效）。
-
-**同时排除口径 1**：若 `assign` 按「每卡的基础权重」分配（口径 1），上例的组内比例会被压回 **2:1**，与旧实现的 9:1 不符。**口径 3 是唯一复现旧实现的选择。**
-
-##### 3.14.3.2 `share` 的不变式依赖边界（2026-10-05 实测）
-
-同池、`soft_step(deltas=((1, 50.0),))`（第 1 抽起 50% boost），U = 全池：
-
-| T | 不变式成立 | 不变式破坏（9:1） | 结论 |
-|---|-----------|-----------------|------|
-| `tf=False`（T = 整个 ssr 组，**跨 featured 与非 featured 两组**） | 差 1.11e-16 ✓ | **差 1.03e-01 ✗** | 需要不变式 |
-| `tf=True`（T = featured 组，**落在单个组内**） | 差 0.00e+00 ✓ | 差 0.00e+00 ✓ | 不需要 |
-
-**边界是「T 是否跨多个 (稀有度, featured) 组」**，不是「单槽还是整组」。旧实现在跨组时把增量按各**槽**的基础权重和（`w_s/Σw`）分配，槽内卡级扩张同乘；跨组时该分配会改变组间比例，而 `share` 的组内常数因子保持不变，两者在不变量成立时同值。**§3.1.5.4 的三行表已按此修正。**
-
-<!-- REVIEW-R1-FIX: RULING-3B -->
-
-#### 3.14.4 Condition 与 EventMatch 的分工（命名区分）
-
-系统里有两处判断，**不合并**，且在命名上分开以免被误读为「同一概念的两份实现」：
-
-| | **Condition**（本节的） | **EventMatch**（Tracker 侧，不新增抽象） |
-|---|---|---|
-| 位置 | Modifier 内，`before_draw` | Tracker 的 `commit`，`after_draw` |
-| 输入 | 状态 + 当前分布 | 本次抽卡的结果（出了哪张卡） |
-| 作用 | 决定「要不要改概率」 | 决定「状态怎么转移」 |
-
-不可合并的技术原因：抽后那一刻 `PityContext.current` 是空字典（[pity.py:1335](gacha_simulator/core/pity.py#L1335) 构造时传 `current={}`），分布参数在抽后无意义。强行统一会得到 `test(ctx, view, dist=None, event=None)` 的万能谓词，读者须先判断时机才知道哪些参数有效。
-
-#### 3.14.5 方案取舍：为什么选 C（2026-10-05 改判）
-
-> **本节结论已改判。** 原选 **B（只拆条件，保留 7 个 Modifier 类）**，理由是「收益 ÷ 风险最优，因子代码一行不动、无需重验」。2026-10-05 的核查证明**该理由不成立**：所谓「一行不动」的因子代码本身就有两处实质错误（§3.1.5.2.5 的 ① ②），且都属「每个类各自推导 (U, T, 运算)」这一形态的失效产物。保留 7 个类并不能保住等价性，只是把错误分散到 7 处。现选 **C（合并为单一 `TransferModifier`）**。
-
-| 维度 | A 保持现状 | B 只拆条件（原选，已弃） | **C 合并内层（选中）** |
-|------|-----------|----------------------|---------------------|
-| 代码单元 | 7 类 | 7 类 + 条件族 + 1 包装器 | **1 类 + 条件族 + 1 包装器** |
-| 读者需理解的概念 | 1（Modifier） | 2（Modifier、Condition） | 3（+ 解析器三元组） |
-| 新增机制成本 | 写一个新类 | 写一个类**或**一个条件 | 写一个**解析器**或一个条件 |
-| **等价性风险** | 无 | **中**（原判「低」被证伪：因子代码已有两处错且未被既有测试捕获） | 中（因子代码重写，需逐类重验）**但只有一处须重验** |
-| 条件的可组合 / 可单测 | ✗ | ✓ | ✓ |
-| G14 落位 | 要写新类 | 换一个 Condition | 换一个 Condition |
-| preset 声明长度 | 短 | 中 | 长 |
-| 声明可读性 | 类名即语义 | 好（类名 + 条件） | 中（须查 §3.1.5.2.3 的分解表） |
-| 消除「仅 target 不同」的类间重复 | ✗ | ✗ | **✓（4 个类合并）** |
-| **新增机制时的一致性保障** | ✗ 各类各推 U/T | ✗ 同上 | **✓ 唯一处推导，与分解表并排可查** |
-
-**改判依据（逐条）**：
-
-1. **「因子代码一行不动」是伪命题**。B 与 C 都无法避免动因子代码，因为因子代码本来就是错的。B 保留 7 个类，等于把两处错误留在 7 处不同的推导里；C 让它们在同一张表下暴露。
-2. **B 与 C 的收益差距不止「最后一行的重复」**。原表把 C 的唯一优势记为「消除 4 个类」，漏记了更重要的一条：**新增机制时的一致性保障**。原形态下「soft 的 U 是什么」与「hard 的 U 是什么」分居两个类内部，没有任何机制强制它们一致，这正是错误 ② 的成因。合并后二者在 §3.1.5.2.3 的分解表里并排。
-3. **C 的重验成本已被高估**。C 只需重验**一处**因子实现（`share` 与 `assign` 两个函数），而非逐类重验 7 次。原表把 B 的「7 个类各自不动」当作低风险，实际是「7 处各自未被验证」。
-
-**不封死 A**：若日后判定「类名即语义」的可读性价值高于一致性保障，可在预设层加回薄包装工厂（`_preset_hard(pdef)` 等），读者看到的名字不变，内层仍是 `TransferModifier`。这与本方案不冲突。
-
-**保留的收益（与方案 A/B 相同）**：条件外置的全部实质收益（G14 可扩展、条件可组合可单测、触发时机显式化）不受影响。
-
-<!-- REVIEW-R1-FIX: RULING-1B -->
-<!-- REVIEW-R1-FIX: RULING-5B -->
-
-#### 3.14.6 修订范围
-
-| 位置 | 改动 |
+| 机制 | 条件 |
 |------|------|
-| §3.1.2 | Modifier 表**整个替换**为 `TransferModifier` 单类 + 「旧类到新形态的映射」表（裁决 1B / 5B）；新增 Condition 类族清单（**含 `state_keys()` 协议**，ISSUE-902） | <!-- REVIEW-R1-FIX: ISSUE-902 --> <!-- REVIEW-R1-FIX: RULING-1B --> |
-| §3.2 | preset 映射表补「组装时的条件」一列（**已落正文**，ISSUE-031）；`soft_*` 带 `target_featured = true` 抛 `ConfigError`（裁决 7B）；Tracker 与 Modifier 形参按解析器形态改写 |
-| §3.3 | G1 inverse preset 用 `ConditionalModifier(TransferModifier(u_of=scope, t_of=非UP, mode='share', r=1), FlagCondition('forced_loss'))` |
-| §3.4 | 软保底去掉内部条件（`Always`），ratio 由 deltas 与 dist 推 |
-| §3.10.4 | G3 用 `ConditionalModifier(TransferModifier(u_of=pool, t_of=未拥有UP, mode='assign'), CounterCondition('counter', τ))` |
-| §四 | 新增 `core/pity_condition.py`（Condition 类族，~80 行）；`core/pity_modifier.py` 的类数由 7 降为 1 |
-| §七 | S2a / S2b 的两块合并为一块（只有一个类）；S9-3 的 `ForceNotOwnedModifier` 改为解析器 + 预设记录 |
-| §七 | GATE 加 S12（**M1 内，排在 S2 之后、S4 之前**——ISSUE-101；M2 因此收窄为 S8 + S9） |
+| hard / G3 | counter ≥ τ |
+| soft | boost > 0 |
+| rotating | flag guaranteed |
+| targeted | flag guaranteed **或** fate_points ≥ τ |
+| G1 | flag forced_loss |
 
-**风险**：① Condition 必须纯读无副作用（由 §3.13 的不变式校验覆盖）；② `RandomThresholdCondition`（G14）需在状态中持久化随机阈值，属 Tracker 侧的扩展，与条件本身正交；③ 包装器多一层对象，preset 声明变长（见 3.14.5 的可读性行）。
+「大小保底」这条规则本身就是「歪过 → 出金必是 UP」。把条件抽成对象，**不会凭空多出任何手册需要的组合**。唯一一处条件确实独立变化的是 **G14**（战双：counter ≥ **随机**阈值，效果与 hard 相同），而 G14 至今未实现。
 
----
+**② 抽出来的代价是四条纪律。**
+
+`ConditionalModifier` 必须转发 `apply` / `rebind` / `factor` / `state_keys` 四个方法，**漏一个就整条保底链不可用**（骨架对 `modifiers` 列表逐项无守卫调用）。计划为这一点写了 ISSUE-401、ISSUE-029、ISSUE-902、ISSUE-GATE-3-dependency-order 四条纪律。
+
+**③ 组合爆炸的方向相反。**
+
+一旦条件是独立对象，`ConditionalModifier(任意效果, 任意条件)` 就成了合法写法，于是要回答「soft 效果 × guaranteed 条件」是什么意思，即**语义爆炸**。现状靠「preset 里手写配对」把语义钉死，等于用纪律去补抽象的洞。**条件内联反而封死了这个洞**：不存在的组合无法表达。
+
+#### 3.14.2 取消后的形态
+
+条件写在各类 `factor()` 的开头，不生效即 `return None`：
+
+```python
+class RotatingModifier(Modifier):
+    def factor(self, view, dist, ctx):
+        if not view.get('guaranteed'):          # ← 条件内联
+            return None
+        ...
+```
+
+**随之删除的符号**：`ConditionalModifier`、`Condition` 类族（`Always` / `Flag` / `Counter` / `FateReady` / `Ratio` / `Owned` / `RandomThreshold`）、组合子（`And` / `Or` / `Not`）、`core/pity_condition.py` 整个模块。
+
+**随之删除的纪律**：ISSUE-401（`apply` / `factor` 条件判定须一致）、ISSUE-902（`Condition.state_keys()` 转发）、ISSUE-029 中 `ConditionalModifier` 的转发义务、ISSUE-GATE-3-dependency-order 中包装器的部分。
+
+**保留的**：`state_keys()` 协议本身（§3.1.1 / §3.1.2 / §3.1.3 三族统一暴露）：条件内联后，条件读的键自然落在 Modifier 自己的 `state_keys()` 里，**一处声明**，比原先「Modifier 与 Condition 两处并集」更简单。
+
+#### 3.14.3 `Modifier` 基类仍需提供的两个默认实现
+
+`apply` 与 `rebind` 的承载处不随条件外置取消而消失：
+
+- **`rebind(state, name)`**：`Pity._rebind_state` 自 S1 起无条件调用（P75 纪律）。无状态零件 `pass`，有状态者覆写。**必须存在，不得省略。**
+- **`apply`**：M1（S1–S7）骨架调用它、S8 起骨架改调 `factor`。基类提供默认实现 `_apply_factor(dist, self.factor(...) or {})`，故内层零件在 S8 之后只写 `factor`。**这是「`apply` 保留为默认实现」的承载处**，删掉它则 S8 之后每个抽卡入口 `AttributeError`。
+
+<!-- REVIEW-R1-FIX: MODIFIER-IFACE -->
+<!-- REVIEW-R1-FIX: COND-INLINE -->
 
 ## 四、波及范围
 
 | 文件 | 改动类型 | 说明 |
 |------|---------|------|
-| `core/pity_primitives.py` | **新增**（**S1a** + **S8** + **S9**） | **叶子原语层**（§3.1.6）：`Counter` / `Flag` / `PityState` / `DrawInfo` / `PityContext` / `LifecycleConfig`（自 `pity.py` 迁出）+ **类型集合常量 `_SOFT_TYPES` / `_HARD_TYPES` / `_EVENT_DRIVEN_TYPES`**（自 `CounterBasedBehavior` 的**类属性**升为**模块级常量**，[pity.py:114-115](gacha_simulator/core/pity.py#L114-L115)（`_SOFT_TYPES` / `_HARD_TYPES` 在 :112 / :113）；§3.1.4 骨架的 `Pity(PityBehavior)` 不继承该基类，裸名引用即 `NameError`，故三者必须随叶子层落在此文件）+ `factor_redistribute`（R 语义）与 **`factor_override`（F 语义）**（S8 起；**ISSUE-909**：两式同住本文件，后者由 `ThresholdForceModifier` / `ForceNotOwnedModifier` 共用，**不得下沉到 `pity_modifier.py`**，§3.9.4）。**S9（ISSUE-034）**：`PityContext` 加 `external` 字段——`PityContext`（[pity.py:31](gacha_simulator/core/pity.py#L31)）已迁至本文件，该字段的定义与编辑点**在此行**，不在 `core/pity.py`。`pity.py` 保留 re-export，既有导入路径不变。**ISSUE-301**：`LifecycleConfig` **保留**（不是删除项），角色由「`PityBehavior` 的 `lifecycle` 形参类型」改为「Lifecycle 对象的构造参数袋」，由四个 Lifecycle 实现的基类持有（§3.1.3） | <!-- REVIEW-FIX-PREV: ISSUE-002 --> <!-- REVIEW-FIX-PREV: ISSUE-301 --> <!-- REVIEW-FIX-PREV: ISSUE-024 --> <!-- REVIEW-FIX-PREV: ISSUE-034 -->
-| `core/pity_tracker.py` | **新增**（**S1b** + **S1c** + **S1d**，逐块独立 commit） | Tracker 家族（CounterTracker/FlagTracker/StreakTracker/FateTracker + **`NamespaceTracker`**——**ISSUE-407** 新增，语义为空、只声明命名空间，供三个 `_soft` 类型的 preset 产出 `X_soft`）+ Lifecycle（四类：`AlwaysActive` / `OnceActive` / `DependentActive` / `DependentOnceActive`——**两个正交维度的四个组合**，2026-09-28 修正，~140 行）。**ISSUE-202**：Lifecycle 的协议为**五方法**——`initialize` / `is_active` / `should_deactivate` / `deactivate` / `rebind`；`initialize(state, name, namespaces=())` 承担 `_active` 的构造期写入（`Always` 维对 `name` 与 `namespaces` 中每个命名空间各写 `_active=True`，`Dependent` 维空实现），由 `Pity.__init__` 在创建 `_view` 前调用（§3.1.3 专段 / §3.1.4 骨架）。<!-- REVIEW-R1-FIX: ISSUE-407 --> **ISSUE-407**：三族（Tracker / Modifier / Lifecycle）统一暴露 **`namespace` 属性**（默认 `None`，§3.1.1「零件的命名空间声明面」），`Pity` 据此经 `self._ns_views` 传对应 view；`should_deactivate` 为**四实参**（第四实参 `fired`，ISSUE-402）。<!-- REVIEW-R1-FIX: ISSUE-501 --> **ISSUE-501**：本文件的 Tracker 族与 Lifecycle 族**一律实现 `state_keys() -> tuple[str, ...]`**（只读、由构造形参决定、不依赖 state；Tracker 返回其写的键，Lifecycle 仅在 `max_triggers > 0` 时返回 `('triggers',)`），它是 §3.12.1 / §3.12.2 / §3.13 与 S10-2 构造期判据的唯一输入（`Pity.__init__` 汇总为 `_declared_keys`，§3.1.4 骨架）。**ISSUE-301**：Lifecycle 以 `LifecycleConfig` 为构造参数袋（共用基类持 `self._cfg`）——**`deactivate_on_early_hit` 与 `depends_on` 两个属性都由基类对 `cfg` 统一代理**（**ISSUE-406**：`PityEngine._build_activation_graph` 对**每条** behavior 无条件读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)），只代理前者会让 `AlwaysActive` / `OnceActive` 在每次 `PityEngine(...)` 构造时 `AttributeError`；原稿「`depends_on` 由 `Dependent` 维同源读出」已废止） | <!-- REVIEW-FIX-PREV: ISSUE-202 --> <!-- REVIEW-FIX-PREV: ISSUE-301 --> |
-| `core/pity_condition.py` | **新增**（**S12**，**落在 M1 内**——排在 S2 之后、S4 之前，ISSUE-101 / §七） | Condition 类族（7 个内置 + 3 个组合子），纯读无副作用；**每个 Condition 一律实现 `state_keys() -> tuple[str, ...]`**（**ISSUE-902**：`Always` 返回 `()`、`FlagCondition(flag)` 返回 `(flag,)`、`CounterCondition(key, τ)` 返回 `(key,)`、`FateReadyCondition(τ)` 返回 `('fate_points',)`、`And`/`Or`/`Not` 取子条件并集；它是 §3.12.2 判据第 2 条与 §3.13 checker 覆盖**条件读键**的唯一输入，缺它则条件键名拼错时四道防线全部静默通过）；配套 `ConditionalModifier` 包装器（~80 行，其 `state_keys()` 返回**内层 Modifier 与条件**的并集，§3.14.2）。**为何必须在 M1**：S4 的 preset 工厂（§3.2 / §3.3 / §3.14.2）与 S5 的等价性测试一律消费 `ConditionalModifier` / `FlagCondition` / `CounterCondition` / `Always`，本模块留在 M2 会让 M1 唯一可照抄的 preset 代码引用不存在的模块，S4/S5 无法闭合 | <!-- REVIEW-FIX-PREV: ISSUE-101 --> |
+| `core/pity_primitives.py` | **新增**（**S1a** + **S8** + **S9**） | **叶子原语层**（§3.1.6）：`Counter` / `Flag` / `PityState` / `DrawInfo` / `PityContext` / `LifecycleConfig`（自 `pity.py` 迁出）+ **类型集合常量 `_SOFT_TYPES` / `_HARD_TYPES` / `_EVENT_DRIVEN_TYPES`**（自 `CounterBasedBehavior` 的**类属性**升为**模块级常量**，[pity.py:114-115](gacha_simulator/core/pity.py#L114-L115)（`_SOFT_TYPES` / `_HARD_TYPES` 在 :112 / :113）；§3.1.4 骨架的 `Pity(PityBehavior)` 不继承该基类，裸名引用即 `NameError`，故三者必须随叶子层落在此文件）+ **助手函数 `transfer_factors`**（S8 起；**2026-10-06**：原两式合并为它，由八个机制共用，**不得下沉到 `pity_modifier.py`**，§3.9.4）。**S9（ISSUE-034）**：`PityContext` 加 `external` 字段——`PityContext`（[pity.py:31](gacha_simulator/core/pity.py#L31)）已迁至本文件，该字段的定义与编辑点**在此行**，不在 `core/pity.py`。`pity.py` 保留 re-export，既有导入路径不变。**ISSUE-301**：`LifecycleConfig` **保留**（不是删除项），角色由「`PityBehavior` 的 `lifecycle` 形参类型」改为「Lifecycle 对象的构造参数袋」，由四个 Lifecycle 实现的基类持有（§3.1.3） | <!-- REVIEW-FIX-PREV: ISSUE-002 --> <!-- REVIEW-FIX-PREV: ISSUE-301 --> <!-- REVIEW-FIX-PREV: ISSUE-024 --> <!-- REVIEW-FIX-PREV: ISSUE-034 -->
+| `core/pity_tracker.py` | **新增**（**S1b** + **S1c** + **S1d**，逐块独立 commit） | Tracker 家族（CounterTracker/FlagTracker/StreakTracker/FateTracker + **`NamespaceTracker`**——**ISSUE-407** 新增，语义为空、只声明命名空间，供三个 `_soft` 类型的 preset 产出 `X_soft`）+ Lifecycle（四类：`AlwaysActive` / `FiniteActive` / `DependentActive` / `DependentFiniteActive`——**两个正交维度的四个组合**，2026-09-28 修正，~140 行）。**ISSUE-202**：Lifecycle 的协议为**五方法**——`initialize` / `is_active` / `should_deactivate` / `deactivate` / `rebind`；`initialize(state, name, namespaces=())` 承担 `_active` 的构造期写入（`Always` 维对 `name` 与 `namespaces` 中每个命名空间各写 `_active=True`，`Dependent` 维空实现），由 `Pity.__init__` 在创建 `_view` 前调用（§3.1.3 专段 / §3.1.4 骨架）。<!-- REVIEW-R1-FIX: ISSUE-407 --> **ISSUE-407**：三族（Tracker / Modifier / Lifecycle）统一暴露 **`namespace` 属性**（默认 `None`，§3.1.1「零件的命名空间声明面」），`Pity` 据此经 `self._ns_views` 传对应 view；`should_deactivate` 为**四实参**（第四实参 `fired`，ISSUE-402）。<!-- REVIEW-R1-FIX: ISSUE-501 --> **ISSUE-501**：本文件的 Tracker 族与 Lifecycle 族**一律实现 `state_keys() -> tuple[str, ...]`**（只读、由构造形参决定、不依赖 state；Tracker 返回其写的键，Lifecycle 仅在 `max_triggers > 0` 时返回 `('triggers',)`），它是 §3.12.1 / §3.12.2 / §3.13 与 S10-2 构造期判据的唯一输入（`Pity.__init__` 汇总为 `_declared_keys`，§3.1.4 骨架）。**ISSUE-301**：Lifecycle 以 `LifecycleConfig` 为构造参数袋（共用基类持 `self._cfg`）——**`deactivate_on_early_hit` 与 `depends_on` 两个属性都由基类对 `cfg` 统一代理**（**ISSUE-406**：`PityEngine._build_activation_graph` 对**每条** behavior 无条件读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)），只代理前者会让 `AlwaysActive` / `FiniteActive` 在每次 `PityEngine(...)` 构造时 `AttributeError`；原稿「`depends_on` 由 `Dependent` 维同源读出」已废止） | <!-- REVIEW-FIX-PREV: ISSUE-202 --> <!-- REVIEW-FIX-PREV: ISSUE-301 --> |
+| ~~`core/pity_condition.py`~~ | **不新增**（**2026-10-06 随 §3.14 改判删除**） | 原 Condition 类族与 `ConditionalModifier` 包装器均已取消，条件内联进各机制的 `factor()`。原行内容如下（存档）：Condition 类族（7 个内置 + 3 个组合子），纯读无副作用；**每个 Condition 一律实现 `state_keys() -> tuple[str, ...]`**（**ISSUE-902**：`Always` 返回 `()`、`FlagCondition(flag)` 返回 `(flag,)`、`CounterCondition(key, τ)` 返回 `(key,)`、`FateReadyCondition(τ)` 返回 `('fate_points',)`、`And`/`Or`/`Not` 取子条件并集；它是 §3.12.2 判据第 2 条与 §3.13 checker 覆盖**条件读键**的唯一输入，缺它则条件键名拼错时四道防线全部静默通过）；配套 `ConditionalModifier` 包装器（~80 行，其 `state_keys()` 返回**内层 Modifier 与条件**的并集，§3.14.2）。**为何必须在 M1**：S4 的 preset 工厂（§3.2 / §3.3 / §3.14.2）与 S5 的等价性测试一律消费 `ConditionalModifier` / `FlagCondition` / `CounterCondition` / `Always`，本模块留在 M2 会让 M1 唯一可照抄的 preset 代码引用不存在的模块，S4/S5 无法闭合 | <!-- REVIEW-FIX-PREV: ISSUE-101 --> |
 | `core/pity_modifier.py` | **新增**（**S2a** + **S2b**，逐块独立 commit） | Modifier 家族（**`TransferModifier` 单类** + `ConditionalModifier` 包装器；原 7 个类按裁决 1B 合并，§3.1.2 映射表）（~80 行，原估 150 行）。**S8**：实现形态切换为乘性因子向量（§3.1.5.1）。<!-- REVIEW-R1-FIX: ISSUE-501 --> **ISSUE-501**：本文件的 `Modifier` 基类提供 `state_keys()` 的默认实现（返回 `()`），读状态的 Modifier 覆写它；`ConditionalModifier` 转发内层声明集（转发义务与 `rebind` / `apply` / `factor` 同列，§3.14.2） |
 | `core/invariants.py` | **新增**（**S11**） | `InvariantChecker`（可开关的不变式运行时校验，§3.13）：`check_after_before_draw(pool_id, dist, engine)` / `check_after_after_draw(pool_id, state, engine)`，覆盖分布 / 状态 / 因子 / 生命周期四层；生产关闭。**2026-09-22 补登记（ISSUE-GATE-file-list）**：原稿只在 §3.13 给类名、§四 无任何落点行，实施者无从判断该新建模块还是并入 `core/pity.py`；现定稿为**独立新模块**（与 `Pity` 骨架解耦，便于生产关闭时零开销）。**S8 波及（ISSUE-903，强制）**：本模块的**分布层归一性判据是跨里程碑两段的**——M1 槽位级管道下取 scope 感知式 `Σp = 1 + Σp(被 F 豁免的更高稀有度槽位)`，**S8 起 `_apply_factor`（§3.9.2）无条件归一化，同一判据须改为恒等断言 `Σp = 1`**（容差 1e-12）。故 S8 的目标文件**含本行**：S8-6 必须同批 re-derive 该判据，否则 M2 一旦启用 checker 即对合法配置误报（§3.12.1 / §3.13 / §六 S10 三处同口径） | <!-- REVIEW-FIX-PREV: ISSUE-GATE-file-list --> <!-- REVIEW-R1-FIX: ISSUE-903 -->
 | `core/pool.py` | 修改（**S8**） | 删除 `aggregate_probs_by_rarity`（[pool.py:244](gacha_simulator/core/pool.py#L244)，唯一调用点在 banner）+ **`infer_rarity_from_spec`（[pool.py:234](gacha_simulator/core/pool.py#L234)，ISSUE-504：其 ①②③ 类消费者随本行与 S8-2 一并消失，函数零消费者）** + `core/__init__.py` 的两者导出行。<!-- REVIEW-R1-FIX: ISSUE-504 -->**ISSUE-026（2026-09-22 修正文件名）**：原稿把「`compute_scope_mappings` 改造为只产出卡集合」记在本行，但该函数**定义在** [pity.py:1040](gacha_simulator/core/pity.py#L1040)，`pool.py` 只有 `infer_rarity_from_spec` / `aggregate_probs_by_rarity`——本行不含该函数的改造，改造点见下方 `core/pity.py` 行 | <!-- REVIEW-FIX-PREV: ISSUE-026 -->
@@ -2502,7 +2170,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 | `tests/test_p60_gacha_state.py` + `tests/test_p63_overflow_integration.py` | 修改（**S9**，2026-09-29 补） | 两条用例正断言 `add_card` 的 `ValueError` 守卫（[:40](tests/test_p60_gacha_state.py#L40)、[:78](tests/test_p63_overflow_integration.py#L78)），守卫删除后必失败，须同步改为断言「从 `state.initial_counts` 自动取」。**原计划未登记这两个文件**。**本步另须处理 9 处关键字实参（2026-10-01 补登记，源自本 run 阶段 4 代码审计的阻塞断裂 ③）**：实测两文件用例体内共 **9 处** `add_card(..., initial_counts=...)` 关键字实参（`test_p60_gacha_state.py` 的 :21/:27/:69，`test_p63_overflow_integration.py` 的 :36/:45/:46/:59/:61/:74），形参移除后**逐条 `TypeError`**。失败形态是「当场报错」而非静默，且两文件已在本行改造范围内，故**不新增子块**，但须写入 §七 S9-2 的改造范围，否则实施者按「只改两条守卫用例」施工会漏 |
 | `core/state.py` | 修改（**S9**，2026-09-28 重梳） | ① 新增 `initial_counts: Dict[str, int]` 字段（本场模拟的初始持有）——原为 `GachaService.run_simulation` 的局部变量与四处传参；② `add_card` / `total_holding` 的 `initial_counts` 形参**移除**（内部改读 `self.initial_counts`）——**单一真相源**（2026-09-29 定稿，原写「改可选」会留两个来源）；连带**删除** `add_card` 的防御守卫（[state.py:120-125](gacha_simulator/core/state.py#L120-L125) 的「传了 bands 未传 counts → ValueError」，其触发条件已不存在）；③ 新增 `ExternalView` 类（只读查询视图，暴露 `owns` / `balance`；`now()` 已于 §3.10.2 删除，`time` 不在白名单）与 `GachaState.external_view() -> ExternalView`（O(1) 包装）。**ISSUE-009：`owns()` 口径为「含初始持有」**——`state.initial_counts.get(c,0) + state.acquired.get(c,0)`，两者同为一个 state 的字段，口径一致由构造保证。**行为等价的三条判据（2026-09-28 查证）**：① **`clone()` 必须带该字段**（**独立验收项见 §六**）——`run_simulation` 首行即 `initial_state.clone()`，漏带则初始持有在克隆时丢失、P63 溢出分档静默出错；② **真实构造点唯一且每场新建**——[batch_simulator.py:501](gacha_simulator/service/batch_simulator.py#L501)（其上方注释已要求跨模拟隔离、每场新建 GachaState），与 `_initial_counts` 的「每场从 `card_defs` 现算」语义等价；③ **`add_card` 的 `initial_counts` 形参一并移除**（2026-09-29 定稿：**统一为单一真相源**）——原计划「形参改可选、缺省取 `self.initial_counts`」会留下**两个真相源**（服务层局部变量 vs state 字段），任一路径只更新其一即静默不一致（直构 `GachaState` 的测试路径上 `state.initial_counts` 恒空 → G3 的 `owns()` 少算初始持有 → 退化为「只算模拟内获得」，正是「精确建模原则」要消除的失效形态）。故两处调用点（[gacha_service.py:481](gacha_simulator/service/gacha_service.py#L481) 抽卡获得、[milestone.py:211](gacha_simulator/core/milestone.py#L211) 里程碑发卡）改为**不传该参**，`add_card` 内部直接读 `self.initial_counts`；**另一条闭包捕获路径**——[milestone.py:163](gacha_simulator/core/milestone.py#L163) 的 `register_milestone_engine(..., initial_counts=...)` 同理改为从 `GachaState` 取（[batch_simulator.py:466-479](gacha_simulator/service/batch_simulator.py#L466-L479) 的 `_ms_initial` 推导**整段删除**（[batch_simulator.py:470-475](gacha_simulator/service/batch_simulator.py#L470-L475) 的 `_ms_initial = {}` 与其后的 `for _cd in env.card_defs` 循环；块首 `if env.milestone_defs:` 在 :466）——**它不是 `GachaState` 初值的来源**：该块在 `if env.milestone_defs:` 内、无里程碑时不执行（ISSUE-914 指出的坑），故「推导上提到块外 → 构造点补传」这条路径**不采用**。全篇只有**一处推导源**（`run_simulation` 内的 `_initial_counts` 现算，[gacha_service.py:310-315](gacha_simulator/service/gacha_service.py#L310-L315)）与**一处赋值点**（该函数 `clone()` 之后，见 §四 `service/gacha_service.py` 行）。<!-- REVIEW-R1-FIX: ISSUE-916 -->
 | `core/config_store.py` | 修改（**S9**） | `PityDef` 新增 `reads: tuple[str, ...] = ()`。**归属（ISSUE-GATE-dependency-order）**：字段定义 + 解析 + 透传链**整体归 S9（M2）**，S4b 不再触碰 `reads`（M1 内无任何消费者） | <!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order -->
-| `core/config_store.py` | 修改（**S4-4**） | `PityDef` 新增 `max_triggers: int = 0`（0 = 不限）——`OnceActive` 的配置接线（ISSUE-032，2026-09-27 裁决） |
+| `core/config_store.py` | 修改（**S4-4**） | `PityDef` 新增 `max_triggers: int = 0`（0 = 不限）——`FiniteActive` 的配置接线（ISSUE-032，2026-09-27 裁决） |
 | `core/config_toml.py` | 修改（**S4-4**） | `max_triggers` 解析（`_build_pity`）+ round-trip 写回（`_pitydef_to_toml`）+ 负值抛 `ConfigError` |
 | `gui/config_panel.py` | 修改（**S7a**） | 新增「触发次数上限」数值控件（0 = 不限），`_apply_pity_edit` 与 load/save 路径同步该键。**ISSUE-911（2026-10-01，透传面补登记）**：本文件另有**五处**与三处引擎侧并列的**枚举式保底字段透传**——`set_config`（[:6541-6605](gacha_simulator/gui/config_panel.py#L6541-L6605)，**别名键** `type`/`start`/`end`/`increment`）、`_refresh_from_store_impl`（[:7443-7468](gacha_simulator/gui/config_panel.py#L7443-L7468)）、`_flush_pity_current_detail`（[:3244-3324](gacha_simulator/gui/config_panel.py#L3244-L3324)）、`get_config`（[:6336-6366](gacha_simulator/gui/config_panel.py#L6336-L6366)，别名键）、`apply_to_store`（[:7167-7196](gacha_simulator/gui/config_panel.py#L7167-L7196)）。五处均为**静默丢失**形态：TOML 里写好的 `priority`（S4b）/ `reads`（S9-2）/ `max_triggers`（S4-4）只要经「GUI 打开 → 导出」一次即被抹掉，且无任何断言覆盖，详见 §3.6 AUDIT-BREAK-1 的 #4–#8 行。**`reads` 的 GUI 通路取保守路径**：不加控件，但五处须保留该键的原样透传（§3.6 同行）。**ISSUE-918（2026-10-01）**：四个别名键的改名另有两处消费面须同批——同文件 `_do_update_preview` 的 `pdef.get('type', '?')`（[:6046](gacha_simulator/gui/config_panel.py#L6046)，改名后 GUI 预览逐条打印 `?`）与 [tests/gui/test_config_panel_pity.py:220](tests/gui/test_config_panel_pity.py#L220) 的正断言（落点 §七 S7a） | <!-- REVIEW-R1-FIX: ISSUE-911 --><!-- REVIEW-R1-FIX: ISSUE-918 -->
 | `core/config_toml.py` | 修改（**S9**） | `reads` 的解析 + 状态源白名单校验（未知名称抛 `ConfigError`）、round-trip 写回 |
@@ -2528,7 +2196,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 | `tests/core/test_pity_equivalence.py` | **新增**（**S5a / S5b**） | 等价性对比 harness（固定种子逐场对比概率分布 + `PityState.to_dict()` 快照，S5a）与按家族分批接入的等价性用例：`hard` / soft 族（3）/ rotating 族（3）/ targeted 族（2），每批独立运行、失败可独立归因（S5b）。**2026-09-22 补（ISSUE-GATE-file-list）**：原稿只写 `tests/` 泛行，S5 的用例无处落笔 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-file-list -->
 | `tests/core/test_pity_invariants.py` | **新增**（**S10-1 / S10-2**） | 组合正确性验收（§3.12）：随机零件组合的生成器与不变式性质断言（归一性 / 非负性 / 因子合法性 / 状态键合法 / 确定性）+ 合法组合判据用例。**2026-09-22 补（ISSUE-GATE-file-list）** | <!-- REVIEW-FIX-PREV: ISSUE-GATE-file-list -->
 | `tests/core/test_pity_invariant_checker.py` | **新增**（**S11**） | `InvariantChecker` 的**专属**验收测试（§六「S10 / S11（保障层）」段）：**正例** `hard(scope='sr')` 的合法配置（Σ = 1.009）不得报错（归一性按 scope 感知口径）；**负例** 卡概率改负 / Σ 改到 1.2 / 白名单外写 `_active` 时必须抛错，且异常信息含**保底名 + 键 + 期望值 / 实际值**三要素。**原稿 S11 无任何测试文件**，`tests/core/test_pity_invariants.py` 归 S10-1 / S10-2（组合正确性，§3.12），与被测对象不同，两者不得混用 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-test-strategy --> |
-| `tests/core/test_pity_condition.py` | **新增**（**S12-1**） | Condition 类族的**专属**验收测试（条件求值真值表，S12-1 / S12-2 的验收命令均指向本文件）：`Always` / `Flag` / `Counter` / `FateReady` / `Ratio` / `Owned` / `RandomThreshold` 七个叶子条件 + `And` / `Or` / `Not` 三个组合子。**ISSUE-GATE-FAIL-2 补登记（2026-09-22）**：`core/pity_condition.py` 与 `ConditionalModifier` 是 M1 内 S3 / S4 的直接前置（ISSUE-101），其测试文件与模块同批新增，原稿 §四 无本行 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-FAIL-2 -->
+| ~~`tests/core/test_pity_condition.py`~~ | **不新增**（**2026-10-06 随 §3.14 改判删除**） | 原 Condition 类族专属验收测试（条件求值真值表，S12-1 / S12-2 的验收命令均指向本文件）：`Always` / `Flag` / `Counter` / `FateReady` / `Ratio` / `Owned` / `RandomThreshold` 七个叶子条件 + `And` / `Or` / `Not` 三个组合子。**ISSUE-GATE-FAIL-2 补登记（2026-09-22）**：`core/pity_condition.py` 与 `ConditionalModifier` 是 M1 内 S3 / S4 的直接前置（ISSUE-101），其测试文件与模块同批新增，原稿 §四 无本行 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-FAIL-2 -->
 | `tests/` | 新增/修改 | 等价性测试（旧类 vs 新引擎，全部类型）+ G1/G5/G16 测试 + N1 / M4 / H4 三条强制约束专项断言（S5c）+ 跨进程 pickle round-trip（S7b） **AUDIT-BREAK-7 追加**：S7d（M1）与 S8-7（M2）两块的存量测试改造目标文件清单见 §六「存量测试文件在删除点之前完成改造」条；**AUDIT-BREAK-1 追加**：字段往返守卫测试（`batch_simulator` / `retreat_config` 两处透传）亦落于本目录 |
 | `docs/01-活跃/subsystems/保底系统/01-理论.md` | 更新（**文档同步，ISSUE-028**） | 子系统文档集（目录实测六件）之一，**已核涉及 P64**：`§2.1 执行顺序` 段（[:64](docs/01-活跃/subsystems/保底系统/01-理论.md#L64)）引用 P64 §1.5 的接线裁决与 §3.1.5.4 的顺序敏感集合。P64 落地后须回写：`_resolve_order` 已接入管道（不再是「算了但没人按顺序用」）、`priority` 语义、卡级管道与乘性因子形式（§3.1.5） | <!-- REVIEW-FIX-PREV: ISSUE-028 --> |
 | `docs/01-活跃/subsystems/保底系统/02-实施.md` | 更新（**文档同步，ISSUE-028**） | 子系统文档集（目录实测六件）之一，**已核涉及 P64**：`§一 代码位置` 的 `pity.py` 行号表（[:17-42](docs/01-活跃/subsystems/保底系统/02-实施.md#L17-L42)，逐行列出 `SoftPityMixin` / 10 个行为类 / `BEHAVIOR_REGISTRY` / `_validate_registry` / `_resolve_order` / `compute_scope_mappings` / `PityEngine`）与 `§2.1`（[:36](docs/01-活跃/subsystems/保底系统/02-实施.md#L36)）。P64 后 10 类退役、`pity.py` 结构重排（新增 `pity_primitives` / `pity_tracker` / `pity_modifier` / `pity_condition` 四模块），该表与相关结论段整体失真，须整体刷新 | <!-- REVIEW-FIX-PREV: ISSUE-028 --> |
@@ -2565,7 +2233,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 | **映射表未写死的实现细节致等价性失败**（计数相位 / CR 随机数短路） | 两条已在 §3.1 列为强制约束（N1 / H4），§六 设对应断言；两者共同点是均不报错、只让结果静默偏移，故必须在 S1/S5 显式实现与断言。did_fire 一项已按 §3.1.1 M4 裁决为统一语义，属行为变更，走独立验收（可先行）；**范围含六类**，其中 counter 驱动 / rotating / targeted 为收严、三个 `_soft` 复合类型为放宽（ISSUE-102，见 §3.1.1 M4 表与 §六 断言） |
 | **快照面差异：事件驱动型多一个 `_active: True` 键（GATE-4 定稿取 ①）** | 统一 `_active` 写入使 `rotating` / `targeted` / `rotating_cr` / `rotating_soft` / `rotating_cr_soft` 的命名空间比旧实现多一个 `_active: True` 键，与 §六「快照逐场完全一致」的字面口径冲突。缓解：§3.1.3 已定稿取 ①（统一写入），§六 按 ① 写死断言（备选分支已删），差异登记入 S1 至 S5 的差异归因清单。**不登记即会被等价性测试当成回归反复排查** | <!-- REVIEW-FIX-PREV: ISSUE-GATE-risk-mitigation --> |
 | **三个 `_soft` 复合类型的 `did_fire` 放宽（ISSUE-102 定稿：不加 hit 门控）** | 该族新 `did_fire` 为「出 scope」，旧经 MRO 为「出 scope ∧ is_featured / 命中定轨」，方向为**放宽**（`depends_on` 依赖方在未命中当轮即被激活），与 rotating / targeted 的**收严**方向相反。缓解：§3.1.1 M4 表六行、§六 断言、§七 S5c 三处已同步；不加 hit 门控（裁定见 §3.1.1）；该差异仅在配 `depends_on` 时可见，按「不在等价性范围内」单独验收 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-risk-mitigation --> |
-| **`Lifecycle` 的第四组合 `DependentOnceActive` 为新增路径（ISSUE-032 衍生，2026-09-28 语义定稿）** | 把 `depends_on` 与 `max_triggers` 两维正交后，「被激活后又限触发次数」成为一个此前不存在的组合。旧实现里 `deactivate_on_early_hit`（N=1）对所有类型都可用，但「依赖激活 + 计数退役」从未组合过。**语义定稿（2026-09-28 用户裁决）：退役计数自「激活后」起算**——依据是「退役」计量的是「生效期间用了几次」，激活前的抽卡不消耗该保底的额度（未激活时 `is_active` 为假、`before_draw` / `after_draw` 首行早退，本就不参与结算）。残余风险仅是该组合无既有配置用例可比对，缓解：§六 设断言、S1d 单测固化 | <!-- REVIEW-FIX-PREV: ISSUE-032 --> |
+| **`Lifecycle` 的第四组合 `DependentFiniteActive` 为新增路径（ISSUE-032 衍生，2026-09-28 语义定稿）** | 把 `depends_on` 与 `max_triggers` 两维正交后，「被激活后又限触发次数」成为一个此前不存在的组合。旧实现里 `deactivate_on_early_hit`（N=1）对所有类型都可用，但「依赖激活 + 计数退役」从未组合过。**语义定稿（2026-09-28 用户裁决）：退役计数自「激活后」起算**——依据是「退役」计量的是「生效期间用了几次」，激活前的抽卡不消耗该保底的额度（未激活时 `is_active` 为假、`before_draw` / `after_draw` 首行早退，本就不参与结算）。残余风险仅是该组合无既有配置用例可比对，缓解：§六 设断言、S1d 单测固化 | <!-- REVIEW-FIX-PREV: ISSUE-032 --> |
 | **`priority` 字段定义与消费的时序错配（GATE-3(a)）** | `PityDef.priority` 原归 S6b 定义，而 S4-2 的 `Pity(..., priority=pdef.priority)` 与 S4b 的三处透传都排在 S6b 之前；实测 `PityDef`（[config_store.py:150-186](gacha_simulator/core/config_store.py#L150-L186)）当前确无该字段，照原序施工即 `AttributeError`；若改用 `getattr(pdef, 'priority', 0)` 兜底，则退化为恒 0 的**静默空转**（priority 永不生效且无任何报错）。缓解：字段定义 + `config_toml` 解析随 S4b 前移（新序 S4-1 → S4b → S4-2），S6b 只留排序键与 GUI 控件 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order --> |
 | **registry `class: None` 之后旧类无入口（GATE-3(c) / GATE-5）** | 等价性装置的「旧」侧与回滚路径各自需要旧类，而 10 个条目的 `class` 一律置 `None` 之后旧类在 registry 上已无入口（实测 `BEHAVIOR_REGISTRY` 当前每条都持有真实类对象）。缓解：harness **直接 import 旧类并以显式实参构造**（不经 registry）；回滚方式改为 **`git revert` 子块 commit**，不依赖 registry 保留旧类。备选 `legacy_class` 过渡字段已否决（§3.2） | <!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order --> |
 | **S8 / S9 子项无预算与目标文件（GATE-1）** | M2 的 10 个子项原稿只有任务描述，无预算、无目标文件、无验收命令，且回滚单元写成「S8 + S9 整体」，与 M1 刚确立的「回滚单元 = 任务单元」相反。缓解：第八轮补齐逐子项预算（S8 约 3.1 / S9 约 2.4 人时）、目标文件与「每子项一个 commit」，并加依赖闭包回退规则（GATE-5） | <!-- REVIEW-FIX-PREV: ISSUE-GATE-granularity --> |
@@ -2581,7 +2249,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - [ ] **`_soft` 族命名空间保留（ISSUE-023）**：`X_soft` 命名空间及其 `_active` 键在 preset 化后原样存在，`PityState.to_dict()` 的快照字段集合与旧类相同（三个 `_soft` 类型各一条）；若实施选择合并命名空间，则该差异须已登记进下方差异归因清单且 S1–S5 断言已相应放宽
 <!-- REVIEW-FIX-PREV: ISSUE-202 -->
 - [ ] **`_active` 构造期写入（ISSUE-202）**：全部 10 个 preset 构造出的 `Pity`，其 `_lifecycle.initialize(state, name, namespaces)` 已在构造期被调用——**非 `depends_on` 保底**在构造后 `state.get(name, "_active")` 为 `True`（若为 `False`/缺失，则 `before_draw` / `after_draw` 首行早退、计数型保底全线失效，属阻塞级缺陷）；`DependentActive` 构造期不写、其 `_active` 由引擎激活传播置位。**事件驱动型的差异须登记**：`rotating` / `targeted` / `rotating_cr` / `rotating_cr_soft` / `rotating_soft` 的命名空间在 preset 化后**多一个 `_active: True` 键**（旧类不写），该差异允许存在并须登记为 S1–S5 已知差异，不得当作回归（§3.1.3 已定稿取 ①「统一写入」，备选已否决，**故本断言只有这一版**）<!-- REVIEW-FIX-PREV: ISSUE-GATE-risk-mitigation -->
-- [ ] **`X_soft._active` 的跨场重绑（ISSUE-917，强制，2026-10-01）**：`Lifecycle` 为 `name` 与 `namespaces` 的并集中**每个**命名空间各持一个 `_active` Flag，`rebind(state, name, namespaces)` 对**并集中每个** Flag 做纯重定向（不复制旧值）。判据两条：① 构造期 `state.get('x_soft', '_active') is True` 且 `state.get('x', '_active') is True`（`AlwaysActive` / `OnceActive`，与上条 ISSUE-023 的快照断言同场）；② **worker 内连跑第 2..N 场**——`lc.rebind(s2, 'x', ('x_soft',))` 后命名空间 Flag 的写入落点 `is s2`（断言 `lc._ns_active['x_soft']._state is s2`）；反向形态（`rebind` 只重绑 `name`）本条必红。`deactivate(state, name)` 只清 `name`，命名空间的 `_active` 不受退役影响（与旧实现内层 `SoftStepBehavior._active` 同形）。<!-- REVIEW-R1-FIX: ISSUE-917 -->
+- [ ] **`X_soft._active` 的跨场重绑（ISSUE-917，强制，2026-10-01）**：`Lifecycle` 为 `name` 与 `namespaces` 的并集中**每个**命名空间各持一个 `_active` Flag，`rebind(state, name, namespaces)` 对**并集中每个** Flag 做纯重定向（不复制旧值）。判据两条：① 构造期 `state.get('x_soft', '_active') is True` 且 `state.get('x', '_active') is True`（`AlwaysActive` / `FiniteActive`，与上条 ISSUE-023 的快照断言同场）；② **worker 内连跑第 2..N 场**——`lc.rebind(s2, 'x', ('x_soft',))` 后命名空间 Flag 的写入落点 `is s2`（断言 `lc._ns_active['x_soft']._state is s2`）；反向形态（`rebind` 只重绑 `name`）本条必红。`deactivate(state, name)` 只清 `name`，命名空间的 `_active` 不受退役影响（与旧实现内层 `SoftStepBehavior._active` 同形）。<!-- REVIEW-R1-FIX: ISSUE-917 -->
 <!-- REVIEW-FIX-PREV: ISSUE-301 -->
 - [ ] **`deactivate_on_early_hit` / `depends_on` 构造保真（ISSUE-301）**：① 全部 10 个 preset 的返回 dict 含 `lifecycle` 键（缺失时 `create_behavior` 抛 `ConfigError`，不静默回退 `AlwaysActive()`）；② `deactivate_on_early_hit=True` 的配置构造出的 `Pity._lifecycle.deactivate_on_early_hit` 为 `True`，`False`/缺省时为 `False`（不得恒 `False`）；③ `pdef.depends_on` 非空时 `_lifecycle` 为 `DependentActive` 且其 `depends_on` 与该字段相同，为空时 `isinstance(_lifecycle, AlwaysActive)`；④ 两个字段全缺省时与旧 `create_behavior`（不带 `lifecycle` 实参、behavior 落到默认 `LifecycleConfig()`）逐场一致。**本条失败即意味着两类配置静默失效**——N1 例外断言与本表的「参与 `depends_on` 的事件驱动型在激活前不改分布」断言随之不可达，`depends_on` 引用不存在名的 `ConfigError` 也一并消失
 
@@ -2593,7 +2261,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 <!-- REVIEW-FIX-PREV: ISSUE-012 -->
 <!-- REVIEW-FIX-PREV: ISSUE-006 -->
 - [ ] **S8 边界断言（ISSUE-016）**：`scope` 键缺失（无 featured 卡的稀有度、新增标准池）时保底返回恒等而非抛 `KeyError`；`scope_cards` / `featured_cards` 一律经 `.get(scope, ())` 消费
-- [ ] **S8 空目标集断言（2026-10-05 补，强制）**：`factor_redistribute` / `factor_override` 在 `target_cards == ()` 时**返回 `None`（恒等）**，**不得返回零因子向量**。反例（改前形态）：`factor_redistribute(dist, ('ssr_featured','ssr'), (), 1.0)` 返回 `{'ssr_featured': 0.0, 'ssr': 0.0}`，归一化后全 scope 归零。触发路径：`rotating` 绑定到无 featured 卡的池。断言须**同时**覆盖两个原语（§3.9.4.1 / §3.9.4.2 的守卫）
+- [ ] **S8 空目标集断言（2026-10-05 补，2026-10-06 改，强制）**：`A` 为空或 `p(A) <= 0` 时 `factor()` 必须 `return None`（恒等），**不得把空集传给 `transfer_factors`**（后者不做防御，会除零或返回零因子向量）。触发路径：`RotatingModifier` 绑定到无 featured 卡的池。断言须覆盖 §3.1.2 表里的**每个**机制
 - [x] **可交换性实测（2026-10-05 完成，脚本形态见 §3.1.5.5）**：对**旧类**（`pity.py` 现行实现）逐抽扫描，结论四条：① `soft(tf=False) + hard` **可交换**；② `hard + rotating`（rotating 非 guaranteed）**可交换**；③ `hard + rotating`（rotating **guaranteed**）**不可交换**（抽 6 起分歧）；④ `soft(tf=True) + hard` **不可交换**（该配置按裁决 7B 已不可构造，反例随之消除）。归纳判据见 §3.1.5.5 的「判据」专段（`X` 与 `hard` 可交换 ⟺ `X` 在 `hard` 的输出上恒等）
 - [x] **`assign` 口径 3 实测验证（2026-10-05 完成）**：§3.9.4.2 的 `factor_override`（口径 3 + `resolve_universe`）对旧 `HardPityBehavior` 的复现程度已在**卡级**逐卡对照完毕，**6/6 场景逐位一致（差 0）**，含「更高稀有度豁免」的 U 构建路径；且**不需要**「组内比例 = 基础权重比例」不变式（扰动分布下仍一致）。口径 1 同时被排除（会把组内比例压回基础比例）。方法与数据见 §3.14.3.1。
 - [x] **`share` 的不变式依赖边界（2026-10-05 完成）**：实测确认需要不变式的条件是「**T 跨多个 (稀有度, featured) 组**」，不是「T 是整组」。`soft(tf=True)`（T 落在单组内）在不变式破坏下仍逐位一致。§3.1.5.4 的三行表已按此修正，数据见 §3.14.3.2。
@@ -2651,12 +2319,12 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - [ ] **N1 例外**：`deactivate_on_early_hit=True` 且命中时，`commit` 跳过 counter 重置，状态快照与 `get_counter()` 与旧实现一致
 - [ ] **Lifecycle 增量能力单独验收**：配 `depends_on` 的事件驱动型在激活前不改分布、不更新状态（旧实现为惰性，属行为变更，不在等价性范围内）
 <!-- REVIEW-FIX-PREV: ISSUE-032 -->
-- [ ] **`OnceActive` / `DependentOnceActive` 配置接线（ISSUE-032，2026-09-27 裁决由「只验类」改为含配置；2026-09-28 两维正交修正）**：① `PityDef(max_triggers=2)` 经 `build_lifecycle` 产出 `OnceActive(cfg, max_triggers=2)`；② `PityDef(depends_on='a', max_triggers=2)` 产出 `DependentOnceActive(cfg, max_triggers=2)`（**两维都生效，非覆盖**）；③ TOML round-trip 保留 `max_triggers`；④ GUI 编辑 → 保存 → 重载一致；⑤ 触发 N 次后 `is_active` 为假且退役动作不改变 `commit` 语义；⑥ `DependentOnceActive` 的退役计数**自激活后起算**（未激活期间不计数）；⑦ `max_triggers = -1` 抛 `ConfigError`
+- [ ] **`FiniteActive` / `DependentFiniteActive` 配置接线（ISSUE-032，2026-09-27 裁决由「只验类」改为含配置；2026-09-28 两维正交修正）**：① `PityDef(max_triggers=2)` 经 `build_lifecycle` 产出 `FiniteActive(cfg, max_triggers=2)`；② `PityDef(depends_on='a', max_triggers=2)` 产出 `DependentFiniteActive(cfg, max_triggers=2)`（**两维都生效，非覆盖**）；③ TOML round-trip 保留 `max_triggers`；④ GUI 编辑 → 保存 → 重载一致；⑤ 触发 N 次后 `is_active` 为假且退役动作不改变 `commit` 语义；⑥ `DependentFiniteActive` 的退役计数**自激活后起算**（未激活期间不计数）；⑦ `max_triggers = -1` 抛 `ConfigError`
 - [ ] **CR 随机数短路（H4）**：`cr_base_rate == 0` 与 `cr_state_probs` 含 0 的用例中，随机数消费次数与旧实现逐位相同
 <!-- REVIEW-R1-FIX: ISSUE-402 -->
-- [ ] **`should_deactivate` 的 `fired` 实参（ISSUE-402，强制）**：`Pity.after_draw` **必须**四实参调用 `should_deactivate(ctx, state, name, fired)`，`fired = self.did_fire(ctx)` 在退役判定**之前**取值。判据两条：① **端到端**——`OnceActive(max_triggers=2)` 的 `Pity` 在**命中两次**后 `is_active` 为假，而**连续未命中 ≥ 2 抽**时仍为真（若 `triggers` 无条件累加，后者会在第 2 抽即退役，本断言必红）；② 直构 Lifecycle 显式传 `fired`（真值 / 假值两态），断言 `triggers` 只在 `fired=True` 时累加。**为什么必须端到端**：S1d 的直构单测与 S3-2 的构造期 `_active` 断言都不经过该调用行，「三实参调用」这一形态在两层验收里都不可见；若 Lifecycle 迁就三参，`triggers` 退化为「激活后的抽数」且不报错。
+- [ ] **`should_deactivate` 的 `fired` 实参（ISSUE-402，强制）**：`Pity.after_draw` **必须**四实参调用 `should_deactivate(ctx, state, name, fired)`，`fired = self.did_fire(ctx)` 在退役判定**之前**取值。判据两条：① **端到端**——`FiniteActive(max_triggers=2)` 的 `Pity` 在**命中两次**后 `is_active` 为假，而**连续未命中 ≥ 2 抽**时仍为真（若 `triggers` 无条件累加，后者会在第 2 抽即退役，本断言必红）；② 直构 Lifecycle 显式传 `fired`（真值 / 假值两态），断言 `triggers` 只在 `fired=True` 时累加。**为什么必须端到端**：S1d 的直构单测与 S3-2 的构造期 `_active` 断言都不经过该调用行，「三实参调用」这一形态在两层验收里都不可见；若 Lifecycle 迁就三参，`triggers` 退化为「激活后的抽数」且不报错。
 <!-- REVIEW-R1-FIX: ISSUE-406 -->
-- [ ] **Lifecycle 属性代理完整（ISSUE-406，强制）**：四个 Lifecycle 类**都**暴露 `deactivate_on_early_hit` **与** `depends_on` 两个只读属性（由基类对 `self._cfg` 统一代理）。判据：① `AlwaysActive()` / `OnceActive(cfg, max_triggers=1)` 实例上 `depends_on` **属性存在**（用哨兵默认值的 `getattr` 判定，不等于哨兵；缺省为 `None`）；② **用这两个类各构造一条 `Pity` 后 `PityEngine([...], …)` 构造成功**——`_build_activation_graph` 对**每条** behavior 无条件读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)），未代理即每次 `PityEngine(...)` 构造 `AttributeError`。原稿只把 `deactivate_on_early_hit` 定为必须暴露的属性，实施者无从判断 `depends_on` 是否也需要。
+- [ ] **Lifecycle 属性代理完整（ISSUE-406，强制）**：四个 Lifecycle 类**都**暴露 `deactivate_on_early_hit` **与** `depends_on` 两个只读属性（由基类对 `self._cfg` 统一代理）。判据：① `AlwaysActive()` / `FiniteActive(cfg, max_triggers=1)` 实例上 `depends_on` **属性存在**（用哨兵默认值的 `getattr` 判定，不等于哨兵；缺省为 `None`）；② **用这两个类各构造一条 `Pity` 后 `PityEngine([...], …)` 构造成功**——`_build_activation_graph` 对**每条** behavior 无条件读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)），未代理即每次 `PityEngine(...)` 构造 `AttributeError`。原稿只把 `deactivate_on_early_hit` 定为必须暴露的属性，实施者无从判断 `depends_on` 是否也需要。
 - [ ] `rotating_inverse` preset 正确：出 UP → 下一次 SSR 必非 UP；出非 UP → 恢复基础比例（G1）
   <!-- REVIEW-FIX-PREV: ISSUE-105 -->
 - [ ] **`rotating_inverse` 的类型注册（ISSUE-105）**：① `_BTYPE_ORDER['rotating_inverse'] == 3`，接线后与同 scope 的 `rotating` 同档（先后按排序键第三位 name 决定）；② `_EVENT_DRIVEN_TYPES` 含 `rotating_inverse`，故 `is_event_driven` 为真、`_validate_behaviors` 规则 3 生效——同 scope 配置 `rotating` + `rotating_inverse` 抛 `ConfigError`（**不得静默通过**）；③ 配 `depends_on` 时 `is_active` 早退对 `rotating_inverse` 生效（§3.1.3）——**ISSUE-506：该早退由骨架对全部类型无条件承担、不由 `_EVENT_DRIVEN_TYPES` 决定**，故本断言对任何类型同形，**它不构成「缺 `rotating_inverse`」的捕获面**（捕获面只有 ②）
@@ -2678,8 +2346,8 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 <!-- REVIEW-FIX-PREV: ISSUE-029 -->
 <!-- REVIEW-FIX-PREV: ISSUE-030 -->
 <!-- REVIEW-R1-FIX: ISSUE-401 -->
-- [ ] **`ConditionalModifier` 的 `apply` 与 `factor` 条件判定一致（ISSUE-401，强制）**：断言两个方法的条件判定**同源且都生效**——① 条件为假时 `ConditionalModifier(...).apply(ctx, view, dist, readonly)` 返回 `None`（**恒等**），分布与不套包装器时逐元素一致；② 条件为真时返回内层结果；③ 对同一对内层 Modifier + 条件，`apply` 与 `factor` 两条路径在条件为假时**都**返回 `None`（防止只在一处判）。**为什么单列**：M1（S12-2 起至 S7）骨架调的是 `apply`（§3.1.4 骨架 / §3.1.2 历史形态），`factor` 自 S8 才引入——只判 `factor` 只会让 S12-2 至 S7 期间 preset 内全部条件包装器退化为**无条件**（hard 每抽强制 F、soft 每抽抬概率、ForceFeatured / ForceSelected 恒生效），且**不报错**；S12-2 自身的验收（「与改前的内部判断逐场一致」）与本条共同构成唯一捕获面。
-- [ ] **三族 rebind 接口存在且包装器转发（ISSUE-029）**：对 `Pity._trackers` / `_modifiers` 与 `_lifecycle` **逐项**断言 `callable(getattr(x, 'rebind', None))`；`ConditionalModifier.rebind` 转发到内层 Modifier（构造一个被包裹的 Modifier，断言其内部 Counter / Flag 被重绑到新 state）。**同一断言扩展到方法名（ISSUE-GATE-dependency-order）**：M1 阶段对 `modifiers` 链上**每个对象**（含包装器）断言 `callable(getattr(x, 'apply', None))` **并实际调用一次**（`x.apply(ctx, view, dist, readonly)` 不抛 `AttributeError`——纯存在性断言在「`ConditionalModifier.apply` 的转发目标无 `apply`」时同样为真、捕获不到该缺口；内层 `apply` 的承载处是 §3.9.2 的 `Modifier` 基类默认实现），S8 后追加断言 `factor` 亦存在——三者是骨架的无守卫调用面，缺一即每个抽卡入口 `AttributeError`。**不得依赖 `hasattr` 守卫**——`Pity._rebind_state` 是无守卫调用，S12 落地后 preset 内的 Modifier 一律被包裹，漏转发即每次抽卡入口 `AttributeError`
+- [x] ~~**`ConditionalModifier` 的 `apply` 与 `factor` 条件判定一致（ISSUE-401，强制）**~~（**2026-10-06 随 §3.14 改判删除**：包装器已取消，条件只在一处）｜原内容存档：断言两个方法的条件判定**同源且都生效**——① 条件为假时 `ConditionalModifier(...).apply(ctx, view, dist, readonly)` 返回 `None`（**恒等**），分布与不套包装器时逐元素一致；② 条件为真时返回内层结果；③ 对同一对内层 Modifier + 条件，`apply` 与 `factor` 两条路径在条件为假时**都**返回 `None`（防止只在一处判）。**为什么单列**：M1（S12-2 起至 S7）骨架调的是 `apply`（§3.1.4 骨架 / §3.1.2 历史形态），`factor` 自 S8 才引入——只判 `factor` 只会让 S12-2 至 S7 期间 preset 内全部条件包装器退化为**无条件**（hard 每抽强制 F、soft 每抽抬概率、ForceFeatured / ForceSelected 恒生效），且**不报错**；S12-2 自身的验收（「与改前的内部判断逐场一致」）与本条共同构成唯一捕获面。
+- [ ] **三族 rebind 接口存在（ISSUE-029，2026-10-06 去掉包装器部分）**：对 `Pity._trackers` / `_modifiers` 与 `_lifecycle` **逐项**断言 `callable(getattr(x, 'rebind', None))`；`ConditionalModifier.rebind` 转发到内层 Modifier（构造一个被包裹的 Modifier，断言其内部 Counter / Flag 被重绑到新 state）。**同一断言扩展到方法名（ISSUE-GATE-dependency-order）**：M1 阶段对 `modifiers` 链上**每个对象**（含包装器）断言 `callable(getattr(x, 'apply', None))` **并实际调用一次**（`x.apply(ctx, view, dist, readonly)` 不抛 `AttributeError`——纯存在性断言在「`ConditionalModifier.apply` 的转发目标无 `apply`」时同样为真、捕获不到该缺口；内层 `apply` 的承载处是 §3.9.2 的 `Modifier` 基类默认实现），S8 后追加断言 `factor` 亦存在——三者是骨架的无守卫调用面，缺一即每个抽卡入口 `AttributeError`。**不得依赖 `hasattr` 守卫**——`Pity._rebind_state` 是无守卫调用，S12 落地后 preset 内的 Modifier 一律被包裹，漏转发即每次抽卡入口 `AttributeError`
 - [ ] **preset 工厂消费 `pdef`（ISSUE-030）**：非默认 `threshold` / `scope` / `counter_init` / `guaranteed_init` / `deltas` 配置下，新 preset 与旧类**逐场一致**（每项至少一条用例）；并断言零参形态未被采用（各 `_preset_xxx` 签名含 `pdef` 形参，`create_behavior` 以 `preset(pdef)` 调用）
 <!-- REVIEW-FIX-PREV: AUDIT-BREAK-2 -->
 - [ ] **构造期参数注入只限旧类分支（AUDIT-BREAK-2）**：`create_behavior` 现于 [pity.py:877-880](gacha_simulator/core/pity.py#L877-L880) 向 `params` 注入 `target_featured` / `reset`，再以 `cls(name=..., state=..., scope=..., **params)` 收尾（[:902](gacha_simulator/core/pity.py#L902)）。preset 分支**不得**透传该 `params`（`Pity.__init__` 无这两个形参）。断言：`inspect.signature(Pity.__init__).parameters` **不含** `target_featured` / `reset`，且 preset 分支构造 10 个 preset 全成功（旧类分支仍按原样注入）。⚠ 待人工裁决：备选方案为保留这两个形参并统一注入（见 §3.1.4 AUDIT-BREAK-2 条）
@@ -2718,9 +2386,9 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 
 > **里程碑划分（2026-09-22，第四轮修订 ISSUE-101）**：主线子块按**验收口径**分为两段。**M1（S1a 至 S7c + S10-1 / S10-2 + S11 + S12）** 证明「重构未退化」并交付带保障的统一架构，口径为「与旧类逐场一致」；**M2（S8 + S9）** 做表达力扩展，口径为「与 M1 产物容差 1e-12 一致」。M1 结束是一个明确的暂停与交付点，故**不拆分为独立计划文件**（避免约 370 行的跨文件搬移与由此产生的长期引用同步成本）。
 >
-> **S12 自 M2 调入 M1（ISSUE-101，强制）**：`core/pity_condition.py` 与 `ConditionalModifier` 是 S4 的 preset 工厂与 S5 等价性测试的**直接前置**——计划全篇唯一的 preset 代码（§3.2 / §3.3 / §3.14.2）一律写成 `ConditionalModifier(ForceFeaturedModifier(_norm_scope(pdef)), FlagCondition("guaranteed"))` 形态。S12 留在 M2 会造成：M1 阶段唯一可照抄的 preset 代码引用不存在的模块与类，S4/S5 在 M1 内无法闭合，「M1 独立交付、可暂停」的定位不成立（10 个 preset 全部无法构造，等价性测试无被测对象）。
+> ~~**S12 自 M2 调入 M1（ISSUE-101）**~~（**2026-10-06 随 §3.14 改判删除**：S12 已整块取消，M1 由 30 块降为 28 块）。原内容：`core/pity_condition.py` 与 `ConditionalModifier` 是 S4 的 preset 工厂与 S5 等价性测试的**直接前置**——计划全篇唯一的 preset 代码（§3.2 / §3.3 / §3.14.2）一律写成 `ConditionalModifier(ForceFeaturedModifier(_norm_scope(pdef)), FlagCondition("guaranteed"))` 形态。S12 留在 M2 会造成：M1 阶段唯一可照抄的 preset 代码引用不存在的模块与类，S4/S5 在 M1 内无法闭合，「M1 独立交付、可暂停」的定位不成立（10 个 preset 全部无法构造，等价性测试无被测对象）。
 >
-> **M1 内部执行顺序（强制）**：**S1a → S1b-1 → S1b-2 → S1c → S1d → S2a → S2b → S12-1 → S12-2 → S3-1 → S3-2 → S4-1 → S4b → S4-2 → S4-3 → S4-4 → S4-5 → S5a → S5b → S5c → S6a → S6b → S6c → S7a → S7b → S7c → **S7d** → S10-1 → S10-2 → S11**。**S7d（存量保底测试文件改造，AUDIT-BREAK-7）排在 S7c 之后、保障层之前**：它消费 S5 的等价性结论与 S4 的新构造路径，且**必须早于「发布前一次性移除旧类」的 commit**（旧类本体移除后这批模块级 `import` 即 `ImportError`）。即先迁叶子原语（S1a）与 Tracker / Lifecycle（S1b 至 S1d），S2a / S2b 按 §3.1.2 历史形态实现 Modifier（条件写在类内），S12 随即外置（§3.14.2），S3 / S4 消费外置后的形态。**不得把 S12 放在 S4 之后**，否则 S4 的 preset 引用不存在的符号。**S4b（`priority` 字段定义 + 解析 + 三处透传）的位置在 S4-1 与 S4-2 之间**（2026-09-22 第八轮前移，GATE-3(a)）：S4-2 的构造形参 `Pity(..., priority=pdef.priority)` 要读该字段，而实测 `PityDef`（[config_store.py:150-186](gacha_simulator/core/config_store.py#L150-L186)）当前确无该字段，照前移前的原序（S4b 排在 S4-5 之后）施工即 `AttributeError`。**`build_lifecycle(pdef)` 的定义随 S1d 落地（ISSUE-GATE-3-dependency-order，2026-09-22）**：它依赖的 `LifecycleConfig`（S1a）与四个 Lifecycle 类（S1d）此时齐备，而 S4-2 / S4-3 的 preset 工厂返回 dict 已写 `lifecycle=build_lifecycle(pdef)`（§3.2 / §3.3 / §3.14.2），名字在**调用**时解析——若留到 S4-4 才定义，S4-3 的验收（「全部 10 个 preset 构造成功」）即 `NameError`；S4-4 只剩该键的校验防线与旧 `lifecycle_kwargs` 段删除（删除时机见 S4-4 任务项）。
+> **M1 内部执行顺序（强制）**：**S1a → S1b-1 → S1b-2 → S1c → S1d → S2a → S2b → S3-1 → S3-2 → S4-1 → S4b → S4-2 → S4-3 → S4-4 → S4-5 → S5a → S5b → S5c → S6a → S6b → S6c → S7a → S7b → S7c → **S7d** → S10-1 → S10-2 → S11**。**S7d（存量保底测试文件改造，AUDIT-BREAK-7）排在 S7c 之后、保障层之前**：它消费 S5 的等价性结论与 S4 的新构造路径，且**必须早于「发布前一次性移除旧类」的 commit**（旧类本体移除后这批模块级 `import` 即 `ImportError`）。即先迁叶子原语（S1a）与 Tracker / Lifecycle（S1b 至 S1d），S2a / S2b 按 §3.1.2 历史形态实现 Modifier（条件写在类内），S12 随即外置（§3.14.2），S3 / S4 消费外置后的形态。**不得把 S12 放在 S4 之后**，否则 S4 的 preset 引用不存在的符号。**S4b（`priority` 字段定义 + 解析 + 三处透传）的位置在 S4-1 与 S4-2 之间**（2026-09-22 第八轮前移，GATE-3(a)）：S4-2 的构造形参 `Pity(..., priority=pdef.priority)` 要读该字段，而实测 `PityDef`（[config_store.py:150-186](gacha_simulator/core/config_store.py#L150-L186)）当前确无该字段，照前移前的原序（S4b 排在 S4-5 之后）施工即 `AttributeError`。**`build_lifecycle(pdef)` 的定义随 S1d 落地（ISSUE-GATE-3-dependency-order，2026-09-22）**：它依赖的 `LifecycleConfig`（S1a）与四个 Lifecycle 类（S1d）此时齐备，而 S4-2 / S4-3 的 preset 工厂返回 dict 已写 `lifecycle=build_lifecycle(pdef)`（§3.2 / §3.3 / §3.14.2），名字在**调用**时解析——若留到 S4-4 才定义，S4-3 的验收（「全部 10 个 preset 构造成功」）即 `NameError`；S4-4 只剩该键的校验防线与旧 `lifecycle_kwargs` 段删除（删除时机见 S4-4 任务项）。
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-granularity -->
 >
 > 共 **45** 子块：G16 独立 2 + P82 接线独立 2 + **M1 主线 30**（细分自原 12 步，见下方「粒度裁定」）+ **M2 11**（S8-1…S8-7 + S9-1…S9-4）。**G16 与 P82 接线均独立先行，不占 P64 主线，也不属任何一个里程碑。** M1 的 30 个子块与 M2 的 11 个子块均**逐块独立 commit**，回滚粒度等于任务粒度（GATE-5）。**2026-09-30 更正**：原写「共 43 子块……主线 29」三项相加仅 33，且与同文件「主线 30 个子块」冲突。
@@ -2739,7 +2407,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - [ ] P82-1 `PityEngine` 独立排序视图（`self._pool_order` 于 behavior 构造后预计算）+ `get_behaviors_for_pool()` 改为消费排序视图，`PoolPitySpec.pity_names` 保持 TOML 顺序不动
 - [ ] P82-2 基线固化 + 等价对照：接线前用固定种子跑 `config.toml` 与既有测试配置固化 `CompactResult` 快照，接线后同种子重跑逐字段对比，差异归因到敏感集合；确认 `draw_pity_names` 输出串不变
 
-#### M1：核心重构与保障（S1–S7 + S10 + S11 + S12）
+#### M1：核心重构与保障（S1–S7 + S10 + S11；S12 已于 2026-10-06 取消）
 
 **主线：Tracker + Modifier 统一骨架（30 个子块逐块预算，合计 16.9 人时；每块独立 commit）**
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-granularity -->
@@ -2754,7 +2422,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 > |---|---|---|---|---|
 > | S1b | ~1.0（贴上限） | S1b-1 CounterTracker / S1b-2 FlagTracker | 0.6 / 0.4 | 双段 N1 相位与翻转语义是两类被测对象，单测红时的归因方向不同 |
 > | S3 | ~1.2（超限） | S3-1 统一骨架 + rebind + `_pools` / S3-2 生命周期顺序与视图接线 | 0.7 / 0.5 | 骨架可独立构造并验收（构造期无 `AttributeError`），退役顺序与 `_active` 写入属另一类断言 |
-> | S12 | ~1.5（超限） | S12-1 Condition 类族 / S12-2 `ConditionalModifier` + 去内部判断 | 0.6 / 0.7 | 原 S12-3（`InterceptModifier` 保持内部判断）折入 S12-2；原 S12-4 验收成为 S12-2 的验收项 |
+> | ~~S12~~ | ~~~1.5~~ | **2026-10-06 取消**（§3.14 改判），原 S12-1 / S12-2 共 ~1.3 人时从 M1 扣除 | — | 原行：Condition 类族 / `ConditionalModifier` + 去内部判断 | 0.6 / 0.7 | 原 S12-3（`InterceptModifier` 保持内部判断）折入 S12-2；原 S12-4 验收成为 S12-2 的验收项 |
 > | S11 | ~0.6 | 不细分（预算改 0.8） | 0.8 | 增补专属测试文件与验收命令（GATE-6） |
 > | S4b | ~0.3 | 不细分（预算改 0.4） | 0.4 | 增补 `PityDef.priority` 字段定义与 `config_toml` 解析（GATE-3(a) 前移），且位置移到 S4-2 之前 |
 > | S6b | ~0.5 | 不细分（预算改 0.4） | 0.4 | 字段定义移出，只留 `_resolve_order` 排序键与 GUI 控件 |
@@ -2791,13 +2459,13 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
   - 验收命令：H4 随机数消费次数在短路条件下与旧实现逐位相同
 - [ ] **S1d Lifecycle 五方法族 + `build_lifecycle` helper**（~0.8 人时）｜目标文件 `core/pity_tracker.py` + `core/pity.py`
 <!-- REVIEW-FIX-PREV: ISSUE-301 -->
-  - `AlwaysActive` / `OnceActive(cfg, max_triggers=…)` / `DependentActive(cfg)` / `DependentOnceActive(cfg, max_triggers=…)` 以 `LifecycleConfig` 为**构造参数袋**（共用基类持 `self._cfg`）；<!-- REVIEW-R1-FIX: ISSUE-406 --> **`deactivate_on_early_hit` 与 `depends_on` 两个属性一律由基类对 `cfg` 统一代理**（§3.1.3；**不得只代理前者**——`_build_activation_graph` 对每条 behavior 读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)），未代理即每次 `PityEngine(...)` 构造 `AttributeError`；原稿「`depends_on` 由 `DependentActive` 同源读出」已废止）
-  - 三族实现**五方法**协议：`initialize` / `is_active` / `should_deactivate` / `deactivate` / `rebind`（§3.1.3）——其中 **`initialize(state, name, namespaces=())` 与 `rebind(state, name, namespaces=())` 的实参面必须对称**（**ISSUE-917**：为 `name` 与 `namespaces` 各持一个 `_active` Flag、逐个重绑；只重绑 `name` 则 `X_soft` 的 Flag 在 worker 内连跑第 2..N 场时仍指上一场 state），`deactivate` 只清 `name`。<!-- REVIEW-R1-FIX: ISSUE-917 -->；`depends_on` 引用不存在名须抛 `ConfigError`。<!-- REVIEW-R1-FIX: ISSUE-407 --> **`initialize` 的签名定为 `initialize(state, name, namespaces=())`**（`namespaces` = 本保底声明的零件命名空间集合，由 `Pity` 收集后传入）：`AlwaysActive` / `OnceActive` 对 `name` 与其中每个命名空间各写 `_active = True`，`Dependent*` 仍为空实现；`deactivate(state, name)` 只清默认命名空间（§3.10.3 配套 2）。另三族统一的 **`namespace` 属性**（默认 `None`）在本步一并落到 Lifecycle 上。<!-- REVIEW-R1-FIX: ISSUE-402 --> **`should_deactivate(ctx, state, name, fired)` 为四实参**——单测直构 Lifecycle 时须显式传 `fired`（真值 / 假值两态各一条），并另有一条**经 `Pity.after_draw` 的端到端断言**覆盖调用形态（否则该调用行无验收面）
+  - `AlwaysActive` / `FiniteActive(cfg, max_triggers=…)` / `DependentActive(cfg)` / `DependentFiniteActive(cfg, max_triggers=…)` 以 `LifecycleConfig` 为**构造参数袋**（共用基类持 `self._cfg`）；<!-- REVIEW-R1-FIX: ISSUE-406 --> **`deactivate_on_early_hit` 与 `depends_on` 两个属性一律由基类对 `cfg` 统一代理**（§3.1.3；**不得只代理前者**——`_build_activation_graph` 对每条 behavior 读 `lc.depends_on`（[pity.py:1216](gacha_simulator/core/pity.py#L1216)），未代理即每次 `PityEngine(...)` 构造 `AttributeError`；原稿「`depends_on` 由 `DependentActive` 同源读出」已废止）
+  - 三族实现**五方法**协议：`initialize` / `is_active` / `should_deactivate` / `deactivate` / `rebind`（§3.1.3），其中 **`initialize(state, name, namespaces=())` 与 `rebind(state, name, namespaces=())` 的实参面必须对称**（**ISSUE-917**：为 `name` 与 `namespaces` 各持一个 `_active` Flag、逐个重绑；只重绑 `name` 则 `X_soft` 的 Flag 在 worker 内连跑第 2..N 场时仍指上一场 state），`deactivate` 只清 `name`。<!-- REVIEW-R1-FIX: ISSUE-917 -->；`depends_on` 引用不存在名须抛 `ConfigError`。<!-- REVIEW-R1-FIX: ISSUE-407 --> **`initialize` 的签名定为 `initialize(state, name, namespaces=())`**（`namespaces` = 本保底声明的零件命名空间集合，由 `Pity` 收集后传入）：`AlwaysActive` / `FiniteActive` 对 `name` 与其中每个命名空间各写 `_active = True`，`Dependent*` 仍为空实现；`deactivate(state, name)` 只清默认命名空间（§3.10.3 配套 2）。另三族统一的 **`namespace` 属性**（默认 `None`）在本步一并落到 Lifecycle 上。<!-- REVIEW-R1-FIX: ISSUE-402 --> **`should_deactivate(ctx, state, name, fired)` 为四实参**——单测直构 Lifecycle 时须显式传 `fired`（真值 / 假值两态各一条），并另有一条**经 `Pity.after_draw` 的端到端断言**覆盖调用形态（否则该调用行无验收面）
   - **新增模块级 helper `build_lifecycle(pdef)`（写 `core/pity.py`，ISSUE-GATE-3-dependency-order，2026-09-22）**：`pdef.depends_on` 非空 → `DependentActive(LifecycleConfig(…))`，否则 `AlwaysActive(LifecycleConfig(…))`，`deactivate_on_early_hit` 一并带入（代码与逐行对照见 §3.1.3 定稿段）。**必须在 S4-2 / S4-3 之前落地**：那两个子块的 preset 工厂返回 dict 写 `lifecycle=build_lifecycle(pdef)`，而它们排在 S4-4 之前，晚定义则 S4-3 的 preset 构造验收即 `NameError`。**全库只能有一处定义**（`core/pity.py` 模块级），S4-4 不重复定义。<!-- REVIEW-FIX-PREV: ISSUE-GATE-3-dependency-order -->
-  - 验收命令：`OnceActive` 触发 N 次后 `is_active` 为假且退役动作不改 `commit` 语义（ISSUE-032）；`build_lifecycle` 按 §3.1.3 的**四组合取值表**（`depends_on` 空/非空 × `max_triggers` 0/正）逐行单测
+  - 验收命令：`FiniteActive` 触发 N 次后 `is_active` 为假且退役动作不改 `commit` 语义（ISSUE-032）；`build_lifecycle` 按 §3.1.3 的**四组合取值表**（`depends_on` 空/非空 × `max_triggers` 0/正）逐行单测
 - [ ] **S2a `TransferModifier`（share/assign 两分支）+ `Modifier` 基类**（~0.8 人时）｜目标文件 `core/pity_modifier.py`（新增）。**原 S2a/S2b 两块按裁决 1B 合并为一块**（只剩一个类），预算合并后仍 1.6 人时（净减：7 个类的 `__init__` 与文档字符串消失，净增：`u_of`/`t_of`/`ratio_of` 三个解析器形参与其校验）
-  - **本步按 §3.1.2 历史形态实现**（触发条件写在 Modifier 内部），S12 随即外置
-  - `ThresholdForceModifier` 的 F 语义按 §3.14.3（不得改为 `factor_redistribute`）
+  - **本步按 §3.1.2 定稿形态实现**（触发条件**内联**在各类 `factor()` 内），无需后续外置
+  - `HardModifier` 的转移量按 §3.1.2 表（`amount = p(Q)`，不得写成 soft 的 `boost/100`）
   - 验收命令：三类各自的内部判断分支单测
 - [ ] **S2b 目标解析器族 `_u_scope` / `_u_pool` / `_t_featured` / `_t_selected` / `_t_not_owned`**（~0.8 人时）｜目标文件 `core/pity_modifier.py` + `core/pity_primitives.py`（`resolve_universe`，§3.9.4.3）。**原「Force 三兄弟 + InterceptModifier」已按裁决 1B / 6B 取消**：三个 Force 类是 `TransferModifier` 的三组参数，`InterceptModifier` 整个删除
   - `ForceFeaturedModifier` / `ForceNonFeaturedModifier` / `ForceSelectedModifier`
@@ -2805,20 +2473,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
   - 验收命令：H4 契约 + 三类强制修饰的分布断言
 <!-- REVIEW-FIX-PREV: ISSUE-101 -->
 <!-- REVIEW-FIX-PREV: ISSUE-101 -->
-- [ ] **S12-1 Condition 类族**（~0.6 人时）｜目标文件 `core/pity_condition.py`（新增）+ `core/pity_modifier.py`（方案见 **§3.14**）+ `tests/core/test_pity_condition.py`（新增，本条与 S12-2 的验收命令均指向它）。**位置在 M1 内、S2b 之后 S3 之前（ISSUE-101）**：S3 / S4 的 preset 工厂与 S5 的等价性测试一律消费本步产物，放在 S4 之后会让 M1 无法闭合
-  - `Always` / `Flag` / `Counter` / `FateReady` / `Ratio` / `Owned` / `RandomThreshold` 七个叶子条件 + `And` / `Or` / `Not` 三个组合条件（`RandomThresholdCondition` 属 G14 专项，验收见 S12-2）
-  - 验收命令：`pytest -q tests/core/test_pity_condition.py`（新增单测，覆盖条件求值真值表）
-- [ ] **S12-2 `ConditionalModifier` + 各 Modifier 去内部判断**（~0.7 人时）｜目标文件 `core/pity_modifier.py`
-  - [ ] 包装器实现 + 把 S2a / S2b 刚按 §3.1.2 形态写下的那批 Modifier 改写为 §3.14.2 形态（效果实现**不动**）
-  - [ ] **ISSUE-029 追加**：包装器**必须转发 `rebind(state, name)` 到内层 Modifier**；M1 阶段同时转发 `apply`，S8 后追加转发 `factor`（§3.14.2 已写，§六 有断言）。S12 落地后 preset 内 Modifier 一律被包裹，漏转发即每次抽卡入口 `AttributeError`
-  - [ ] **原 S12-3 折入本项**：~~`InterceptModifier` 保持内部判断~~ **已随裁决 6B 取消**（掷骰移入 Tracker，Modifier 层全为纯函数，条件无需例外）
-  - [ ] **验收（原 S12-4 成为本项验收项）**：条件不成立时返回 `None`（恒等）与改前的内部判断逐场一致；`ThresholdForceModifier` 的 F 语义保持（不得改为 `factor_redistribute`，依 §3.14.3）；`RandomThresholdCondition`（G14）专项。**ISSUE-101 追加**：本步的「改前」指 **S2a / S2b 写入的内部判断形态**，S12 不改任何因子计算路径（§3.14.3），故该对比在 M1 内即可完成，无需等 S8
-  <!-- REVIEW-R1-FIX: ISSUE-401 -->
-  - [ ] **ISSUE-401 追加（强制，阻塞级）**：**`apply` 与 `factor` 两个方法的首行都必须是同一条件判定**（`if not self._cond.test(ctx, view, dist): return None`）。M1（S12-2 起至 S7）骨架调的是 `apply`、`factor` 自 S8 才引入，**只判 `factor` 会让本步一落地到 S8 期间 preset 内全部条件包装器退化为无条件**（hard 每抽强制 F、soft 每抽抬概率、ForceFeatured / ForceSelected 恒生效）——正是本项验收「与改前的内部判断逐场一致」所禁止的形态，且不报错。验收：① 条件为假时 `ConditionalModifier(...).apply(...)` 返回 `None`、分布与不套包装器时逐元素一致；② 对同一对（内层 Modifier + 条件），`apply` 与 `factor` **都**返回 `None`（落 `tests/core/test_pity_condition.py`）
-  - [ ] 验收命令：`pytest -q tests/core/test_pity_condition.py` + 等价性对照脚本（条件不成立分支逐场一致）
-<!-- REVIEW-FIX-PREV: ISSUE-001 -->
-<!-- REVIEW-FIX-PREV: ISSUE-004 -->
-<!-- REVIEW-FIX-PREV: ISSUE-018 -->
+- [x] ~~**S12-1 Condition 类族** / **S12-2 `ConditionalModifier` + 各 Modifier 去内部判断**~~（**2026-10-06 随 §3.14 改判整块删除**）：条件内联进各机制的 `factor()`，不再需要 Condition 类族与包装器。原两块共 ~1.3 人时，**从 M1 预算中扣除**。原目标文件 `core/pity_condition.py`（新增）与 `tests/core/test_pity_condition.py`（新增）一并不存在。
 - [ ] **S3-1 统一 Pity 骨架 + rebind 委托 + `_pools`**（~0.7 人时）｜目标文件 `core/pity.py`
 <!-- REVIEW-FIX-PREV: ISSUE-001 -->
 <!-- REVIEW-FIX-PREV: ISSUE-004 -->
@@ -2831,7 +2486,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - [ ] **S3-2 生命周期顺序与视图接线**（~0.5 人时）｜目标文件 `core/pity.py`
 <!-- REVIEW-FIX-PREV: ISSUE-202 -->
   - `after_draw` 的退役判定**先于** `commit`，`commit` 接受 `skip_reset`。<!-- REVIEW-R1-FIX: ISSUE-402 --> **退役判定的调用形态 = 四实参**：`fired = self.did_fire(ctx)` 在判定前取值，再 `self._lifecycle.should_deactivate(ctx, self._state, self._name, fired)`（§3.1.4 骨架；三实参即 `triggers` 退化为「激活后的抽数」或 `TypeError`）
-  - **ISSUE-202 追加**：`Pity.__init__` 在创建 `_view` **之前**调用 `Lifecycle.initialize(state, name, namespaces)` 写初始 `_active`（非 `depends_on` 保底写 `True`，`DependentActive` 空实现）。<!-- REVIEW-R1-FIX: ISSUE-407 --> **`namespaces` 由 `Pity` 从 `trackers` / `modifiers` / `lifecycle` 的 `namespace` 属性收集**（去 `None`），`AlwaysActive` / `OnceActive` 对 `name` 与其中每个命名空间各写一次（这是 `X_soft: {_active: True}` 的唯一产出路径）
+  - **ISSUE-202 追加**：`Pity.__init__` 在创建 `_view` **之前**调用 `Lifecycle.initialize(state, name, namespaces)` 写初始 `_active`（非 `depends_on` 保底写 `True`，`DependentActive` 空实现）。<!-- REVIEW-R1-FIX: ISSUE-407 --> **`namespaces` 由 `Pity` 从 `trackers` / `modifiers` / `lifecycle` 的 `namespace` 属性收集**（去 `None`），`AlwaysActive` / `FiniteActive` 对 `name` 与其中每个命名空间各写一次（这是 `X_soft: {_active: True}` 的唯一产出路径）
   - **StateView 薄版（ISSUE-GATE-dependency-order；ISSUE-407 补实接口）**：按 §3.10.3 定稿做**按零件命名空间分配**——默认 view 绑 `self._name`；`Pity` 另建 **`self._ns_views: Dict[str, StateView]`**（keyed by 零件 `namespace`），遍历 `trackers` / `modifiers` 时经 `self._ns_views.get(getattr(part, 'namespace', None)) or self._view` 取值，**不得写死 `self._view`**；`_rebind_state` 重建默认 view 时同批重建 `_ns_views`；S9 才切断 `name` 之外的读取
   - 验收命令：P75 跨模拟状态隔离用例（worker 内连跑 N 场）+ 构造期 `_active` 断言（§六 ISSUE-202 条）
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order -->
@@ -2875,7 +2530,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
   - **`create_behavior` 增 `lifecycle` 键防线**：在 `preset(pdef)` 之后校验返回 dict 含该键，缺失即抛 `ConfigError`（不得静默回退骨架默认 `AlwaysActive()`，§3.1.3）。**10 个 preset 工厂的 `lifecycle=build_lifecycle(pdef)` 在 S4-2 / S4-3 写入**（helper 已于 S1d 定义，本步不重复定义、也不「先写 preset 后在 S4-4 补键」）；本步只补校验与清理
   - **删除旧 `create_behavior` 的 `lifecycle_kwargs` 段（:893-900）**：同一转换不得留两处（§3.1.3）。**删除时机不可前移**——S4-2 / S4-3 期间未迁移的类型仍走旧类兼容路径、仍需该段注入 `LifecycleConfig`，提前删除会让这些类型的 `deactivate_on_early_hit` / `depends_on` 静默失效（§3.2 双路径保留到等价性测试通过为止）
   - 验收命令：`create_behavior` 对缺 `lifecycle` 键的 preset 返回 dict 抛 `ConfigError`；10 个 preset 的 `Pity._lifecycle` 类型与 `deactivate_on_early_hit` 值符合 §3.1.3 **四组合取值表**（§六 ISSUE-301 条）
-  - **`OnceActive` 配置接线（ISSUE-032，2026-09-27 裁决）**：`PityDef.max_triggers: int = 0` 字段 + `config_toml` 解析与 round-trip（负值抛 `ConfigError`）+ `build_lifecycle` 的退役维产出（`max_triggers > 0` 时产出 `OnceActive` 或 `DependentOnceActive`，见 §3.1.3 四组合表）。本步预算 0.3 → 0.7 人时（GUI 控件归 S7a）；验收见 §六 ISSUE-032 条
+  - **`FiniteActive` 配置接线（ISSUE-032，2026-09-27 裁决）**：`PityDef.max_triggers: int = 0` 字段 + `config_toml` 解析与 round-trip（负值抛 `ConfigError`）+ `build_lifecycle` 的退役维产出（`max_triggers > 0` 时产出 `FiniteActive` 或 `DependentFiniteActive`，见 §3.1.3 四组合表）。本步预算 0.3 → 0.7 人时（GUI 控件归 S7a）；验收见 §六 ISSUE-032 条
 <!-- REVIEW-FIX-PREV: ISSUE-204 -->
 - [ ] **S4-5 PityEngine 构造兜底改抛 ConfigError**（~0.2 人时）｜目标文件 `core/pity.py`
   - `PityEngine.__init__` 的 `try / except Exception` 构造兜底改为抛 `ConfigError`（§四 `core/pity.py` 行）；任一 preset 构造失败**不得只 `logger.warning` 后跳过**（跳过会让 `_resolve_order` / `_validate_behaviors` 在截断后的列表上执行，同 scope 互斥校验失去语义）
@@ -2978,7 +2633,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
   - [ ] S9-4 验收：§六 的 S9 口径三条 + G3 专项三条 + **G3 补充用例（含 `initial_count`）+ `external is None` 兜底 + `reads` 运行期送达**（~0.7 人时；ISSUE-009 / ISSUE-013 / ISSUE-008；2026-09-30 上调，新增 `tests/gui/test_about_dialog.py`）。**填充点就地**（2026-09-28 重梳，ISSUE-027）：两条通道各持同一 `GachaState`，各自调 `state.external_view()`（通道 A 在 `Banner.draw`、通道 B 在 `StrategyContext.get_pity_probabilities`）；**不再新增 `Banner.draw` 形参**，`PityEngine` 两个入口加可选参 `external=None`。原「填充点定为 `GachaService`」的前提（`Banner.draw` 拿不到 `_initial_counts`）已随 `initial_counts` 提升为 state 字段而消失。｜目标文件 `tests/core/test_pity_integration.py`（既有文件，已含 `depends_on` 激活传播与 rotating / targeted 同池用例；G3 与 `reads` 用例加在此处）+ `tests/service/test_gacha_service.py`（`ExternalView` 填充点断言）+ `tests/gui/test_about_dialog.py`（新增：关于页两处文本与 `BEHAVIOR_REGISTRY` 的 `display_name` 同源，两个形态的括注均须出现）<!-- REVIEW-FIX-PREV: ISSUE-GATE-FAIL-6-测试策略 -->
     - 验收命令：`pytest -q tests/core/test_pity_integration.py -k "g3 or reads or external"`（**ISSUE-920 提示**：该文件现存用例名无一含 `g3` / `reads` / `external`（实测 10 条为 `o1_lookup` / `dependent_activated` / `rotating_and_hard` 等），故这条 `-k` 只有在 S9-4 **新增**用例按此命名时才有匹配——**无匹配时 pytest 以 exit code 5 结束，会被误读为通过**，落地时须确认收集到 ≥1 条；加 `pytest -q tests/service/test_gacha_service.py -k external` 覆盖填充点——**ISSUE-920：该用例须本步新增**（原文件零 `external` 用例，零匹配的 `-k` 以 exit code 5 假通过；断言 `Banner.draw` 路径上的 `before_draw` 收到非 `None` 的 `external`，即 `core/banner.py` 的 `state.external_view()` 填充点确实接线）；加 `pytest -q tests/gui/test_about_dialog.py` 覆盖关于页文本同源）——§六 的 S9 口径三条 + G3 专项四条（保底触发时已拥有的 UP 不被选中 / **普通抽卡仍能产出已拥有的装备** / **③a** `hard_exclude_owned_skip` 全拥有时退化为恒等 / **③b** `hard_exclude_owned_any` 全拥有时仍给出一件 UP；**③a / ③b 两条随 §3.10.4 的待确认项挂起，机制定稿前均不作为已定稿验收**）+ G3 补充用例（`initial_count` 的 UP 装备同样视为「已拥有」）+ `external is None` 兜底（策略层查询路径不崩溃，或按 §六 登记为已知差异）+ `reads` 运行期送达（TOML → `ConfigStore` → `pentry` → `_PityDef` → 引擎全程保真，`get_reads_for_pool` 返回并集）<!-- REVIEW-FIX-PREV: ISSUE-GATE-FAIL-6-测试策略 -->
     - **AUDIT-BREAK-9 追加（通道 B 独立验收，强制）**：上述用例只覆盖通道 A（`GachaService` → `Banner.draw` → `PityEngine.before_draw`）。**通道 B**（`StrategyContext.get_pity_probabilities` → `PityEngine.get_probabilities` 经 `_pity_cache`，见 `core/strategy.py:161-179`）必须另有独立验收：`pytest -q tests/core/test_pity_integration.py -k "reads and strategy"` —— 断言「配 `reads` 的池，经 `ctx.get_pity_probabilities(key)` 取到的分布，与**同刻** `before_draw` 返回值逐元素一致（容差 1e-12），且非退化为恒等 `expected_probs`」。理由：通道 B 是真实消费方（`strategies/builtin/pity_reserve.py:52` 调 `ctx.get_pity_probabilities(qualified_key)`），且它**绕过 `Banner.draw`**，A 通道全绿不能推出 B 通道正确。目标文件补 `core/strategy.py`（`_pity_cache` 与 `get_probabilities` 调用点）与 `service/gacha_service.py`（`ctx` 构造处 :412，保证两通道共用同一 `GachaState` / `_initial_counts` 源）。<!-- REVIEW-FIX-PREV: AUDIT-BREAK-9 -->
-- [ ] ~~S12 条件外置~~ **已迁至 M1**（排在 S2 之后、S4 之前，见上；ISSUE-101）。M2 不再包含本项。
+- [x] ~~S12 条件外置~~（**2026-10-06 整块取消**，§3.14 改判）。原注：已迁至 M1（排在 S2 之后、S4 之前，见上；ISSUE-101）。M2 不再包含本项。
 
 > **M2 完成标志**：卡级管道与 **M1 产物**容差 1e-12 一致（§六 S8 口径）；单卡定向与 G3 专项通过（§六 S9 口径）。
 
@@ -2988,7 +2643,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - **回滚单元（2026-09-22 修订，ISSUE-GATE-granularity）**：G16 独立；**主线改为逐子块独立 commit，回滚单元 = 任务单元**（S1a 至 S11 共 **30** 块，见 GATE-1；2026-09-22 第八轮细分后由 26 变为 29，本轮 AUDIT-BREAK-7 新增 S7d 后为 30）。原稿「主线整体一次回滚」已撤销，其后果是单块失败只能整体回退，与 30 块的排期不相容。**回退规则 = 依赖闭包（强制，方向 = 向消费方闭包；ISSUE-GATE-5-rollback 补齐）**：回退某子块时**必须连带回退所有消费其产物的后继子块**——只有**同层兄弟块**之间互不牵连（如 S1b-1 与 S1b-2、S5a 与 S5b、S10-1 与 S10-2）。原稿只写「任一子块验收失败只 revert 该 commit，不牵连已通过的兄弟块」，该表述对**低层块**不成立（M2 段早已写明依赖闭包规则，M1 漏写，本条补齐）：
   - 回退 **S1a**（叶子原语层，含 `_SOFT_TYPES` / `_HARD_TYPES` / `_EVENT_DRIVEN_TYPES` 三个模块级常量；§3.1.4 骨架的 `Pity(PityBehavior)` **不继承** `CounterBasedBehavior`，裸名引用即 `NameError`）→ 连带回退 **S1b 至 S11 全部**；
   - 回退 **S1b / S1c / S1d**（Tracker / Lifecycle 族，含 `build_lifecycle`）→ 连带回退 **S3 至 S7**（凡引用被回退符号者一律连带；S2a / S2b 不引用 Tracker / Lifecycle 者可保留）；
-  - 回退 **S12-1 / S12-2**（Condition 类族 / `ConditionalModifier`）→ 连带回退 **S3、S4（含 S4b）、S5、S6、S7**（§3.2 / §3.3 / §3.14.2 的 preset 一律为 `ConditionalModifier` 包裹形态，去掉包装器即全部断裂），S10 / S11 视其是否消费被回退符号而定；
+  - ~~回退 **S12-1 / S12-2**~~（**2026-10-06 取消**，无此二块）→ 原连带回退范围 **S3、S4（含 S4b）、S5、S6、S7**（§3.2 / §3.3 / §3.14.2 的 preset 一律为 `ConditionalModifier` 包裹形态，去掉包装器即全部断裂），S10 / S11 视其是否消费被回退符号而定；
   - 回退 **S3-1 / S3-2**（统一骨架）→ 连带回退 **S4 至 S7**；
   - 回退 **S4-1 / S4b** → 连带回退 **S4-2 至 S6b**（preset 工厂与构造形参消费 registry schema 与 `PityDef.priority`）。**S4-1 的回退面（GATE-3 定稿，2026-10-01）**：S4-1 的「过渡判据」与 S4-2 / S4-3 的「按条目置 `class: None` + 写 `preset`」是**同一机制的两端**——单独 revert S4-1 会让已迁移条目落回旧判据（`preset` 不再是校验对象、而 `class` 已是 `None`）而**导入期即失败**，故回退 S4-1 必须连带 S4-2 / S4-3（含 S4-3 收口），与本行既有范围一致；**反向不成立**——回退 S4-2 / S4-3 不牵连 S4-1（过渡判据正是为此保留）。<!-- REVIEW-R1-FIX: ISSUE-930 -->
   - 回退 **S4-2 / S4-3** → 连带回退 **S4-4**（其防线与旧段删除以「10 个 preset 已落地」为前提）与 **S5**。
@@ -3001,7 +2656,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 - **M2 的回滚单元（2026-09-22 第八轮修订）**<!-- REVIEW-FIX-PREV: ISSUE-GATE-5-rollback -->：**逐子项回滚，回滚单元 = 子项**（S8-1 至 S8-7 / S9-1 至 S9-4 各一个 commit，见 GATE-1 的 M2 清单）。**依赖闭包规则（强制）**：S9 依赖 S8，若回退 S8 中任一子项，必须**连带回退其后的 S8 子项与全部 S9 子项**（S8-2 起管道形态逐项叠加，中途回退会留下半卡级 / 半槽位的混态），但 **S8 内部已通过的前序子项不因此回退**。原稿写「S8 + S9 整体」，与 M1 刚确立的「回滚单元 = 任务单元」相反；且 S8 / S9 各含 6 / 4 个子项、原稿无独立 commit，整体回退等于丢掉约 5.5 人时的可保留成果，已撤销。**S12 不在 M2 回滚单元内**（已随 M1 落地，ISSUE-101）；M1 内若回退 S4 / S5 等消费 S12 的子块，`ConditionalModifier` 本身是独立 commit，可单独 revert 而保留其他块；**反向不成立**——回退被消费方（S12-1 / S12-2）须按上方依赖闭包规则连带回退消费方 S3 / S4 / S5 / S6 / S7。<!-- REVIEW-FIX-PREV: ISSUE-GATE-5-rollback -->
 - **发布前**：主线完成后一次性移除旧保底类（无历史包袱原则，`RELEASED=False`）。**ISSUE-502 的收口点**：`_redistribute_scope` 的**函数本体**、`pity.py` 内 4 处旧类调用点（:477 / :589 / :655 / :659）与 10 个旧行为类在本 commit **同批删除**；在此之前 `_redistribute_scope` 与 `factor_redistribute` 并存（前者只服务旧类，后者只服务新骨架，两者不得互相调用）
   - **末条 = 完整收口清单（ISSUE-905 / ISSUE-901 定稿，2026-10-01）**：全篇**十余处**写「并入 GATE-5 末条……的同一个 commit」（§3.9.3 组件处置表的多行、§3.9.3 跨文件同步清单 B / D 段、§3.9.4、§四、S8-4、S8-7 等），若本条只列三项，实施者按本条施工即**漏删/漏改**——被引用的那一条本身必须完整。**七项同批，缺一即留下半态**：① `_redistribute_scope` 的**函数本体**（[pity.py:418](gacha_simulator/core/pity.py#L418) 起，导出面已在 S8-4 删，本项只清函数本体）；② `pity.py` 内 **4 处旧类调用点**（:477 `RotatingBehavior` / :589 `RotatingCRBehavior._force_featured` / :655、:659 `TargetedBehavior`）；③ **10 个旧行为类 + `SoftPityMixin`** 的类本体（`core/__init__.py` 的 re-export 已在 S4-3 删）；④ `PoolPitySpec` 与 `DrawInfo` 的 **6 个槽位字段** `scope_slots` / `featured_slots` / `card_to_slot`（各 3 个），含 `PityEngine` 三个调度入口的 `DrawInfo(...)` 透传实参（[pity.py:1290-1300](gacha_simulator/core/pity.py#L1290-L1300)）；⑤ `compute_scope_mappings` 的**槽位产出**（减量改造，只留 `scope_cards` / `featured_cards` 及其反向索引）；⑥ **两处构造点的改造**——`service/batch_simulator.py`（[batch_simulator.py:274-283](gacha_simulator/service/batch_simulator.py#L274-L283) 的五元组解包与 8 字段 `PoolPitySpec` 构造）与 `core/worst_impact.py`（[worst_impact.py:506-548](gacha_simulator/core/worst_impact.py#L506-L548) 的硬编码槽位表 :512/:515 + `_ref_pool` 死分支）；⑦ **S8-7 的 5 个槽位消费测试文件**的收口确认（S8-7 已在 M2 内完成改造，本项只跑 `grep -rn "scope_slots\|featured_slots\|card_to_slot\|_redistribute_scope" tests/` 归零，并处置其**唯一例外** `tests/core/test_pity_equivalence.py`——该文件的「旧侧」随 ①②③ 一并消失，须同批改为「读 S5 阶段固化的 golden 快照」或整体归档，**不得留下引用已删符号的装置**）。<!-- REVIEW-R1-FIX: ISSUE-905 --> <!-- REVIEW-R1-FIX: ISSUE-901 -->
-  - **已就地消解、不在本 commit 清单内的一项（ISSUE-909）**：`factor_override` 的 `exempt` 计算原同时展开 `scope_slots`，已改为只读 `scope_cards`（§3.9.4），本 commit 无需再改该函数。<!-- REVIEW-R1-FIX: ISSUE-909 --><!-- REVIEW-R1-FIX: ISSUE-502 -->
+  - **已就地消解、不在本 commit 清单内的一项（ISSUE-909）**：原 `factor_override` 的 `exempt` 计算原同时展开 `scope_slots`，已改为只读 `scope_cards`（§3.9.4），本 commit 无需再改该函数。<!-- REVIEW-R1-FIX: ISSUE-909 --><!-- REVIEW-R1-FIX: ISSUE-502 -->
 
 ---
 
@@ -3027,7 +2682,7 @@ hard(scope='ssr') 触发时，旧实现输出 {ssr_featured: 1.0, ssr: 0.0, sr: 
 <summary>第 2 次审查（2026-09-30，Fixer 修复 8 项）</summary>
 
 - 问题面：8 项（阻塞 3 / 高风险 1 / 中风险 3 / 低风险 1），全部为本轮独立复核新发现，均已在计划内定稿
-- 阻塞 3 项：**ISSUE-401**（`ConditionalModifier.apply` 不判条件 → S12-2 至 S7 期间条件包装器全部退化为无条件）、**ISSUE-402**（骨架 `should_deactivate` 缺 `fired` 实参 → `triggers` 退化为「激活后的抽数」或 `TypeError`）、**ISSUE-403**（`pdef.target_featured` 在 preset 路径无承接 → hard 与三个 counter 驱动 soft 的目标集静默放宽）
+- 阻塞项（**2026-10-06 更新**）：~~**ISSUE-401**~~（**已消解**：包装器取消，条件只在一处）、~~**ISSUE-902**~~（**已消解**：条件内联后读键落在 Modifier 自己的 `state_keys()` 里）。原记录：**ISSUE-401**（`ConditionalModifier.apply` 不判条件 → S12-2 至 S7 期间条件包装器全部退化为无条件）、**ISSUE-402**（骨架 `should_deactivate` 缺 `fired` 实参 → `triggers` 退化为「激活后的抽数」或 `TypeError`）、**ISSUE-403**（`pdef.target_featured` 在 preset 路径无承接 → hard 与三个 counter 驱动 soft 的目标集静默放宽）
 - 非阻塞 5 项：**ISSUE-404**（`reads` 门控的派生 ctx 形态 + 池内污染断言）、**ISSUE-405**（`_validate_registry()` 口径写死为「导入期只判可调用」）、**ISSUE-406**（`depends_on` 属性由基类统一代理）、**ISSUE-407**（零件 `namespace` 声明面 + `NamespaceTracker` + `initialize(namespaces)` + `Pity._ns_views`/`_view_for`）、**ISSUE-408**（§四 的 `ForceNotOwnedModifier` 归属改回 `core/pity_modifier.py`）
 - 落点：§3.1.1 / §3.1.2 / §3.1.3 / §3.1.4（骨架）/ §3.1.6 / §3.2 / §3.10.2 / §3.10.3 / §3.14.2 / §四 / §六 / §七（S1c / S1d / S4-2 / S4-3 / S5b / S9-2 / S12-2）
 - 改动方式：全部为**补内部一致性与接口落点**，未改动任何核心架构决策（双层纯函数、条件外置、M1/M2 划分、里程碑顺序、G3 双实现均保持原状）；每处修复均带 `<!-- REVIEW-R1-FIX: ISSUE-xxx -->` 标记

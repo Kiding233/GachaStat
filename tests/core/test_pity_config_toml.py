@@ -97,15 +97,15 @@ class TestP56TypeParsing:
 
     @pytest.mark.parametrize("btype,extra", [
         ('rotating', {}),
-        ('rotating_soft', {'soft_start': 74, 'soft_end': 90}),
+        ('rotating_soft', {'start': 74, 'end': 90}),
         ('rotating_cr', {'cr_counter_threshold': 3, 'cr_base_rate': 0.00018,
                           'cr_state_probs': [0.0, 0.0, 0.0, 1.0]}),
-        ('rotating_cr_soft', {'soft_start': 74, 'soft_end': 90,
+        ('rotating_cr_soft', {'start': 74, 'end': 90,
                                'cr_counter_threshold': 3,
                                'cr_state_probs': [0.0, 0.0, 0.0, 1.0]}),
         ('targeted', {'fate_threshold': 1, 'switch_allowed': True,
                        'switch_resets_progress': True}),
-        ('targeted_soft', {'soft_start': 63, 'soft_end': 80,
+        ('targeted_soft', {'start': 63, 'end': 80,
                             'fate_threshold': 1}),
     ])
     def test_parse_p56_type(self, btype, extra):
@@ -120,22 +120,29 @@ class TestP56TypeParsing:
             # 软保底参数必须真的落进 deltas（TOML 键名为 start/end/increment，
             # 写成字段名 soft_start 会被解析器静默忽略）
             if 'start' in extra:
-                assert pdef.deltas is not None
                 assert pdef.soft_start == extra['start']
                 assert pdef.soft_end == extra.get('end')
+                # 后缀型的 deltas 由 SoftPityMixin 在 create_behavior() 时展开，
+                # 不经 PityDef.deltas；非后缀型在 _build_pity 即展开。
+                if btype in ('rotating_soft', 'rotating_cr_soft', 'targeted_soft'):
+                    assert pdef.deltas is None
+                else:
+                    assert pdef.deltas is not None
+            else:
+                assert pdef.deltas is None, '未给 start 的条目不应产出 deltas'
         finally:
             os.unlink(path)
 
     @pytest.mark.parametrize("btype,extra", [
         ('rotating', {}),
-        ('rotating_soft', {'soft_start': 74, 'soft_end': 90}),
+        ('rotating_soft', {'start': 74, 'end': 90}),
         ('rotating_cr', {'cr_counter_threshold': 3,
                           'cr_state_probs': [0.0, 0.0, 0.0, 1.0]}),
-        ('rotating_cr_soft', {'soft_start': 74, 'soft_end': 90,
+        ('rotating_cr_soft', {'start': 74, 'end': 90,
                                'cr_counter_threshold': 3,
                                'cr_state_probs': [0.0, 0.0, 0.0, 1.0]}),
         ('targeted', {'fate_threshold': 1}),
-        ('targeted_soft', {'soft_start': 63, 'soft_end': 80,
+        ('targeted_soft', {'start': 63, 'end': 80,
                             'fate_threshold': 1}),
     ])
     def test_roundtrip_p56_type(self, btype, extra):
@@ -150,9 +157,14 @@ class TestP56TypeParsing:
             assert pdef2.scope == 'ssr'
             assert pdef2.name == f'pity_{btype}'
             # 软保底语法糖参数与展开后的 deltas 均须保值
-            assert pdef2.soft_start == store.pity.pities[0].soft_start
-            assert pdef2.soft_end == store.pity.pities[0].soft_end
-            assert pdef2.deltas == store.pity.pities[0].deltas
+            src_p = store.pity.pities[0]
+            assert pdef2.soft_start == src_p.soft_start
+            assert pdef2.soft_end == src_p.soft_end
+            assert pdef2.soft_increment == src_p.soft_increment
+            assert pdef2.deltas == src_p.deltas
+            if 'start' in extra:
+                assert pdef2.soft_start == extra['start']
+                assert pdef2.soft_end == extra.get('end')
         finally:
             os.unlink(path)
 
@@ -257,8 +269,8 @@ deactivate_on_early_hit = true
 name = "ok_soft"
 type = "soft_interval"
 scope = "ssr"
-soft_start = 73
-soft_end = 90
+start = 73
+end = 90
 
 [pity.lifecycle]
 deactivate_on_early_hit = true
@@ -312,7 +324,7 @@ class TestMixedPityCompat:
             btypes = {p.btype for p in store.pity.pities}
             assert btypes == {'soft_interval', 'rotating', 'hard'}
             soft = next(p for p in store.pity.pities if p.btype == 'soft_interval')
-            assert soft.deltas == ((72, 0.0), (17, 5.882353))
+            assert soft.deltas == ((72, 0.0), (18, 5.555556))
         finally:
             os.unlink(path)
 
@@ -380,7 +392,7 @@ class TestSoftSugarRoundTrip:
         store, path = _write_and_load(toml)
         try:
             p = store.pity.pities[0]
-            assert p.deltas == ((79, 0.0), (10, 10.0))  # 首段 = start-1
+            assert p.deltas == ((79, 0.0), (11, 9.090909))  # 首段 = start-1，档数 = end-start+1
             p2 = _roundtrip(store, path).pity.pities[0]
             assert (p2.soft_start, p2.soft_end) == (80, 90)
             assert p2.soft_increment is None

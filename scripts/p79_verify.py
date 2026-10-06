@@ -9,8 +9,11 @@
    其 ``final_time`` / ``final_resources`` / ``total_waits`` / ``wait_durations``
    / ``banner_end_*`` 均按 8.3「有意变更」表变化），但须显式核对新值——
    ``final_time`` 必须收敛到 ``env.end_time``
-4. 其余 7 组（含插件策略）**逐字段严格一致**
-5. 两侧固定 ``sim_start_date`` 为 golden 的生成日：``config.toml`` 含 ``monthly_day``
+4. ``smart`` / ``pool_quota`` / ``draw_target`` 三组**走 soft 语义豁免**
+   （``SOFT_SEMANTICS_EXEMPT``，2026-10-06 软保底语义修正所致）——只断言
+   ``final_time`` 收敛到 ``env.end_time``，**不做字段比较**
+5. 其余 4 组（含插件策略）**逐字段严格一致**
+6. 两侧固定 ``sim_start_date`` 为 golden 的生成日：``config.toml`` 含 ``monthly_day``
    收入规则，其日程锚定该字段，不固定则 ``draw_resources_gained`` 的归属抽次随墙上
    时钟差 1，对照在非生成日恒红（P79 R19 审计定位）
 

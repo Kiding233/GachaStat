@@ -21,20 +21,21 @@ class TestExpandSoftToDeltas:
     """soft_interval / soft_additive 语法糖 → deltas"""
 
     def test_soft_interval_linear(self):
-        """start=73, end=90 → ((72, 0.0), (17, 5.882353...))
+        """start=73, end=90 → ((72, 0.0), (18, 5.555556))
 
-        首段为 start-1（§3.4.1 修正 ②）：第 73 抽即加成，而非第 74 抽。"""
+        两端都含：首段为 start-1（第 73 抽即加成），档数 end-start+1 = 18，
+        故 100% 恰好落在 end（第 90 抽）。"""
         result = _expand_soft_to_deltas('soft_interval', 73, 90, None)
         assert len(result) == 2
         assert result[0] == (72, 0.0)
-        assert result[1][0] == 17  # 17 抽
-        assert pytest.approx(result[1][1], abs=1e-4) == 100.0 / 17
+        assert result[1][0] == 18
+        assert pytest.approx(result[1][1], abs=1e-4) == 100.0 / 18
 
     def test_soft_interval_start_zero(self):
-        """start=0, end=10 → ((0, 0.0), (10, 10.0))"""
+        """start=0, end=10 → ((0, 0.0), (11, 100/11))"""
         result = _expand_soft_to_deltas('soft_interval', 0, 10, None)
         assert result[0] == (0, 0.0)   # start=0 → max(0, -1) = 0
-        assert result[1][0] == 10
+        assert result[1][0] == 11      # 两端都含：10-0+1
 
     def test_soft_interval_end_equals_start(self):
         """end <= start → 防御性修正为 start+1"""
@@ -110,7 +111,7 @@ class TestDeltasRoundTrip:
     def test_round_trip(self):
         """deltas → soft_interval → 展开 → 逐段全等"""
         deltas = _expand_soft_to_deltas('soft_interval', 73, 90, None)
-        assert deltas == ((72, 0.0), (17, 5.882353))  # §3.4.1 修正 ②：首段 = start-1
+        assert deltas == ((72, 0.0), (18, 5.555556))  # 首段 = start-1，档数 = end-start+1
         result = _deltas_to_soft_interval(deltas)
         assert result == (73, 90)
         assert _expand_soft_to_deltas('soft_interval', *result, None) == deltas
@@ -120,11 +121,11 @@ class TestDeltasRoundTrip:
 
         _expand_soft_to_deltas() 对 start=0 取 max(0, 0-1)=0，首段长 0；
         反函数只能还原出「首段长 + 1」，故给 start=1 并同步把 end 加 1，
-        使 n_steps = end - start 保持不变。二者 deltas 完全相同，在
-        _cumulative_boost() 下行为一致，属表示不唯一而非语义丢失。
+        使档数 n_steps = end - start + 1 保持不变。二者 deltas 完全相同，
+        在 _cumulative_boost() 下行为一致，属表示不唯一而非语义丢失。
         """
         d0 = _expand_soft_to_deltas('soft_interval', 0, 10, None)
-        assert d0 == ((0, 0.0), (10, 10.0))
+        assert d0 == ((0, 0.0), (11, 9.090909))
         assert _deltas_to_soft_interval(d0) == (1, 11)
         assert _expand_soft_to_deltas('soft_interval', 1, 11, None) == d0
 

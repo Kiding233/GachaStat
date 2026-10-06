@@ -17,7 +17,11 @@ class TestSoftStepProgress:
 
     @staticmethod
     def _make_soft_behavior(start=73, end=90):
-        """构造等价于旧 SoftPityBehavior(start_at=73, end_at=90) 的 SoftStepBehavior。"""
+        """构造 soft_interval(73, 90) 的 SoftStepBehavior。
+
+        §3.4.1 修正 ② 与 2026-10-06 端点裁决后 deltas = ((72, 0.0), (18, 5.555556))：
+        第 73 抽起加成、第 90 抽满，不再等价于旧 SoftPityBehavior 的 (73, 0.0) 首段。
+        """
         from gacha_simulator.core.config_toml import _expand_soft_to_deltas
         deltas = _expand_soft_to_deltas('soft_interval', start, end, None)
         return SoftStepBehavior(
@@ -36,19 +40,20 @@ class TestSoftStepProgress:
         """§3.4.1 修正 ②：counter==start 恰为第一档增量，counter==start-1 为 0"""
         bh = self._make_soft_behavior(73, 90)
         assert bh._cumulative_boost(72) == 0.0
-        assert bh._cumulative_boost(73) == pytest.approx(100.0 / 17)
+        assert bh._cumulative_boost(73) == pytest.approx(100.0 / 18)
 
     def test_boost_increases_after_start(self):
         """counter 进入增量段后 boost 递增"""
         bh = self._make_soft_behavior(73, 90)
-        # deltas = ((72, 0.0), (17, 5.882353)) → counter=74: 2 档 = 11.7647%
-        assert bh._cumulative_boost(74) == pytest.approx(2 * 100.0 / 17)
+        # deltas = ((72, 0.0), (18, 5.555556)) → counter=74: 2 档 = 11.1111%
+        assert bh._cumulative_boost(74) == pytest.approx(2 * 100.0 / 18)
         assert bh._cumulative_boost(80) > bh._cumulative_boost(74)
 
     def test_boost_reaches_100_at_end(self):
-        """counter=end 时 boost=100%"""
+        """counter=end 时 boost 恰为 100%（两端都含，100% 落在 end）"""
         bh = self._make_soft_behavior(73, 90)
         assert bh._cumulative_boost(90) == pytest.approx(100.0)
+        assert bh._cumulative_boost(89) < 100.0
 
     def test_boost_clamped_at_100(self):
         """counter 超出范围后 boost 封顶 100%"""
@@ -60,7 +65,7 @@ class TestSoftStepProgress:
         """feature_slot 分离后概率和保持"""
         bh = SoftStepBehavior(
             name='test', state=PityState(), scope='ssr', btype='soft_interval',
-            deltas=((80, 0.0), (10, 10.0)), target_featured=True, reset='featured',
+            deltas=((79, 0.0), (11, 9.090909)), target_featured=True, reset='featured',
         )
         probs = {'ssr': 0.002, 'ssr_featured': 0.002, 'sr': 0.051, 'r': 0.945}
         draw = DrawInfo(

@@ -1580,24 +1580,28 @@ def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linea
     首段长度为 start-1 而非 start（§3.4.1 修正 ②：start 含首抽）：
     counter == start-1 时 boost 仍为 0，counter == start 时已拿到第一档增量。
 
-    边界：start=0 与 start=1 的首段都被 max(0, ...) 夹为 0 长，二者的差别
-    只在档数 n_steps = end - start，即 start=0 等价于「start=1 且 end 加 1」。
+    两种语法糖的端点语义不同（2026-10-06 用户裁决）：
 
-    soft_interval: ((start-1, 0.0), (end-start, 100/(end-start)))
-      例：start=73, end=90 → ((72, 0.0), (17, 5.882353))
-      end <= start 时兜底为 start+1（单档 100%）。
+    soft_interval（指定头尾）：`start` 是开始提升的那一抽，`end` 是**到达
+      100% 的那一抽**，两端都含，故档数 n_steps = end - start + 1，
+      inc = 100/n_steps。100% 恰好落在 `end`。
+      例：start=73, end=90 → ((72, 0.0), (18, 5.555556))，第 73 抽起、
+      第 90 抽满。end < start 时兜底为 e = s（单档 100%）。
+      边界：start=0 与 start=1 的首段都被 max(0, ...) 夹为 0 长，二者的
+      差别只在档数，即 start=0 等价于「start=1 且 end 加 1」。
 
-    soft_additive: ((start-1, 0.0), (n_steps, increment))
-      n_steps = int(100/increment) + 1，即累计跨过 100% 所需的档数再多一档，
-      使末档不被 _cumulative_boost() 的 min(boost, 100) 提前截断。
+    soft_additive（指定起始点与增量）：只按 increment 累加，**哪一抽累计到
+      100% 就是哪一抽**，不设终点。n_steps = int(100/increment) + 1，
+      即跨过 100% 所需的档数再多一档，使末档不被 _cumulative_boost() 的
+      min(boost, 100) 提前截断（多出的一档在封顶后无副作用）。
       increment <= 0 时退化为单档 n_steps=1。
     """
     if btype == 'soft_interval':
         s = int(start) if start else 0
         e = int(end) if end else 90
-        if e <= s:
-            e = s + 1
-        n_steps = e - s
+        if e < s:
+            e = s                    # 非法区间兜底：退化为单档 100%
+        n_steps = e - s + 1          # 两端都含：首档落 start，100% 落 end
         inc = 100.0 / n_steps
         return ((max(0, s - 1), 0.0), (n_steps, round(inc, 6)))
 
@@ -1644,12 +1648,12 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     即恰两段、首段增量为 0（首段是「未起步」区间，其长度即 start-1）。
     返回 (start, end) 或 None（若无法还原）。
 
-    例：((72, 0.0), (17, 5.882353)) → (73, 90)
+    例：((72, 0.0), (18, 5.555556)) → (73, 90)
 
     边界：首段长为 0 时无从判断它来自 start=0 还是 start=1（两者都被
     max(0, ...) 夹为 0），一律还原为 start=1，并把 end 同步加 1 以保住
     档数 n_steps。还原结果与原始 start=0 展开出的 deltas 逐段相同，
-    故行为不变（例：(0, 10) → (1, 11)，两者 deltas 均为 ((0, 0.0), (10, 10.0))）。
+    故行为不变（例：(0, 10) → (1, 11)，两者 deltas 均为 ((0, 0.0), (11, 100/11))）。
 
     调用方：当前仅测试（生产路径的 TOML 写回直接取 PityDef.soft_start/
     soft_end，不经本函数）。
@@ -1660,11 +1664,32 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     n2, inc2 = deltas[1]
     if inc1 != 0.0:
         return None  # 首段增量非零——非 soft_interval 模式
-    return (n1 + 1, n1 + n2 + 1)
+    return (n1 + 1, n1 + n2)
 
 
 # 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas
 _SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
+
+
+def _sugar_matches_deltas(p, btype: str) -> bool:
+    """语法糖参数展开后是否与 p.deltas 逐段相同（读写优先级一致性守卫）。
+
+    读取侧 `if 'deltas' in p:` 优先于语法糖展开；若写回侧无条件优先语法糖，
+    则「同时写了 deltas 与 start/end」的配置经一次往返就丢掉 deltas、改用
+    语法糖，引擎行为随之改变（实测 soft_interval + deltas=[[10,1.0],[5,2.0]]
+    + start=73/end=90：往返前 ((10,1.0),(5,2.0))，往返后 ((72,0.0),(18,5.555556))）。
+    故写回语法糖的前提是它展开后与 p.deltas 逐段相同；否则改走 deltas 分支。
+
+    `start` 缺失时返回 False（无语法糖可写）。`end` / `increment` 缺失时
+    按读取侧同样的默认值展开，从而保住「只写了 start」这类配置的形式。
+    """
+    if p.deltas is None or p.soft_start is None:
+        return False
+    if btype == 'soft_interval':
+        expanded = _expand_soft_to_deltas(btype, p.soft_start, p.soft_end, None)
+    else:
+        expanded = _expand_soft_to_deltas(btype, p.soft_start, None, p.soft_increment)
+    return expanded == p.deltas
 
 
 def _pitydef_to_toml(p) -> dict:
@@ -1683,23 +1708,29 @@ def _pitydef_to_toml(p) -> dict:
         # ——否则重载默认 ('*',) 语义反转（不绑定 → 绑定全部池）
         entry['pools'] = list(p.pools)
 
-    # 语法糖参数（优先写出直观形式，否则写出 deltas）
-    if p.btype in _SOFT_SUFFIX_TYPES and p.deltas is None and p.soft_start is not None:
+    # 语法糖参数（写出直观形式，前提是它能还原出同一份 deltas；否则写 deltas）
+    if p.btype in _SOFT_SUFFIX_TYPES and p.deltas is None and (
+            p.soft_start is not None or p.soft_end is not None
+            or p.soft_increment is not None):
         # 后缀型的软保底不经 PityDef.deltas 展开——由 SoftPityMixin 在
         # create_behavior() 时独立消费 soft_start / soft_end / soft_increment。
         # 不写回则重载后这三项全为 None，mixin 落到注册表默认值（start=74 /
         # end=90），用户配置被静默改写且无任何提示。
-        entry['start'] = p.soft_start
+        # 三键各自独立写出：只给 increment 或只给 end 也是合法配置。
+        if p.soft_start is not None:
+            entry['start'] = p.soft_start
         if p.soft_end is not None:
             entry['end'] = p.soft_end
         if p.soft_increment is not None:
             entry['increment'] = p.soft_increment
-    elif p.btype == 'soft_interval' and p.soft_start is not None and p.soft_end is not None:
+    elif p.btype == 'soft_interval' and _sugar_matches_deltas(p, 'soft_interval'):
         entry['start'] = p.soft_start
-        entry['end'] = p.soft_end
-    elif p.btype == 'soft_additive' and p.soft_start is not None and p.soft_increment is not None:
+        if p.soft_end is not None:
+            entry['end'] = p.soft_end
+    elif p.btype == 'soft_additive' and _sugar_matches_deltas(p, 'soft_additive'):
         entry['start'] = p.soft_start
-        entry['increment'] = p.soft_increment
+        if p.soft_increment is not None:
+            entry['increment'] = p.soft_increment
     elif p.deltas is not None:
         entry['deltas'] = [list(seg) for seg in p.deltas]
 

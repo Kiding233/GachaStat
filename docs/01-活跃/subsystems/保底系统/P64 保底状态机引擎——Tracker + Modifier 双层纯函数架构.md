@@ -1259,14 +1259,14 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 | 项 | 内容 | 归属 |
 |---|------|------|
 | **甲** | §3.4.1 的语义规格 + §3.1.5.2 的 `t` 定义 | **P64（已写入）** |
-| **乙** | 改 `SoftStepBehavior._compute_probabilities` 的分配式、改 `_expand_soft_to_deltas` 的首段边界、同步改反推函数 `_deltas_to_soft_interval`（**该反函数无生产调用方，仅测试**，见下表第 3 行） | **已于 2026-10-06 落地**（三处全改，全量 1953 passed / 35 skipped；基线对照经 `SOFT_SEMANTICS_EXEMPT` 豁免后 PASS） |
+| **乙** | 改 `SoftStepBehavior._compute_probabilities` 的分配式、改 `_expand_soft_to_deltas` 的首段边界与档数、同步改反推函数 `_deltas_to_soft_interval`（**该反函数无生产调用方，仅测试**，见下表第 3 行） | **已于 2026-10-06 落地**（三处全改，当日全量 1953 passed / 35 skipped；基线对照经 `SOFT_SEMANTICS_EXEMPT` 豁免后 PASS）。**同日追加端点裁决与一轮独立审查修复**，见 §3.4.1.2，全量升至 1960 passed / 35 skipped |
 
 **乙的改动清单（3 处，2026-10-06 试改实测）**：
 
 | # | 位置 | 改动 |
 |---|------|------|
 | 1 | `pity.py` `SoftStepBehavior._compute_probabilities`（[pity.py:306-323](gacha_simulator/core/pity.py#L306-L323)） | 重分配段改为百分点语义 + 单组常数因子（19 行 → 12 行） |
-| 2 | `config_toml.py` `_expand_soft_to_deltas`（[config_toml.py:1592-1601](gacha_simulator/core/config_toml.py#L1592-L1601)） | 两条 `return` 的首段由 `s` 改为 `max(0, s - 1)` |
+| 2 | `config_toml.py` `_expand_soft_to_deltas`（[config_toml.py:1573](gacha_simulator/core/config_toml.py#L1573)） | 两条 `return` 的首段由 `s` 改为 `max(0, s - 1)`；`soft_interval` 的档数另经同日裁决改为 `end - start + 1`（§3.4.1.2） |
 | 3 | `config_toml.py` `_deltas_to_soft_interval`（[config_toml.py:1640-1660](gacha_simulator/core/config_toml.py#L1640-L1660)） | 它是第 2 处的反函数，`return (n1, n1 + n2)` 须同步为 `(n1 + 1, n1 + n2 + 1)`，否则 `TestDeltasRoundTrip` 失败。**更正（2026-10-06 实测）**：该反函数无生产调用方，写回路径不经它，故此项不影响 GUI round-trip |
 
 **第 3 处不做则**：`tests/test_config_toml.py::TestDeltasRoundTrip` 失败（实测 `(72, 0.0) == (73, 0.0)`）。
@@ -1301,7 +1301,7 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 
 **乙之后该依赖消失**：新实现的目标组是一个组、乘一个常数因子，**不需要任何不变式**。这是本次修正的附带收益，与修正 ① ② 一并登记。
 
-**乙的实测波及面（2026-10-06 落地，改后全量 1953 passed / 35 skipped；下列为改前试改时的中间态记录）**：
+**乙的实测波及面（2026-10-06 落地当日全量 1953 passed / 35 skipped；下列为改前试改时的中间态记录。当日后续追加 §3.4.1.2 的端点裁决与审查修复后为 1960 passed / 35 skipped）**：
 
 | 测试 | 性质 | 处置 |
 |------|------|------|
@@ -1310,7 +1310,7 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 | `test_pity.py::TestSoftStepProgress::test_boost_zero_below_start` | 断言 `_cumulative_boost(73) == 0` | 更新期望值 |
 | `test_p79_stop_condition_baseline::test_equivalence_verify_script_passes` | **golden 基线对照** | 见下 |
 
-**基线影响**：`tests/fixtures/p79_golden/` 共 8 组，其中 **3 组受影响**（`smart` / `pool_quota` / `draw_target`，各 7~12 个字段变化），另 5 组（`pity_reserve` / `target_hunting` / `no_draw` / `plugin__example_phased`）逐字段一致。处置走 P79 既有的「有意变更」流程（`scripts/p79_verify.py` 白名单 + 显式断言新值），或重固化这 3 组快照。
+**基线影响**：`tests/fixtures/p79_golden/` 共 **9 组**，其中 **5 组受影响**，分两类：① **3 组走 soft 语义豁免**（`smart` / `pool_quota` / `draw_target`，各 6 个字段变化，实测）；② **2 组整组豁免**（`stop_on_target` / `fixed_count`，各 13 个字段变化，属 P79 1c 的时间冻结失效形态修复，与乙无关）。另 **4 组逐字段一致**（`pity_reserve` / `target_hunting` / `no_draw` / `plugin__example_phased`）。处置走 P79 既有的「有意变更」流程（`scripts/p79_verify.py` 白名单），或重固化这 3 组快照。**该豁免的回归效力问题已由 2026-10-06 独立审查提出（见 §3.4.1.2 第 3 条），尚未处置**。
 
 **风险评级：低**。依据：代码面 3 处共约 25 行；无 golden 之外的数值资产；项目未发布、无历史结果文件；基线处置有现成机制。**唯一需要留意的是第 3 处**（反推函数），漏改不会报错、只会让 GUI 静默改数。
 
@@ -1319,6 +1319,48 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 1. **`soft_additive` 的 `soft_end` 是死字段**：`_expand_soft_to_deltas` 对 `soft_additive` 只算 `n_steps = 100/inc + 1`，`end` 不参与。手册的 `soft_additive` 也确实不写 `end`，故功能与配置均未受影响，但 `PityDef.soft_end` 对该类型空转。
 2. **手册第 1088 行注释有误**：写 `start = 50, increment = 2.0  # 每抽 +2%，第 70 抽 100%`，按任何模型都算不出第 70 抽 100%（20 抽 × 2% = 40%）。属手册笔误，归手册同步面。
 
+
+##### 3.4.1.2 端点裁决与一轮独立审查的修复（2026-10-06 追加）
+
+**（一）`soft_interval` 的端点语义（用户裁决）**
+
+修正 ② 只把首段改成 `start-1`，档数仍是 `end - start`，于是整条爬升**平移一抽**：首个增量落在 `start`（这是要修的），但 100% 也提前到了 `end-1`（这是副作用）。仓库真实配置 `config.toml` 的 `ssr_soft`（`soft_interval` 80/90）直接受影响。
+
+裁决：两种语法糖的端点语义**不同**，按配置形态区分：
+
+| 形态 | 指定内容 | 语义 | 档数 |
+|------|---------|------|------|
+| `soft_interval` | 头 + 尾 | `start` 是开始提升那一抽，`end` 是**到达 100% 那一抽**，两端都含 | `end - start + 1` |
+| `soft_additive` | 起始点 + 增量 | 只按增量累加，**哪一抽累计到 100% 就是哪一抽**，不设终点 | `int(100/increment) + 1` |
+
+落点：`_expand_soft_to_deltas` 的 `soft_interval` 分支改 `n_steps = e - s + 1`（`e < s` 时兜底 `e = s`，单档 100%），`soft_additive` 分支不动；反函数 `_deltas_to_soft_interval` 同步改回 `(n1 + 1, n1 + n2)`。
+
+实测（`ssr_soft` 80/90）：`deltas = ((79, 0.0), (11, 9.090909))`，第 80 抽 9.09%、第 89 抽 90.91%、**第 90 抽 100%**。此前（修正 ② 的中间态）是 `((79, 0.0), (10, 10.0))`，第 89 抽即 100%。
+
+| 口径 | 爬升区间 | 首个增量 | 100% 点 |
+|------|---------|---------|--------|
+| 修正前 | `[start+1, end]` | 第 81 抽 | `end` |
+| 修正 ② 中间态（错） | `[start, end-1]` | 第 80 抽 | `end-1` |
+| **本轮定稿** | `[start, end]` | 第 80 抽 | `end` |
+
+**（二）TOML 写回的三处修复（同日独立审查提出，已修）**
+
+| # | 问题 | 实测反例 | 修法 |
+|---|------|---------|------|
+| 1 | 后缀型写回分支条件过窄：只给 `increment` 或只给 `end` 时整条丢弃 | `rotating_soft, end=80`：往返前 `((73,0.0),(6,16.666667))`，往返后 `((73,0.0),(16,6.25))`（落回默认 74/90） | 分支条件放宽为「三键任一非 None」，三键各自独立写出 |
+| 2 | 读写优先级相反：读取侧 `deltas` 优先，写回侧语法糖优先 | `soft_interval` + `deltas=[[10,1.0],[5,2.0]]` + `start=73,end=90`：往返前 `((10,1.0),(5,2.0))`，往返后 `((72,0.0),(18,5.555556))` | 新增 `_sugar_matches_deltas()`：写回语法糖的前提是它展开后与 `p.deltas` 逐段相同，否则写 `deltas` |
+| 3 | 测试键名修复不彻底：`TestP56TypeParsing` 的 parametrize 用 dict 字面量 `{'soft_start': …}`（冒号），未被上一轮的 `soft_start=`（等号）替换命中，新增的值级断言被守卫整体跳过 | `if 'start' in extra:` 恒为 False | parametrize 改用 `start`/`end`；守卫补 `else` 分支；断言按「后缀型 deltas 为 None / 非后缀型非 None」分支 |
+
+修后实测七种组合（后缀型三键单独与组合、`soft_interval` 的 `deltas`+语法糖并存、只给 `start`、`soft_additive`）全部「往返前后引擎 deltas 一致」。
+
+**（三）本轮登记、未处置的审查发现**
+
+1. **`SOFT_SEMANTICS_EXEMPT` 的回归效力**（`scripts/p79_verify.py:116-123`）：该分支只断言 `final_time == env.end_time` 后 `continue`，**不做任何字段比较**，且与 `EXEMPT_STRATEGIES` 分支逐行重复。后果是 `smart` / `pool_quota` / `draw_target` 三组**永久退出逐字段回归对照**，而这三组恰是软保底数值改动的核心风险面。本节的 6 个数值也无任何测试钉住（全库 grep 只命中本文档）。待裁决：重固化这 3 组 golden，或保留豁免但把本节期望数值写成断言。
+2. **§3.4.1.1 表的第 2 行无法由表头所述池复现**（第 1 行可精确复现）：表头 base 的 f1:f2 = 2:1，旧实现保持目标组内当前比例，输出比必落在 `(2, ρ)` 开区间，而表内输出恰为 9.0（要求 steal = 0），同行 s1 上升又要求 steal > 0，两者矛盾。审查给出一组可逐位吻合的反解分布，但原始 harness 未留档，故记为「与表头所述池不符」，不定性为编造。
+3. **表下「差」的口径未写明**：两个值等于「全部槽位的最大绝对差」，不等于表内加粗的「featured 合计」列之差，易误读。
+4. `_check_pity_format` 的提示语自相矛盾（把 `start`/`end` 既当旧格式标志又当正确写法），且手册 §2244 的字面示例（`soft_interval` + `func="step"`）会被硬拒。
+5. 跨模块重复常量：`_SOFT_SUFFIX_TYPES`（`config_toml.py` / `pity.py`）、`_EVENT_DRIVEN_TYPES`（`pity.py:114`）与 `_EVENT_TYPES`（`config_toml.py`）各两份，无测试钉住相等。
+6. 两处不可达守卫：`pity.py:511` 的空 deltas 分支、`pity.py:225-229` 的 `deltas is None` ValueError（被 `TypeError` 顶掉，诊断信息永不触发）。
 
 #### 3.4.1 `deltas` 的两处语义修正（2026-10-06 实测确认）
 

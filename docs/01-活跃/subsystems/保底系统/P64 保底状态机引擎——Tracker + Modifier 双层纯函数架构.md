@@ -1282,6 +1282,81 @@ def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-0
 
 `rotating_soft` = rotating 的 Tracker/Modifier 各加一项，`_SOFT_SUFFIX_TYPES` 处理移除；任意 Tracker × 任意 Modifier 自由组合，不再需要每组合一个类。
 
+**施工分工（2026-10-06 用户裁决）**：
+
+| 项 | 内容 | 归属 |
+|---|------|------|
+| **甲** | §3.4.1 的语义规格 + §3.1.5.2 的 `t` 定义 | **P64（已写入）** |
+| **乙** | 改 `SoftStepBehavior._compute_probabilities` 的分配式、改 `_expand_soft_to_deltas` 的首段边界、**同步改反推函数 `_deltas_to_soft_interval`** | **独立计划**（见下方清单） |
+
+**乙的改动清单（3 处，2026-10-06 试改实测）**：
+
+| # | 位置 | 改动 |
+|---|------|------|
+| 1 | `pity.py` `SoftStepBehavior._compute_probabilities`（[pity.py:306-323](gacha_simulator/core/pity.py#L306-L323)） | 重分配段改为百分点语义 + 单组常数因子（19 行 → 12 行） |
+| 2 | `config_toml.py` `_expand_soft_to_deltas`（[config_toml.py:1592-1601](gacha_simulator/core/config_toml.py#L1592-L1601)） | 两条 `return` 的首段由 `s` 改为 `max(0, s - 1)` |
+| 3 | `config_toml.py` `_deltas_to_soft_interval`（[config_toml.py:1629-1644](gacha_simulator/core/config_toml.py#L1629-L1644)） | **隐藏耦合**：它是第 2 处的反函数，`return (n1, n1 + n2)` 须同步为 `(n1 + 1, n1 + n2 + 1)`，否则 GUI round-trip 不一致 |
+
+**第 3 处不做则**：`tests/test_config_toml.py::TestDeltasRoundTrip` 失败（实测 `(72, 0.0) == (73, 0.0)`），且 GUI「加载 → 保存」会静默改小 `start` 与 `end`。
+
+**为什么分开**：乙会改变所有 soft 配置的模拟数值。P64 的验收口径之一是「与旧实现逐场一致」，若现在就动乙，P64 的对照基准当场失效，两件事互相干扰。
+
+**乙的实测波及面（2026-10-06 试改后跑全量：7 failed / 1946 passed / 35 skipped）**：
+
+| 测试 | 性质 | 处置 |
+|------|------|------|
+| `test_config_toml.py::TestExpandSoftToDeltas` ×4 | 规格测试，断言首段 `(73, 0.0)` | 更新期望值（改后才是正确的） |
+| `test_config_toml.py::TestDeltasRoundTrip` | 反推与展开不一致 | 由第 3 处修复 |
+| `test_pity.py::TestSoftStepProgress::test_boost_zero_below_start` | 断言 `_cumulative_boost(73) == 0` | 更新期望值 |
+| `test_p79_stop_condition_baseline::test_equivalence_verify_script_passes` | **golden 基线对照** | 见下 |
+
+**基线影响**：`tests/fixtures/p79_golden/` 共 8 组，其中 **3 组受影响**（`smart` / `pool_quota` / `draw_target`，各 7~12 个字段变化），另 5 组（`pity_reserve` / `target_hunting` / `no_draw` / `plugin__example_phased`）逐字段一致。处置走 P79 既有的「有意变更」流程（`scripts/p79_verify.py` 白名单 + 显式断言新值），或重固化这 3 组快照。
+
+**风险评级：低**。依据：代码面 3 处共约 25 行；无 golden 之外的数值资产；项目未发布、无历史结果文件；基线处置有现成机制。**唯一需要留意的是第 3 处**（反推函数），漏改不会报错、只会让 GUI 静默改数。
+
+**两处附带的既有问题（登记，不在本轮处理）**：
+
+1. **`soft_additive` 的 `soft_end` 是死字段**：`_expand_soft_to_deltas` 对 `soft_additive` 只算 `n_steps = 100/inc + 1`，`end` 不参与。手册的 `soft_additive` 也确实不写 `end`，故功能与配置均未受影响，但 `PityDef.soft_end` 对该类型空转。
+2. **手册第 1088 行注释有误**：写 `start = 50, increment = 2.0  # 每抽 +2%，第 70 抽 100%`，按任何模型都算不出第 70 抽 100%（20 抽 × 2% = 40%）。属手册笔误，归手册同步面。
+
+
+#### 3.4.1 `deltas` 的两处语义修正（2026-10-06 实测确认）
+
+> **本节记录两处既有实现的语义错误。** 它们不由 P64 引入，但 P64 的软保底规格若照现状书写，会把错误固化。**P64 按修正后的语义写规格；代码修正走独立计划**（分工见本节末）。
+
+**判据来源：手册自带的数字。** 手册 §1610 写「基础 0.8%，第 65 抽起每抽 +5%，第 **79** 抽 ~**75.8%**」。这个数同时定死两件事：
+
+| 模型 | 第 79 抽算得 | 与手册 75.8% |
+|------|-------------|-------------|
+| **A 的概率 +x 个百分点**（`0.008 + 5×15/100`） | **0.758000** | **✓ 精确命中** |
+| 从源组按比例取 x%（`0.008 + 0.992×0.75`） | 0.752000 | ✗ 差 0.6 点 |
+| **现状实现** | **0.702400** | ✗ 差 5.6 点 |
+
+**修正 ①：`deltas` 的增量是「百分点」，不是「源组的百分比」**
+
+```
+现状：steal = p(Q) × boost% / 100      ← 参数被当成「取源组的百分之几」（乘法）
+应为：t     = boost% / 100             ← 百分点，直接就是转移量（加法）
+```
+
+两者差一个因子 `p(Q)`。因 `p(Q) ≈ 1`（低稀有度池占绝大部分），前期差异极小（第 75 抽 0.0703 vs 0.0710），**到爬升后段才拉开**（第 89 抽：现状 0.9009、应为 0.966）。这是它长期未被发现的原因。
+
+**修正 ②：`start` 含首抽**
+
+`_expand_soft_to_deltas`（[config_toml.py:1573](gacha_simulator/core/config_toml.py#L1573)）对 `start=74` 产出 `((74, 0.0), …)`，而 `_cumulative_boost`（[pity.py:237-255](gacha_simulator/core/pity.py#L237-L255)）按「前 74 抽增量 0」解释，故**第 74 抽无加成、第 75 抽才有**。手册写的是「74 抽**起**」，即第 74 抽即加成。修正为首段取 `start−1`。
+
+**`deltas` 的格式与含义均不变**：`((段长, 每抽增量), …)`，增量单位是百分点。改的只是**展开端**（首段 `start−1`）与**消费端**（不再乘 `p(Q)`）各一处。
+
+**P64 的规格写法**：`soft` 的转移量是
+
+```
+t = boost%(counter) / 100        # boost% 经 _cumulative_boost 从 deltas 得出
+```
+
+其中 `boost%` 的语义是「目标组概率应增加的百分点数」。`t` 是 `factor()` 内的**局部变量**，不是 Modifier 的构造形参（它由 deltas 与当前 counter 算出，无独立配置来源）。
+
+<!-- REVIEW-R1-FIX: SOFT-SEMANTICS -->
+
 ### 3.5 Lifecycle 统一（P64 增量能力）
 
 `deactivate_on_early_hit` 目前只在 counter 驱动型（[pity.py:334-336](gacha_simulator/core/pity.py#L334-L336)、[pity.py:410-412](gacha_simulator/core/pity.py#L410-L412)）实现，且 config_toml 对事件驱动型配置该参数直接抛 ConfigError（[config_toml.py:677-682](gacha_simulator/core/config_toml.py#L677-L682)<!-- REVIEW-R1-FIX: ISSUE-929 -->）。P64 统一进 Lifecycle 包装层，使全部类型可用。**必须同步移除 config_toml 的拒绝分支（H3）**，否则增量能力无法配置。**此为增量能力（旧事件驱动类无此能力），不在等价性范围内**。覆盖手册 §16.6 终末地 80/120 协调「若 120 用 rotating 表达」的场景。

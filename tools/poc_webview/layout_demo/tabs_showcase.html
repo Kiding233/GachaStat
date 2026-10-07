@@ -178,17 +178,20 @@ body{
 
 /* ── 二级标签对照区（一级固定为已定的 card 式） ── */
 /* F 一级同款缩小：完全沿用 card 的形状语言（同边框、同圆角、同步共边），
-   只把尺寸和字重调小。与一级同一族，区分靠「更小一号」这一条线索。 */
+   只把尺寸和字重调小。与一级同一族，区分靠「更小一号」这一条线索。
+   注意 gap 必须归零：.sub 默认 gap:6px，会把共边拆开，与一级不一致。 */
+.sub.s-f{gap:0}
 .s-f button{border:1px solid var(--line);border-bottom:0;background:var(--result);
-  border-radius:2px 2px 0 0;padding:3px 8px;margin:0 -1px -1px 0;font:inherit;
+  border-radius:2px 2px 0 0;padding:4px 9px;margin:0 -1px -1px 0;font:inherit;
   font-size:11px;color:var(--muted);cursor:pointer;white-space:nowrap}
 .s-f button.on{background:var(--panel);color:var(--ink);font-weight:600;
   border-bottom:1px solid var(--panel);position:relative;z-index:1}
 
 /* G 一级同款弱化：保留形状与共边，但抽掉边框，只剩底色 + 选中白底。
    比 F 更轻，仍属同一族（同为矩形、同为共边），只是不再描边。 */
+.sub.s-g{gap:0}
 .s-g button{border:1px solid transparent;border-bottom:0;background:var(--line3);
-  border-radius:2px 2px 0 0;padding:4px 9px;margin:0 -1px -1px 0;font:inherit;
+  border-radius:2px 2px 0 0;padding:5px 10px;margin:0 -1px -1px 0;font:inherit;
   font-size:11px;color:var(--muted);cursor:pointer;white-space:nowrap}
 .s-g button.on{background:var(--panel);color:var(--ink);font-weight:600;
   box-shadow:inset 0 0 0 1px var(--line)}

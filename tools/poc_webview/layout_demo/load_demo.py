@@ -28,11 +28,13 @@ def main() -> None:
     if not page.exists():
         cands = ", ".join(sorted(p.stem for p in _HERE.glob("*.html")))
         raise SystemExit(f"找不到页面：{page}\n本目录可用的页面：{cands}")
+    # 1520×950：配置区行宽约 1060px，刚好容下 11 个标签一行（实测标签总宽 993px）；
+    # 宽高比 1.6，接近 16:10。
     webview.create_window(
         _TITLES.get(page.stem, page.stem),
         page.as_uri(),
-        width=1280,
-        height=720,
+        width=1520,
+        height=950,
     )
     webview.start()
 

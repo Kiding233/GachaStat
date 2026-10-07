@@ -177,6 +177,21 @@ body{
 .s-e button.on{color:var(--ink);font-weight:600}
 
 /* ── 二级标签对照区（一级固定为已定的 card 式） ── */
+/* F 一级同款缩小：完全沿用 card 的形状语言（同边框、同圆角、同步共边），
+   只把尺寸和字重调小。与一级同一族，区分靠「更小一号」这一条线索。 */
+.s-f button{border:1px solid var(--line);border-bottom:0;background:var(--result);
+  border-radius:2px 2px 0 0;padding:3px 8px;margin:0 -1px -1px 0;font:inherit;
+  font-size:11px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.s-f button.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-bottom:1px solid var(--panel);position:relative;z-index:1}
+
+/* G 一级同款弱化：保留形状与共边，但抽掉边框，只剩底色 + 选中白底。
+   比 F 更轻，仍属同一族（同为矩形、同为共边），只是不再描边。 */
+.s-g button{border:1px solid transparent;border-bottom:0;background:var(--line3);
+  border-radius:2px 2px 0 0;padding:4px 9px;margin:0 -1px -1px 0;font:inherit;
+  font-size:11px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.s-g button.on{background:var(--panel);color:var(--ink);font-weight:600;
+  box-shadow:inset 0 0 0 1px var(--line)}
 .d1row{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-top:5px}
 .d1tab{display:inline-flex;align-items:center;border:1px solid var(--line);border-bottom:0;
   background:var(--result);border-radius:2px 2px 0 0;padding:5px 10px;margin:0 -1px -1px 0;
@@ -411,11 +426,11 @@ body{
   <!-- 二级标签 · 一级固定为已定的 card 式 -->
   <section class="v wide" style="background:#fbfcfd">
     <div class="v-head" style="background:#f2f5f8">
-      <b>二级标签 · 五种处理（一级都是已定的 card 式）</b>
-      <p>「二级标签」指卡池管理里的 <b>池 / 生命周期</b>。一级既然定为 card 式（有边框、相邻共边、选中白底连体），
-      二级就必须在<b>形状</b>上与它分开，否则两层叠着会混。五种都排在同一份一级之下，只比形状区分度。</p>
-      <p>先前那版二级候选叠在<b>色块带式</b>一级之下，那个一级已废弃，所以结论与那时不同，以本页为准。
-      最要紧的变化：<b>A 方框按钮</b>从「可接受」掉到「最弱」——一级换成 card 式之后，它和一级成了同一族。</p>
+      <b>二级标签 · 七种处理（一级都是已定的 card 式）</b>
+      <p>「二级标签」指卡池管理里的 <b>池 / 生命周期</b>，也是分析页里「一项分析产出多块结果」的那层。一级已定为 card 式，
+      二级怎么与它拉开，前一版列了五种<b>换形状</b>的做法；新版补了 F / G 两种<b>不换形状、只改尺寸与细节</b>的做法。</p>
+      <p>要判断的是：<b>形状区分</b>与<b>同族缩小</b>哪条路更稳。F / G 的风险不在好不好看，而在层级线索只剩「大小」一条，
+      两者靠近时是否还分得开；A–E 的风险则是同屏出现两套标签语言。</p>
     </div>
     <div class="v-body">
 
@@ -474,6 +489,31 @@ body{
           <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
           <div class="s2body">
             <div class="sub s-e"><button class="on">池</button><button>生命周期</button></div>
+            <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="s2row">
+        <div class="s2lab"><b>F 一级同款 · 缩小</b>
+          <span>完全沿用一级的形状语言：同边框、同圆角、同步共边，<b>只把尺寸和字重调小一号</b>。
+          同一族，靠「更小」一条线索区分。代价是层级线索最细，两者靠近时容易看串。</span></div>
+        <div class="s2demo">
+          <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
+          <div class="s2body">
+            <div class="sub s-f"><button class="on">池</button><button>生命周期</button></div>
+            <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="s2row">
+        <div class="s2lab"><b>G 一级同款 · 弱化</b>
+          <span>保留形状与共边，但<b>抽掉边框</b>，只剩底色 + 选中白底。比 F 更轻，仍属同族（同为矩形、同为共边），只是不再描边。</span></div>
+        <div class="s2demo">
+          <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
+          <div class="s2body">
+            <div class="sub s-g"><button class="on">池</button><button>生命周期</button></div>
             <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
           </div>
         </div>

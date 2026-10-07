@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -105,25 +106,42 @@ def main() -> None:
 
     probe = PROBES.get(probe_name, COMMON)
 
-    with sync_playwright() as p:
-        b = p.chromium.launch(channel="chrome")
-        pg = b.new_page(viewport={"width": 1520, "height": 950}, device_scale_factor=1)
-        errs: list[str] = []
-        pg.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))
-        pg.on("console", lambda m: errs.append(f"console.{m.type}: {m.text}")
-              if m.type == "error" else None)
-        pg.goto(page.as_uri())
-        pg.wait_for_timeout(2500)
-        if pre_js:
-            pg.evaluate(pre_js)
-            pg.wait_for_timeout(900)
-        pg.screenshot(path=str(out), full_page="--full" in args)
-        result = pg.evaluate(probe)
-        b.close()
+    last = None
+    for attempt in range(3):
+        with sync_playwright() as p:
+            b = p.chromium.launch(channel="chrome")
+            pg = b.new_page(viewport={"width": 1520, "height": 950}, device_scale_factor=1)
+            errs: list[str] = []
+            pg.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))
+            pg.on("console", lambda m: errs.append(f"console.{m.type}: {m.text}")
+                  if m.type == "error" else None)
+            pg.goto(page.as_uri())
+            pg.wait_for_timeout(2500)
+            if pre_js:
+                pg.evaluate(pre_js)
+                pg.wait_for_timeout(900)
+            result = pg.evaluate(probe)
+            # 模板未渲染 = Vue 没挂上（CDN 抖动或自闭合标签吃掉子树）。
+            # 这种坏帧必须重试，且最终一定要报出来，不能拍张图就过。
+            broken = result.get("unrendered", 0) > 0 or result.get("cloaked", 0) > 0
+            if not broken or attempt == 2:
+                pg.screenshot(path=str(out), full_page="--full" in args)
+            b.close()
+        last = (result, errs, broken)
+        if not broken:
+            break
+        print(f"RETRY {attempt + 1}/3：模板未渲染（{{{{ }}}} 残留 "
+              f"{result.get('unrendered')} 处），重载")
+        time.sleep(1.5)
 
+    result, errs, broken = last
     if errs:
         print("ERRORS", json.dumps(errs[:8], ensure_ascii=False))
     print("PROBE", json.dumps(result, ensure_ascii=False))
+    if broken:
+        print("FAIL 模板未渲染 —— 该截图不可作为渲染证据")
+        raise SystemExit(1)
+    print("OK 渲染通过")
 
 
 if __name__ == "__main__":

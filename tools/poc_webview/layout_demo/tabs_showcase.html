@@ -164,6 +164,38 @@ body{
 .s-c button{border:1px solid var(--line);background:var(--result);color:var(--muted)}
 .s-c button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 
+/* D 分段控件：单一外框 + 内部分隔线，读作「一个控件的两个选项」而非「两个页签」 */
+.s-d{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.s-d button{border:0;border-right:1px solid var(--line);background:var(--panel);color:var(--muted);
+  font:inherit;font-size:11px;cursor:pointer;padding:4px 13px}
+.s-d button:last-child{border-right:0}
+.s-d button.on{background:var(--header);color:var(--ink);font-weight:600}
+
+/* E 纯文字：无框无线，只靠字重与颜色。最轻，但弱到可能不像可点 */
+.s-e button{border:0;background:transparent;font:inherit;font-size:12px;color:var(--faint);
+  cursor:pointer;padding:2px 0}
+.s-e button.on{color:var(--ink);font-weight:600}
+
+/* ── 二级标签对照区（一级固定为已定的 card 式） ── */
+.d1row{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-top:5px}
+.d1tab{display:inline-flex;align-items:center;border:1px solid var(--line);border-bottom:0;
+  background:var(--result);border-radius:2px 2px 0 0;padding:5px 10px;margin:0 -1px -1px 0;
+  font:inherit;font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.d1tab.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-bottom:1px solid var(--panel);position:relative;z-index:1}
+.s2row{display:flex;gap:16px;padding:12px 0;border-bottom:1px dashed var(--line2)}
+.s2row:last-child{border-bottom:0;padding-bottom:2px}
+.s2lab{flex:0 0 250px}
+/* 只让标题那个 b 成块；描述里的 <b> 是行内强调，不能一起成块 */
+.s2lab > b{font-size:12px;display:block;margin-bottom:3px}
+.s2lab span{font-size:11px;color:var(--muted);line-height:1.55;display:block}
+.s2lab span b{color:var(--ink)}
+.s2demo{flex:1;min-width:0}
+.s2body{padding-top:12px}
+.s2body table{width:100%;border-collapse:collapse;font-size:11px}
+.s2body th,.s2body td{border:1px solid var(--line2);padding:3px 8px;text-align:left;color:var(--muted)}
+.s2body th{background:var(--header);color:var(--ink)}
+
 /* ── B 段：分析页骨架 ── */
 .sk{border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);overflow:hidden}
 .sk-head{padding:6px 10px;background:var(--header);border-bottom:1px solid var(--line);
@@ -371,10 +403,84 @@ body{
 
 <div class="page-head">
   <b>标签页样式对照</b>
-  <span>15 种一级样式 + 二级标签 3 种 + 分析页骨架 3 种。同一份 DOM，只换 CSS。数字编号对应下面的说明。</span>
+  <span>顶部为二级标签 5 种（叠在已定的 card 式一级之下）；其后是 15 种一级样式 + 分析页骨架 3 种。同一份 DOM，只换 CSS。</span>
 </div>
 
 <div class="grid">
+
+  <!-- 二级标签 · 一级固定为已定的 card 式 -->
+  <section class="v wide" style="background:#fbfcfd">
+    <div class="v-head" style="background:#f2f5f8">
+      <b>二级标签 · 五种处理（一级都是已定的 card 式）</b>
+      <p>「二级标签」指卡池管理里的 <b>池 / 生命周期</b>。一级既然定为 card 式（有边框、相邻共边、选中白底连体），
+      二级就必须在<b>形状</b>上与它分开，否则两层叠着会混。五种都排在同一份一级之下，只比形状区分度。</p>
+      <p>先前那版二级候选叠在<b>色块带式</b>一级之下，那个一级已废弃，所以结论与那时不同，以本页为准。
+      最要紧的变化：<b>A 方框按钮</b>从「可接受」掉到「最弱」——一级换成 card 式之后，它和一级成了同一族。</p>
+    </div>
+    <div class="v-body">
+
+      <div class="s2row">
+        <div class="s2lab"><b>A 方框按钮</b>
+          <span>独立方框、彼此有间隙。与一级同属「边框矩形」一族，只差圆角与共边。<b>区分度最弱</b>。</span></div>
+        <div class="s2demo">
+          <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
+          <div class="s2body">
+            <div class="sub s-a"><button class="on">池</button><button>生命周期</button></div>
+            <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="s2row">
+        <div class="s2lab"><b>B 下划线</b>
+          <span>无边框、彩色底线。与一级「有边框无底线」正好互为反面，是<b>形状区分度最高的一档，且不引入色块</b>。</span></div>
+        <div class="s2demo">
+          <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
+          <div class="s2body">
+            <div class="sub s-b"><button class="on">池</button><button>生命周期</button></div>
+            <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="s2row">
+        <div class="s2lab"><b>C 填充胶囊</b>
+          <span>选中项实心蓝。形状与颜色<b>两个维度都不同</b>，层级最清楚；代价是引入了实心色块，而彩色在本项目里本该留给语义。</span></div>
+        <div class="s2demo">
+          <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
+          <div class="s2body">
+            <div class="sub s-c"><button class="on">池</button><button>生命周期</button></div>
+            <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="s2row">
+        <div class="s2lab"><b>D 分段控件</b>
+          <span>单一外框 + 内部分隔线，读起来是「一个控件的两个选项」而非「两个页签」。<b>与 card 式的区别是：那是 N 个框，这是一个框</b>。</span></div>
+        <div class="s2demo">
+          <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
+          <div class="s2body">
+            <div class="sub s-d"><button class="on">池</button><button>生命周期</button></div>
+            <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="s2row">
+        <div class="s2lab"><b>E 纯文字</b>
+          <span>无框无线，只靠字重与明度。最轻、最不抢戏，但弱到<b>可能不像可点</b>，且未选中项容易被读成正文。</span></div>
+        <div class="s2demo">
+          <div class="d1row"><button class="d1tab on">卡池管理</button><button class="d1tab">保底机制</button></div>
+          <div class="s2body">
+            <div class="sub s-e"><button class="on">池</button><button>生命周期</button></div>
+            <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr></table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
 
   <!-- Carbon 图标 · 真实标签行情境 -->
   <section class="v wide" style="background:#fbfcfd">
@@ -900,50 +1006,7 @@ body{
 
   </details>
 
-  <!-- 二级 1 -->
-  <section class="v">
-    <div class="v-head"><b>二级标签 · A 方框按钮</b>
-      <p>叠在色块带式之下。「池 / 生命周期」两个二级项做成方框，选中项灰底。层级清楚，但两个方框与一级的色块带容易混淆。</p></div>
-    <div class="v-body">
-      <div class="demo plain">
-        <div class="row" style="background:var(--header);border-bottom:1px solid var(--line)"><button class="tab on" style="background:var(--panel);margin-bottom:-1px;border-bottom:1px solid var(--panel);font-weight:600">卡池管理</button><button class="tab">保底机制</button></div>
-        <div class="pane">
-          <div class="sub s-a"><button class="on">池</button><button>生命周期</button></div>
-          <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr><tr><td>武器池 UP</td><td>targeted</td></tr></table>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 二级 2 -->
-  <section class="v">
-    <div class="v-head"><b>二级标签 · B 下划线</b>
-      <p>二级用下划线，与一级的色块带明显不同，层级一眼分开。轻，但同一屏里出现两种标签语言。</p></div>
-    <div class="v-body">
-      <div class="demo plain">
-        <div class="row" style="background:var(--header);border-bottom:1px solid var(--line)"><button class="tab on" style="background:var(--panel);margin-bottom:-1px;border-bottom:1px solid var(--panel);font-weight:600">卡池管理</button><button class="tab">保底机制</button></div>
-        <div class="pane">
-          <div class="sub s-b"><button class="on">池</button><button>生命周期</button></div>
-          <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr><tr><td>武器池 UP</td><td>targeted</td></tr></table>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 二级 3 -->
-  <section class="v">
-    <div class="v-head"><b>二级标签 · C 填充胶囊</b>
-      <p>二级用填充胶囊，选中项实心蓝。层级最清楚（形状+颜色都不同），代价是引入了彩色块，颜色在本项目里本该留给语义。</p></div>
-    <div class="v-body">
-      <div class="demo plain">
-        <div class="row" style="background:var(--header);border-bottom:1px solid var(--line)"><button class="tab on" style="background:var(--panel);margin-bottom:-1px;border-bottom:1px solid var(--panel);font-weight:600">卡池管理</button><button class="tab">保底机制</button></div>
-        <div class="pane">
-          <div class="sub s-c"><button class="on">池</button><button>生命周期</button></div>
-          <table><tr><th>池子</th><th>保底</th></tr><tr><td>角色池 UP</td><td>rotating</td></tr><tr><td>武器池 UP</td><td>targeted</td></tr></table>
-        </div>
-      </div>
-    </div>
-  </section>
+  <!-- 二级标签候选已移到页面最前（叠在已定的 card 式一级之下） -->
 
   <!-- B1 -->
   <section class="v">

@@ -39,6 +39,12 @@ dev = [
     # 不进发布产物（同 psutil 的定位，附二决策 5）。缺失时 4a 的调用封装软降级——
     # 现场勘查常发生在用户正在使用的机器上、对着一个跑着的进程，工具缺失不该把排查搞挂。
     "py-spy>=0.4",
+    # 前端页面的渲染验证（tools/poc_webview/layout_demo/shot.py）。开发侧工具，
+    # 不进发布产物（同 psutil / py-spy 的定位）。
+    # 必须装的理由：探针页是纯静态 HTML + CDN 上的 Vue，改坏了不会报错，
+    # 只会静默空白（已发生过一次：15 个自闭合自定义标签吃掉整棵树）。
+    # 浏览器不额外下载：shot.py 用 channel="chrome" 走系统已装的 Chrome。
+    "playwright>=1.40",
 ]
 
 [tool.pytest.ini_options]

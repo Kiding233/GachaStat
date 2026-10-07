@@ -985,10 +985,41 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 | 随机数消费次数 | 可证，但需先把 H4 的短路条件写死，再把 ω 显式化为消费序列逐位比对 |
 | 全配置组合 | 组合空间过大，采样测试只覆盖有限点；本节的判据用于缩小「必须实测」的范围 |
 | **因子在 p 的支撑上全为零** | 由性质 2，此时 `Φ_m` 未定义（⟨m,p⟩ = 0）。语义上这是「提升一个概率为零的集合」，物理上不应发生（保底不作用于零概率组）。实现约定：返回原分布，与现行早退路径一致 |
-| **`p(T) = 0`（目标组当前无概率）** | `share` 的因子 `r·p(U)/p(T)` 除零**发散**，与上一行方向相反（不是全零而是无穷）；`assign` 的因子 `目标值_c / p_c` 同样在 `p_c = 0` 时发散。**两个运算都受影响**，实测抛 `ZeroDivisionError`。处置：`share` 走 §3.9.5 的 `T == 0` 分支（跳过目标因子）；`assign` 的**目标值本身非零**（基础权重归一），故取极限语义为「该卡从 0 抬到目标值」，即因子取无穷。当前实现按 §3.9.5 处理：`assign` 的 T 若含零概率卡，按口径 3 的分组结果直接写入绝对值，不走因子向量 |
+| **`p(T) = 0`（目标组当前无概率）** | `share` 的因子 `r·p(U)/p(T)` 除零**发散**，与上一行方向相反（不是全零而是无穷）；`assign` 的因子 `目标值_c / p_c` 同样在 `p_c = 0` 时发散。**两个运算都受影响**，实测抛 `ZeroDivisionError`。处置：`share` 走 §3.9.5 的 `T == 0` 分支（跳过目标因子）；`assign` 的**目标值本身非零**（基础权重归一），故取极限语义为「该卡从 0 抬到目标值」，即因子取无穷。当前实现按 §3.9.5 处理：`assign` 的 T 若含零概率卡，按口径 3 的分组结果直接写入绝对值，不走因子向量。**2026-10-06 补（可达性实测 + 形式化待决）**：见下方 §3.1.5.6.1 |
 | **`T = U` 且 `r < 1`** | `U\T` 为空，⟨m,p⟩ = 1 − (1−r)·p(U) ≠ 1。此法作用于 soft 之外的 `share` 时须按此重述 |
 | **`share` 的 `T ⊄ U`** | 因子的三项推导依赖 T ⊆ U（源侧为 `U\T`，须与 T 不交）。目标解析器返回的 T 若含 U 外的卡，那些卡**不在 U 内**故不会被写到，其因子保持 1，但语义上等于该卡「既被指定为目标又不在作用域内」。**构造期须校验 T ⊆ U 并抛 `ConfigError`**，不得静默忽略 |
 | 约束求解语义 | 3.1.5.3 提到的替代组合语义未实现；其可行性复核见 3.1.5.3 末段（`share` 天然是约束形式，阻碍在 `assign` 的常数项与求解成本） |
+
+##### 3.1.5.6.1 `p(T) = 0` 边界的可达性实测与形式化待决（2026-10-06）
+
+**可达性：可达，但唯一路径是一个本身可疑的配置。** 实测方法：把 `SoftStepBehavior._compute_probabilities` 的 `if target_total <= 0: return result` 临时改为 `raise`（直接命中真实代码路径，不重写逻辑），跑真实模拟（`fixed_count`，100 抽）。
+
+| 路线 | 结果 |
+|------|------|
+| `hard(scope='sr')` 排在 `soft(scope='ssr')` 之前 | **不可达**——`hard` 对**更高稀有度豁免**（只清零更低稀有度），故 SSR 保留原概率，`target_total > 0` |
+| `hard(scope='ssr')` 排在 `soft(scope='sr')` 之前 | **不可达**——`hard` 把更低稀有度清零，`pool <= 0` 的**前一道守卫**先命中 |
+| 池中某稀有度的卡声明 `probability = 0.0`，`soft(scope=该稀有度)` | **可达**——槽位存在（`compute_scope_mappings` 按 `rewards` 生成、不看概率）但质量为 0，`target_total = 0` 而 `pool > 0` |
+
+即：**进入该分支要求「池里声明了一张概率为 0 的卡」**。该形态当前无校验（`_validate_reward_dict` 不查 `probability`）、仓库配置与手册均无此写法、也无「不可获得卡」的既有表达方式，故它是一个**退化配置**而非现实机制。
+
+**语义上还有一层**：在这个场景里，「不转移」未必是错的——池子自己声明该稀有度概率为 0（不可获得），保底把它抬起来反而与池子的声明冲突。所以 §3.4.1 的规格（「目标组 +t 个百分点」，无条件）可能才是需要改的那一侧。
+
+**形式化待决（根因是乘性因子无逆）**：`transfer_factors` 的 `(pA + amount)/pA` 是**把绝对量换算成相对因子**的那一步除法，`pA = 0` 时发散。三条候选：
+
+| | 做法 | 代价 | 买到 |
+|---|------|------|------|
+| **甲** 不动形式化 | 让 §3.4.1 的规格与代码一致（规格加「目标组无概率时不转移」，或保留规格、把偏差登记为边界） | 极小 | 规格与代码不再打架 |
+| **乙** 全局换加法 | 重写 §3.1.5 全节 + §3.9.2 接口 + §3.9.4 助手 + §3.9.5 / §3.10 / §3.12 / §3.13 / §3.14 + §3.1.4 骨架 + §六 断言 + §七 S3/S4/S8/S9 任务块 + §3.1.2 的 D20 | **大**（Modifier 层的重新规划，非编辑） | 边界精确、去掉除法、修正 ① 的绝对语义成为本原 |
+| **丙** 乘性接口 + 一条「绝对写入」通道 | 中（框架支持两种表示；§3.1.5.6 已为 `assign` 描述过这条通道：「按口径 3 的分组结果直接写入绝对值，不走因子向量」） | 边界精确，保留乘性默认；但两套形式并存，§3.1.5.3 的可交换性分析要同时对两套做 |
+| **丁** 堵掉输入 | 在装载期拒绝 `probability <= 0`（该形态无校验、无示例、无既有用途） | 极小 | 边界变为不可达，丙的形式化问题不再紧迫 |
+
+**支持「换加法」的三条实测事实**（供裁决）：① §3.1.5.1 的「性质 1（对数坐标 / 指数族）」**全文档只出现一次**（它自己的定义），从未被后续用到——那条数学理由没有兑现；② §3.1.5.2.1 声明本族**配平**（`⟨m,p⟩ ≡ 1`，实测六组差 0），故「框架统一归一化」那次除法**对当前唯一的族退化为恒等**，乘性机器从未真正跑过；③ §3.4.1 修正 ① 已把 `amount` 改为**绝对百分点**语义，乘性因子成为**从绝对量反推**的派生量。
+
+**反对「换加法」的一点**（须如实记账）：乘性的非负性是**参数级**约束（声明 `m ≥ 0` 即可，手写 Modifier 不可能产出负概率），加法的非负性是**值依赖**约束（须 `p + δ ≥ 0`）。两者都还需一个额外条件（乘性 `⟨m,p⟩ > 0`；加法 `Σ(p+δ) > 0`），故乘性的闭性优势真实但不大——对转移族，加法的约束退化为单个标量 `amount ≤ p(Q)`，而该条件 §3.9.4 已经写了。
+
+**换加法买不到的**（避免误判收益）：顺序敏感**不会**消失——`δ` 仍依赖当前分布（通过 `p(Q)`），「在 `δ₁` 的输出上求值 `δ₂`」与原处求值仍不同，§3.1.5.3 的分析不会因换形式而变短。
+
+**前置**：本节的边界分析（以及 §3.1.5.3 / .4 / .5、§3.9.3 / .5）至今仍写在 §3.1.5.2 已宣告**作废**的 `share` / `assign` / `(U, T, 运算)` 词汇里（全文 `share` 29 处、`assign` 20 处）。要判本项，须先把这些段落迁到新词汇——这是 2026-10-05 那轮改写只做了 §3.1.5.2 留下的欠账。
 
 <!-- REVIEW-FIX-PREV: ISSUE-002 -->
 #### 3.1.6 模块归属与依赖方向（ISSUE-002，强制）
@@ -2184,6 +2215,7 @@ class RotatingModifier(Modifier):
 | `docs/00-meta/模块状态矩阵.md` | 更新（**文档同步，ISSUE-017**） | 实测该行**已含** G3 / S9 / S10 / S11 / S12 与「M1（S1–S7 + S10 + S11，含自 M2 前移的 S12）/ M2（S8 + S9）」划分（自 2026-09-22 起），**2026-09-30 复核：原写「仍写『覆盖 G1 幻塔必歪 + G5 priority』，未含 G3 / S9 与 S10/S11/S12，也未含 M1/M2 划分」已不成立**。本行当前更新点收窄为：G3 的**双实现**（`hard_exclude_owned_skip` / `hard_exclude_owned_any`）与 §3.10.4 的待确认项尚未进摘要 |
 | `config/config.toml` | 更新 | 幻塔 `rotating_inverse` + G16 示例段。**ISSUE-913（2026-10-01，波及面补登记）**：本文件是 **P79 常驻护栏的固定输入**——[p79_verify.py:36](scripts/p79_verify.py#L36) 的 `CONFIG = 'gacha_simulator/config/config.toml'`，由活测试 [test_p79_stop_condition_baseline.py:29-37](tests/test_p79_stop_condition_baseline.py#L29-L37) 以子进程运行并断言「退出码 0 + stdout 含『等价对照结果：PASS』」，另有 `tests/fixtures/p79_golden/` 的 golden 快照逐字段比对。**故新增段的形态必须先定**：① **推荐（注释形态）**——示例写成 `# ` 注释块或纯说明文字，**不进 TOML 的生效段**，golden 的 `draw_pity_names` / `final_pity_state` / `banner_end_pity_states` 等字段一字不变，护栏不受影响；② 若必须写成**生效 TOML 段**（新增 `[[pity]]` / `[[banner]]`），则 golden 必然变化，须同步「golden 重固化方案 + 有意变更登记」（**禁止**用 `p79_baseline.py` 覆盖已提交基线），并在 §六 的差异归因清单登记该项——否则该活测试必红、H9 直接拦推。**计划全文原对 `p79` / `fixtures` / `golden` 零命中**，本行是本条护栏的唯一登记点 | <!-- REVIEW-R1-FIX: ISSUE-913 -->
 | `tests/core/test_pity_config_toml.py` + `tests/gui/test_config_panel_p56.py` | 修改（**S6a / S9-3**，2026-10-01 补登记） | **ISSUE-912**：前者两条用例正断言 H3 的 `ConfigError`（[:217](tests/core/test_pity_config_toml.py#L217) / [:230](tests/core/test_pity_config_toml.py#L230)）；后者 [:53](tests/gui/test_config_panel_p56.py#L53) 写死 `_PITY_TYPES` 数量为 10、[:116](tests/gui/test_config_panel_p56.py#L116) 正断言 `deactivate_on_early_hit` 仅 `hard` 启用。**原 §四 与 §七 的存量测试清单（S7d / S8-7）对这两个文件零命中**，按原计划施工会在 S6a / S9-3 的 commit 上直接 `pytest -q` 全红（H9 拦推） |
+| `tests/core/test_pity_config_toml.py` + `tests/test_config_toml.py` | 修改（**S4c**，2026-10-06 补登记） | 键契约一致性测试（每个 btype 用全量键构造 → `_pitydef_to_toml` 产出键集 ⊆ 契约表；反向契约表 ⊆ `_build_pity` 读取面）+ 未知键硬拒用例 + `load_toml` 失败原子性用例（失败后传入 store 逐字段不变） |
 | `tests/core/test_pity_equivalence.py` | **新增**（**S5a / S5b**） | 等价性对比 harness（固定种子逐场对比概率分布 + `PityState.to_dict()` 快照，S5a）与按家族分批接入的等价性用例：`hard` / soft 族（3）/ rotating 族（3）/ targeted 族（2），每批独立运行、失败可独立归因（S5b）。**2026-09-22 补（ISSUE-GATE-file-list）**：原稿只写 `tests/` 泛行，S5 的用例无处落笔 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-file-list -->
 | `tests/core/test_pity_invariants.py` | **新增**（**S10-1 / S10-2**） | 组合正确性验收（§3.12）：随机零件组合的生成器与不变式性质断言（归一性 / 非负性 / 因子合法性 / 状态键合法 / 确定性）+ 合法组合判据用例。**2026-09-22 补（ISSUE-GATE-file-list）** | <!-- REVIEW-FIX-PREV: ISSUE-GATE-file-list -->
 | `tests/core/test_pity_invariant_checker.py` | **新增**（**S11**） | `InvariantChecker` 的**专属**验收测试（§六「S10 / S11（保障层）」段）：**正例** `hard(scope='sr')` 的合法配置（Σ = 1.009）不得报错（归一性按 scope 感知口径）；**负例** 卡概率改负 / Σ 改到 1.2 / 白名单外写 `_active` 时必须抛错，且异常信息含**保底名 + 键 + 期望值 / 实际值**三要素。**原稿 S11 无任何测试文件**，`tests/core/test_pity_invariants.py` 归 S10-1 / S10-2（组合正确性，§3.12），与被测对象不同，两者不得混用 | <!-- REVIEW-FIX-PREV: ISSUE-GATE-test-strategy --> |
@@ -2382,7 +2414,7 @@ class RotatingModifier(Modifier):
 > **M1 内部执行顺序（强制）**：**S1a → S1b-1 → S1b-2 → S1c → S1d → S2a → S2b → S3-1 → S3-2 → S4-1 → S4b → S4-2 → S4-3 → S4-4 → S4-5 → S5a → S5b → S5c → S6a → S6b → S6c → S7a → S7b → S7c → **S7d** → S10-1 → S10-2 → S11**。**S7d（存量保底测试文件改造，AUDIT-BREAK-7）排在 S7c 之后、保障层之前**：它消费 S5 的等价性结论与 S4 的新构造路径，且**必须早于「发布前一次性移除旧类」的 commit**（旧类本体移除后这批模块级 `import` 即 `ImportError`）。即先迁叶子原语（S1a）与 Tracker / Lifecycle（S1b 至 S1d），S2a / S2b 按 §3.1.2 历史形态实现 Modifier（条件写在类内），S12 随即外置（§3.14.2），S3 / S4 消费外置后的形态。**不得把 S12 放在 S4 之后**，否则 S4 的 preset 引用不存在的符号。**S4b（`priority` 字段定义 + 解析 + 三处透传）的位置在 S4-1 与 S4-2 之间**（2026-09-22 第八轮前移，GATE-3(a)）：S4-2 的构造形参 `Pity(..., priority=pdef.priority)` 要读该字段，而实测 `PityDef`（[config_store.py:150-186](gacha_simulator/core/config_store.py#L150-L186)）当前确无该字段，照前移前的原序（S4b 排在 S4-5 之后）施工即 `AttributeError`。**`build_lifecycle(pdef)` 的定义随 S1d 落地（ISSUE-GATE-3-dependency-order，2026-09-22）**：它依赖的 `LifecycleConfig`（S1a）与四个 Lifecycle 类（S1d）此时齐备，而 S4-2 / S4-3 的 preset 工厂返回 dict 已写 `lifecycle=build_lifecycle(pdef)`（§3.2 / §3.3 / §3.14.2），名字在**调用**时解析——若留到 S4-4 才定义，S4-3 的验收（「全部 10 个 preset 构造成功」）即 `NameError`；S4-4 只剩该键的校验防线与旧 `lifecycle_kwargs` 段删除（删除时机见 S4-4 任务项）。
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-granularity -->
 >
-> 共 **45** 子块：G16 独立 2 + P82 接线独立 2 + **M1 主线 30**（细分自原 12 步，见下方「粒度裁定」）+ **M2 11**（S8-1…S8-7 + S9-1…S9-4）。**G16 与 P82 接线均独立先行，不占 P64 主线，也不属任何一个里程碑。** M1 的 30 个子块与 M2 的 11 个子块均**逐块独立 commit**，回滚粒度等于任务粒度（GATE-5）。**2026-09-30 更正**：原写「共 43 子块……主线 29」三项相加仅 33，且与同文件「主线 30 个子块」冲突。
+> 共 **46** 子块：G16 独立 2 + P82 接线独立 2 + **M1 主线 31**（细分自原 12 步，见下方「粒度裁定」；31 = 原 30 + 2026-10-06 新增 S4c）+ **M2 11**（S8-1…S8-7 + S9-1…S9-4）。**G16 与 P82 接线均独立先行，不占 P64 主线，也不属任何一个里程碑。** M1 的 30 个子块与 M2 的 11 个子块均**逐块独立 commit**，回滚粒度等于任务粒度（GATE-5）。**2026-09-30 更正**：原写「共 43 子块……主线 29」三项相加仅 33，且与同文件「主线 30 个子块」冲突。
 >
 > **执行顺序**：独立先行块 → M1 → M2。
 
@@ -2400,7 +2432,7 @@ class RotatingModifier(Modifier):
 
 #### M1：核心重构与保障（S1–S7 + S10 + S11；S12 已于 2026-10-06 取消）
 
-**主线：Tracker + Modifier 统一骨架（30 个子块逐块预算，合计 16.9 人时；每块独立 commit）**
+**主线：Tracker + Modifier 统一骨架（31 个子块逐块预算，合计 17.7 人时；每块独立 commit。2026-10-06 新增 S4c ~0.8 人时）**
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-granularity -->
 
 > **粒度裁定（2026-09-22，ISSUE-GATE-granularity）**：原 12 步主线中至少 7 步的实作量明显超过 1 人时（S1 同时新建 Tracker 家族 + Lifecycle 并迁出叶子原语；S4 同时改 registry schema、10 个 preset、deltas 归属与构造兜底；S6 同时做 G1 + G5 + H1 + H3 四件事），按该粒度派工无法保证「每步一轮内可验收」。故按**可独立验收的最小单元**细分，并给每个子块补 **目标文件 + 人时预算 + 验收命令**。原「~10 人时」为按 12 步粗估，未计入 S12 与保障层细目；本表逐块预算汇总后为 **约 16.4 人时**（差异来自细分后每块的构建与验证开销；**2026-09-22 第八轮按细分后的 29 块重新逐块汇总，合计仍为 16.4 人时**，故原「⚠ 待人工裁决」的估算口径争议随之解除）。
@@ -2498,6 +2530,13 @@ class RotatingModifier(Modifier):
   - `PityDef.priority` 在 `service/batch_simulator.py`（[batch_simulator.py:1161-1186] 的 `pentry`、:218-243 的 `_PityDef`）与 `core/retreat_config.py`（[retreat_config.py:123-142]）三处**枚举式透传点**同步补齐；**AUDIT-BREAK-1 升为强制**：三处一律**改造为 dataclass 字段驱动**（`dataclasses.fields(PityDef)` 逐字段取值/回填），原「建议」表述废止；逐字段枚举与 `pentry` 的 24 键清单**一经改造即删除**（不得与新写法并存）。理由：三处枚举是字段级类型断裂点，`pentry` 实测 24 键、`_PityDef` 实测逐字段重建（`_PityDef` 是 `PityDef` 的别名，[batch_simulator.py:202](gacha_simulator/service/batch_simulator.py#L202)；**ISSUE-925** 更正原引 `:193`——该行是 `_build_pity_engine_from_gui` 附近的别的语句，`_PityDef` 的函数内 import 在 `:202`）<!-- REVIEW-R1-FIX: ISSUE-925 -->，漏写即静默落回默认值且配置层无异常。三处的完整清单与失效面见 §3.6 AUDIT-BREAK-1 条
   - **归属说明**（**2026-10-06 改**）：原 `PityDef.reads` 的字段定义 + 解析 + 三处透传整体归 S9（M2）（ISSUE-008 的本步落点已撤销），且同样走改造后的 dataclass 驱动路径。本步只处理 `priority`，其消费方是紧随其后的 S4-2（构造形参）与 S6b（`_resolve_order` 排序）
   - 验收命令：`PityDef(priority=5)` 经 TOML round-trip 与三处透传后仍为 5（§六 ISSUE-007 条）；**写回判据（ISSUE-923）**：`_pitydef_to_toml(PityDef(priority=5))` 导出的 dict 含 `priority == 5`（且默认值 0 **不写出**该键），并跑一次「写盘 → 重载」闭环断言值不变；**AUDIT-BREAK-1 追加**：字段全量 round-trip 用例——`for f in dataclasses.fields(PityDef)` 用非默认值构造 → TOML round-trip → `ConfigStore` → `pentry` → `_PityDef` 逐字段等值，且断言 `set(pentry) == {f.name for f in dataclasses.fields(PityDef)}`（键集相等，防漏亦防多）。落点 `tests/service/test_batch_simulator.py`
+- [ ] **S4c `[[pity]]` 键契约与 `load_toml` 失败原子性**（~0.8 人时；**2026-10-06 用户裁决归入本计划**）｜目标文件 `core/config_toml.py` + `tests/core/test_pity_config_toml.py` + `tests/test_config_toml.py`。**位置：S4b 之后**（① 的 TOML 键空间与 S4b 改的 `pentry` 内部键空间是两回事，故 ① 不依赖 S4b 的改名；排在 S4b 之后是为了把 `config_toml.py` 的编辑并批）
+  - **① 键契约 + 硬拒（读侧：未知键静默忽略）**：建模块级 `_PITY_COMMON_KEYS`（`type` / `name` / `scope` / `target_featured` / `reset` / `pools` / `lifecycle` / `counter_init` / `guaranteed_init` / `fate_points_init` / `selected_card_init`）与 `_PITY_TYPE_KEYS`（每 btype 的键集，**含嵌套键** `lifecycle.deactivate_on_early_hit` / `lifecycle.depends_on`），加 `pity_key_issues(pity_list) -> List[str]`（形态照 [stop_condition.py:314](gacha_simulator/core/stop_condition.py#L314) 的 `stop_condition_shape_issues`：不抛、只读、返回消息列表，加载期与保存闸门共用一处实现），并在 `_build_pity` 内**硬拒**（`ConfigError`，与 `scope` 白名单同风格）。
+    - **白名单来源不得取 `BEHAVIOR_REGISTRY[btype]['params']`**：实测它是 GUI 控件声明面，比真键契约窄——`rotating_soft` 缺 `end`、`rotating_cr` 缺 `cr_state_probs`、四个 init 键与 `reset`/`pools`/`lifecycle`/`target_featured` 均不在其中，照抄会把合法键报成未知。
+    - **`func` 不入契约**：`_check_pity_format` 已按「带 start 却缺 scope，或含 func」硬拒，其提示语比未声明键更准（该提示语的自相矛盾已于 2026-10-06 修正）。
+    - **一致性测试（必须同批）**：对每个 btype 用全量键构造 → `_pitydef_to_toml` → 断言产出键集 ⊆ 契约表；反向断言契约表 ⊆ `_build_pity` 的读取面。没有它，契约表自身就是新的漂移点。
+  - **② `load_toml` 失败原子性（① 的前提）**：现实现先 `store.clear()` 再逐段构建（[config_toml.py:62-64](gacha_simulator/core/config_toml.py#L62-L64)），中途抛错即停在半成品——实测（真实配置 + 一处非法 `scope`）`banners 8→0`、`pity 1→0`。改为「副本上构建、成功再 swap」或「失败回滚快照」。**这不是 ① 独有的问题**：`load_toml` 调用链内现有十余处会抛 `ConfigError`（cards / pity / milestone / select_voucher / banners / resource_lifecycle / stop_condition），本步顺带修好全部。GUI 启动路径（[main_window.py:240-242](gacha_simulator/gui/main_window.py#L240-L242)）现状为「`except Exception` → stderr traceback + 状态栏一行字，窗口照常打开、配置半装」，即**静默半开**；硬拒若不配 ② 只会多一个触发点。
+  - 验收命令：`pytest -q tests/core/test_pity_config_toml.py tests/test_config_toml.py -k "key or atomic or unknown"`（收集 ≥1 条）；另加两条端到端——① 含未知键的 `[[pity]]` 抛 `ConfigError`，且错误信息点名该键与合法键集；② 加载失败后传入的 `store` 与加载前**逐字段相同**（`banner.banners` / `card_defs` / `pity.pities` / `resource_defs` 计数与内容不变）
 <!-- REVIEW-FIX-PREV: ISSUE-005 -->
 - [ ] **S4-2 counter 驱动 preset（4 类）**（~0.6 人时）｜目标文件 `core/pity.py`
   - `soft_interval` / `soft_additive` / `soft_step` / `hard` 四类改造为 **preset 工厂函数**（不得模块级常量实例，ISSUE-005）；工厂签名统一 `def _preset_xxx(pdef)`、调用形式 `preset(pdef)`（ISSUE-030），逐条可配字段一律取自 `pdef`（取值来源表见 §3.2）
@@ -2631,12 +2670,13 @@ class RotatingModifier(Modifier):
 ### GATE-5 回滚策略
 
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-granularity -->
-- **回滚单元（2026-09-22 修订，ISSUE-GATE-granularity）**：G16 独立；**主线改为逐子块独立 commit，回滚单元 = 任务单元**（S1a 至 S11 共 **30** 块，见 GATE-1；2026-09-22 第八轮细分后由 26 变为 29，本轮 AUDIT-BREAK-7 新增 S7d 后为 30）。原稿「主线整体一次回滚」已撤销，其后果是单块失败只能整体回退，与 30 块的排期不相容。**回退规则 = 依赖闭包（强制，方向 = 向消费方闭包；ISSUE-GATE-5-rollback 补齐）**：回退某子块时**必须连带回退所有消费其产物的后继子块**——只有**同层兄弟块**之间互不牵连（如 S1b-1 与 S1b-2、S5a 与 S5b、S10-1 与 S10-2）。原稿只写「任一子块验收失败只 revert 该 commit，不牵连已通过的兄弟块」，该表述对**低层块**不成立（M2 段早已写明依赖闭包规则，M1 漏写，本条补齐）：
+- **回滚单元（2026-09-22 修订，ISSUE-GATE-granularity）**：G16 独立；**主线改为逐子块独立 commit，回滚单元 = 任务单元**（S1a 至 S11 共 **31** 块，见 GATE-1；2026-10-06 新增 S4c；2026-09-22 第八轮细分后由 26 变为 29，本轮 AUDIT-BREAK-7 新增 S7d 后为 30）。原稿「主线整体一次回滚」已撤销，其后果是单块失败只能整体回退，与 30 块的排期不相容。**回退规则 = 依赖闭包（强制，方向 = 向消费方闭包；ISSUE-GATE-5-rollback 补齐）**：回退某子块时**必须连带回退所有消费其产物的后继子块**——只有**同层兄弟块**之间互不牵连（如 S1b-1 与 S1b-2、S5a 与 S5b、S10-1 与 S10-2）。原稿只写「任一子块验收失败只 revert 该 commit，不牵连已通过的兄弟块」，该表述对**低层块**不成立（M2 段早已写明依赖闭包规则，M1 漏写，本条补齐）：
   - 回退 **S1a**（叶子原语层，含 `_SOFT_TYPES` / `_HARD_TYPES` / `_EVENT_DRIVEN_TYPES` 三个模块级常量；§3.1.4 骨架的 `Pity(PityBehavior)` **不继承** `CounterBasedBehavior`，裸名引用即 `NameError`）→ 连带回退 **S1b 至 S11 全部**；
   - 回退 **S1b / S1c / S1d**（Tracker / Lifecycle 族，含 `build_lifecycle`）→ 连带回退 **S3 至 S7**（凡引用被回退符号者一律连带；S2a / S2b 不引用 Tracker / Lifecycle 者可保留）；
   - ~~回退 **S12-1 / S12-2**~~（**2026-10-06 取消**，无此二块）→ 原连带回退范围 **S3、S4（含 S4b）、S5、S6、S7**（§3.2 / §3.3 / §3.14.2 的 preset 一律为 `ConditionalModifier` 包裹形态，去掉包装器即全部断裂），S10 / S11 视其是否消费被回退符号而定；
   - 回退 **S3-1 / S3-2**（统一骨架）→ 连带回退 **S4 至 S7**；
   - 回退 **S4-1 / S4b** → 连带回退 **S4-2 至 S6b**（preset 工厂与构造形参消费 registry schema 与 `PityDef.priority`）。**S4-1 的回退面（GATE-3 定稿，2026-10-01）**：S4-1 的「过渡判据」与 S4-2 / S4-3 的「按条目置 `class: None` + 写 `preset`」是**同一机制的两端**——单独 revert S4-1 会让已迁移条目落回旧判据（`preset` 不再是校验对象、而 `class` 已是 `None`）而**导入期即失败**，故回退 S4-1 必须连带 S4-2 / S4-3（含 S4-3 收口），与本行既有范围一致；**反向不成立**——回退 S4-2 / S4-3 不牵连 S4-1（过渡判据正是为此保留）。<!-- REVIEW-R1-FIX: ISSUE-930 -->
+  - 回退 **S4c**（键契约与 `load_toml` 原子性）→ **无连带**（只改 `config_toml.py` 的解析/加载路径与测试，不产出被消费符号）；② 的原子性改动是纯收窄，不改变成功路径的行为
   - 回退 **S4-2 / S4-3** → 连带回退 **S4-4**（其防线与旧段删除以「10 个 preset 已落地」为前提）与 **S5**。
   - 回退 **S7d**（存量保底测试文件改造，AUDIT-BREAK-7）→ **无连带**（只改测试文件，不产出被消费符号）；但**发布前「一次性移除旧类」的 commit 不得早于 S7d 完成**。回退 **S8-7**（槽位消费测试改造）**须与 GATE-5 末条（发布前一次性移除旧保底类）成对**——**ISSUE-906 修正（2026-10-01）**：原稿写「须与 **S8-4** 成对（同一删除面），单回退一方会让测试重新引用已删符号」，按 ISSUE-901 改判后 S8-4 已不碰任何槽位结构（它只删 `aggregate_probs_by_rarity` / `infer_rarity_from_spec` 及导出面），与 S8-7 不再共享删除面。S8-7 处置的是「测试仍引用槽位字段」这一**形态**，其收口点是末条删字段那一次 commit；**S8-7 与 S8-4 自此互不牵连**，可各自独立 revert。<!-- REVIEW-R1-FIX: ISSUE-906 --><!-- REVIEW-FIX-PREV: AUDIT-BREAK-7 -->
 - **强制（低层块回退 = 该里程碑的部分回退）**：低层块被回退后，**必须重跑受影响块的验收命令**（逐块命令见 GATE-1）并确认全绿，才可继续后续子块；未重跑即恢复施工，等于在未验证的状态上叠加新块。<!-- REVIEW-FIX-PREV: ISSUE-GATE-5-rollback -->

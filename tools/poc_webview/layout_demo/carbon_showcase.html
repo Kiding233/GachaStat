@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Carbon 组件展示 · GachaStat</title>
+
+<!-- 一次性组件展示页：纯 HTML + Carbon 的 CSS，不引 React。
+     Carbon 的样式按类名书写（.cds--btn / .cds--data-table …），
+     @carbon/react 只是把这些类名挂到 React 组件上的壳，所以纯 HTML 也能用。 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@carbon/styles@1.116.0/css/styles.min.css">
+<style>
+body{background:#f4f4f4}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:20px;font-weight:400;margin:0 0 6px}
+.lead{color:#525252;font-size:14px;line-height:1.65;margin:0 0 8px}
+.lead code{background:#e0e0e0;padding:1px 5px;font-size:12px}
+.meta{color:#6f6f6f;font-size:12px;line-height:1.7;margin:0 0 24px}
+section{margin:0 0 32px}
+section > h2{font-size:14px;font-weight:600;margin:0 0 4px;color:#161616}
+section > .hint{font-size:12px;color:#6f6f6f;line-height:1.6;margin:0 0 12px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:12px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.cell{background:#fff;padding:16px;border:1px solid #e0e0e0}
+.cell .cap{font-size:11px;color:#6f6f6f;margin-bottom:10px;letter-spacing:.2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Carbon 组件展示</h1>
+  <p class="lead">
+    这是 <b>纯 HTML + Carbon 的 CSS</b>，没有引入 React。<code>@carbon/styles</code> 的样式按类名书写
+    （<code>.cds--btn</code> / <code>.cds--data-table</code> …），<code>@carbon/react</code> 只是把这些类名挂到组件上的壳，
+    所以静态页面同样能用。
+  </p>
+  <p class="meta">
+    包：<code>@carbon/styles@1.116.0/css/styles.min.css</code>（917 KB，Apache-2.0）·
+    图标：<code>@carbon/icons@11.89.0</code>（Apache-2.0）<br>
+    下面每组都对照本项目会用到的地方，右侧小字是「用在哪」。
+  </p>
+
+  <section>
+    <h2>按钮 Button</h2>
+    <p class="hint">配置页头的「保存 / 另存为」、分析的「开始 xxx」、任务抽屉的「取消 / 查看」。</p>
+    <div class="row">
+      <button class="cds--btn cds--btn--primary">主要（保存）</button>
+      <button class="cds--btn cds--btn--secondary">次要（另存为）</button>
+      <button class="cds--btn cds--btn--tertiary">第三级（复制为一级配置）</button>
+      <button class="cds--btn cds--btn--ghost">幽灵（查看）</button>
+      <button class="cds--btn cds--btn--danger">危险（取消任务）</button>
+      <button class="cds--btn cds--btn--primary" disabled>禁用</button>
+      <button class="cds--btn cds--btn--primary cds--btn--sm">小号</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>输入类</h2>
+    <p class="hint">配置表单的字段、运行参数浮层的三个数字、筛选框。</p>
+    <div class="grid2">
+      <div class="cell"><div class="cap">文本输入 · 用在「目标卡」</div>
+        <div class="cds--form-item">
+          <label class="cds--label" for="i1">目标卡</label>
+          <div class="cds--text-input__field-outer-wrapper">
+            <div class="cds--text-input__field-wrapper">
+              <input id="i1" class="cds--text-input" value="雷电芽衣">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cell"><div class="cap">数字输入 · 用在「模拟次数 / 种子 / 进程数」</div>
+        <div class="cds--form-item">
+          <label class="cds--label" for="i2">模拟次数</label>
+          <div class="cds--number">
+            <div class="cds--number__input-wrapper">
+              <input id="i2" class="cds--number__input" type="text" value="1000">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cell"><div class="cap">下拉 · 用在「策略 / 池子 / 数据集选择器」</div>
+        <div class="cds--form-item">
+          <label class="cds--label" for="i3">策略</label>
+          <div class="cds--select">
+            <div class="cds--select-input__wrapper">
+              <select id="i3" class="cds--select-input">
+                <option>smart</option><option>draw_target</option><option>no_draw</option>
+              </select>
+              <svg class="cds--select__arrow" width="16" height="16" viewBox="0 0 16 16"><path d="M8 11L3 6l.7-.7L8 9.6l4.3-4.3.7.7z"/></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cell"><div class="cap">复选框 · 用在「分析项勾选」（若保留勾选）</div>
+        <div class="cds--form-item cds--checkbox-wrapper">
+          <input class="cds--checkbox" type="checkbox" id="c1" checked>
+          <label class="cds--checkbox-label" for="c1"><span class="cds--checkbox-label-text">GDR分布</span></label>
+        </div>
+        <div class="cds--form-item cds--checkbox-wrapper" style="margin-top:8px">
+          <input class="cds--checkbox" type="checkbox" id="c2">
+          <label class="cds--checkbox-label" for="c2"><span class="cds--checkbox-label-text">时间热力图</span></label>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>标签 Tab</h2>
+    <p class="hint">配置页的 11 个标签（卡牌定义 … 满突溢出）。Carbon 的标签是下划线式，横向可滚动，自带溢出「更多」按钮。</p>
+    <div class="cds--tabs">
+      <div class="cds--tab--list" role="tablist">
+        <button class="cds--tabs__nav-item cds--tabs__nav-item--selected" role="tab">卡牌定义</button>
+        <button class="cds--tabs__nav-item" role="tab">资源定义</button>
+        <button class="cds--tabs__nav-item" role="tab">资源获取</button>
+        <button class="cds--tabs__nav-item" role="tab">卡池管理</button>
+        <button class="cds--tabs__nav-item" role="tab">保底机制</button>
+        <button class="cds--tabs__nav-item" role="tab">累抽奖励</button>
+        <button class="cds--tabs__nav-item" role="tab">抽卡策略</button>
+        <button class="cds--tabs__nav-item" role="tab">停止条件</button>
+        <button class="cds--tabs__nav-item" role="tab">目标卡</button>
+        <button class="cds--tabs__nav-item" role="tab">权重配置</button>
+        <button class="cds--tabs__nav-item" role="tab">满突溢出</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>数据表格 Table</h2>
+    <p class="hint">配置页的「卡牌定义 / 保底规则 / 里程碑」等，以及任务队列。</p>
+    <table class="cds--data-table">
+      <thead>
+        <tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>耗时(s)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>方案搜索 search-A</td><td>搜索</td><td><span class="cds--tag cds--tag--green">完成</span></td><td>100%</td><td>1122.4</td></tr>
+        <tr><td>最差影响</td><td>模拟</td><td><span class="cds--tag cds--tag--green">完成</span></td><td>100%</td><td>186.3</td></tr>
+        <tr><td>敏感性扫描</td><td>搜索</td><td><span class="cds--tag cds--tag--red">失败</span></td><td>61%</td><td>402.8</td></tr>
+        <tr><td>主模拟</td><td>模拟</td><td><span class="cds--tag cds--tag--blue">运行中</span></td><td>42%</td><td>47.5</td></tr>
+        <tr><td>主模拟 · 武器池</td><td>模拟</td><td><span class="cds--tag">排队</span></td><td>0%</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>标记与反馈</h2>
+    <p class="hint">数据集状态（已冻结 / 未跑 / 运行中）、配置文件的文件态、字段旁的说明。</p>
+    <div class="row">
+      <span class="cds--tag cds--tag--green">已冻结</span>
+      <span class="cds--tag cds--tag--gray">未跑</span>
+      <span class="cds--tag cds--tag--blue">运行中</span>
+      <span class="cds--tag cds--tag--red">失败</span>
+      <span class="cds--tag cds--tag--purple">已派生新配置</span>
+      <span class="cds--tag cds--tag--outline">单值产物</span>
+    </div>
+    <div class="cds--inline-notification cds--inline-notification--info" style="max-width:640px">
+      <div class="cds--inline-notification__details">
+        <div class="cds--inline-notification__text-wrapper">
+          <p class="cds--inline-notification__title">配置未保存</p>
+          <div class="cds--inline-notification__subtitle">按 P87 §3.10，未保存的配置不能派发模拟。</div>
+        </div>
+      </div>
+    </div>
+    <div class="cds--inline-notification cds--inline-notification--warning" style="max-width:640px;margin-top:8px">
+      <div class="cds--inline-notification__details">
+        <div class="cds--inline-notification__text-wrapper">
+          <p class="cds--inline-notification__title">该配置已有运行中的任务</p>
+          <div class="cds--inline-notification__subtitle">等它结束或先取消，再提交新的。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>进度</h2>
+    <p class="hint">任务队列的进度、资源监控的 CPU / 内存。</p>
+    <div style="max-width:520px">
+      <div class="cds--progress-bar" style="margin-bottom:16px">
+        <div class="cds--progress-bar__label"><span>主模拟 · 42%</span></div>
+        <div class="cds--progress-bar__track"><div class="cds--progress-bar__bar" style="width:42%"></div></div>
+      </div>
+      <div class="cds--progress-bar cds--progress-bar--small" style="margin-bottom:16px">
+        <div class="cds--progress-bar__track"><div class="cds--progress-bar__bar" style="width:78%"></div></div>
+      </div>
+      <div class="cds--progress-bar cds--progress-bar--finished">
+        <div class="cds--progress-bar__track"><div class="cds--progress-bar__bar" style="width:100%"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>折叠与列表</h2>
+    <p class="hint">分析页「一项分析 = 一个可折叠块」的骨架、配置页的字段分组。左边手风琴，右边结构化列表。</p>
+    <div class="grid2">
+      <div class="cell">
+        <div class="cap">手风琴 · 用在分析项折叠</div>
+        <ul class="cds--accordion">
+          <li class="cds--accordion__item cds--accordion__item--active">
+            <button class="cds--accordion__heading" type="button">
+              <svg class="cds--accordion__arrow" width="16" height="16" viewBox="0 0 16 16"><path d="M8 11L3 6l.7-.7L8 9.6l4.3-4.3.7.7z"/></svg>
+              <div class="cds--accordion__title">GDR分布</div>
+            </button>
+            <div class="cds--accordion__content">参数：gdr = target_achievement；直方图开；累积分布关。</div>
+          </li>
+          <li class="cds--accordion__item">
+            <button class="cds--accordion__heading" type="button">
+              <svg class="cds--accordion__arrow" width="16" height="16" viewBox="0 0 16 16"><path d="M8 11L3 6l.7-.7L8 9.6l4.3-4.3.7.7z"/></svg>
+              <div class="cds--accordion__title">GDR指标统计</div>
+            </button>
+            <div class="cds--accordion__content">参数：CI = Wilson 95%。</div>
+          </li>
+        </ul>
+      </div>
+      <div class="cell">
+        <div class="cap">结构化列表 · 用在数据集元信息 / 任务记录</div>
+        <ul class="cds--structured-list">
+          <li class="cds--structured-list-row cds--structured-list-row--header-row">
+            <div class="cds--structured-list-th">字段</div><div class="cds--structured-list-th">值</div>
+          </li>
+          <li class="cds--structured-list-row">
+            <div class="cds--structured-list-td">样本数</div><div class="cds--structured-list-td">1000</div>
+          </li>
+          <li class="cds--structured-list-row">
+            <div class="cds--structured-list-td">流式分析</div><div class="cds--structured-list-td">已跑</div>
+          </li>
+          <li class="cds--structured-list-row">
+            <div class="cds--structured-list-td">产生它的配置</div><div class="cds--structured-list-td">configs/root.toml</div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>开关 · 用在布尔配置项</h2>
+    <p class="hint">「重复」「deactivate_on_early_hit」「是否跑流式」。</p>
+    <div class="row">
+      <div class="cds--toggle">
+        <input class="cds--toggle__input" type="checkbox" id="t1" checked>
+        <label class="cds--toggle__label" for="t1">
+          <span class="cds--toggle__text--left">关</span>
+          <span class="cds--toggle__appearance"></span>
+          <span class="cds--toggle__text--right">开</span>
+        </label>
+      </div>
+      <div class="cds--toggle">
+        <input class="cds--toggle__input" type="checkbox" id="t2">
+        <label class="cds--toggle__label" for="t2">
+          <span class="cds--toggle__appearance"></span>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>颜色与字体 token</h2>
+    <p class="hint">Carbon 的色阶是成套的（Gray 10/90/100 等主题），先看它默认的灰阶与语义色，再决定与本项目「黑白灰骨架 + 彩色只做语义」怎么对齐。</p>
+    <div class="row" style="gap:0">
+      <div style="width:88px;height:56px;background:#f4f4f4;border:1px solid #e0e0e0;font-size:10px;color:#6f6f6f;padding:4px">gray10<br>#f4f4f4</div>
+      <div style="width:88px;height:56px;background:#e0e0e0;font-size:10px;color:#525252;padding:4px">gray20<br>#e0e0e0</div>
+      <div style="width:88px;height:56px;background:#c6c6c6;font-size:10px;color:#393939;padding:4px">gray30<br>#c6c6c6</div>
+      <div style="width:88px;height:56px;background:#8d8d8d;font-size:10px;color:#fff;padding:4px">gray50<br>#8d8d8d</div>
+      <div style="width:88px;height:56px;background:#525252;font-size:10px;color:#f4f4f4;padding:4px">gray70<br>#525252</div>
+      <div style="width:88px;height:56px;background:#262626;font-size:10px;color:#f4f4f4;padding:4px">gray90<br>#262626</div>
+      <div style="width:88px;height:56px;background:#161616;font-size:10px;color:#f4f4f4;padding:4px">gray100<br>#161616</div>
+      <div style="width:88px;height:56px;background:#0f62fe;font-size:10px;color:#fff;padding:4px">blue60<br>#0f62fe</div>
+      <div style="width:88px;height:56px;background:#24a148;font-size:10px;color:#fff;padding:4px">green50<br>#24a148</div>
+      <div style="width:88px;height:56px;background:#da1e28;font-size:10px;color:#fff;padding:4px">red60<br>#da1e28</div>
+      <div style="width:88px;height:56px;background:#f1c21b;font-size:10px;color:#161616;padding:4px">yellow30<br>#f1c21b</div>
+    </div>
+    <p class="meta" style="margin-top:12px">
+      两处与本项目现状的差异需要留意：<br>
+      ① Carbon 的主操作色是 <code>#0f62fe</code>（更亮的蓝），本项目现用 <code>#1976d2</code>；<br>
+      ② Carbon 默认直角、紧凑（组件高度 32/40px），与本项目「严肃、朴素、信息密度优先」的定位一致，
+      但它的表格行高比现在探针的高，11 个标签行要重新量一遍宽度。
+    </p>
+  </section>
+
+  <section>
+    <h2>图标（Carbon 32 网格）</h2>
+    <p class="hint">配置标签页已定用 Carbon。下面是把已定与候选拼成一行的效果，看线条粗细与文字是否协调。</p>
+    <div class="row" style="gap:28px">
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor"><path d="M8 2h16v4H8zM6 8h20v20H6zm2 2v16h16V10z"/></svg>卡牌定义
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor"><circle cx="16" cy="16" r="12" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="16" r="5"/></svg>资源定义
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor"><path d="M4 6h24v20H4zm2 2v16h20V8zM7 11h10v2H7zm0 4h14v2H7zm0 4h8v2H7z"/></svg>日历（资源获取）
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor"><path d="M6 8h20v4H6zm0 6h20v4H6zm0 6h20v4H6z"/></svg>卡池管理
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor"><path d="M16 3a13 13 0 1 0 13 13A13 13 0 0 0 16 3zm0 2a11 11 0 0 1 10.6 8H5.4A11 11 0 0 1 16 5zm0 22A11 11 0 0 1 5.4 19h21.2A11 11 0 0 1 16 27z"/></svg>保底机制（伞）
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor"><path d="M14 4h4v10h-4zm0 14h4v10h-4zM4 14h10v4H4zm14 0h10v4H18z"/></svg>累抽奖励
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor"><path d="M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-8 0V8a4 4 0 0 1 4-4zm-6 22h12v2H10z"/></svg>满突溢出
+      </span>
+    </div>
+    <p class="meta" style="margin-top:10px">注：这一行的图标形状是示意（按已定语义手绘对齐线条粗细），实际落地时从 <code>@carbon/icons@11.89.0</code> 取真件替换。</p>
+  </section>
+
+</div>
+</body>
+</html>

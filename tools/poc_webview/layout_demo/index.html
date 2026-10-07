@@ -229,6 +229,53 @@ body{
 .cfg-tab.on svg{color:var(--accent)}
 .cfg-pane{padding-top:14px}
 
+
+/* ---------- 嵌入件（各归各家）：配置详情页里只显示与该 tag 相关的图 ---------- */
+.embed{margin:2px 0 12px;border:1px solid var(--line);background:var(--result);
+  border-radius:var(--radius);padding:8px 10px 6px}
+.embed-h{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+.embed-h b{font-size:12px;color:var(--ink-2);font-weight:600}
+.embed-h span{font-size:11px;color:var(--ink-3)}
+.embed svg{display:block;width:100%;height:auto}
+.embed .axis{stroke:#c8ced9;stroke-width:1}
+.embed .grid{stroke:#e8ebf0;stroke-width:1}
+.embed .tick{font-size:9px;fill:var(--ink-3)}
+.embed .lbl{font-size:10px;fill:var(--ink-2)}
+.embed .band{fill:#cfe1f5}
+.embed .band.on{fill:#8db8e4}
+.embed .bar{fill:#b9c7d6}
+.embed .bar.on{fill:var(--accent)}
+.embed .ln{fill:none;stroke:var(--accent);stroke-width:1.6}
+.embed .ln2{fill:none;stroke:#c07a2a;stroke-width:1.4;stroke-dasharray:3 3}
+.embed .area{fill:#dce9f7}
+.embed .dot{fill:var(--accent)}
+.embed .now{stroke:var(--accent);stroke-width:1;stroke-dasharray:3 2}
+.embed .rule{stroke:#c8ced9;stroke-width:1;stroke-dasharray:2 2}
+
+/* 分析页：与配置页统一为 card 式标签行（相邻共边、选中白底连体） */
+.an-tabrow{display:flex;flex-wrap:wrap;padding-top:5px;border-bottom:1px solid var(--line);
+  margin-top:6px}
+.an-tab{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);
+  border-bottom:0;background:var(--result);border-radius:2px 2px 0 0;padding:5px 10px;
+  margin:0 -1px -1px 0;font:inherit;font-size:12px;color:var(--muted);cursor:pointer;
+  white-space:nowrap}
+.an-tab svg{flex:0 0 auto;color:var(--ink-3)}
+.an-tab:hover{background:#eef1f5}
+.an-tab.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-bottom:1px solid var(--panel);position:relative;z-index:1}
+.an-tab.on svg{color:var(--accent)}
+.an-pane{padding-top:12px}
+.an-tab .cnt{font-size:10px;color:var(--ink-3);background:var(--bg);border-radius:8px;
+  padding:0 5px;line-height:15px}
+.an-tab.on .cnt{background:var(--accent-soft);color:var(--accent)}
+
+/* 二级标签：B 下划线式（与一级 card 式形状不同，不混层） */
+.sub2{display:flex;gap:14px;margin:0 0 10px;border-bottom:1px solid var(--line)}
+.sub2 button{border:0;background:transparent;font:inherit;font-size:12px;color:var(--muted);
+  cursor:pointer;padding:4px 0;border-bottom:2px solid transparent;margin-bottom:-1px}
+.sub2 button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.sub2 button:hover:not(.on){color:var(--ink-2)}
+
 /* 分析面板 */
 .anchor-bar{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
@@ -448,6 +495,25 @@ body{
               </el-table>
             </div>
             <div class="cfg-pane" v-show="cfgTab==='resgain'">
+              <div class="embed">
+                <div class="embed-h"><b>累积收入</b>
+                  <span>横轴＝模拟天数，纵轴＝下发资源累计（0–7200）；实线＝实际下发，虚线＝按日均 60 折算的等速线，两线贴近即收入规则稳定</span></div>
+                <svg viewBox="0 0 560 104" role="img" aria-label="累积资源曲线">
+                  <line class="axis" x1="48" y1="84" x2="540" y2="84"/>
+                  <line class="axis" x1="48" y1="12" x2="48" y2="84"/>
+                  <line class="grid" x1="48" y1="24" x2="540" y2="24"/>
+                  <text class="tick" x="44" y="28" text-anchor="end">7200</text>
+                  <text class="tick" x="44" y="88" text-anchor="end">0</text>
+                  <text class="tick" x="48" y="98" text-anchor="middle">0</text>
+                  <text class="tick" x="294" y="98" text-anchor="middle">60</text>
+                  <text class="tick" x="540" y="98" text-anchor="middle">120 天</text>
+                  <polyline class="ln" points="48,84 130,72 212,60 294,48 376,36 458,24 540,12"/>
+                  <polyline class="ln2" points="48,84 540,46"/>
+                  <circle class="dot" cx="294" cy="48" r="2.5"/>
+                  <text class="tick" x="294" y="38" text-anchor="middle" fill="#1976d2">第 60 天 3680</text>
+                  <text class="tick" x="536" y="41" text-anchor="end" fill="#c07a2a">日均 60</text>
+                </svg>
+              </div>
               <el-table :data="draft.resGains" size="small">
                 <el-table-column prop="res" label="资源" width="140"></el-table-column>
                 <el-table-column prop="mode" label="规则" min-width="170"></el-table-column>
@@ -459,8 +525,36 @@ body{
               </p>
             </div>
             <div class="cfg-pane" v-show="cfgTab==='pools'">
-              <el-tabs v-model="poolSubTab" type="card" class="sub-tabs">
-                <el-tab-pane label="池" name="pool">
+              <div class="embed">
+                <div class="embed-h"><b>开放区间</b>
+                  <span>横轴＝模拟时间（0–120 天）；蓝条＝池子可抽区间，虚线＝当前时刻。所有涉及时间窗口的字段都读这张图</span></div>
+                <svg viewBox="0 0 560 96" role="img" aria-label="Banner 开放区间甘特图">
+                  <line class="grid" x1="88" y1="10" x2="88" y2="84"/>
+                  <line class="grid" x1="196" y1="10" x2="196" y2="84"/>
+                  <line class="grid" x1="304" y1="10" x2="304" y2="84"/>
+                  <line class="grid" x1="412" y1="10" x2="412" y2="84"/>
+                  <line class="grid" x1="520" y1="10" x2="520" y2="84"/>
+                  <text class="tick" x="88" y="94" text-anchor="middle">0</text>
+                  <text class="tick" x="304" y="94" text-anchor="middle">60</text>
+                  <text class="tick" x="520" y="94" text-anchor="middle">120 天</text>
+                  <text class="lbl" x="80" y="24" text-anchor="end">角色池 UP</text>
+                  <rect class="band on" x="88" y="14" width="54" height="14" rx="1"/>
+                  <text class="tick" x="150" y="25">第 21 天下架</text>
+                  <text class="lbl" x="80" y="46" text-anchor="end">武器池 UP</text>
+                  <rect class="band on" x="88" y="36" width="54" height="14" rx="1"/>
+                  <text class="tick" x="150" y="47">第 21 天下架</text>
+                  <text class="lbl" x="80" y="68" text-anchor="end">常驻池</text>
+                  <rect class="band" x="88" y="58" width="432" height="14" rx="1"/>
+                  <text class="tick" x="524" y="69" text-anchor="end">不下架</text>
+                  <line class="now" x1="196" y1="8" x2="196" y2="84"/>
+                  <text class="tick" x="200" y="10" fill="#1976d2">当前 第 30 天</text>
+                </svg>
+              </div>
+              <div class="sub2">
+                <button :class="{on: poolSubTab==='pool'}" @click="poolSubTab='pool'">池</button>
+                <button :class="{on: poolSubTab==='lifecycle'}" @click="poolSubTab='lifecycle'">生命周期</button>
+              </div>
+              <template v-if="poolSubTab==='pool'">
                   <el-table :data="draft.pools" size="small">
                     <el-table-column prop="name" label="池子" min-width="150"></el-table-column>
                     <el-table-column prop="type" label="类型" width="80"></el-table-column>
@@ -468,17 +562,36 @@ body{
                     <el-table-column prop="rate" label="出率" width="80"></el-table-column>
                     <el-table-column prop="from" label="开放" width="100"></el-table-column>
                     <el-table-column prop="until" label="下架" width="110"></el-table-column>
-                  </el-table>
-                </el-tab-pane>
-                <el-tab-pane label="生命周期" name="lifecycle">
+                </el-table>
+              </template>
+              <template v-else>
                   <el-table :data="draft.lifecycles" size="small">
                     <el-table-column prop="cond" label="条件" min-width="220"></el-table-column>
                     <el-table-column prop="act" label="动作" min-width="200"></el-table-column>
-                  </el-table>
-                </el-tab-pane>
-              </el-tabs>
+                </el-table>
+              </template>
             </div>
             <div class="cfg-pane" v-show="cfgTab==='pity'">
+              <div class="embed">
+                <div class="embed-h"><b>出率曲线</b>
+                  <span>横轴＝距上次出货的累计抽数，纵轴＝该抽命中率（0–100%）。软保底段逐步抬升，到阈值起为 100%；基础段是贴着底的平台，所以另注 0.6%</span></div>
+                <svg viewBox="0 0 560 104" role="img" aria-label="保底出率曲线">
+                  <line class="axis" x1="48" y1="84" x2="540" y2="84"/>
+                  <line class="axis" x1="48" y1="12" x2="48" y2="84"/>
+                  <text class="tick" x="44" y="16" text-anchor="end">100%</text>
+                  <text class="tick" x="44" y="88" text-anchor="end">0</text>
+                  <text class="tick" x="48" y="98" text-anchor="middle">0</text>
+                  <text class="tick" x="294" y="98" text-anchor="middle">90 抽</text>
+                  <text class="tick" x="516" y="98" text-anchor="middle">180</text>
+                  <line class="grid" x1="48" y1="82" x2="540" y2="82"/>
+                  <text class="tick" x="44" y="80" text-anchor="end">0.6%</text>
+                  <polyline class="ln" points="48,82 294,82 320,68 346,55 372,42 398,29 424,17 444,12 540,12"/>
+                  <text class="tick" x="448" y="10" fill="#2e7d32">阈值起 100%</text>
+                  <line class="now" x1="294" y1="12" x2="294" y2="84"/>
+                  <text class="tick" x="298" y="22" fill="#1976d2">硬保底 90</text>
+                  <text class="tick" x="52" y="78" fill="#5a6272">基础 0.6% 平台</text>
+                </svg>
+              </div>
               <el-table :data="draft.pities" size="small">
                 <el-table-column prop="scope" label="适用稀有度" width="110"></el-table-column>
                 <el-table-column prop="type" label="类型" width="120"></el-table-column>
@@ -488,6 +601,25 @@ body{
               </el-table>
             </div>
             <div class="cfg-pane" v-show="cfgTab==='milestone'">
+              <div class="embed">
+                <div class="embed-h"><b>阈值尺</b>
+                  <span>横轴＝累计抽数，刻度＝里程碑阈值；实心＝已达，空心＝未达。虚线＝本轮已抽数</span></div>
+                <svg viewBox="0 0 560 78" role="img" aria-label="累抽奖励阈值尺">
+                  <line class="axis" x1="48" y1="42" x2="540" y2="42"/>
+                  <text class="tick" x="48" y="66" text-anchor="middle">0</text>
+                  <text class="tick" x="212" y="66" text-anchor="middle">100</text>
+                  <text class="tick" x="376" y="66" text-anchor="middle">300</text>
+                  <text class="tick" x="540" y="66" text-anchor="middle">500</text>
+                  <circle class="dot" cx="212" cy="42" r="4.5"/>
+                  <text class="tick" x="212" y="26" text-anchor="middle" fill="#1976d2">×30 抽卡资源</text>
+                  <circle cx="376" cy="42" r="4.5" fill="none" stroke="#8b93a3" stroke-width="1.5"/>
+                  <text class="tick" x="376" y="26" text-anchor="middle">×1 自选券</text>
+                  <circle cx="540" cy="42" r="4.5" fill="none" stroke="#8b93a3" stroke-width="1.5"/>
+                  <text class="tick" x="536" y="26" text-anchor="end">×1 自选券</text>
+                  <line class="now" x1="268" y1="34" x2="268" y2="52"/>
+                  <text class="tick" x="272" y="60" fill="#1976d2">已抽 132</text>
+                </svg>
+              </div>
               <el-table :data="draft.milestones" size="small">
                 <el-table-column prop="threshold" label="累抽阈值" width="110"></el-table-column>
                 <el-table-column prop="repeat" label="重复" width="80"></el-table-column>
@@ -704,8 +836,16 @@ body{
           </p>
           </template>
 
-          <el-tabs v-model="analysisTab" style="margin-top:6px">
-            <el-tab-pane v-for="cat in activeCategories" :key="cat.key" :label="cat.name" :name="cat.key">
+          <div class="an-tabrow">
+            <button class="an-tab" :class="{on: analysisTab==='overall'}" @click="analysisTab='overall'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M4,2H2V28a2,2,0,0,0,2,2H30V28H4Z"/><path d="M30,9H23v2h3.59L19,18.59l-4.29-4.3a1,1,0,0,0-1.42,0L6,21.59,7.41,23,14,16.41l4.29,4.3a1,1,0,0,0,1.42,0L28,12.41V16h2Z"/></svg><span>{{ (catCount('overall')) ? catName('overall') : catName('overall') }}</span><span class="cnt" v-if="catCount('overall')">{{ catCount('overall') }}</span></button>
+            <button class="an-tab" :class="{on: analysisTab==='success'}" @click="analysisTab='success'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M26 16a9.9283 9.9283 0 00-1.1392-4.6182l-1.4961 1.4961A7.9483 7.9483 0 0124 16zM23.4141 10L22 8.5859l-4.7147 4.7147A2.9659 2.9659 0 0016 13a3 3 0 103 3 2.9659 2.9659 0 00-.3006-1.2853zM16 17a1 1 0 111-1A1.0013 1.0013 0 0116 17zM16 8a7.9515 7.9515 0 013.1223.6353l1.4961-1.4961A9.9864 9.9864 0 006 16H8A8.0092 8.0092 0 0116 8z"/><path d="M16,30A14,14,0,1,1,30,16,14.0158,14.0158,0,0,1,16,30ZM16,4A12,12,0,1,0,28,16,12.0137,12.0137,0,0,0,16,4Z"/></svg><span>{{ (catCount('success')) ? catName('success') : catName('success') }}</span><span class="cnt" v-if="catCount('success')">{{ catCount('success') }}</span></button>
+            <button class="an-tab" :class="{on: analysisTab==='risk'}" @click="analysisTab='risk'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M16 23a1.5 1.5 0 101.5 1.5A1.5 1.5 0 0016 23zM15 12H17V21H15z"/><path d="M29,30H3a1,1,0,0,1-.8872-1.4614l13-25a1,1,0,0,1,1.7744,0l13,25A1,1,0,0,1,29,30ZM4.6507,28H27.3493l.002-.0033L16.002,6.1714h-.004L4.6487,27.9967Z"/></svg><span>{{ (catCount('risk')) ? catName('risk') : catName('risk') }}</span><span class="cnt" v-if="catCount('risk')">{{ catCount('risk') }}</span></button>
+            <button class="an-tab" :class="{on: analysisTab==='time'}" @click="analysisTab='time'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M16,30A14,14,0,1,1,30,16,14,14,0,0,1,16,30ZM16,4A12,12,0,1,0,28,16,12,12,0,0,0,16,4Z"/><path d="M20.59 22L15 16.41 15 7 17 7 17 15.58 22 20.59 20.59 22z"/></svg><span>{{ (catCount('time')) ? catName('time') : catName('time') }}</span><span class="cnt" v-if="catCount('time')">{{ catCount('time') }}</span></button>
+            <button class="an-tab" :class="{on: analysisTab==='per_pool'}" @click="analysisTab='per_pool'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M4,2H2V28a2,2,0,0,0,2,2H30V28H4V25H26V17H4V13H18V5H4ZM24,19v4H4V19ZM16,7v4H4V7Z"/></svg><span>{{ (catCount('per_pool')) ? catName('per_pool') : catName('per_pool') }}</span><span class="cnt" v-if="catCount('per_pool')">{{ catCount('per_pool') }}</span></button>
+            <button class="an-tab" :class="{on: analysisTab==='dispatch'}" @click="analysisTab='dispatch'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M12 30H4a2.0023 2.0023 0 01-2-2V24a2.0023 2.0023 0 012-2h8a2.0023 2.0023 0 012 2v4A2.0023 2.0023 0 0112 30zM4 24v4h8V24zM28 20H12a2.0023 2.0023 0 01-2-2V14a2.0023 2.0023 0 012-2H28a2.0023 2.0023 0 012 2v4A2.0023 2.0023 0 0128 20zM12 14v4H28V14zM16 10H4A2.0023 2.0023 0 012 8V4A2.0023 2.0023 0 014 2H16a2.0023 2.0023 0 012 2V8A2.0023 2.0023 0 0116 10zM4 4V8H16V4z"/></svg><span>{{ (catCount('dispatch')) ? catName('dispatch') : catName('dispatch') }}</span><span class="cnt" v-if="catCount('dispatch')">{{ catCount('dispatch') }}</span></button>
+          </div>
+
+          <div class="an-pane" v-show="analysisTab===cat.key" v-for="cat in activeCategories" :key="cat.key">
               <p v-if="cat.note" class="reason" style="color:var(--warn);margin:0 0 10px">
                 {{ cat.note }}
               </p>
@@ -772,8 +912,8 @@ body{
                   </div>
                 </div>
               </div>
-            </el-tab-pane>
-          </el-tabs>
+          </div>
+          
         </div>
 
         <div v-else class="wb-empty">该节点不能作为分析锚点（需选中某个一级配置节点）</div>
@@ -1234,6 +1374,15 @@ const app = createApp({
       return '';
     });
     // 比较分析页签与一般分析页签同构但不同集；切主体时把页签拉回该集的第一项
+    // 标签行需要在不进入 pane 分支的情况下取到分类名与条目数
+    function catName(key) {
+      const c = activeCategories.value.find(x => x.key === key);
+      return c ? c.name : key;
+    }
+    function catCount(key) {
+      const c = activeCategories.value.find(x => x.key === key);
+      return c ? c.items.length : 0;
+    }
     const activeCategories = computed(() =>
       subjectKind.value === 'compare' ? compareCategories : categories);
     watch(subjectKind, (nv) => {
@@ -1325,6 +1474,7 @@ const app = createApp({
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
       canAnalyze, canRun, runDisabledReason, cfgTab, poolSubTab, activeCategories,
+      catName, catCount,
       taskDrawer, openTasks, runningCount, workersActive, workersMax, cpu, mem, now,
       onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runNow, saveDraft,
       runParams, runPop, runningForSubject, sameRunCount,

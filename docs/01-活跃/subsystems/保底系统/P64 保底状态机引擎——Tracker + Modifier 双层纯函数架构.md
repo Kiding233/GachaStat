@@ -331,9 +331,11 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 | `RotatingModifier` | `guaranteed` | `featured_cards[scope]` | `scope\featured` | `p(Q)` |
 | `NonFeaturedModifier`（G1） | `forced_loss` | `scope\featured` | `featured_cards[scope]` | `p(Q)` |
 | `SelectedModifier`（targeted） | `guaranteed ∨ fate_ready` | `(selected,)` | `scope\selected` | `p(Q)` |
-| `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\featured` | `p(Q)` |
+| `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\A` | `p(Q)` |
 
 **四样都是 `factor()` 方法体内的局部量**，不是构造形参、不进接口。「更低稀有度」= `rarity_rank` 中 `rank > rank(scope)` 的稀有度下的全部卡；「`scope\X`」= scope 卡集去掉 X。
+
+> **G3 的 Q 含已拥有的 UP（2026-10-07 用户裁决）**：G3 的 A = featured 中**未拥有**者，故 `scope\A` = (featured 中已拥有者) ∪ `scope\featured`。已拥有的 UP 落在 Q 内、本抽被搬空，从而「50 抽必出**未获得的** UP」成立。若按 `scope\featured`（不含已拥有者）取 Q，已拥有的 UP 保留原概率、本抽仍可被抽到，与手册「已获得的装备从 UP 组中排除」冲突。
 
 **表里只有两列变出花样**：A/Q 的取法（5 种）与转移量（2 种：`p(Q)` 与 `boost/100`）。条件各不相同，但与 A/Q/转移量无关。
 
@@ -1951,7 +1953,9 @@ def _preset_rotating_soft(pdef):
 
 **为什么不能沿用 pool 层近似**：pool 层过滤（把已拥有的卡从 reward 列表移除）会让**每次抽卡**都不出它们，而真实机制只作用于「50 抽 UP 保护」这一个触发点——普通抽卡仍可产出已拥有的装备。按「精确建模原则」这是语义打折，不接受。手册原先将其归为 pool 层，是架构约束下的权宜。
 
-**实现**：本机制的 Modifier 部分**不新增类**（裁决 1B）。它是 `TransferModifier` 的一组参数：`u_of = _u_pool`、`t_of = _t_not_owned(scope, on_all_owned)`、`mode = 'assign'`，即「动态目标」的解析器变体。下给出的是**该解析器**的实现（原 `ForceNotOwnedModifier` 类本体）：
+**实现**：一个 `NotOwnedModifier` 零件（§3.1.2 机制表第 7 行），四样由 `factor()` 就地算出：条件 `counter >= τ`；A = `featured_cards[scope]` 中**未拥有**者（**动态目标**，由下方 `_t_not_owned` 解析器给出）；Q = 更低稀有度 ∪ `scope\A`；转移量 = `p(Q)`。下给出的是**目标解析器**的实现（原 `ForceNotOwnedModifier` 类本体的前半段）：
+
+> **2026-10-07 裁决（用户）**：Q 取「更低稀有度 ∪ `scope\A`」，即**已拥有的 UP 落在 Q 内、本抽被搬空**，实现「必出未获得的 UP」。原文写 `mode = 'assign'`（绝对写入通道），与本节末段的 `transfer_factors` 形态互斥，且其 Q 不含已拥有者、等于不排除，已按裁决改正。
 
 <!-- REVIEW-FIX-PREV: ISSUE-016 -->
 <!-- REVIEW-FIX-PREV: ISSUE-013 -->

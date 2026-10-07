@@ -996,13 +996,13 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 
 | 路线 | 结果 |
 |------|------|
-| `hard(scope='sr')` 排在 `soft(scope='ssr')` 之前 | **不可达**——`hard` 对**更高稀有度豁免**（只清零更低稀有度），故 SSR 保留原概率，`target_total > 0` |
-| `hard(scope='ssr')` 排在 `soft(scope='sr')` 之前 | **不可达**——`hard` 把更低稀有度清零，`pool <= 0` 的**前一道守卫**先命中 |
-| 池中某稀有度的卡声明 `probability = 0.0`，`soft(scope=该稀有度)` | **可达**——槽位存在（`compute_scope_mappings` 按 `rewards` 生成、不看概率）但质量为 0，`target_total = 0` 而 `pool > 0` |
+| `hard(scope='sr')` 排在 `soft(scope='ssr')` 之前 | **不可达**：`hard` 对**更高稀有度豁免**（只清零更低稀有度），故 SSR 保留原概率，`target_total > 0` |
+| `hard(scope='ssr')` 排在 `soft(scope='sr')` 之前 | **不可达**：`hard` 把更低稀有度清零，`pool <= 0` 的**前一道守卫**先命中 |
+| 池中某稀有度的卡声明 `probability = 0.0`，`soft(scope=该稀有度)` | **可达**：槽位存在（`compute_scope_mappings` 按 `rewards` 生成、不看概率）但质量为 0，`target_total = 0` 而 `pool > 0` |
 
 即：**进入该分支要求「池里声明了一张概率为 0 的卡」**。该形态当前无校验（`_validate_reward_dict` 不查 `probability`）、仓库配置与手册均无此写法、也无「不可获得卡」的既有表达方式，故它是一个**退化配置**而非现实机制。
 
-**语义上还有一层**：在这个场景里，「不转移」未必是错的——池子自己声明该稀有度概率为 0（不可获得），保底把它抬起来反而与池子的声明冲突。所以 §3.4.1 的规格（「目标组 +t 个百分点」，无条件）可能才是需要改的那一侧。
+**语义上还有一层**：在这个场景里，「不转移」未必是错的：池子自己声明该稀有度概率为 0（不可获得），保底把它抬起来反而与池子的声明冲突。所以 §3.4.1 的规格（「目标组 +t 个百分点」，无条件）可能才是需要改的那一侧。
 
 **形式化待决（根因是乘性因子无逆）**：`transfer_factors` 的 `(pA + amount)/pA` 是**把绝对量换算成相对因子**的那一步除法，`pA = 0` 时发散。三条候选：
 
@@ -1013,13 +1013,13 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 | **丙** 乘性接口 + 一条「绝对写入」通道 | 中（框架支持两种表示；§3.1.5.6 已为 `assign` 描述过这条通道：「按口径 3 的分组结果直接写入绝对值，不走因子向量」） | 边界精确，保留乘性默认；但两套形式并存，§3.1.5.3 的可交换性分析要同时对两套做 |
 | **丁** 堵掉输入 | 在装载期拒绝 `probability <= 0`（该形态无校验、无示例、无既有用途） | 极小 | 边界变为不可达，丙的形式化问题不再紧迫 |
 
-**支持「换加法」的三条实测事实**（供裁决）：① §3.1.5.1 的「性质 1（对数坐标 / 指数族）」**全文档只出现一次**（它自己的定义），从未被后续用到——那条数学理由没有兑现；② §3.1.5.2.1 声明本族**配平**（`⟨m,p⟩ ≡ 1`，实测六组差 0），故「框架统一归一化」那次除法**对当前唯一的族退化为恒等**，乘性机器从未真正跑过；③ §3.4.1 修正 ① 已把 `amount` 改为**绝对百分点**语义，乘性因子成为**从绝对量反推**的派生量。
+**支持「换加法」的三条实测事实**（供裁决）：① §3.1.5.1 的「性质 1（对数坐标 / 指数族）」**全文档只出现一次**（它自己的定义），从未被后续用到，那条数学理由没有兑现；② §3.1.5.2.1 声明本族**配平**（`⟨m,p⟩ ≡ 1`，实测六组差 0），故「框架统一归一化」那次除法**对当前唯一的族退化为恒等**，乘性机器从未真正跑过；③ §3.4.1 修正 ① 已把 `amount` 改为**绝对百分点**语义，乘性因子成为**从绝对量反推**的派生量。
 
-**反对「换加法」的一点**（须如实记账）：乘性的非负性是**参数级**约束（声明 `m ≥ 0` 即可，手写 Modifier 不可能产出负概率），加法的非负性是**值依赖**约束（须 `p + δ ≥ 0`）。两者都还需一个额外条件（乘性 `⟨m,p⟩ > 0`；加法 `Σ(p+δ) > 0`），故乘性的闭性优势真实但不大——对转移族，加法的约束退化为单个标量 `amount ≤ p(Q)`，而该条件 §3.9.4 已经写了。
+**反对「换加法」的一点**（须如实记账）：乘性的非负性是**参数级**约束（声明 `m ≥ 0` 即可，手写 Modifier 不可能产出负概率），加法的非负性是**值依赖**约束（须 `p + δ ≥ 0`）。两者都还需一个额外条件（乘性 `⟨m,p⟩ > 0`；加法 `Σ(p+δ) > 0`），故乘性的闭性优势真实但不大：对转移族，加法的约束退化为单个标量 `amount ≤ p(Q)`，而该条件 §3.9.4 已经写了。
 
-**换加法买不到的**（避免误判收益）：顺序敏感**不会**消失——`δ` 仍依赖当前分布（通过 `p(Q)`），「在 `δ₁` 的输出上求值 `δ₂`」与原处求值仍不同，§3.1.5.3 的分析不会因换形式而变短。
+**换加法买不到的**（避免误判收益）：顺序敏感**不会**消失：`δ` 仍依赖当前分布（通过 `p(Q)`），「在 `δ₁` 的输出上求值 `δ₂`」与原处求值仍不同，§3.1.5.3 的分析不会因换形式而变短。
 
-**前置**：本节的边界分析（以及 §3.1.5.3 / .4 / .5、§3.9.3 / .5）至今仍写在 §3.1.5.2 已宣告**作废**的 `share` / `assign` / `(U, T, 运算)` 词汇里（全文 `share` 29 处、`assign` 20 处）。要判本项，须先把这些段落迁到新词汇——这是 2026-10-05 那轮改写只做了 §3.1.5.2 留下的欠账。
+**前置**：本节的边界分析（以及 §3.1.5.3 / .4 / .5、§3.9.3 / .5）至今仍写在 §3.1.5.2 已宣告**作废**的 `share` / `assign` / `(U, T, 运算)` 词汇里（全文 `share` 29 处、`assign` 20 处）。要判本项，须先把这些段落迁到新词汇，这是 2026-10-05 那轮改写只做了 §3.1.5.2 留下的欠账。
 
 <!-- REVIEW-FIX-PREV: ISSUE-002 -->
 #### 3.1.6 模块归属与依赖方向（ISSUE-002，强制）
@@ -2532,11 +2532,11 @@ class RotatingModifier(Modifier):
   - 验收命令：`PityDef(priority=5)` 经 TOML round-trip 与三处透传后仍为 5（§六 ISSUE-007 条）；**写回判据（ISSUE-923）**：`_pitydef_to_toml(PityDef(priority=5))` 导出的 dict 含 `priority == 5`（且默认值 0 **不写出**该键），并跑一次「写盘 → 重载」闭环断言值不变；**AUDIT-BREAK-1 追加**：字段全量 round-trip 用例——`for f in dataclasses.fields(PityDef)` 用非默认值构造 → TOML round-trip → `ConfigStore` → `pentry` → `_PityDef` 逐字段等值，且断言 `set(pentry) == {f.name for f in dataclasses.fields(PityDef)}`（键集相等，防漏亦防多）。落点 `tests/service/test_batch_simulator.py`
 - [ ] **S4c `[[pity]]` 键契约与 `load_toml` 失败原子性**（~0.8 人时；**2026-10-06 用户裁决归入本计划**）｜目标文件 `core/config_toml.py` + `tests/core/test_pity_config_toml.py` + `tests/test_config_toml.py`。**位置：S4b 之后**（① 的 TOML 键空间与 S4b 改的 `pentry` 内部键空间是两回事，故 ① 不依赖 S4b 的改名；排在 S4b 之后是为了把 `config_toml.py` 的编辑并批）
   - **① 键契约 + 硬拒（读侧：未知键静默忽略）**：建模块级 `_PITY_COMMON_KEYS`（`type` / `name` / `scope` / `target_featured` / `reset` / `pools` / `lifecycle` / `counter_init` / `guaranteed_init` / `fate_points_init` / `selected_card_init`）与 `_PITY_TYPE_KEYS`（每 btype 的键集，**含嵌套键** `lifecycle.deactivate_on_early_hit` / `lifecycle.depends_on`），加 `pity_key_issues(pity_list) -> List[str]`（形态照 [stop_condition.py:314](gacha_simulator/core/stop_condition.py#L314) 的 `stop_condition_shape_issues`：不抛、只读、返回消息列表，加载期与保存闸门共用一处实现），并在 `_build_pity` 内**硬拒**（`ConfigError`，与 `scope` 白名单同风格）。
-    - **白名单来源不得取 `BEHAVIOR_REGISTRY[btype]['params']`**：实测它是 GUI 控件声明面，比真键契约窄——`rotating_soft` 缺 `end`、`rotating_cr` 缺 `cr_state_probs`、四个 init 键与 `reset`/`pools`/`lifecycle`/`target_featured` 均不在其中，照抄会把合法键报成未知。
+    - **白名单来源不得取 `BEHAVIOR_REGISTRY[btype]['params']`**：实测它是 GUI 控件声明面，比真键契约窄：`rotating_soft` 缺 `end`、`rotating_cr` 缺 `cr_state_probs`、四个 init 键与 `reset`/`pools`/`lifecycle`/`target_featured` 均不在其中，照抄会把合法键报成未知。
     - **`func` 不入契约**：`_check_pity_format` 已按「带 start 却缺 scope，或含 func」硬拒，其提示语比未声明键更准（该提示语的自相矛盾已于 2026-10-06 修正）。
     - **一致性测试（必须同批）**：对每个 btype 用全量键构造 → `_pitydef_to_toml` → 断言产出键集 ⊆ 契约表；反向断言契约表 ⊆ `_build_pity` 的读取面。没有它，契约表自身就是新的漂移点。
-  - **② `load_toml` 失败原子性（① 的前提）**：现实现先 `store.clear()` 再逐段构建（[config_toml.py:62-64](gacha_simulator/core/config_toml.py#L62-L64)），中途抛错即停在半成品——实测（真实配置 + 一处非法 `scope`）`banners 8→0`、`pity 1→0`。改为「副本上构建、成功再 swap」或「失败回滚快照」。**这不是 ① 独有的问题**：`load_toml` 调用链内现有十余处会抛 `ConfigError`（cards / pity / milestone / select_voucher / banners / resource_lifecycle / stop_condition），本步顺带修好全部。GUI 启动路径（[main_window.py:240-242](gacha_simulator/gui/main_window.py#L240-L242)）现状为「`except Exception` → stderr traceback + 状态栏一行字，窗口照常打开、配置半装」，即**静默半开**；硬拒若不配 ② 只会多一个触发点。
-  - 验收命令：`pytest -q tests/core/test_pity_config_toml.py tests/test_config_toml.py -k "key or atomic or unknown"`（收集 ≥1 条）；另加两条端到端——① 含未知键的 `[[pity]]` 抛 `ConfigError`，且错误信息点名该键与合法键集；② 加载失败后传入的 `store` 与加载前**逐字段相同**（`banner.banners` / `card_defs` / `pity.pities` / `resource_defs` 计数与内容不变）
+  - **② `load_toml` 失败原子性（① 的前提）**：现实现先 `store.clear()` 再逐段构建（[config_toml.py:62-64](gacha_simulator/core/config_toml.py#L62-L64)），中途抛错即停在半成品。实测（真实配置 + 一处非法 `scope`）：`banners 8→0`、`pity 1→0`。改为「副本上构建、成功再 swap」或「失败回滚快照」。**这不是 ① 独有的问题**：`load_toml` 调用链内现有十余处会抛 `ConfigError`（cards / pity / milestone / select_voucher / banners / resource_lifecycle / stop_condition），本步顺带修好全部。GUI 启动路径（[main_window.py:240-242](gacha_simulator/gui/main_window.py#L240-L242)）现状为「`except Exception` → stderr traceback + 状态栏一行字，窗口照常打开、配置半装」，即**静默半开**；硬拒若不配 ② 只会多一个触发点。
+  - 验收命令：`pytest -q tests/core/test_pity_config_toml.py tests/test_config_toml.py -k "key or atomic or unknown"`（收集 ≥1 条）；另加两条端到端：① 含未知键的 `[[pity]]` 抛 `ConfigError`，且错误信息点名该键与合法键集；② 加载失败后传入的 `store` 与加载前**逐字段相同**（`banner.banners` / `card_defs` / `pity.pities` / `resource_defs` 计数与内容不变）
 <!-- REVIEW-FIX-PREV: ISSUE-005 -->
 - [ ] **S4-2 counter 驱动 preset（4 类）**（~0.6 人时）｜目标文件 `core/pity.py`
   - `soft_interval` / `soft_additive` / `soft_step` / `hard` 四类改造为 **preset 工厂函数**（不得模块级常量实例，ISSUE-005）；工厂签名统一 `def _preset_xxx(pdef)`、调用形式 `preset(pdef)`（ISSUE-030），逐条可配字段一律取自 `pdef`（取值来源表见 §3.2）

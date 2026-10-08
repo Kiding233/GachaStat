@@ -7,8 +7,9 @@
 
 <!-- 一次性组件展示页：纯 HTML + Carbon 的 CSS，不引 React。
      Carbon 的样式按类名书写（.cds--btn / .cds--data-table …），
-     @carbon/react 只是把这些类名挂到 React 组件上的壳，所以纯 HTML 也能用。 -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@carbon/styles@1.116.0/css/styles.min.css">
+     @carbon/react 只是把这些类名挂到 React 组件上的壳，所以纯 HTML 也能用。
+     CSS 走本地 libs/（原先引 jsdelivr，断网就整页没样式）。 -->
+<link rel="stylesheet" href="libs/carbon.min.css">
 <style>
 body{background:#f4f4f4}
 .wrap{max-width:1180px;margin:0 auto;padding:24px 16px 80px}

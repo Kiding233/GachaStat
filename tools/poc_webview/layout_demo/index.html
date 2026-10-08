@@ -7,7 +7,7 @@
 
 <!-- 一次性布局探针：数据全假，不接 Python。用于评估「左树 + 右侧详情/分析双模式」方案。
      Vue 3 + Element Plus 走 cdnjs，版本与 tools/poc_webview/ui_compare 一致。 -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/element-plus/2.9.1/index.min.css">
+<link rel="stylesheet" href="libs/ep.min.css">
 <style>
 :root{
   --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --line-strong:#d0d5dd;
@@ -1278,8 +1278,33 @@ body{
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.prod.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/element-plus/2.9.1/index.full.min.js"></script>
+<!-- 依赖走本地 libs/，不引 CDN。原先从 cdnjs 取 Vue + Element Plus，
+     CDN 一抖动就整个应用退化成裸模板（工具栏显示 {{ ... }}、文件树一个节点都没有），
+     界面上毫无提示，看起来像应用坏了。项目里 echarts.min.js / plotly.min.js
+     本来就是本地化的，这里跟上。版本仍钉 Vue 3.5.13 + Element Plus 2.9.1，
+     因为外观是按这两个版本验过的。 -->
+<script src="libs/vuemin.js"></script>
+<script src="libs/ep.min.js"></script>
 <script>
+// 本地化之后仍要防「文件缺失/损坏」：那时页面同样会退化成裸模板。
+// 与其让人对着一屏 {{ }} 猜，不如直接说是依赖没起来。
+if (typeof Vue === 'undefined' || typeof ElementPlus === 'undefined') {
+  document.addEventListener('DOMContentLoaded', function () {
+    var miss = (typeof Vue === 'undefined' ? 'Vue ' : '')
+             + (typeof ElementPlus === 'undefined' ? 'Element Plus' : '');
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#fff;color:#c62828;'
+      + 'font:14px/1.8 "Microsoft YaHei",sans-serif;padding:48px;white-space:pre-wrap';
+    d.textContent = '依赖未加载：' + miss.trim()
+      + '\n\n本页依赖同目录 libs/ 下的 vuemin.js（Vue）与 ep.min.js（Element Plus）。'
+      + '\n文件缺失或损坏时，页面会退化成裸模板（工具栏显示 {{ ... }}、文件树为空）。'
+      + '\n检查这两个文件是否在位、大小是否正常。';
+    document.body.appendChild(d);
+  });
+}
+</script>
+<script>
+if (typeof Vue === 'undefined') { throw new Error('Vue 未加载，见上方提示'); }
 const { createApp, ref, reactive, computed, watch } = Vue;
 
 /* ============ 假数据 ============ */

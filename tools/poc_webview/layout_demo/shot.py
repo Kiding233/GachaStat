@@ -122,6 +122,16 @@ def main() -> None:
             pg.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))
             pg.on("console", lambda m: errs.append(f"console.{m.type}: {m.text}")
                   if m.type == "error" else None)
+            # 一律屏蔽外部请求：这些页面必须能离线渲染。
+            # 出过一次真事故——页面从 CDN 取 Vue，CDN 一抖动整个应用退化成裸模板
+            # （工具栏显示 {{ ... }}、文件树一个节点都没有），而当时的验证在联网下跑，
+            # 完全看不出来。依赖现在本地化了，这里把「不许联网」变成硬约束。
+            pg.route(
+                "**/*",
+                lambda r: r.continue_()
+                if r.request.url.startswith("file://")
+                else r.abort(),
+            )
             pg.goto(page.as_uri())
             pg.wait_for_timeout(2500)
             if pre_js:

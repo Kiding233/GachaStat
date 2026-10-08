@@ -155,6 +155,36 @@ Bootstrap B 次后得到 B 个分布估计，TVD 均值衡量"分布估计的平
 
 > 问题 4-6 来源：`docs/reports/全模块理论严谨性系统性审查.md`（2026-05-26）。问题 4-5 已在引擎修复中完成（架构委托scipy后一并实施）；问题 6 低优先级。
 
+#### 问题 7：m-out-of-n 缺收敛率缩放 → ✅ 已修复（2026-10-08）
+
+**发现**：P88 差分布计划的独立审查（2026-10-08）实测发现，`_bootstrap_mean_m_out_of_n()` 直接对 `boot_means` 取百分位，**缺收敛率缩放**。重抽 m 个（m<n）的抽样分布比原样本更宽，须乘回收敛率之比。
+
+**实测证据**（正态数据，n=200，m=n^(2/3)=34）：
+
+| 量 | 宽度 |
+|---|---|
+| 理论 95% 宽度（2×1.96×σ/√n） | 0.2772 |
+| 修复前实测 | 0.6658（**2.40 倍**，恰为 √(n/m)=2.425） |
+| 修复后实测 | 0.2745（0.99× 理论） |
+
+**修复**（`core/bootstrap.py`）：按尾指数选择缩放因子，有限方差（α>2）乘 √(m/n)；无限方差（0<α<2）的收敛率为 n^(1−1/α)，乘 (m/n)^(1−1/α)。method 字段补报 `scale=` 便于诊断。
+
+**影响面**：`auto_heavy_tail=True` 在生产代码中**零调用**（仅 3 个测试使用），故修复不改变任何面板行为。
+
+**守测试**：`test_m_out_of_n_scaled_to_n_scale` / `test_m_out_of_n_method_reports_scale`。
+
+#### 问题 8：BCa 退化静默返回 nan → ✅ 已修复（2026-10-08）
+
+**发现**：同次审查实测 `bootstrap_mean([0.0]*30, use_bca=True)` 返回 `nan [nan, nan]`。BCa 在退化输入下**不抛异常**（scipy 只发 `DegenerateDataWarning`），故 `except Exception: pass` 抓不到，nan 经 `_from_scipy_result` 原样返回并被 `format_ci` 显示成 `nan [nan, nan]`。
+
+**这订正了本文件「问题 6」的结论**：问题 6 称「即使发生，scipy BCa 失败时会自动回退百分位法（`except Exception: pass`）」，该保证**不成立**，因为退化路径不抛异常。问题 6 的「低优先级」定性随之失效，已按本条修复。
+
+**修复**：新增 `_ci_is_valid()` 静态守卫（`isfinite` 且 `lower ≤ upper`），`bootstrap_probability` 与 `bootstrap_mean` 两处 BCa 分支在返回前校验，失败即落到百分位路径。
+
+**影响面**：`bootstrap_mean(use_bca=True)` 有 2 个生产调用点（`gui/analysis_panel.py:2361`、`webui/analysis_service.py:286`）；修复只在退化输入时改变行为（nan → 有效区间），非退化情形逐位不变（`test_bca_normal_unchanged` 守）。
+
+**守测试**：`test_bca_degenerate_returns_finite` / `test_bca_constant_nonzero_returns_finite` / `test_bca_normal_unchanged` / `test_ci_is_valid_helper`。
+
 ---
 
 ## 五、阶段1：BootstrapEngine 核心类（TDD）✅ 已完成

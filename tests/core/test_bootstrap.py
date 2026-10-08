@@ -297,3 +297,70 @@ class TestBootstrapResultFormat:
     def test_method_field(self):
         result = BootstrapResult(1.0, 1.0, 1.0, 0.0, 'GPD-param', 30, 1000)
         assert result.method == 'GPD-param'
+
+class TestBootstrapFixes:
+    """2026-10-08 修复的两处缺陷的守测试。
+
+    缺陷一：m-out-of-n 缺收敛率缩放，区间放大 sqrt(n/m) 倍。
+    缺陷二：BCa 在退化输入下静默返回 nan（不抛异常），`except Exception` 抓不到。
+    """
+
+    @pytest.fixture
+    def engine(self):
+        return BootstrapEngine(B=1000, ci_level=0.95, random_seed=7)
+
+    def test_m_out_of_n_scaled_to_n_scale(self, engine):
+        """m-out-of-n 区间宽度须缩放回 n 口径，而非停在 1/sqrt(m) 口径。
+
+        正态数据下理论宽度 = 2*1.96*sigma/sqrt(n)；缺缩放时会是它的
+        sqrt(n/m) 倍（n=200, m=34 时约 2.4 倍）。
+        """
+        rng = np.random.default_rng(7)
+        n = 200
+        m = BootstrapEngine._select_m(n)
+        theo = 2 * 1.96 / math.sqrt(n)
+        widths = []
+        for rep in range(20):
+            data = rng.normal(0.0, 1.0, n)
+            eng = BootstrapEngine(B=1000, ci_level=0.95, random_seed=rep)
+            r = eng._bootstrap_mean_m_out_of_n(data, m)
+            widths.append(r.ci_upper - r.ci_lower)
+        avg = float(np.mean(widths))
+        assert 0.8 * theo < avg < 1.25 * theo, (
+            '宽度 %.4f 偏离理论 %.4f 过多（缺缩放时会是 %.4f）'
+            % (avg, theo, theo * math.sqrt(n / m)))
+
+    def test_m_out_of_n_method_reports_scale(self, engine):
+        """method 字段须报出缩放因子，便于诊断。"""
+        rng = np.random.default_rng(7)
+        data = rng.normal(0, 1, 200)
+        r = engine._bootstrap_mean_m_out_of_n(data, BootstrapEngine._select_m(200))
+        assert 'scale=' in r.method
+
+    def test_bca_degenerate_returns_finite(self, engine):
+        """退化输入下 BCa 不得静默返回 nan，须回退百分位法。"""
+        r = engine.bootstrap_mean([0.0] * 30, use_bca=True)
+        assert math.isfinite(r.ci_lower) and math.isfinite(r.ci_upper)
+        assert r.ci_lower <= r.ci_upper
+        assert r.method != 'BCa'
+
+    def test_bca_constant_nonzero_returns_finite(self, engine):
+        """常数非零数据同样不得返回 nan。"""
+        r = engine.bootstrap_mean([3.5] * 30, use_bca=True)
+        assert math.isfinite(r.ci_lower) and math.isfinite(r.ci_upper)
+
+    def test_bca_normal_unchanged(self, engine):
+        """非退化数据仍走 BCa（修复不得改变既有行为）。"""
+        rng = np.random.default_rng(3)
+        r = engine.bootstrap_mean(rng.normal(5, 1, 100), use_bca=True)
+        assert r.method == 'BCa'
+        assert r.ci_lower < r.point_estimate < r.ci_upper
+
+    def test_ci_is_valid_helper(self):
+        """守卫函数的判据：有限、且下界不大于上界。"""
+        ok = BootstrapResult(0.5, 0.4, 0.6, 0.05, 'BCa')
+        assert BootstrapEngine._ci_is_valid(ok)
+        bad_nan = BootstrapResult(0.5, float('nan'), float('nan'), 0.0, 'BCa')
+        assert not BootstrapEngine._ci_is_valid(bad_nan)
+        inverted = BootstrapResult(0.5, 0.6, 0.4, 0.05, 'BCa')
+        assert not BootstrapEngine._ci_is_valid(inverted)

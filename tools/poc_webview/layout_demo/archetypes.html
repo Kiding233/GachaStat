@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>分析页右栏 · 结果形态分类</title>
+
+<!-- 一次性参考页：把「方案 A 的骨架」按结果形态分类后各自变形。
+     与 rightcol_showcase.html 的关系：那一页比的是「同一份内容怎么排」，
+     这一页解决它留下的问题：不同分析方法的主元素根本不同，
+     一个骨架盖不住，必须先分类再套骨架。
+     自包含，无外部依赖。 -->
+<style>
+:root{
+  --bg:#f4f5f7; --panel:#fff; --line:#dcdfe4; --line2:#e9ebef; --line3:#f2f4f6;
+  --ink:#1f2329; --ink2:#5a6270; --ink3:#8b93a1; --faint:#aab2bd;
+  --accent:#1976d2; --ok:#2e7d32; --warn:#b26a00; --danger:#c62828; --purple:#6941c6;
+  --radius:6px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-size:13px;line-height:1.7}
+.wrap{max-width:1240px;margin:0 auto;padding:26px 20px 70px}
+h1{font-size:21px;font-weight:600;margin:0 0 6px}
+.sub{color:var(--ink3);font-size:12px;margin:0 0 22px}
+h2{font-size:14px;font-weight:600;margin:0 0 8px}
+p{margin:0 0 10px}
+code{font-family:Consolas,"Courier New",monospace;font-size:11.5px;
+  background:#eceff3;padding:1px 5px;border-radius:3px;color:var(--ink2)}
+.doc{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:16px 18px;margin-bottom:16px}
+.lead{color:var(--ink2);font-size:12.5px;line-height:1.85}
+table{border-collapse:collapse;width:100%;font-size:11.5px;margin:6px 0 2px}
+th,td{border:1px solid var(--line2);padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f7f8fa;font-weight:600;color:var(--ink2)}
+td.n{font-variant-numeric:tabular-nums;font-family:Consolas,monospace;color:var(--ink2)}
+.tag{display:inline-block;font-size:10px;line-height:15px;padding:0 6px;border-radius:8px;
+  border:1px solid;margin-right:4px}
+.t-d{color:var(--danger);border-color:#eec4c4;background:#fdf1f1}
+.t-o{color:var(--ok);border-color:#c9e3ca;background:#f0f8f0}
+.t-a{color:var(--accent);border-color:#c7ddf5;background:#eef5fc}
+.t-p{color:var(--purple);border-color:#d9cdf5;background:#f5f1fd}
+
+/* 型：左说明 + 右骨架示意 */
+.arche{display:flex;gap:18px;align-items:flex-start;margin-bottom:20px}
+.arche .lab{flex:0 0 292px}
+.arche .lab h3{margin:0 0 5px;font-size:13.5px}
+.arche .lab .who{font-size:11px;color:var(--ink3);margin:0 0 7px}
+.arche .lab dl{margin:0;font-size:11.5px}
+.arche .lab dt{color:var(--ink3);font-size:10.5px;margin-top:7px}
+.arche .lab dd{margin:1px 0 0;color:var(--ink2);line-height:1.65}
+.arche .box{flex:1;min-width:0}
+.skel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:13px 15px}
+.skel .kicker{font-size:10.5px;color:var(--ink3);margin-bottom:3px}
+.skel .h{font-size:15px;font-weight:600;margin-bottom:2px}
+.skel .deck{font-size:11px;color:var(--ink3);margin-bottom:11px}
+.skel .cap{font-size:10.5px;color:var(--ink3);margin-top:6px;line-height:1.6}
+.skel .cap b{color:var(--ink2)}
+.skel .foot{font-size:10px;color:var(--faint);margin-top:8px;
+  border-top:1px solid var(--line3);padding-top:6px}
+/* 数据带：小灰标签在上，大号数字在下 */
+.band{display:flex;gap:26px;flex-wrap:wrap;margin-top:11px;
+  border-top:1px solid var(--line2);padding-top:9px}
+.band .it .k{font-size:10px;color:var(--ink3);display:block;line-height:1.4}
+.band .it .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;
+  font-family:Consolas,monospace;line-height:1.25}
+.band .it .v small{font-size:10px;font-weight:400;color:var(--ink3);margin-left:2px;
+  font-family:inherit}
+.v.red{color:var(--danger)} .v.grn{color:var(--ok)} .v.amb{color:var(--warn)}
+.rule{height:1px;background:var(--line2);margin:11px 0}
+.body2{display:flex;gap:16px;font-size:11.5px;color:var(--ink2)}
+.body2 p{margin:0;flex:1}
+/* 表主型 */
+.tbl{width:100%;border-collapse:collapse;font-size:11px}
+.tbl th{background:transparent;border:0;border-bottom:1px solid var(--line);
+  padding:4px 6px;color:var(--ink3);font-weight:400;font-size:10.5px}
+.tbl td{border:0;border-bottom:1px solid var(--line3);padding:5px 6px}
+.tbl td.n{text-align:right}
+.tbl tr.hi td{background:#fdf6ec}
+/* 矩阵 */
+.mx{display:grid;gap:2px;font-size:10px}
+.mx span{height:26px;display:flex;align-items:center;justify-content:center;
+  font-variant-numeric:tabular-nums;font-family:Consolas,monospace;border-radius:2px}
+.mx .hd{color:var(--ink3);font-family:inherit;font-size:10px}
+/* 标量 */
+.big{font-size:38px;font-weight:600;font-variant-numeric:tabular-nums;
+  font-family:Consolas,monospace;line-height:1.05}
+.big small{font-size:13px;font-weight:400;color:var(--ink3);font-family:inherit;margin-left:3px}
+.scal{display:flex;gap:24px;align-items:flex-end}
+.scal .side{flex:1;min-width:0}
+.note{font-size:11px;color:var(--ink3);line-height:1.7;margin-top:6px}
+.flag{border-left:3px solid var(--warn);background:#fdfaf4;padding:9px 12px;
+  font-size:11.5px;color:var(--ink2);line-height:1.75;border-radius:0 4px 4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>分析页右栏 · 结果形态分类</h1>
+  <p class="sub">tools/poc_webview/layout_demo/archetypes.html · 静态参考页 · 自包含离线可渲染</p>
+
+  <section class="doc">
+    <h2>为什么先分类</h2>
+    <p class="lead">右栏排版参考页（<code>rightcol_showcase.html</code>）比的是「同一份内容怎么排」，结论是方案 A 最好。
+    但那只解决了一半：<b>不同分析方法的主元素根本不是同一种东西</b>。A 的骨架是「图为主」的
+    （眉题 → 标题 → 导语 → 主图 → 数据带 → 正文 → 表 → 脚注），把它直接套在「结果就是一张表」
+    或「结果就是一个数字」的方法上，主位会空着，读者不知道该看哪。</p>
+    <p class="lead">下面是 <code>gui/analysis_panel.py</code> 里实际产出的图形类型统计，不是凭印象分的：</p>
+    <table>
+      <thead><tr><th>type</th><th>出现次数</th><th>对应方法</th></tr></thead>
+      <tbody>
+        <tr><td class="n">table</td><td class="n">8</td><td>VaR/CVaR、成功率、最差情形、最好情形、条件分布（表）</td></tr>
+        <tr><td class="n">histogram</td><td class="n">6</td><td>最差情形、最好情形、条件分布（图）</td></tr>
+        <tr><td class="n">scatter</td><td class="n">4</td><td>GDR 时间序列、2D 瀑布、抽卡数 vs 达成率、转变分析</td></tr>
+        <tr><td class="n">bar</td><td class="n">3</td><td>每池抽卡数、每池目标卡数、每池保底数</td></tr>
+        <tr><td class="n">heatmap</td><td class="n">2</td><td>GDR 指标相关性</td></tr>
+        <tr><td class="n">subplot_grid / ridge / cdf / 3D</td><td class="n">4</td><td>转移概率矩阵、脆弱性、GDR 分布、3D 瀑布</td></tr>
+      </tbody>
+    </table>
+    <p class="lead" style="margin-top:10px">两处容易忽略的事实：</p>
+    <ul class="lead" style="margin:0;padding-left:20px">
+      <li><b>多数项是「表 + 图」成对出现的</b>（最差情形 = 统计量表 + 分布直方图），不是单一元素。
+      骨架必须给这对关系一个明确的主次，而不是把两张都平铺。</li>
+      <li><b>过程分析 5 项全是表</b>（事件统计、成败统计、事件→成败、成败→事件、轨迹详情），
+      一条曲线都没有。给它们套「主图」骨架是错的。</li>
+    </ul>
+  </section>
+
+  <section class="doc">
+    <h2>六型（按「主位是谁」+「重要信息在哪」切）</h2>
+    <p class="lead" style="margin-bottom:14px">判据只有两条：<b>主位</b>是读者第一眼该看到的东西；<b>重要信息</b>是这次分析真正要回答的问题。
+    骨架的变形只做一件事：把主位让给对的东西，把重要信息放到标注层与数据带里。</p>
+
+    <!-- 型 1 -->
+    <div class="arche">
+      <div class="lab">
+        <h3><span class="tag t-d">型 1</span>分布型</h3>
+        <p class="who">最差情形分析 · 最好情形分析 · 条件分布 · GDR 分布</p>
+        <dl>
+          <dt>主位</dt><dd>分布图（直方图 / CDF）</dd>
+          <dt>重要信息</dt><dd><b>尾部</b>：极端情形占多少、分位数落在哪</dd>
+          <dt>骨架变形</dt><dd>A 原样。数据带换成<b>分位数</b>而非均值族，因为分布型看的就是位置而非中心</dd>
+          <dt>佐证</dt><dd>统计量表放在主图之后，不占主位</dd>
+        </dl>
+      </div>
+      <div class="box"><div class="skel">
+        <div class="kicker">风险分析 · 最差情形分析</div>
+        <div class="h">资源剩余的条件分布</div>
+        <div class="deck">1,000 次模拟 · 条件：抽出全部目标卡 · 主指标 简单目标达成率 · α = 0.05</div>
+        <svg viewBox="0 0 640 130" style="width:100%;height:auto;display:block">
+          <line x1="46" y1="112" x2="620" y2="112" stroke="#c8ced9"/>
+          <g fill="#b9c7d6">
+            <rect x="50" y="88" width="22" height="24"/><rect x="74" y="72" width="22" height="40"/>
+            <rect x="98" y="52" width="22" height="60"/><rect x="122" y="34" width="22" height="78"/>
+            <rect x="146" y="44" width="22" height="68"/><rect x="170" y="62" width="22" height="50"/>
+            <rect x="194" y="78" width="22" height="34"/><rect x="218" y="90" width="22" height="22"/>
+          </g>
+          <g fill="#d8a7a7">
+            <rect x="242" y="96" width="22" height="16"/><rect x="266" y="100" width="22" height="12"/>
+            <rect x="290" y="103" width="22" height="9"/><rect x="314" y="105" width="22" height="7"/>
+          </g>
+          <line x1="242" y1="12" x2="242" y2="112" stroke="#c62828" stroke-dasharray="3 2"/>
+          <text x="247" y="22" font-size="10" fill="#c62828">P5 尾部 4.6%</text>
+          <line x1="134" y1="12" x2="134" y2="112" stroke="#1976d2" stroke-dasharray="3 2"/>
+          <text x="139" y="22" font-size="10" fill="#1976d2">中位 1,180</text>
+          <text x="50" y="126" font-size="10" fill="#8b93a1">0</text>
+          <text x="600" y="126" font-size="10" fill="#8b93a1">3,600 资源剩余</text>
+        </svg>
+        <div class="cap"><b>图 1</b>　最差情形下的资源剩余分布。浅红为 P5 以下尾部，红线为 P5 分位。</div>
+        <div class="band">
+          <div class="it"><span class="k">P5</span><span class="v">420</span></div>
+          <div class="it"><span class="k">中位</span><span class="v">1,180</span></div>
+          <div class="it"><span class="k">P95</span><span class="v">2,240</span></div>
+          <div class="it"><span class="k">尾部占比</span><span class="v red">4.6<small>%</small></span></div>
+          <div class="it"><span class="k">样本数</span><span class="v">1,000</span></div>
+        </div>
+        <div class="foot">口径　分位数用线性插值；尾部占比按 P5 阈值计数；置信区间 95% 自助法（B = 2,000）。</div>
+      </div></div>
+    </div>
+
+    <!-- 型 2 -->
+    <div class="arche">
+      <div class="lab">
+        <h3><span class="tag t-a">型 2</span>趋势型</h3>
+        <p class="who">GDR 时间序列 · 成功率分析 · 敏感性扫描 · 2D 压缩瀑布</p>
+        <dl>
+          <dt>主位</dt><dd>折线 / 散点</dd>
+          <dt>重要信息</dt><dd><b>拐点与阈值</b>：在哪一抽开始变化、阈值点落在哪</dd>
+          <dt>骨架变形</dt><dd>A 骨架，但<b>标注层必须加强</b>：拐点、阈值点直接标在图上并给出坐标，不让读者对刻度</dd>
+          <dt>数据带</dt><dd>换成「起点 / 拐点 / 终点 / 阈值点」四个位置，而非统计量</dd>
+        </dl>
+      </div>
+      <div class="box"><div class="skel">
+        <div class="kicker">成功率分析 · 阈值扫描</div>
+        <div class="h">成功率随目标阈值的变化</div>
+        <div class="deck">1,000 次模拟 · 判据 全部目标达成 · 置信水平 95%</div>
+        <svg viewBox="0 0 640 130" style="width:100%;height:auto;display:block">
+          <line x1="46" y1="112" x2="620" y2="112" stroke="#c8ced9"/>
+          <line x1="46" y1="12" x2="46" y2="112" stroke="#c8ced9"/>
+          <polyline points="46,20 130,26 214,42 298,72 382,96 466,105 550,109 620,111"
+                    fill="none" stroke="#1976d2" stroke-width="2"/>
+          <circle cx="298" cy="72" r="3.5" fill="#1976d2"/>
+          <line x1="298" y1="72" x2="298" y2="112" stroke="#8b93a1" stroke-dasharray="2 2"/>
+          <text x="303" y="66" font-size="10" fill="#1976d2">拐点：阈值 0.70 起陡降</text>
+          <line x1="382" y1="12" x2="382" y2="112" stroke="#c62828" stroke-dasharray="3 2"/>
+          <text x="387" y="22" font-size="10" fill="#c62828">目标阈值 0.80 → 34.1%</text>
+          <text x="42" y="16" font-size="10" fill="#8b93a1" text-anchor="end">100%</text>
+          <text x="42" y="115" font-size="10" fill="#8b93a1" text-anchor="end">0</text>
+          <text x="298" y="126" font-size="10" fill="#8b93a1" text-anchor="middle">0.70</text>
+          <text x="382" y="126" font-size="10" fill="#8b93a1" text-anchor="middle">0.80</text>
+        </svg>
+        <div class="cap"><b>图 1</b>　成功率随阈值的下降曲线。0.70 之前平缓，之后陡降，拐点即判据的实际松紧边界。</div>
+        <div class="band">
+          <div class="it"><span class="k">阈值 0.60</span><span class="v">92.4<small>%</small></span></div>
+          <div class="it"><span class="k">拐点 0.70</span><span class="v amb">61.8<small>%</small></span></div>
+          <div class="it"><span class="k">目标 0.80</span><span class="v red">34.1<small>%</small></span></div>
+          <div class="it"><span class="k">95% CI</span><span class="v" style="font-size:13px">[31.2, 37.1]</span></div>
+        </div>
+        <div class="foot">口径　成功率按「全部目标达成」计；置信区间 Wilson 95%，用于小样本下的比例估计。</div>
+      </div></div>
+    </div>
+
+    <!-- 型 3 -->
+    <div class="arche">
+      <div class="lab">
+        <h3><span class="tag t-p">型 3</span>分组比较型</h3>
+        <p class="who">每池抽卡数 · 每池目标卡数 · 每池保底数 · 截止每 banner 的 GDR 分布</p>
+        <dl>
+          <dt>主位</dt><dd>分组柱状（每个池 / 每个 banner 一条）</dd>
+          <dt>重要信息</dt><dd><b>哪个最差</b>：池与池之间的差异，以及极差有多大</dd>
+          <dt>骨架变形</dt><dd>数据带换成「最高 / 最低 / 极差」，并在图上把<b>最差那一项用语义色标出</b>。
+          比较型不关心总体均值，关心离散度与离群者</dd>
+          <dt>注意</dt><dd>池数可到几十个（见 §5.9），横轴会挤，需要横向滚动或截断 + 排序</dd>
+        </dl>
+      </div>
+      <div class="box"><div class="skel">
+        <div class="kicker">每池分析 · 每池抽卡数</div>
+        <div class="h">各池平均抽卡数</div>
+        <div class="deck">1,000 次模拟 · 按池分组 · 单位 抽</div>
+        <svg viewBox="0 0 640 130" style="width:100%;height:auto;display:block">
+          <line x1="46" y1="112" x2="620" y2="112" stroke="#c8ced9"/>
+          <g fill="#b9c7d6">
+            <rect x="60" y="60" width="34" height="52"/><rect x="120" y="52" width="34" height="60"/>
+            <rect x="180" y="68" width="34" height="44"/><rect x="240" y="58" width="34" height="54"/>
+            <rect x="300" y="46" width="34" height="66"/><rect x="360" y="74" width="34" height="38"/>
+            <rect x="420" y="64" width="34" height="48"/>
+          </g>
+          <rect x="480" y="18" width="34" height="94" fill="#c62828"/>
+          <text x="497" y="12" font-size="10" fill="#c62828" text-anchor="middle">最差 96.4 抽</text>
+          <g font-size="10" fill="#8b93a1" text-anchor="middle">
+            <text x="77" y="126">角色</text><text x="137" y="126">武器</text><text x="197" y="126">常驻</text>
+            <text x="257" y="126">复刻</text><text x="317" y="126">交换</text><text x="377" y="126">自选</text>
+            <text x="437" y="126">阶梯</text><text x="497" y="126">轮换</text>
+          </g>
+        </svg>
+        <div class="cap"><b>图 1</b>　各池平均抽卡数。轮换池（红）显著高于其余，是资源占用的主要来源。</div>
+        <div class="band">
+          <div class="it"><span class="k">最低 · 自选池</span><span class="v grn">61.2</span></div>
+          <div class="it"><span class="k">最高 · 轮换池</span><span class="v red">96.4</span></div>
+          <div class="it"><span class="k">极差</span><span class="v amb">35.2</span></div>
+          <div class="it"><span class="k">池数</span><span class="v">8</span></div>
+        </div>
+        <div class="foot">口径　每池抽卡数按池分别统计后取均值；「最差」指均值最高者，与资源占用同向。</div>
+      </div></div>
+    </div>
+
+    <!-- 型 4 -->
+    <div class="arche">
+      <div class="lab">
+        <h3><span class="tag t-o">型 4</span>矩阵型</h3>
+        <p class="who">GDR 指标相关性 · 转移概率矩阵</p>
+        <dl>
+          <dt>主位</dt><dd>热力图 / 方阵（行列都是指标或状态）</dd>
+          <dt>重要信息</dt><dd><b>极值格</b>：最强/最弱的那一对，以及行和是否守恒（转移矩阵）</dd>
+          <dt>骨架变形</dt><dd>矩阵没有「曲线」，A 的图注体系要改写：<b>色阶图例的落位</b>成为主要版面问题（放右侧竖条还是底部横条），
+          极值格直接标数值而不靠颜色深浅</dd>
+          <dt>数据带</dt><dd>换成「最强对 / 最弱对 / 行和校验」</dd>
+        </dl>
+      </div>
+      <div class="box"><div class="skel">
+        <div class="kicker">每池分析 · 转变分析</div>
+        <div class="h">池间转移概率矩阵</div>
+        <div class="deck">1,000 次模拟 · 事件模式 池成败 · 行为当前池、列为下一个池</div>
+        <div style="display:flex;gap:14px;align-items:flex-start">
+          <div class="mx" style="grid-template-columns:56px repeat(4,52px);flex:1;min-width:0">
+            <span class="hd"></span><span class="hd">角色</span><span class="hd">武器</span><span class="hd">常驻</span><span class="hd">轮换</span>
+            <span class="hd">角色</span>
+            <span style="background:#cfe1f5">0.62</span><span style="background:#e8f0fa">0.21</span>
+            <span style="background:#f2f6fb">0.12</span><span style="background:#f7fafd">0.05</span>
+            <span class="hd">武器</span>
+            <span style="background:#e8f0fa">0.24</span><span style="background:#cfe1f5">0.58</span>
+            <span style="background:#f2f6fb">0.14</span><span style="background:#f7fafd">0.04</span>
+            <span class="hd">常驻</span>
+            <span style="background:#f2f6fb">0.18</span><span style="background:#e8f0fa">0.19</span>
+            <span style="background:#cfe1f5">0.55</span><span style="background:#f7fafd">0.08</span>
+            <span class="hd">轮换</span>
+            <span style="background:#fdf1f1;box-shadow:inset 0 0 0 1.5px #c62828">0.03</span>
+            <span style="background:#f7fafd">0.09</span><span style="background:#e8f0fa">0.16</span>
+            <span style="background:#cfe1f5">0.72</span>
+          </div>
+          <div style="flex:0 0 96px">
+            <div style="font-size:10px;color:#8b93a1;margin-bottom:4px">转移概率</div>
+            <div style="height:78px;width:14px;border-radius:2px;
+              background:linear-gradient(#cfe1f5,#f7fafd);border:1px solid var(--line2)"></div>
+            <div style="font-size:10px;color:#8b93a1;margin-top:4px">高 → 低</div>
+          </div>
+        </div>
+        <div class="cap"><b>图 1</b>　池间转移概率。对角线为自持概率；<b>红框格</b>为最小转移（轮换 → 角色，0.03），
+        即从轮换池切到角色池几乎不发生。</div>
+        <div class="band">
+          <div class="it"><span class="k">最强转移</span><span class="v">0.72</span></div>
+          <div class="it"><span class="k">最弱转移</span><span class="v red">0.03</span></div>
+          <div class="it"><span class="k">行和校验</span><span class="v grn">1.00</span></div>
+        </div>
+        <div class="foot">口径　转移概率为 Wilson 95% 区间中点；零分母记 NaN 不记 0，避免把「未发生」误读为「不可能」。</div>
+      </div></div>
+    </div>
+
+    <!-- 型 5 -->
+    <div class="arche">
+      <div class="lab">
+        <h3><span class="tag t-d">型 5</span>表主型</h3>
+        <p class="who">VaR / CVaR · 成功率分析（数值）· <b>过程分析 5 项全部</b>（事件统计、成败统计、事件→成败、成败→事件、轨迹详情）</p>
+        <dl>
+          <dt>主位</dt><dd><b>表本身</b>，没有主图</dd>
+          <dt>重要信息</dt><dd>排序后的前几行，以及量级对比（哪一行显著更大）</dd>
+          <dt>骨架变形</dt><dd>A 的<b>主图位让给表</b>，且<b>表题在表上</b>（读表前要知道是什么）。
+          数据带取消：表本身就是数据，再抽一条数据带是重复</dd>
+          <dt>补强</dt><dd>给行内数值加<b>格内条形</b>（背景按量级铺一层浅灰），这样不必逐行比数字也能看出量级</dd>
+        </dl>
+      </div>
+      <div class="box"><div class="skel">
+        <div class="kicker">过程分析 · 事件统计</div>
+        <div class="h">事件类型频次</div>
+        <div class="deck">1,000 次模拟 · 每池推断 7 种事件类型 · 单位 次</div>
+        <table class="tbl">
+          <caption style="caption-side:top;text-align:left;font-size:11px;color:var(--ink2);padding:2px 0 5px">
+            <b>表 1</b>　各事件类型出现频次（n = 1,000）</caption>
+          <thead><tr><th>事件类型</th><th style="text-align:right">频次</th><th style="width:132px">量级</th></tr></thead>
+          <tbody>
+            <tr><td>抽卡</td><td class="n">12,840</td>
+              <td><div style="height:7px;background:#cfe1f5;border-radius:1px;width:100%"></div></td></tr>
+            <tr><td>保底触发</td><td class="n">960</td>
+              <td><div style="height:7px;background:#cfe1f5;border-radius:1px;width:7.5%"></div></td></tr>
+            <tr><td>目标卡获得</td><td class="n">742</td>
+              <td><div style="height:7px;background:#cfe1f5;border-radius:1px;width:5.8%"></div></td></tr>
+            <tr class="hi"><td>资源耗尽</td><td class="n">30</td>
+              <td><div style="height:7px;background:#c62828;border-radius:1px;width:0.9%"></div></td></tr>
+            <tr><td>池切换</td><td class="n">18</td>
+              <td><div style="height:7px;background:#cfe1f5;border-radius:1px;width:0.6%"></div></td></tr>
+            <tr><td>池耗尽</td><td class="n">4</td>
+              <td><div style="height:7px;background:#cfe1f5;border-radius:1px;width:0.2%"></div></td></tr>
+          </tbody>
+        </table>
+        <div class="cap" style="margin-top:8px"><b>说明</b>　「资源耗尽」（浅红底）是唯一需要盯的异常事件，量级小但后果最重，
+        所以用行底色标出而不是靠频次排序。</div>
+        <div class="foot">口径　事件由每池推断得出，非配置直读；「抽卡」含未出货的抽。</div>
+      </div></div>
+    </div>
+
+    <!-- 型 6 -->
+    <div class="arche">
+      <div class="lab">
+        <h3><span class="tag t-a">型 6</span>标量型</h3>
+        <p class="who">最差影响分析（大保底资源覆盖率）</p>
+        <dl>
+          <dt>主位</dt><dd><b>一个数字</b>，以及它与阈值的关系（够 / 不够）</dd>
+          <dt>重要信息</dt><dd>达标与否，一眼可判</dd>
+          <dt>骨架变形</dt><dd>最接近方案 B / D 的混合：大字号主数字占主位，
+          <b>支撑分布图降权</b>（缩小、移到侧边），表退到最后</dd>
+          <dt>风险</dt><dd>单数字最容易掩盖可信度。必须紧邻给出<b>区间与样本量</b>，
+          否则「覆盖率 128%」这种结论会被当成确定事实</dd>
+        </dl>
+      </div>
+      <div class="box"><div class="skel">
+        <div class="kicker">最差影响 · 后续池子上线</div>
+        <div class="h">大保底资源覆盖率</div>
+        <div class="deck">1,000 次模拟 · 后续 3 个池 · 阈值 100%</div>
+        <div class="scal">
+          <div>
+            <div class="big">128<small>%</small></div>
+            <div style="font-size:11px;color:var(--ok);margin-top:2px">
+              <span class="tag t-o">够</span>高于阈值 28 个百分点</div>
+            <div style="font-size:10.5px;color:var(--ink3);margin-top:6px;line-height:1.7">
+              95% 区间 <b style="color:var(--ink2)">[119, 137]</b><br>
+              样本 1,000 · 最差一次 104%</div>
+          </div>
+          <div class="side">
+            <div style="font-size:10px;color:var(--ink3);margin-bottom:3px">覆盖率分布（降权佐证）</div>
+            <svg viewBox="0 0 300 62" style="width:100%;height:auto;display:block">
+              <line x1="0" y1="56" x2="300" y2="56" stroke="#c8ced9"/>
+              <g fill="#d3dde8">
+                <rect x="10" y="44" width="26" height="12"/><rect x="40" y="34" width="26" height="22"/>
+                <rect x="70" y="22" width="26" height="34"/><rect x="100" y="12" width="26" height="44"/>
+                <rect x="130" y="18" width="26" height="38"/><rect x="160" y="30" width="26" height="26"/>
+                <rect x="190" y="40" width="26" height="16"/><rect x="220" y="48" width="26" height="8"/>
+              </g>
+              <line x1="86" y1="4" x2="86" y2="56" stroke="#2e7d32" stroke-dasharray="3 2"/>
+              <text x="90" y="12" font-size="9" fill="#2e7d32">阈值 100%</text>
+            </svg>
+          </div>
+        </div>
+        <div class="foot">口径　覆盖率为「可用资源 ÷ 覆盖后续池所需」；最差一次指 1,000 次模拟中的最小值。</div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="doc">
+    <h2>两处不套 A 骨架的特殊情形</h2>
+    <div class="flag" style="margin-bottom:12px">
+      <b>脆弱性分析</b>：结果块数是 <code>2 + 2×池数</code>，3 池 8 块、24 池 50 块。它不套 A，
+      走「总览常驻 + 逐项下钻」（见 <code>docs/00-meta/UI设计体系/工作区交互形态.md</code> §5.9）。
+      原因是 A 的前提是「一次分析产出一块结论」，而它一次产出几十块。
+    </div>
+    <div class="flag">
+      <b>3D 瀑布图</b>：3D 图在 868px 的框里不可读（透视会让近处的柱子遮住远处的，且无法精确读刻度）。
+      两条路：给它更大的框并允许全屏，或者降级成 2D 压缩瀑布图（<code>waterfall_2d</code> 本来就存在，
+      且已有散点实现）。<b>倾向前者只在用户主动展开时提供</b>，默认走 2D。
+    </div>
+  </section>
+
+  <section class="doc">
+    <h2>把六型压成一句规则</h2>
+    <p class="lead">骨架不变，只换三件事：<b>主位让给谁</b>（图 / 表 / 数 / 矩阵）、<b>数据带放什么</b>（分位数 / 位置点 / 极值 / 取消）、
+    <b>标注层标什么</b>（尾部 / 拐点 / 最差项 / 极值格 / 异常行）。其余（眉题、标题、导语、图注体系、口径脚注、行长控制）
+    六型共用，这也是 A 能被选中的原因：它的骨架本来就是把「读者先看什么、后看什么」写死了，
+    换主位不破坏这个次序。</p>
+    <table>
+      <thead><tr><th>型</th><th>主位</th><th>数据带</th><th>标注层</th><th>哪些方法</th></tr></thead>
+      <tbody>
+        <tr><td>1 分布</td><td>分布图</td><td>分位数 + 尾部占比</td><td>尾部区间、分位线</td><td>最差/最好情形、条件分布、GDR 分布</td></tr>
+        <tr><td>2 趋势</td><td>折线 / 散点</td><td>起点 / 拐点 / 阈值点</td><td>拐点、阈值点</td><td>时间序列、成功率、敏感性、2D 瀑布</td></tr>
+        <tr><td>3 分组比较</td><td>分组柱状</td><td>最高 / 最低 / 极差</td><td>最差那一项</td><td>每池三兄弟、截止每 banner</td></tr>
+        <tr><td>4 矩阵</td><td>热力图 / 方阵</td><td>最强 / 最弱 / 行和</td><td>极值格</td><td>相关性、转移概率矩阵</td></tr>
+        <tr><td>5 表主</td><td>表（表题在表上）</td><td>取消</td><td>异常行底色</td><td>VaR/CVaR、成功率、过程分析 5 项</td></tr>
+        <tr><td>6 标量</td><td>大数字 + 与阈值的关系</td><td>区间 + 样本量（必须）</td><td>阈值线</td><td>最差影响（覆盖率）</td></tr>
+        <tr><td colspan="5" style="background:#fdfaf4;color:var(--ink2)">
+          另有两处不套：<b>脆弱性</b>走总览常驻 + 下钻；<b>3D 瀑布</b>默认降级 2D，展开时给大框。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="doc">
+    <h2>这一页没有解决的事</h2>
+    <ul class="lead" style="margin:0;padding-left:20px">
+      <li><b>型与方法的对应还没接进代码。</b>本页的映射是读 <code>analysis_panel.py</code> 的 <code>ChartSpec</code> 现推的，
+      要落地需要在 <code>AnalysisSpec</code> 上显式声明「结果形态」（P86 §3.2 的注册表里加一个字段），
+      否则前端只能靠猜。</li>
+      <li><b>型 3 的池数上限没定。</b>池数到几十个时横轴会挤，是横向滚动、排序截断、还是分组折叠，需要按真实配置量再定。</li>
+      <li><b>型 5 与型 1/2 的混血没试。</b>最差情形是「表 + 分布图」，本页把它归到型 1（图为主、表为佐证），
+      但也可以反过来（表为主、图为佐证），取决于读者是「看形状」还是「读数字」，这个取向还没裁决。</li>
+      <li><b>本页只做版面，不碰数据。</b>所有数字都是固定的假值，用来撑起字阶与对齐，不追求统计自洽。</li>
+    </ul>
+  </section>
+
+</div>
+</body>
+</html>

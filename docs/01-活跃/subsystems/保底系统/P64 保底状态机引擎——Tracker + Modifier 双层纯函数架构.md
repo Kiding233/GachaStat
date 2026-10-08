@@ -249,7 +249,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 2. **`guaranteed` 短路同源**：旧码首行 `if self._guaranteed.is_set(): return super().before_draw(...)` 即不掷骰；新码在 `commit` 尾部以 `guard_flag` 判同一标记，置位时不掷。
 3. **`readonly` 同源**：旧码查询路径不掷；新码查询不调 `after_draw`，天然不掷。
 
-**故分布等价，但全局 `random` 流的消费位置改变**，固定种子下自首次拦截起样本路径分叉。**`rotating_cr` / `rotating_cr_soft` 因此无法通过 §六 的 M1「与旧类逐场一致」，须单独登记进差异归因清单。** Modifier 侧随之退化为无条件依赖 RNG 的普通 `share`，其条件为 `Or(FlagCondition('guaranteed'), FlagCondition('cr_intercepted'))`。<!-- REVIEW-R1-FIX: RULING-6B -->
+**故分布等价，但全局 `random` 流的消费位置改变**，固定种子下自首次拦截起样本路径分叉。**`rotating_cr` / `rotating_cr_soft` 因此无法通过 §六 的 M1「与旧类逐场一致」，须单独登记进差异归因清单。** Modifier 侧随之退化为无条件依赖 RNG 的普通转移（原写「`share`，其条件为 `Or(FlagCondition('guaranteed'), FlagCondition('cr_intercepted'))`」；`share` / `FlagCondition` / `Or` 均为作废词汇，条件已内联进 `RotatingModifier.delta()`，见 §3.1.2 与 §3.14.2）。<!-- REVIEW-R1-FIX: RULING-6B -->
 
 
 **did_fire 统一语义（M4，强制，2026-09-16 裁决）**：`Pity.did_fire` 供 `PityEngine.after_draw` 的 depends_on 激活传播使用（[pity.py:1340](gacha_simulator/core/pity.py#L1340)）。<!-- REVIEW-R1-FIX: ISSUE-402 --> **P64 起它有两个调用点**：上游那一处，以及**本保底自身的 `Pity.after_draw`**（把 `fired` 传给 `Lifecycle.should_deactivate`，§3.1.4 骨架）——两者共用同一个「本次抽卡是否让本保底回到初始状态」判据，不得各写一套（原稿写「全代码唯一调用点」，已按新增调用点更正）。**统一语义 = 「本次抽卡是否让本保底回到初始状态」**，由各 Tracker 的 `did_reset(ctx, state, name)` 提供，`Pity.did_fire = any(tr.did_reset(...))`。
@@ -880,7 +880,7 @@ Q 内每卡  − amount · p_c / p(Q)
 
 | 类型 | 例子 | 性质 |
 |------|------|------|
-| **约束冲突（语义）** | `assign` 与「在 `assign` 输出上非恒等」的算子共存（如 `hard` 与 guaranteed 分支的 `rotating`） | **这是语义正确的表现**，不是缺陷。`assign` 是**写入**且输出与输入分布无关，故 `[X, hard] ≡ hard 的输出`，而 `[hard, X] ≡ X 作用于 hard 的输出`；两者相等**当且仅当 X 在 hard 的输出上恒等**。**不是「同 U 才行」**：`soft(tf=False)` 与 `hard` 同 U 且可交换，`rotating`（非 guaranteed）与 `hard` 异 U 也可交换，而 `rotating`（guaranteed）与 `hard` 异 U **不可**交换。完整判据与逐条验算见 §3.1.5.5 |
+| **约束冲突（语义）** | 两个算子对同一组给出互相矛盾的要求。**M1 实例**：`assign` 与「在 `assign` 输出上非恒等」的算子共存（如 `hard` 与 guaranteed 分支的 `rotating`）；**M2 实例**见 §3.1.5.5 的适用范围注 | **这是语义正确的表现**，不是缺陷。**M1 口径**：`assign` 是**写入**且输出与输入分布无关，故 `[X, hard] ≡ hard 的输出`，而 `[hard, X] ≡ X 作用于 hard 的输出`；两者相等**当且仅当 X 在 hard 的输出上恒等**（该判据在 M2 的夺取型 `hard` 下不成立，见 §3.1.5.5 的适用范围注）。**不是「同 U 才行」**：`soft(tf=False)` 与 `hard` 同 U 且可交换，`rotating`（非 guaranteed）与 `hard` 异 U 也可交换，而 `rotating`（guaranteed）与 `hard` 异 U **不可**交换。完整判据与逐条验算见 §3.1.5.5 |
 | **随机数消费（实现）** | 含 `rotating_cr` 的配置 | 增量本身可交换，但掷骰消费全局 `random`，换序导致随机流错位。数学上若随机源独立则无影响，它只影响固定种子下的可复现性与样本路径。**这是实现绑定的副作用**。裁决 6B 把掷骰从 Modifier 移入 Tracker 后，本条**保留但降级**：Tracker 的 `commit` 同样按行为顺序逐个调用，换序仍会移动消费位置，**B 方案只把它从 Modifier 层搬到 Tracker 层，并未消除** |
 
 > **原「`soft(target_featured=True)` + `hard`」这一反例已不可构造（裁决 7B）**：`soft_*` 类型出现 `target_featured = true` 时按 §3.2 的取值来源表抛 `ConfigError`。其位置由「同 U 的 `share` 与 `assign` 共存」取代。P82 的修正结论「含 `rotating_cr`，或 `target_featured=True` 的 soft 与 hard 共存的配置会变」随之收窄为「**含 `rotating_cr` 的配置会变**」。<!-- REVIEW-R1-FIX: RULING-7B -->
@@ -1048,7 +1048,7 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 
 **代价已如实记账**（改写方案 §0.3）：J4 由类型级降为值依赖（转移族退化为 `amount ≤ p(Q)` 一个标量）；**顺序敏感不消失**，`δ` 仍通过 `p(Q)` 依赖当前分布，§3.1.5.3 的分析长度不变。
 
-**前置欠账的部分清偿**：本节原文末条记「§3.1.5.3 / .4 / .5、§3.9.3 / .5 仍写在作废的 `share` / `assign` / `(U, T, 运算)` 词汇里」。2026-10-08 这轮已把 §3.1.5.1–.3、.5、.6 与 §3.9.2 / .4 / .5 迁到增量词汇；**§3.1.5.4（定理 1 的构造表）与 §3.9.3（组件处置表）仍在旧词汇里**，是剩下的部分。
+**前置欠账的部分清偿**：本节原文末条记「§3.1.5.3 / .4 / .5、§3.9.3 / .5 仍写在作废的 `share` / `assign` / `(U, T, 运算)` 词汇里」。2026-10-08 这轮已把 §3.1.5.1–.6 与 §3.9.2 / .3 / .4 / .5 迁到增量词汇（§3.1.5.4 的构造表与让步表、§3.9.3 的组件处置表均已处理）。**仍带旧词汇的是 §3.1.1（`rotating_cr` 的 `share` + `FlagCondition` 描述）、§3.1.5.3（顺序敏感表与约束化讨论）、§3.1.5.5（推论表与判据专段）、§3.2.1（soft 的两步分解）**，它们多为 M1 旧类实测或历史记录，已按标注保留。
 
 <!-- REVIEW-FIX-PREV: ISSUE-002 -->
 #### 3.1.6 模块归属与依赖方向（ISSUE-002，强制）
@@ -1143,12 +1143,12 @@ preset 工厂**接受一个形参 `pdef`**（`PityDef` 实例），签名统一�
 | `hard` / `hard_exclude_owned_skip` / `hard_exclude_owned_any` | 正常生效（目标集 = scope 内 featured 卡集），10 处机制全部在此 |
 | `soft_interval` / `soft_additive` / `soft_step` | **抛 `ConfigError`** |
 
-**为什么 soft 侧可删而不丢能力**：`soft(target_featured=True)` 可**等价分解**为两步（§3.1.5.2 的 `share` 语义下逐位相同）：
+**为什么 soft 侧可删而不丢能力**：`soft(target_featured=True)` 可**等价分解**为两步转移（原按 §3.1.5.2 的 `share` 语义写出，2026-10-08 迁到增量词汇；该形态已于裁决 7B 从配置面移除，本段按历史记录保留）：
 
-1. `share`（u = pool 全池减更高稀有度，t = `scope_cards[scope]`，r 由 β 推）—— 稀有度级
-2. `share`（u = `scope_cards[scope]`，t = `featured_cards[scope]`，r = `[p_f + β(p_ss + R)] / (p_S + βR)`）—— 卡级
+1. 转移（A = `scope_cards[scope]`，Q = 全池减更高稀有度，`amount = β`），稀有度级
+2. 转移（A = `featured_cards[scope]`，Q = `scope_cards[scope]`，`amount` 由第一步的份额推出），卡级
 
-第 2 步的角色与 rotating 家族的「卡级定向」是同一件事，故 soft 不需要自带该能力。**若要一个「r 可自由取值」的卡级算子**（区别于由 β 推出的 r），那是**第三个机制**，当前表达不了，须另立条目而非复用 `target_featured`。
+第 2 步的角色与 rotating 家族的「卡级定向」是同一件事，故 soft 不需要自带该能力。**若要一个「转移量可自由取值」的卡级算子**，那是**第三个机制**，当前表达不了，须另立条目而非复用 `target_featured`。
 
 **收益（三条）**：
 

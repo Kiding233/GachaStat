@@ -237,21 +237,6 @@ body{
 .embed-h{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
 .embed-h b{font-size:12px;color:var(--ink-2);font-weight:600}
 .embed-h span{font-size:11px;color:var(--ink-3)}
-.embed svg{display:block;width:100%;height:auto}
-.embed .axis{stroke:#c8ced9;stroke-width:1}
-.embed .grid{stroke:#e8ebf0;stroke-width:1}
-.embed .tick{font-size:9px;fill:var(--ink-3)}
-.embed .lbl{font-size:10px;fill:var(--ink-2)}
-.embed .band{fill:#cfe1f5}
-.embed .band.on{fill:#8db8e4}
-.embed .bar{fill:#b9c7d6}
-.embed .bar.on{fill:var(--accent)}
-.embed .ln{fill:none;stroke:var(--accent);stroke-width:1.6}
-.embed .ln2{fill:none;stroke:#c07a2a;stroke-width:1.4;stroke-dasharray:3 3}
-.embed .area{fill:#dce9f7}
-.embed .dot{fill:var(--accent)}
-.embed .now{stroke:var(--accent);stroke-width:1;stroke-dasharray:3 2}
-.embed .rule{stroke:#c8ced9;stroke-width:1;stroke-dasharray:2 2}
 
 /* 分析页：与配置页统一为 card 式标签行（相邻共边、选中白底连体） */
 .an-tabrow{display:flex;flex-wrap:wrap;padding-top:5px;border-bottom:1px solid var(--line);
@@ -344,28 +329,13 @@ body{
 .ovs-stat{font-size:11px;color:var(--ink-2)}
 .ovs-stat i{font-style:normal;color:var(--ink-3);margin-right:5px}
 .ovs-stat b{font-size:13px;color:var(--ink)}
-.ovs svg{display:block;width:100%;height:auto}
 /* 山脊：既是总览也是池选择器。横轴百分比 + preserveAspectRatio="none" 拉到容器宽，
    图内不放文字，所以拉伸不扭曲字形；池名与轴标走 HTML。
    行高 30px + 区域限高滚动，池数到几十个也不顶掉页面其余部分。 */
-.ridge{border:1px solid var(--line2);border-radius:3px;background:var(--panel);
-  max-height:330px;overflow-y:auto}
-.ridge-row{display:flex;align-items:center;gap:8px;padding:0 8px;height:30px;cursor:pointer}
-.ridge-row:hover{background:#f7f9fc}
-.ridge-row.on{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
-.ridge-row.grp{border-top:1px solid var(--line2)}
-.ridge-name{flex:0 0 108px;font-size:11px;color:var(--ink-2);white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}
-.ridge-plot{flex:1;position:relative;height:30px;min-width:0}
-.ridge-plot svg{display:block;width:100%;height:30px}
-.ridge-meta{flex:0 0 62px;font-size:10px;text-align:right}
-.ridge-meta i{font-style:normal}
-.ridge-meta .bad{color:var(--warn)}
-.ridge-meta .none{color:var(--ink-3)}
-.ridge-axis{display:flex;align-items:center;gap:8px;padding:3px 8px 0}
-.ridge-axis .ridge-plot{height:13px}
-.ridge-axis i{position:absolute;top:0;transform:translateX(-50%);font-size:9px;
-  color:var(--ink-3);font-style:normal;white-space:nowrap}
+/* 山脊的限高滚动区。行高固定 28px，池数到几十个也不顶掉页面其余部分；
+   图本身是 ECharts（.gs-chart），这里只管外层的框与滚动。 */
+.ridge-wrap{border:1px solid var(--line2);border-radius:3px;background:var(--panel);
+  max-height:420px;overflow-y:auto}
 .tg{font:inherit;font-size:10px;cursor:pointer;border:1px solid var(--line);
   border-radius:9px;padding:1px 8px;background:var(--panel);color:var(--ink-2)}
 .tg.on{background:var(--warn);border-color:var(--warn);color:#fff;font-weight:600}
@@ -373,19 +343,6 @@ body{
 .sub3 + .sub3{margin-top:8px}
 .sub3-h{font-size:11px;color:var(--ink-2);font-weight:600;margin-bottom:5px}
 /* 图内元素（与 .embed 同族，但作用域在 .ovs 下） */
-.ovs .axis{stroke:#c8ced9;stroke-width:1}
-.ovs .grid{stroke:#eef1f5;stroke-width:1}
-.ovs .tick{font-size:9px;fill:var(--ink-3)}
-.ovs .lbl{font-size:10px;fill:var(--ink-2)}
-.ovs .area{fill:#dce9f7}
-.ovs .ln{fill:none;stroke:var(--accent);stroke-width:1.4}
-.ovs .mean{stroke:rgba(200,50,50,.6);stroke-width:1;stroke-dasharray:3 2}
-.ovs .base{fill:var(--ok)}
-.ovs .vband{fill:rgba(200,50,50,.13)}
-.ovs .bar{fill:#b9c7d6}
-.ovs .nbar{fill:#cdd8e4}
-.ovs .step{stroke:#b03a3a;stroke-width:1.3}
-.ovs .pdot{fill:#8b93a3;opacity:.62}
 
 /* 二级标签：定型为 F：一级同款缩小。
    同边框、同圆角、同步共边，只把尺寸与字重调小一号，与一级同族。
@@ -435,9 +392,6 @@ body{
 .drow{display:flex;align-items:center;gap:8px}
 .drow label{width:70px;flex:0 0 70px;color:var(--ink-3);font-size:12px;text-align:right}
 
-.mini{height:104px;display:flex;align-items:flex-end;gap:2px;padding:6px 2px 0;border-bottom:1px solid var(--line)}
-.mini i{flex:1;background:linear-gradient(#8fbdf0,#3f8fd9);border-radius:2px 2px 0 0;min-height:2px}
-.mini-line{height:104px;border-bottom:1px solid var(--line);padding:6px 2px 0}
 .cfg-tabs .el-tabs__header{margin-bottom:12px}
 .cfg-tabs .el-tabs__item{font-size:12px;height:34px;line-height:34px}
 .sub-tabs .el-tabs__header{margin-bottom:10px}

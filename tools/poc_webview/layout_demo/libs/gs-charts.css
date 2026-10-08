@@ -1,0 +1,101 @@
+/* GachaStat 图表容器样式（配合 libs/gs-charts.js）。
+ *
+ * 这里只负责「容器」那层：尺寸、空态、字形的 CSS 可控部分，外加图表配色令牌。
+ * 图内的一切（轴、线、标注、提示）由 ECharts option 管，不在这里碰。
+ */
+
+/* ── 图表配色令牌（唯一真相源） ──
+ * JS 侧 ECharts 不认 var()，所以 gs-charts.js 在加载时从 :root 读这些变量
+ * （读不到才回退到它内置的同值字面量）。想改配色只改这里一处，
+ * 图内（ECharts）与图外（数据带、表格、图注）会同时跟上。
+ *
+ * 值不是挑的，是算出来的：dataviz skill 的 validate_palette.js，
+ * 浅色表面 #ffffff，两条命令的输出如下。
+ *
+ *   node validate_palette.js "#1976d2,#00897b,#7b1fa2" --surface "#ffffff" --pairs all
+ *     亮度带 PASS · 色度下限 PASS · CVD 分离 PASS（全对最差 #7b1fa2↔#1976d2
+ *     ΔE 10.8 deutan）· 常视分离 PASS（最差 ΔE 16.1）· 对比度 PASS（均 ≥3:1）
+ *   node validate_palette.js "<seq 六级>" --surface "#ffffff" --ordinal
+ *     亮度单调 PASS · 相邻级差 PASS · 亮端 2.16:1 PASS · 单一色相 PASS
+ *
+ * 语义色（good / warn / danger）不出现在分类序列里：图上出现红色必须意味着
+ * 「坏」。分类序列只有三个色相，第 4 条序列不是再挑一个颜色，而是折进
+ * 「其他」或改小倍数图。
+ */
+:root {
+  /* 分类：固定顺序，不循环 */
+  --gsc-chart-c1: #1976d2;          /* 主序列 */
+  --gsc-chart-c2: #00897b;
+  --gsc-chart-c3: #7b1fa2;
+
+  /* 连续量级：单一色相，浅→深 */
+  --gsc-chart-seq-1: #82b5e9;
+  --gsc-chart-seq-2: #5c9fe0;
+  --gsc-chart-seq-3: #3a8ad4;
+  --gsc-chart-seq-4: #1f6fc4;
+  --gsc-chart-seq-5: #12539e;
+  --gsc-chart-seq-6: #083a80;
+
+  /* 发散：两色相 + 中性灰中点（红在此是「一极」不是「状态」） */
+  --gsc-chart-div-neg: #0d47a1;
+  --gsc-chart-div-mid: #b0b8c4;
+  --gsc-chart-div-pos: #c62828;
+
+  /* 语义：保留色，永不作为序列身份 */
+  --gsc-chart-good: #2e7d32;        /* 达标 */
+  --gsc-chart-warn: #b26a00;        /* 警告 */
+  --gsc-chart-danger: #c62828;      /* 尾部 / 最差 / 危险 */
+  --gsc-chart-muted: #8b93a3;       /* 不活跃 / 中性 */
+
+  /* 图面 */
+  --gsc-chart-surface: #ffffff;
+  --gsc-chart-grid: #e6e9ee;        /* 细线分区：发丝、实线、一档深于表面 */
+  --gsc-chart-axis: #c8ced9;
+}
+
+.gs-chart {
+  width: 100%;
+  display: block;
+  position: relative;
+}
+
+/* 等宽数字只给「成列对齐」的数字：轴刻度、提示里的值。
+   大字号主数字（型 6 的覆盖率）用比例字形，tnum 会让它在展示尺寸下发松，见
+   dataviz 反模式「tabular-nums on a large standalone number」。
+   SVG renderer 下 ECharts 的文字是真 text 节点，这条 CSS 才生效；
+   换 canvas 渲染就退化掉，这是选 SVG 作默认渲染器的理由之一。 */
+.gs-chart text,
+.gs-chart .gs-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ECharts 的提示是宿主 DOM，不在 svg 里，单独给 */
+.gs-chart + div[style*="position: absolute"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 空态：数据不足以出图时给一句话，不画空坐标轴（空框会被读成「值都是 0」） */
+.gs-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
+  border: 1px dashed var(--line-strong, #d0d5dd);
+  border-radius: 4px;
+  color: var(--ink-3, #8b93a3);
+  font-size: 12px;
+  background: repeating-linear-gradient(45deg,
+    transparent, transparent 6px,
+    rgba(0, 0, 0, .012) 6px, rgba(0, 0, 0, .012) 12px);
+}
+
+/* 工具箱图标压在图的右上角，给一点存在感但不抢主体 */
+.gs-chart .echarts-toolbox,
+.gs-chart div[class*="toolbox"] {
+  opacity: .55;
+  transition: opacity .15s;
+}
+.gs-chart:hover div[class*="toolbox"] { opacity: 1; }
+
+/* 可点选的图（山脊那类「图本身即选择器」）给出手势 */
+.gs-chart[data-pickable="1"] { cursor: pointer; }

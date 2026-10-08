@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GachaStat 图表标准</title>
+<link rel="stylesheet" href="libs/ep.min.css">
+<link rel="stylesheet" href="libs/gs-charts.css">
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#fff; --line:#e3e6eb; --line-strong:#d0d5dd;
+  --ink:#1f2430; --ink-2:#5a6272; --ink-3:#8b93a3;
+  --accent:#1976d2;
+  --radius:6px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-size:13px;color:var(--ink);background:var(--bg);
+  padding:20px 22px 60px;line-height:1.65;
+}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:19px;margin:0 0 4px;font-weight:600}
+.lead{color:var(--ink-2);margin:0 0 4px}
+.sub{color:var(--ink-3);font-size:12px;margin:0 0 22px}
+h2{font-size:14px;margin:30px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:12.5px;margin:0 0 10px;font-weight:600;color:var(--ink-2)}
+p{margin:0 0 10px}
+code{font-family:Consolas,"Courier New",monospace;font-size:11.5px;
+  background:#eef1f5;padding:1px 5px;border-radius:3px}
+
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px 12px;margin-bottom:14px;
+}
+.kicker{font-size:11px;color:var(--ink-3);margin-bottom:3px}
+.h{font-size:13.5px;font-weight:600;margin-bottom:2px}
+.deck{font-size:11.5px;color:var(--ink-3);margin-bottom:10px}
+.cap{font-size:11.5px;color:var(--ink-2);margin-top:7px}
+.cap b{color:var(--ink);font-weight:600}
+.foot{font-size:11px;color:var(--ink-3);margin-top:5px;
+  padding-top:5px;border-top:1px solid var(--line)}
+
+/* 数据带：成列的数字用等宽字形；大字号主数字用比例字形 */
+.band{display:flex;flex-wrap:wrap;gap:0 22px;margin-top:9px;
+  padding:8px 0 0;border-top:1px solid var(--line)}
+.it{display:flex;flex-direction:column;gap:1px}
+.it .k{font-size:10.5px;color:var(--ink-3)}
+.it .v{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;
+  letter-spacing:-.2px}
+.it .v small{font-size:10px;font-weight:400;color:var(--ink-3);margin-left:1px}
+.it .v.red{color:var(--gsc-chart-danger)}
+.it .v.grn{color:var(--gsc-chart-good)}
+.it .v.amb{color:var(--gsc-chart-warn)}
+
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+
+/* 配色样卡 */
+.sw{display:flex;flex-wrap:wrap;gap:10px}
+.swd{width:132px}
+.swatch{height:34px;border-radius:4px;border:1px solid rgba(0,0,0,.07)}
+.swk{font-size:10.5px;color:var(--ink-3);margin-top:4px}
+.swv{font-size:10.5px;color:var(--ink-2);font-family:Consolas,monospace}
+.ramp{display:flex;height:26px;border-radius:4px;overflow:hidden;
+  border:1px solid rgba(0,0,0,.07);margin-top:6px}
+.ramp i{flex:1}
+
+table{border-collapse:collapse;width:100%;font-size:12px;margin:6px 0 4px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}
+th{font-weight:600;color:var(--ink-2);font-size:11.5px;
+  background:linear-gradient(#fbfcfd,#f4f6f9)}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.pass{color:var(--gsc-chart-good);font-weight:600}
+.warn{color:var(--gsc-chart-warn);font-weight:600}
+.fail{color:var(--gsc-chart-danger);font-weight:600}
+
+.note{background:#fdfaf4;border:1px solid #f0dcb8;border-radius:4px;
+  padding:10px 12px;font-size:12px;color:var(--ink-2);margin:10px 0}
+.note b{color:var(--ink)}
+.err{background:#fdf3f3;border:1px solid #f0c8c8;border-radius:4px;
+  padding:10px 12px;font-size:12px;color:#8e1b1b;margin:10px 0;display:none}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+<div class="wrap">
+
+  <h1>GachaStat 图表标准</h1>
+  <p class="lead">所有图表按 ECharts 5.6 交互式渲染，走 <code>ChartSpec</code> IR → renderer 这条真实管线。</p>
+  <p class="sub">本页同时是全图型的冒烟测试：每种 <code>chart_type</code> 至少渲一个实例，改渲染器后先看这一页。</p>
+
+  <div class="err" id="depfail">
+    <b>依赖没加载上。</b>本页需要 <code>libs/echarts.min.js</code>、<code>libs/gs-charts.js</code>、
+    <code>libs/vuemin.js</code>。三者都在仓库里，走 file:// 打开即可，不需要联网。
+  </div>
+
+  <!-- ─────────── 配色 ─────────── -->
+  <h2>1. 配色（算出来的，不是挑出来的）</h2>
+  <p>用 dataviz skill 的 <code>validate_palette.js</code> 跑过，浅色表面 <code>#ffffff</code>。
+  改配色前先跑一遍校验器，别凭肉眼判断色盲安全性。</p>
+
+  <div class="card">
+    <h3>分类色 · 固定顺序，不循环</h3>
+    <div class="sw">
+      <div class="swd" v-for="c in cats" :key="c.v">
+        <div class="swatch" :style="{background:c.v}"></div>
+        <div class="swk">{{ c.k }}</div>
+        <div class="swv">{{ c.v }}</div>
+      </div>
+    </div>
+    <div class="foot">只三槽：第 4 条序列不是在末尾再加一个色相（CVD 下分不开、也会破坏顺序检查），
+    而是折进「其他」或改小倍数图。本项目绝大多数图是单序列，两三条已够。</div>
+  </div>
+
+  <table>
+    <thead><tr><th>检查</th><th>结果</th><th>实测</th></tr></thead>
+    <tbody>
+      <tr><td>亮度带</td><td class="pass">PASS</td><td>三个色都在 L 0.43–0.77</td></tr>
+      <tr><td>色度下限</td><td class="pass">PASS</td><td>均 ≥ 0.1，不会读成灰</td></tr>
+      <tr><td>CVD 分离（全对）</td><td class="pass">PASS</td><td>最差 #7b1fa2↔#1976d2 ΔE 10.8（deutan）</td></tr>
+      <tr><td>常视分离</td><td class="pass">PASS</td><td>最差 #00897b↔#1976d2 ΔE 16.1（≥15 门槛）</td></tr>
+      <tr><td>对表面对比度</td><td class="pass">PASS</td><td>均 ≥ 3:1</td></tr>
+    </tbody>
+  </table>
+
+  <div class="card" style="margin-top:14px">
+    <h3>连续量级 · 单一色相，浅 → 深</h3>
+    <div class="ramp">
+      <i v-for="s in seq" :key="s" :style="{background:s}"></i>
+    </div>
+    <div class="foot">亮度单调 PASS · 相邻级差 PASS · 亮端对白底 2.16:1 PASS · 单一色相 PASS。
+    量级只能用一个色相；彩虹色阶（含 Viridis）在浅底上不成立，见 §5 的登记。</div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h3>语义色 · 保留，永不作为序列身份</h3>
+    <div class="sw">
+      <div class="swd" v-for="c in semantics" :key="c.v">
+        <div class="swatch" :style="{background:c.v}"></div>
+        <div class="swk">{{ c.k }}</div>
+        <div class="swv">{{ c.v }}</div>
+      </div>
+    </div>
+    <div class="foot">图上出现红色必须意味着「坏」。若某条序列用了红，读者就再也分不清
+    那是「第 3 个方案」还是「出问题了」。发散色阶的红色是唯一例外，且同一张图里不得兼作状态。</div>
+  </div>
+
+  <!-- ─────────── 图型 ─────────── -->
+  <h2>2. 图型（按后端 IR 的 chart_type 逐一）</h2>
+  <p>每张图喂一份 <code>ChartSpec</code> 形状的对象，与 Python 侧
+  <code>gacha_simulator/visualization/chart_spec.py</code> 的字段同名同构。
+  下表列出后端实际产出的类型与数量，全部有对应实现。</p>
+
+  <table>
+    <thead><tr><th>chart_type</th><th>后端产出处</th><th>本页实例</th></tr></thead>
+    <tbody>
+      <tr><td>histogram</td><td>最差/最好情形、条件分布、GDR 分布（6 处）</td><td class="pass">有</td></tr>
+      <tr><td>cdf</td><td>条件分布、成功率（1 处）</td><td class="pass">有</td></tr>
+      <tr><td>ridge</td><td>脆弱性分析（1 处，每池一行）</td><td class="pass">有</td></tr>
+      <tr><td>boxplot</td><td>GDR 分池对比</td><td class="pass">有</td></tr>
+      <tr><td>scatter</td><td>敏感性、PAVA 灰点（4 处）</td><td class="pass">有</td></tr>
+      <tr><td>bar</td><td>每池统计、事件频次（3 处）</td><td class="pass">有</td></tr>
+      <tr><td>heatmap</td><td>相关性、转移概率（2 处）</td><td class="pass">有</td></tr>
+      <tr><td>subplot_grid</td><td>转变分析多池矩阵（1 处）</td><td class="pass">有</td></tr>
+      <tr><td>waterfall_3d</td><td>3D 瀑布（默认降级 2D）</td><td class="pass">有</td></tr>
+      <tr><td>composite</td><td>脆弱性单池三行子图（1 处）</td><td class="pass">有</td></tr>
+      <tr><td>table</td><td>过程分析 5 项、VaR/CVaR</td><td class="warn">不渲染为图</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>表不画进 canvas。</b><code>chart_type='table'</code> 时 renderer 返回 <code>null</code>，
+    由页面渲染真正的 HTML 表。把表塞进画布是把可选中、可复制、可读屏、可排序的文本
+    降级成像素，而表主型（型 5）本来就没有主图。
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="kicker">分布型</div>
+      <div class="h">histogram · 资源剩余分布</div>
+      <div class="deck">1,000 次模拟 · 密度 · 均值线与 P5 分位线</div>
+      <gs-chart :spec="S.hist" :height="158"></gs-chart>
+      <div class="band">
+        <div class="it"><span class="k">P5</span><span class="v">420</span></div>
+        <div class="it"><span class="k">中位</span><span class="v">1,180</span></div>
+        <div class="it"><span class="k">尾部占比</span><span class="v red">4.6<small>%</small></span></div>
+      </div>
+      <div class="cap"><b>图 1</b>　资源剩余分布。浅红带为 P5 以下尾部。</div>
+      <div class="foot">标注层：均值线（虚线）与分位线（点线）由 <code>annotations</code> 生成，
+      文字用墨色，颜色由线本身承载。</div>
+    </div>
+
+    <div class="card">
+      <div class="kicker">趋势型</div>
+      <div class="h">cdf · 累积分布</div>
+      <div class="deck">1,000 次模拟 · 横轴＝抽数 · 纵轴＝累积概率</div>
+      <gs-chart :spec="S.cdf" :height="158"></gs-chart>
+      <div class="band">
+        <div class="it"><span class="k">P50</span><span class="v">77 <small>抽</small></span></div>
+        <div class="it"><span class="k">P90</span><span class="v">85 <small>抽</small></span></div>
+        <div class="it"><span class="k">样本数</span><span class="v">1,000</span></div>
+      </div>
+      <div class="cap"><b>图 2</b>　单池出货抽数的累积分布。</div>
+      <div class="foot">坐标十字线随指针移动，一次读出抽数与累积概率两个值。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="kicker">分组比较型</div>
+    <div class="h">bar · 各池平均抽卡数</div>
+    <div class="deck">1,000 次模拟 · 按池分组 · 单位 抽 · 最差项用语义色标出</div>
+    <gs-chart :spec="S.bar" :height="170"></gs-chart>
+    <div class="band">
+      <div class="it"><span class="k">最低 · 自选池</span><span class="v grn">61.2</span></div>
+      <div class="it"><span class="k">最高 · 轮换池</span><span class="v red">96.4</span></div>
+      <div class="it"><span class="k">极差</span><span class="v amb">35.2</span></div>
+      <div class="it"><span class="k">池数</span><span class="v">8</span></div>
+    </div>
+    <div class="cap"><b>图 3</b>　各池平均抽卡数。轮换池显著高于其余，是资源占用的主要来源。</div>
+    <div class="foot">柱长已经编码了量级，所以不按大小给柱子染深浅（那是把一个通道用两遍）。
+    只有「最差那一项」配语义色，因为那是结论。超过 14 个分类会自动给出横轴缩放条。</div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="kicker">矩阵型</div>
+      <div class="h">heatmap · 池间转移概率</div>
+      <div class="deck">行＝当前池 · 列＝下一个池 · 行和为 1</div>
+      <gs-chart :spec="S.heat" :height="196"></gs-chart>
+      <div class="band">
+        <div class="it"><span class="k">最强转移</span><span class="v">0.72</span></div>
+        <div class="it"><span class="k">最弱转移</span><span class="v red">0.03</span></div>
+        <div class="it"><span class="k">行和校验</span><span class="v grn">1.00</span></div>
+      </div>
+      <div class="cap"><b>图 4</b>　池间转移概率矩阵。</div>
+      <div class="foot">矩阵型的版面问题是<b>色阶图例落在哪</b>：这里贴右作竖条，
+      <code>visualMap</code> 可拖动筛选，比静态图例多一层可用性。</div>
+    </div>
+
+    <div class="card">
+      <div class="kicker">矩阵型 · 面板网格</div>
+      <div class="h">subplot_grid · 各池成败矩阵</div>
+      <div class="deck">4 个池 × 5 种事件模式</div>
+      <gs-chart :spec="S.grid" :height="196"></gs-chart>
+      <div class="cap"><b>图 5</b>　多池矩阵合并到一图，共用行列标签。</div>
+      <div class="foot">每个子图独立 grid，共用右上的色阶图例：一个图例管多张矩阵，
+      比每张各挂一条省版面。</div>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="kicker">山脊 · 图本身即选择器</div>
+      <div class="h">ridge · 各池资源剩余</div>
+      <div class="deck">8 行 · 点行选中该池 · 红虚线＝均值</div>
+      <gs-chart :spec="S.ridge" :height="306" @pick="onPick"></gs-chart>
+      <div class="cap"><b>图 6</b>　每行一个池，行可点选（已选：<b>{{ picked || '无' }}</b>）。</div>
+      <div class="foot">池数涨到几十个时不会把页面顶掉：容器限高、内部滚动，
+      行高固定 28px 上下。点行即选中，不再另设池选择器。</div>
+    </div>
+
+    <div class="card">
+      <div class="kicker">组合图 · 共享横轴</div>
+      <div class="h">composite · 脆弱性三行子图</div>
+      <div class="deck">① 等距直方图　② PAVA 保序推断　③ 分位数分箱</div>
+      <gs-chart :spec="S.comp" :height="306"></gs-chart>
+      <div class="cap"><b>图 7</b>　三个子面板共用横轴（资源剩余），逐层下钻。</div>
+      <div class="foot">十字线在三行之间联动，同一 x 位置一次读三个面板的值，
+      这是把三张图并成一张的理由。</div>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="kicker">散点</div>
+      <div class="h">scatter · 敏感性扫描</div>
+      <div class="deck">目标阈值 × 达成率 · 两条轨迹</div>
+      <gs-chart :spec="S.scatter" :height="172"></gs-chart>
+      <div class="cap"><b>图 8</b>　两条轨迹才有图例；单序列不给图例，标题已说明。</div>
+      <div class="foot">散点很密时逐点命中不现实，所以用轴触发给出十字线与最近点读数，
+      而不是要求指针精准落在 8px 的点上。</div>
+    </div>
+
+    <div class="card">
+      <div class="kicker">箱线</div>
+      <div class="h">boxplot · 各池出货抽数</div>
+      <div class="deck">中位、四分位、极值</div>
+      <gs-chart :spec="S.box" :height="172"></gs-chart>
+      <div class="cap"><b>图 9</b>　分池分布对比，一眼看出离散度差异。</div>
+      <div class="foot">五个统计量由样本现算，与后端 boxplot 构造同语义。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="kicker">3D 瀑布 · 默认降级</div>
+    <div class="h">waterfall_3d → 2D 压缩瀑布</div>
+    <div class="deck">3D 在 868px 的框里不可读（近柱遮远柱、无法精读刻度），默认走 2D</div>
+    <gs-chart :spec="S.wf" :height="182"></gs-chart>
+    <div class="cap"><b>图 10</b>　把第三维（计数）编成色阶铺在平面上，量级与位置都不丢。</div>
+    <div class="foot">展开时才给大框并切回 3D。这条对应 archetypes.html 登记的例外之一。</div>
+  </div>
+
+  <!-- ─────────── 交互 ─────────── -->
+  <h2>3. 默认交互</h2>
+  <table>
+    <thead><tr><th>能力</th><th>默认</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>提示</td><td>开</td><td>轴触发配十字线（线/散点）或柱影（柱）；矩阵与散点是逐项触发。
+        提示里的值在前、序列名在后：读者已经知道是哪条线，要的是数字。</td></tr>
+      <tr><td>工具箱</td><td>开</td><td>保存图片 / 还原，图带缩放轴时多一个数据缩放。既有 §6 图表规范的要求。</td></tr>
+      <tr><td>数据缩放</td><td>按需</td><td>分类超过 14 个、或横轴是连续量时给 inside + slider；不给没用的空白条。</td></tr>
+      <tr><td>图例</td><td>≥2 序列</td><td>顶部水平。单序列不给图例，标题已说明画的是什么。</td></tr>
+      <tr><td>点选</td><td>按需</td><td>山脊那类「图本身即选择器」的图，点行选中并派发 <code>pick</code>。</td></tr>
+      <tr><td>自适应</td><td>开</td><td>容器尺寸变化自动重绘（面板折展、道切换都靠这条）。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>4. 版面纪律（与图注体系配套）</h2>
+  <div class="card">
+    <p style="margin-bottom:8px">图题<b>不画在图里</b>。图注体系要求「图题在图下、表题在表上」，
+    所以标题、导语、图注、口径脚注全部由 HTML 承载，ECharts 主题里 <code>title</code> 默认关闭。</p>
+    <p style="margin-bottom:8px">容器高度必须<b>含轴标签带</b>。定高裁掉 x 轴会让卡片长出一条细滚动条，
+    这是常见反模式；<code>grid.containLabel</code> 与显式 <code>height</code> 一起保证不裁。</p>
+    <p style="margin:0">网格线是一档深于表面的灰、发丝、<b>实线</b>。虚线留给阈值，
+    否则读者会把网格读成「预测值」。</p>
+  </div>
+
+  <h2>5. 登记的偏差与待决</h2>
+  <div class="note">
+    <b>① 后端 IR 的默认色阶 <code>Viridis</code> 在浅色底上不成立。</b>
+    校验器对 <code>#440154…&fde725</code> 跑 ordinal 模式：亮度单调 PASS，但色相跨 144°（非单一色相），
+    且亮端 <code>#fde725</code> 对白底仅 1.26:1（门槛 2:1）。
+    本页矩阵一律渲成单色蓝。接线时需决定：改 <code>chart_spec.py</code> 的默认值，还是保留 Viridis
+    并接受这两条不通过。<b>现状：探针按标准渲染，偏差已登记未消除。</b>
+  </div>
+  <div class="note">
+    <b>② 两处 token 文件不一致。</b>
+    <code>tools/poc_webview/ui_compare/src/styles/tokens.css</code> 里的
+    <code>--gsc-chart-palette</code> 是 matplotlib tab10（<code>#1f77b4,#ff7f0e,#2ca02c,#d62728,…</code>），
+    含橙与红，与语义色纪律冲突；<code>--el-border-radius-base:2px</code> 与
+    <code>layout_demo</code> 的 6px 圆角也分叉。本页图表令牌定义在 <code>libs/gs-charts.css</code>，
+    是当前唯一真相源。合并两套设计时要么改 tokens.css，要么退役该文件。
+  </div>
+  <div class="note">
+    <b>③ 表格视图尚未提供。</b>
+    「每个图都有一份表格视图」是可达性要求（提示只能增强、不能成为读数的唯一途径）。
+    当前由各结果块的<b>数据带</b>承载关键值算部分满足，但完整表格视图未做。
+  </div>
+  <div class="note">
+    <b>④ 深色模式未做。</b>
+    深色模式不是把浅色翻过来，而是从同一批色阶里另选步进并对着深色表面重新跑校验。
+    当前 GUI 与探针都只有浅色，故未做，登记为缺口而非「以后顺手翻一下」。
+  </div>
+
+</div>
+</div>
+
+<script src="libs/vuemin.js"></script>
+<script src="libs/echarts.min.js"></script>
+<script src="libs/gs-charts.js"></script>
+<script>
+/* 依赖没上来就明说，别让页面静默变成裸模板（吃过一次真事故的教训） */
+(function () {
+  if (typeof Vue === 'undefined' || typeof echarts === 'undefined' || typeof GS === 'undefined') {
+    var b = document.getElementById('depfail');
+    if (b) b.style.display = 'block';
+  }
+})();
+
+(function () {
+  'use strict';
+
+  /* 稳定伪随机：截图之间可比，不引真随机 */
+  var _s = 20261008;
+  function rnd() { _s = (_s * 1103515245 + 12345) & 0x7fffffff; return _s / 0x7fffffff; }
+  function gauss(n, mu, sd) {
+    var a = [];
+    for (var i = 0; i < n; i++) {
+      var u = 0, v = 0;
+      while (u === 0) u = rnd();
+      while (v === 0) v = rnd();
+      a.push(mu + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v));
+    }
+    return a;
+  }
+
+  var POOLS = ['限定角色', '限定武器', '常驻', '复刻', '交换', '自选', '阶梯', '轮换'];
+
+  /* 出货抽数样本：大部分集中在 60-90，少数拖到 180（吃满硬保底） */
+  var draws = gauss(1000, 74, 11).map(function (v) {
+    return Math.max(1, Math.round(v));
+  });
+  draws.push.apply(draws, [178, 180, 176, 172, 168, 180, 174, 179, 177, 170]);
+
+  /* 资源剩余：右偏，长尾在左边 */
+  var res = gauss(1000, 1180, 620).map(function (v) { return Math.max(0, Math.round(v)); });
+
+  /* 敏感性：两条轨迹，阈值 0.55 → 0.95 */
+  var thr = [], acc1 = [], acc2 = [];
+  for (var k = 0; k < 22; k++) {
+    var t = 0.55 + k * 0.018;
+    thr.push(+t.toFixed(3));
+    acc1.push(+(1 / (1 + Math.exp((t - 0.74) * 19))).toFixed(4));
+    acc2.push(+(1 / (1 + Math.exp((t - 0.80) * 15))).toFixed(4));
+  }
+
+  /* 池间转移概率：对角占优，行和为 1 */
+  var TN = ['角色池', '武器池', '常驻池', '轮换池'];
+  var TM = [
+    [0.62, 0.21, 0.12, 0.05],
+    [0.24, 0.58, 0.14, 0.04],
+    [0.18, 0.19, 0.55, 0.08],
+    [0.03, 0.09, 0.16, 0.72],
+  ];
+
+  /* 各池资源剩余：多峰，供山脊用；均值与脆弱区间一并给 */
+  var ridgeSeries = {}, ridgeLabels = {}, ridgeMeans = {}, ridgeVuln = {}, ridgeColors = {};
+  POOLS.forEach(function (p, i) {
+    var mu = 900 + i * 190, sd = 260 + (i % 3) * 90;
+    ridgeSeries[p] = gauss(400, mu, sd).map(function (v) { return Math.max(0, v); });
+    ridgeLabels[p] = p;
+    ridgeMeans[p] = mu;
+    if (i % 3 === 1) { ridgeVuln[p] = [Math.max(0, mu - sd * 1.6), mu + sd * 0.4]; }
+    ridgeColors[p] = (i % 3 === 1) ? GS.STATUS.danger : GS.CAT[0];
+  });
+
+  /* 组合图三行子图，共用横轴「资源剩余」 */
+  var N = 46, X0 = 0, X1 = 3600;
+  function bin(n, f) {
+    var out = [];
+    for (var i = 0; i < n; i++) out.push([+(X0 + (X1 - X0) * (i + 0.5) / n).toFixed(1), f(i / n)]);
+    return out;
+  }
+  var comp = {
+    chart_type: 'composite', title: '', xlabel: '资源剩余',
+    layout_hints: { row_heights: [0.34, 0.33, 0.33] },
+    panels: [
+      {
+        chart_type: 'histogram', title: '① 频次（等距直方图）',
+        data: { samples: res, density: false, mean_line: true },
+        layout_hints: { nbins: 26 },
+      },
+      {
+        chart_type: 'scatter', title: '② PAVA 保序推断',
+        data: {
+          traces: [
+            { name: '分箱观测', mode: 'markers', marker_size: 6, opacity: 0.55,
+              marker_color: GS.STATUS.muted,
+              x: bin(18, function (t) { return +(X0 + (X1 - X0) * t).toFixed(1); }).map(function (p) { return p[0]; }),
+              y: bin(18, function (t) { return +(1 / (1 + Math.exp((t - 0.46) * 7.5))).toFixed(4); }).map(function (p) { return p[1]; }) },
+            { name: '单调拟合', mode: 'lines', marker_symbol: 'none', line_width: 2.5,
+              line_color: GS.STATUS.danger,
+              x: bin(40, function (t) { return +(X0 + (X1 - X0) * t).toFixed(1); }).map(function (p) { return p[0]; }),
+              y: bin(40, function (t) { return +Math.min(1, 1 / (1 + Math.exp((t - 0.52) * 5))).toFixed(4); }).map(function (p) { return p[1]; }) },
+          ],
+        },
+      },
+      {
+        chart_type: 'bar', title: '③ 分位数分箱 N_j',
+        data: { labels: new Array(18).fill(0).map(function (_, i) { return (i + 1); }),
+          values: new Array(18).fill(0).map(function (_, i) {
+            return 12 + ((i * 53) % 9) * 2; }), orientation: 'v' },
+        layout_hints: {},
+      },
+    ],
+  };
+
+  /* 各池成败矩阵，供 subplot_grid */
+  var gMats = [], gTitles = [];
+  for (var g = 0; g < 4; g++) {
+    var m = [];
+    for (var r = 0; r < 5; r++) {
+      var row = [];
+      for (var c = 0; c < 5; c++) row.push(+((r === c ? 0.42 : 0.06) + rnd() * 0.18).toFixed(3));
+      m.push(row);
+    }
+    gMats.push(m); gTitles.push(POOLS[g]);
+  }
+
+  /* 3D 瀑布的三维数据：池 × 资源档 × 计数 */
+  var wfX = [], wfY = [], wfZ = [];
+  POOLS.forEach(function (_, i) {
+    var mu = 7 + (i % 4) * 2.4, sd = 1.6 + (i % 3) * 0.5;
+    for (var b = 0; b < 18; b++) {
+      wfX.push(i); wfY.push(b * 200);
+      wfZ.push(+Math.exp(-0.5 * Math.pow((b - mu) / sd, 2)).toFixed(3));
+    }
+  });
+
+  Vue.createApp({
+    data: function () {
+      return {
+        picked: '',
+        cats: [
+          { k: 'c1 主序列', v: '#1976d2' },
+          { k: 'c2 次序列', v: '#00897b' },
+          { k: 'c3 第三序列', v: '#7b1fa2' },
+        ],
+        seq: ['#82b5e9', '#5c9fe0', '#3a8ad4', '#1f6fc4', '#12539e', '#083a80'],
+        semantics: [
+          { k: 'good 达标', v: '#2e7d32' },
+          { k: 'warn 警告', v: '#b26a00' },
+          { k: 'danger 尾部/最差', v: '#c62828' },
+          { k: 'muted 中性', v: '#8b93a3' },
+        ],
+        S: {
+          hist: {
+            chart_type: 'histogram', title: '资源剩余分布', xlabel: '资源剩余', ylabel: '密度',
+            data: { samples: res, mean_line: true, quantile_lines: [0.05], density: true },
+            annotations: [{ type: 'vline', value: 420, color: '#c62828', dash: 'dot', text: 'P5 420' }],
+            shaded_regions: [{ lower: 0, upper: 420, color: 'rgba(198,40,40,.10)' }],
+            layout_hints: { nbins: 34 },
+          },
+          cdf: {
+            chart_type: 'cdf', title: '出货抽数累积分布', xlabel: '抽数', ylabel: '累积概率',
+            data: { samples: draws },
+            annotations: [
+              { type: 'vline', value: 77, color: '#5a6272', dash: 'dash', text: 'P50 77' },
+              { type: 'vline', value: 85, color: '#c62828', dash: 'dash', text: 'P90 85' },
+            ],
+          },
+          bar: {
+            chart_type: 'bar', title: '各池平均抽卡数', xlabel: '', ylabel: '抽',
+            data: { labels: POOLS, values: [72.4, 78.1, 66.3, 74.9, 81.5, 61.2, 88.7, 96.4] },
+            layout_hints: { worst_index: 7 },
+          },
+          heat: {
+            chart_type: 'heatmap', title: '池间转移概率',
+            data: { matrix: TM, row_labels: TN, col_labels: TN },
+          },
+          grid: {
+            chart_type: 'subplot_grid', title: '各池成败矩阵',
+            data: { matrices: gMats, titles: gTitles, cols: 4,
+              row_labels: ['全成', '部分', '全败', '耗尽', '未启'],
+              col_labels: ['全成', '部分', '全败', '耗尽', '未启'] },
+          },
+          ridge: {
+            chart_type: 'ridge', title: '各池资源剩余', xlabel: '资源剩余', ylabel: '',
+            data: { series: ridgeSeries, labels: ridgeLabels, means: ridgeMeans,
+              vuln_regions: ridgeVuln, colors: ridgeColors },
+            layout_hints: { nbins: 30 },
+          },
+          comp: comp,
+          scatter: {
+            chart_type: 'scatter', title: '成功率随阈值变化', xlabel: '目标阈值', ylabel: '达成率',
+            data: { traces: [
+              { name: '全部目标达成', mode: 'lines', x: thr, y: acc1, marker_color: '#1976d2' },
+              { name: '加权达成率', mode: 'lines', x: thr, y: acc2, marker_color: '#00897b' },
+            ] },
+          },
+          box: {
+            chart_type: 'boxplot', title: '各池出货抽数', ylabel: '抽数',
+            data: { series: (function () {
+              var o = {};
+              POOLS.slice(0, 5).forEach(function (p, i) {
+                o[p] = gauss(300, 68 + i * 7, 9 + i * 2).map(function (v) { return Math.max(1, v); });
+              });
+              return o;
+            })() },
+          },
+          wf: {
+            chart_type: 'waterfall_3d', title: '资源档位 × 池 的达成计数',
+            data: { x: wfX, y: wfY, z: wfZ },
+          },
+        },
+      };
+    },
+    methods: {
+      onPick: function (p) { this.picked = p.seriesName || ('行 ' + (p.seriesIndex + 1)); },
+    },
+    mounted: function () {
+      /* 折叠面板、切道之后尺寸会变，统一重绘 */
+      window.addEventListener('resize', GS.resizeAll);
+    },
+  }).use(GS).mount('#app');
+})();
+</script>
+</body>
+</html>

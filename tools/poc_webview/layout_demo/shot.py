@@ -4,10 +4,11 @@
 否则会出现「15 个自闭合标签导致整页空白」那类静默失败。
 
 用法：
-    python shot.py <页面.html> <输出.png> [页面名] [--js "先执行的 JS"]
+    python shot.py <页面.html> <输出.png> [页面名] [--js "先执行的 JS"] [--full] [--at 0,3,5]
 
-「页面名」用于选择断言组：index / tabs / carbon，省略则用通用断言。
+「页面名」用于选择断言组：index / tabs / chart，省略则用通用断言。
 --js 用来切状态（如点第 5 个配置标签）后再截图。
+--at 把第 N 个 .gs-chart 滚到视口顶部各截一张（长页整页截图会缩到看不清字）。
 
 用系统已装的 Chrome（channel="chrome"），不额外下载 chromium。
 """
@@ -92,7 +93,36 @@ TABS = """
 })()
 """
 
-PROBES = {"index": INDEX, "tabs": TABS, "common": COMMON}
+# 图表页专有：每个 .gs-chart 是否真的挂上了 ECharts（出了 svg/canvas），
+# 以及渲染器选择、空图、控制台报错。图表挂不上时页面看起来只是「图没了」，
+# 静态截图不会告诉你原因，所以这里必须断言。
+CHART = """
+(() => {
+  const vis = e => { if (!e) return false; const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0; };
+  const boxes = [...document.querySelectorAll('.gs-chart')];
+  const empty = boxes.filter(b => !b.querySelector('svg,canvas'));
+  const zero = boxes.filter(b => { const r = b.getBoundingClientRect();
+    return r.width === 0 || r.height === 0; });
+  return {
+    boxes: boxes.length,
+    mounted: boxes.length - empty.length,
+    empty: empty.length,
+    zeroSize: zero.length,
+    renderers: boxes.map(b => b.querySelector('canvas') ? 'canvas'
+      : (b.querySelector('svg') ? 'svg' : '-')),
+    svgText: document.querySelectorAll('.gs-chart svg text').length,
+    gsStats: (window.GS && GS._stats) ? GS._stats() : null,
+    bodyText: (document.body.innerText || '').length,
+    unrendered: ((document.body.innerText || '').match(/\\{\\{/g) || []).length,
+    cloaked: document.querySelectorAll('[v-cloak]').length,
+    depfail: (() => { const e = document.getElementById('depfail');
+      return !!e && vis(e); })(),
+  };
+})()
+"""
+
+PROBES = {"index": INDEX, "tabs": TABS, "chart": CHART, "common": COMMON}
 
 
 def main() -> None:
@@ -103,13 +133,23 @@ def main() -> None:
     if not page.is_absolute():
         page = (Path.cwd() / page).resolve()
     out = Path(args[1])
-    probe_name = "common"
-    pre_js = ""
-    rest = [a for a in args[2:] if not a.startswith("--")]
-    if rest:
-        probe_name = rest[0]
-    if "--js" in args:
-        pre_js = args[args.index("--js") + 1]
+    # 所有带值的选项先摘掉，剩下的裸参数才是页面名；否则 --at 的值会被当成页面名
+    VALUE_FLAGS = {"--js", "--at"}
+    bare, skip = [], False
+    for a in args[2:]:
+        if skip:
+            skip = False
+            continue
+        if a in VALUE_FLAGS:
+            skip = True
+            continue
+        if a.startswith("--"):
+            continue
+        bare.append(a)
+    probe_name = bare[0] if bare else "common"
+    pre_js = args[args.index("--js") + 1] if "--js" in args else ""
+    at = ([int(x) for x in args[args.index("--at") + 1].split(",") if x.strip()]
+          if "--at" in args else [])
 
     probe = PROBES.get(probe_name, COMMON)
 
@@ -143,6 +183,14 @@ def main() -> None:
             broken = result.get("unrendered", 0) > 0 or result.get("cloaked", 0) > 0
             if not broken or attempt == 2:
                 pg.screenshot(path=str(out), full_page="--full" in args)
+                for n in at:
+                    pg.evaluate(
+                        """(i) => { const els = document.querySelectorAll('.gs-chart');
+                           if (els[i]) els[i].scrollIntoView({block:'start'});
+                           window.scrollBy(0, -70); }""", n)
+                    pg.wait_for_timeout(500)
+                    stem = out.with_suffix("")
+                    pg.screenshot(path=f"{stem}-{n}{out.suffix}")
             b.close()
         last = (result, errs, broken)
         if not broken:

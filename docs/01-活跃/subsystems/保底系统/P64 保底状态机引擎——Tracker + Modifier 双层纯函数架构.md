@@ -302,7 +302,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 >
 > ~~**S2 与 S12 的先后（ISSUE-101 补）**~~（**2026-10-06 随 §3.14 改判删除**）：S12 已整块取消，条件自始内联。原内容：**S2 按本表形态实现**（触发条件写在 Modifier 内部），**S12 随即外置**为 §3.14.2 的 `ConditionalModifier` 形态——S12 已前移进 M1、排在 S2 之后、S4 之前（§七）。故本表不是「永不实施的死稿」，而是 **M1 内 S2 阶段的有效实现形态**；S12 之后以 §3.14 为准。S4 的 preset 工厂与 S5 的等价性测试一律消费**外置后**的形态（§3.2 / §3.3 / §3.14.2 的代码即该形态）。
 >
-> **Modifier 方法名定稿（ISSUE-GATE-dependency-order，2026-09-22；2026-10-08 由 `factor` 改为 `delta`）**：M1（S2 起至 S7）期间的 Modifier 方法名一律为 **`apply(ctx, view, dist, readonly) -> 分布`**（骨架 §3.1.4 按此调用），`ConditionalModifier` 也实现 `apply` 并转发到内层；**`delta(...) -> 增量向量` 自 S8 引入**（§3.9.2 定稿），此后骨架改调 `delta`、`apply` 保留为默认实现。全篇三处（本表 / §3.1.4 骨架 / §3.14.2 包装器）以本条统一，见 §3.9.2 的「与 §3.1.4 骨架的关系」段与 §3.14.2 的 `apply` 转发实现。
+> **Modifier 方法名定稿（ISSUE-GATE-dependency-order，2026-09-22；2026-10-08 由 `factor` 改为 `delta`）**：M1（S2 起至 S7）期间的 Modifier 方法名一律为 **`apply(ctx, view, dist, readonly) -> 分布`**（骨架 §3.1.4 按此调用），`ConditionalModifier` 也实现 `apply` 并转发到内层；**`delta(view, dist, ctx) -> 增量向量` 自 S8 引入**（§3.9.2 定稿；**2026-10-08 用户裁决：签名由 `apply` 的四参收为三参，`readonly` 随「Modifier 是 pure 函数」一并废除**），此后骨架改调 `delta`、`apply` 保留为默认实现。全篇三处（本表 / §3.1.4 骨架 / §3.14.2 包装器）以本条统一，见 §3.9.2 的「与 §3.1.4 骨架的关系」段与 §3.14.2 的 `apply` 转发实现。
 
 Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG 的 `InterceptModifier` 已并入 Tracker，见下）：给定当前状态和基础分布，返回修正后分布。**实现形态为增量向量**（§3.1.5.1）：每个 Modifier 产出一个增量向量 δ，链式应用即逐元素相加再归一化。「列表顺序」因此退化为**增量求值的先后**，不再是可交换性的来源（可交换性由 §3.1.5.5 的判据决定）。语义上全部复用 `_redistribute_scope` 的「scope 内重分配」。
 
@@ -1620,14 +1620,16 @@ class Modifier:
         """**默认实现**（ISSUE-GATE-3-dependency-order，2026-09-22 定稿）：把本 Modifier 的增量向量
         作用到分布并归一化。`apply` 自此**不是**每个 Modifier 的必写方法——各 Modifier 覆写的是
         `delta()`，`apply()` 由本基类提供。两期分工：**M1（S2 起至 S7）** 各 Modifier 直接实现 `apply`
-        （§3.1.2 历史形态，返回分布）并覆写掉本默认实现；**S8 起** 各 Modifier 改实现 `delta()`，
-        骨架逐项调用 `delta`，本默认实现成为唯一的 `apply` 定义。
+        （§3.1.2 历史形态，返回分布）并覆写掉本默认实现；**S8 起** 各 Modifier 改实现 `delta(view, dist, ctx)`，
+        骨架逐项调用 `delta`，本默认实现成为唯一的 `apply` 定义。**注意参数也随之收窄**：`apply` 是四参
+        （含 `readonly`），`delta` 是三参（2026-10-08 用户裁决，`readonly` 随「Modifier 是 pure 函数」
+        一并废除），故本方法仍收四参、其内部调用 `delta` 时只传三参。
 
         **这是「`apply()` 保留为默认实现」的承载处**（§3.1.2 / §3.9.2 原稿只写该句、未指明它住哪）：
         （原 `ConditionalModifier.apply` 转发段落已随 §3.14 改判删除；本基类的 `apply` 默认实现仍保留）
         只写 `delta`——没有本基类即 `AttributeError: 内层对象无 apply`，而该调用点在每个抽卡的调度
         入口，后果是全部保底不可用（§六 的存在性断言不触发调用，捕获不到该缺口，故本条必须落成代码）。"""
-        return _apply_delta(dist, self.delta(ctx, view, dist, readonly) or {})
+        return _apply_delta(dist, self.delta(view, dist, ctx) or {})
 
 # Pity 骨架
 for mod in self._modifiers:
@@ -1635,8 +1637,10 @@ for mod in self._modifiers:
     #   不得写死 `self._view`**。声明了 `namespace` 的 Modifier 必须读到自己的命名空间，
     #   写死默认 view 会让它读错账本、恒返回 default（不报错，只让该零件静默失效）。
     #   §3.1.4 骨架的 M1 形态（`mod.apply(cctx, self._view_for(mod), out, readonly)`）
-    #   已按此写；S8 只换方法名（`apply` → `delta`），**本行不得回退为 `self._view`**。
-    d = mod.delta(ctx, self._view_for(mod), out, readonly)
+    #   已按此写；**S8 换方法名与参数**（`apply(ctx, view, dist, readonly)` →
+    #   `delta(view, dist, ctx)`，`readonly` 随「Modifier 是 pure 函数」一并废除，
+    #   2026-10-08 用户裁决），**本行不得回退为 `self._view`**。
+    d = mod.delta(self._view_for(mod), out, ctx)
     if d is not None:
         out = _apply_delta(out, d)       # (out + d) / Σ(out + d)
 
@@ -1652,14 +1656,14 @@ def _apply_delta(dist, d):
 > **`Modifier` 是全部 Modifier 的公共基类（ISSUE-GATE-3-dependency-order 定稿，2026-09-22）**：`rebind`（空实现，供无状态零件继承、有状态者覆写）与 `apply`（由 `delta` 导出，见上方代码）两个**默认实现都住在本基类**；`delta` 是各 Modifier 唯一必写的那个。**§3.2 / §3.14.2 的每个 Modifier 示例一律写成 `class XxxModifier(Modifier):`**——原稿为裸类、无基类，使「`apply()` 保留为默认实现」无承载处，S8 之后 `ConditionalModifier.apply` 的转发目标会落成 `AttributeError`；`ConditionalModifier` 同样继承本基类并覆写 `apply` / `delta` / `rebind` 三个转发。**备选（S8 一并删除 `apply` 与 `ConditionalModifier.apply`）已否决**：它与 §3.1.2 的「`apply` 保留为默认实现」互斥，还要同步改 §六 的 M1 断言口径，改动面更大且无额外收益。<!-- REVIEW-FIX-PREV: ISSUE-GATE-3-dependency-order -->
 > **`rebind` 是 S8 之前就需要的接口（ISSUE-029）**：`Pity._rebind_state`（§3.1.4）自 S1 起就无条件调用 `mod.rebind(state, name)`，而本节的 `factor()` 是 **S8** 才引入——两者不可混为一谈，别把 `rebind` 当成 S8 的附属接口。各 Modifier 是否持有状态零件（Counter / Flag）不同，恒等零件可直接 `pass`。**另注意 S12 的连带影响**：S12 落地后 preset 里的 Modifier 一律被 `ConditionalModifier` 包裹（§3.14.2），该包装器**必须转发 `rebind`**，否则 S12 一落地、首次抽卡即抛 `AttributeError: 'ConditionalModifier' object has no attribute 'rebind'`。该调用位于每个抽卡的调度入口，后果是全部保底不可用，而非局部退化。
 
-> **与 §3.1.4 骨架的关系（ISSUE-GATE-dependency-order 定稿，2026-09-22）**：S1–S5 期间 Modifier 的方法名是 **`apply(ctx, view, dist, readonly)`**（返回修正后的分布，§3.1.2 历史形态），骨架按此调用、本节的内循环不实施；S8 引入 **`delta(...)`** 返回增量向量，内循环改为 `mod.delta(...)` + `_apply_delta`，`apply()` 保留为默认实现、`delta()` 缺省时回退到它。**视图形参同源（ISSUE-505，强制）**：S8 的内循环**只换方法名**，`view` 实参一律继承 §3.1.4 骨架的 `self._view_for(mod)`（ISSUE-407 的零件级 view 取值，**不得写死 `self._view`**）——原稿本节内循环写死 `self._view`，与同计划 ISSUE-407 的强制纪律冲突；现全部 `Modifier` 的 `namespace` 均为 `None`（只有 `NamespaceTracker` 声明 `X_soft`），故今日无行为差异，但 ISSUE-407 的意义正是「为后续声明命名空间的零件留出读取通道」，写死 `self._view` 会让该通道在 Modifier 侧空转。<!-- REVIEW-R1-FIX: ISSUE-505 -->
+> **与 §3.1.4 骨架的关系（ISSUE-GATE-dependency-order 定稿，2026-09-22）**：S1–S5 期间 Modifier 的方法名是 **`apply(ctx, view, dist, readonly)`**（返回修正后的分布，§3.1.2 历史形态），骨架按此调用、本节的内循环不实施；S8 引入 **`delta(view, dist, ctx)`** 返回增量向量，内循环改为 `mod.delta(self._view_for(mod), out, ctx)` + `_apply_delta`，`apply()` 保留为默认实现、`delta()` 缺省时回退到它。**视图形参同源（ISSUE-505，强制）**：S8 的内循环**换方法名与参数**（`apply` 的四参收为三参，`readonly` 随「Modifier 是 pure 函数」废除，2026-10-08 用户裁决），`view` 实参一律继承 §3.1.4 骨架的 `self._view_for(mod)`（ISSUE-407 的零件级 view 取值，**不得写死 `self._view`**）——原稿本节内循环写死 `self._view`，与同计划 ISSUE-407 的强制纪律冲突；现全部 `Modifier` 的 `namespace` 均为 `None`（只有 `NamespaceTracker` 声明 `X_soft`），故今日无行为差异，但 ISSUE-407 的意义正是「为后续声明命名空间的零件留出读取通道」，写死 `self._view` 会让该通道在 Modifier 侧空转。<!-- REVIEW-R1-FIX: ISSUE-505 -->
 >
 > **~~包装器的转发义务~~（2026-10-06 随 §3.14 改判删除）**：原 `ConditionalModifier` 须转发 `rebind` / `apply` / `factor` / `state_keys` 四个方法，漏一个即每个抽卡入口 `AttributeError`。**包装器取消后本条作废**；`rebind` 与 `apply` 的默认实现仍由 `Modifier` 基类提供（§3.14.3）。
 
 <!-- REVIEW-FIX-PREV: ISSUE-004 -->
 > **`self._view` 的生命周期（ISSUE-004，强制）**：`self._view` 是 `Pity` 的成员，**每次 `_rebind_state` 必须重建**（§3.1.4 骨架已写），且 `StateView` 自身**不得在构造期缓存命名空间 dict**（§3.10.3 已改为每次 `get` 现取）。两条缺一：worker 内同一 engine 连跑 N 场模拟，第 2..N 场读的是第 1 场的账本；若 view 建于命名空间尚未创建之时（`depends_on` 依赖方构造期不写 `_active`），`state.data.get(name, {})` 会拿到一个与 state 脱联的空 dict，此后引擎 `state.set` 新建的命名空间与该 view 无关，所有读取恒返回 default 且不报错。此条同时是 §五 风险表「Pity 统一实现 Trackers/Modifiers/Lifecycle 的 rebind 委托」的落地条件。
 
-**为什么归一化放引擎层（ISSUE-021，2026-09-22 修正论证前提）**：原稿称「§3.1.5.2 已证三个基本算子的 ⟨m,p⟩ 恒为 1，归一化是恒等操作」，与 §3.9.5 / §3.9.4 自相矛盾——⟨m,p⟩ = 1 只在两类情形成立：① `R_r` / `B_β` 且 `T ⊊ S`、`T ∩ Q = ∅`；② `F` 作用于**最高稀有度**的 scope（§3.1.5.2 的验算段）。`F` 作用于低于最高稀有度的 scope 时 ⟨m,p⟩ = P + p(更高稀有度) ≠ 1（§3.9.5 实测 `ssr` 0.009 → 0.008919）；`R` 的 `ratio = 1` 分支更须靠「源侧显式写 0 因子」才使 ⟨m,p⟩ = 1（§3.9.4 docstring 整段在讲这一点）。故归一化**不是恒等化简，而是必需的正确性步骤**——删掉它，目标组只能拿到 `P/(1+P−T)` 而非 100%。把它集中在引擎层有两个好处：① Modifier 只负责「算出调制系数」，职责单一；② 边界（⟨m,p⟩ = 0）只需在一处处理。`dist` 参数保留在 `factor()` 中，因为因子依赖当前分布（`R_r` 的因子含 `p(T)`，见 §3.1.5.2 表）。
+**为什么归一化放引擎层（ISSUE-021，2026-09-22 修正论证前提；2026-10-08 换增量后重述）**：原稿的论证是「§3.1.5.2 已证三个基本算子的 ⟨m,p⟩ 恒为 1，归一化是恒等操作」，而那只在两类情形成立（`R_r` / `B_β` 且 `T ⊊ S`、`T ∩ Q = ∅`；`F` 作用于最高稀有度 scope）。**换增量后该论证整体作废**：转移族恒有 `Σδ = 0`，故 `Σ(p + δ) ≡ 1`，族内算子的归一化确实退化为恒等（§3.9.5 已记该条消失）。**但归一化仍必须保留在引擎层**，理由是接口本身允许不配平：§3.1.5.2 明确「增量向量可以是任意形状……不配平（`Σ(p + δ) ≠ 1`）都合法」，非族内的自定义 Modifier 可以不配平，故归一化是**对接口的兜底**，删不得。把它集中在引擎层有两个好处：① Modifier 只负责「算出增量」，职责单一；② 边界（`Σ(p + δ) ≤ 0`）只需在一处处理。`dist` 参数保留在 `delta()` 中，因为增量依赖当前分布（转移族的 `δ_Q` 含 `p(Q)`，见 §3.1.5.2.1）。
 
 **增量向量按稀疏给出**：Modifier 只需列出被改动的卡，其余默认 0。组级操作给出整组的增量，单卡定向给出单张的增量，两者是同一种东西（这正是 §3.1.5 与「槽位收回操作内部」合流之处）。
 
@@ -1814,7 +1818,7 @@ class SoftModifier(Modifier):
 
 #### 3.9.6 对只读查询的影响
 
-`PityEngine.get_probabilities(pool_id, state, base)` 与 `before_draw` 走同一路径，S8 后同样改为卡级进出。`readonly=True` 时 Modifier 不推进计数（N1 纪律），但**因子照算**——否则「查询」与「抽卡前」会给出不同分布，破坏 P16 的查询/修改分离语义。
+`PityEngine.get_probabilities(pool_id, state, base)` 与 `before_draw` 走同一路径，S8 后同样改为卡级进出。**S8 起 Modifier 是 pure 函数（§3.1.2），`readonly` 形参随 2026-10-08 的签名裁决一并废除**：查询与抽卡前天然无副作用差异，增量照算，两者给出的分布必然相同（P16 的查询/修改分离由「pure」这一性质直接保证，不再需要一个开关）。**M1 期间仍用 `readonly`**（那时的 Modifier 会推进自己的计数器，见 §3.9.2 的两期分工）。
 
 **接线（§1.5）与 S8 的交互**：接线引入的 `_pool_order` 独立排序视图作用于「按哪个顺序遍历保底」，与本节改造的「单个保底内部如何算概率」是正交的两层，互不影响。
 
@@ -2699,7 +2703,7 @@ class RotatingModifier(Modifier):
 <!-- REVIEW-FIX-PREV: ISSUE-006 -->
 <!-- REVIEW-FIX-PREV: ISSUE-201 -->
 - [ ] S9 **状态可见性与 G3 真实建模**（合计 ~2.9 人时；方案见 **§3.10**）｜**逐子项独立 commit，回滚单元 = 子项**（GATE-1 / GATE-5）
-  - [ ] S9-1 `StateView` 限定 Modifier 状态视野（关闭跨保底读，~0.5 人时；§3.10.3），**签名沿用 S8-1 定稿的 `factor(ctx, view, dist, readonly)` 形态**（方法名由 `apply` 改为 `factor` 属 S8-1 的接口变更，**本步不改签名**，只收紧 `view` 的可读面）｜目标文件 `core/pity.py`。**ISSUE-103 追加**：`PityContext.state` 的字段注记保持 `PityState`（隔离只由 `view` 承担，§3.10.2）；`TargetedBehavior` 三处 `ctx.state.get(self._name, "selected_card")` 迁为 `view.get("selected_card")`（§3.10.3）
+  - [ ] S9-1 `StateView` 限定 Modifier 状态视野（关闭跨保底读，~0.5 人时；§3.10.3），**签名沿用 S8-1 定稿的 `delta(view, dist, ctx)` 形态**（方法名与参数由 `apply(ctx, view, dist, readonly)` 改为 `delta(view, dist, ctx)` 属 S8-1 的接口变更，**本步不改签名**，只收紧 `view` 的可读面）｜目标文件 `core/pity.py`。**ISSUE-103 追加**：`PityContext.state` 的字段注记保持 `PityState`（隔离只由 `view` 承担，§3.10.2）；`TargetedBehavior` 三处 `ctx.state.get(self._name, "selected_card")` 迁为 `view.get("selected_card")`（§3.10.3）
     - 验收命令（GATE-6 补，块级最小验收）：`pytest -q tests/core/test_pity_integration.py -k stateview`——**Modifier 经 view 读其他保底键时返回 `default` 而非抛 `KeyError`** 的单测（跨保底读关闭的正例与负例各一），与现存用例同文件<!-- REVIEW-R1-FIX: ISSUE-931 --> **GATE-6-测试策略（2026-10-01 补：收集守卫）**：用例名须含 `stateview`（正例 / 负例各一），且命中项须**全部为本步新增**。实测 `-k stateview` 在该文件当前 10 条既有用例下**零命中**（pytest **exit code 5**），落地时确认收集到 ≥1 条 <!-- REVIEW-R1-FIX: GATE-6-测试策略 -->
   - [ ] S9-2 ~~`PityDef.reads`~~ + **`SimView`** + `uses_sim` 注解校验（~0.6 人时，2026-10-06 由 0.8 下调；§3.10.2）｜目标文件 `core/config_store.py` + `core/config_toml.py` + `service/batch_simulator.py` + `core/retreat_config.py` + `core/pity.py` + **`core/strategy.py`** + **`service/gacha_service.py`** + **`core/banner.py`**（<!-- REVIEW-FIX-PREV: AUDIT-BREAK-9 -->后两者是**通道 B（独立概率查询）与通道 A（抽卡管道）的填充点**，缺任一则 `reads` 只在一半路径生效且验收盲区不可见，逐通道说明见 §3.10.2 的 AUDIT-BREAK-9 条。**ISSUE-920（2026-10-01 补登记，原清单漏列）**：通道 A 的**实际填充点在 `core/banner.py`**——§3.10.2「送达路径定稿」第 2 条与 §四 `core/banner.py` 行都写「`Banner.draw` 手上已有 `state`，直接 `pity_engine.before_draw(..., external=state.external_view())`」（[banner.py:195](gacha_simulator/core/banner.py#L195)，调用点 [gacha_service.py:467](gacha_simulator/service/gacha_service.py#L467)），而原清单只列到 `service/gacha_service.py`；漏列的后果是 `ctx.external` 在抽卡管道**恒为 `None`** → G3 的 `ForceNotOwnedModifier` **静默退化为恒等**（不报错，仅 GDR 数值偏移），正是 §3.10.2 通道表要防的失效形态）。**2026-09-30 补登记（目标文件清单与 §四 对齐）**：本步另含 **`core/state.py`**（`initial_counts` 字段、`add_card` / `total_holding` 形参移除与守卫删除、`ExternalView` 类与 `GachaState.external_view()`）、**`core/milestone.py`**（闭包捕获改从 state 取）、**`tests/test_p60_gacha_state.py`** + **`tests/test_p63_overflow_integration.py`**（两文件正断言被删守卫，须与本步同一 commit 改造，否则该 commit `pytest -q` 全红）。四者均为 §四 标注归 S9 而原 §七 清单漏列。**ISSUE-033 追加**：`Pity.reads` 承载 + `PityEngine.get_reads_for_pool(pool_key)` 汇总接口（`GachaService` 与 `StrategyContext` 均**经它取并集**，不自行遍历保底）。<!-- REVIEW-FIX-PREV: AUDIT-BREAK-1 -->**三处透传点（`pentry` / `_PityDef` / `retreat_config`）随 `reads` 字段定义同批落地**——S4b 已把三处改造为 dataclass 驱动，故本步只需确认新字段自动随行（§3.6 AUDIT-BREAK-1 条）。<!-- REVIEW-R1-FIX: ISSUE-404 --> **本步另含 `reads` 门控代码的落点（ISSUE-404）**：§3.1.4 骨架的 `Pity._gated_ctx`（按 `self._reads` **派生**一份 ctx 交给 Modifier，**禁止就地改写共享 ctx**——每次调用单 ctx 在同池保底间复用（**ISSUE-926** 更正原写「每池单 ctx」）<!-- REVIEW-R1-FIX: ISSUE-926 -->，就地置 `None` 会污染同池其他保底）。原稿本步只列字段 / 解析 / 透传 / `get_reads_for_pool`，无任何子块承接这段门控代码
   - [ ] S9-3 `NotOwnedModifier` 新零件 + **两个新 type（G3 双实现，2026-09-30 裁决）** `hard_exclude_owned_skip` / `hard_exclude_owned_any`（`BEHAVIOR_REGISTRY` 两条注册；GUI 下拉**自动出现**——**前提 = S6a 的 `_PITY_TYPES` 生成式改造已落地**，未落地则本步手工追加这两个 type）<!-- REVIEW-R1-FIX: ISSUE-929 -->+ **「关于」页面两处文本改为 registry 生成**（§3.10.4 配套第 4 条）+ G3 配置示例 + 手册 §7.3 / §21 缺口归属更正（登记为**一条**待确认项、两个候选实现）（~0.9 人时，原 0.7 因增第二个 type 与关于页两处；§3.10.4）｜目标文件 `core/pity_modifier.py`（`on_all_owned` 构造参数）+ `core/pity.py`（两条 registry 条目）+ `gui/config_panel.py`（下拉）+ **`gui/about_dialog.py`**（`:67` 与 `:207` 两处文本）+ `tests/gui/test_about_dialog.py`（新增）+ **`tests/gui/test_config_panel_p56.py`**（**ISSUE-912**：其 [:53](tests/gui/test_config_panel_p56.py#L53) 的 `assert len(panel._PITY_TYPES) == 10` 与 [:45-50](tests/gui/test_config_panel_p56.py#L45) 的 `test_pity_types_has_10_entries` 会被本步（+2 个 type）与 S6a（+`rotating_inverse`）共同打破；`_PITY_TYPES` 自 S6a 起改为 registry 生成，该断言须改为 `== len(BEHAVIOR_REGISTRY)` 并去掉写死的数量名——**且该改写必须在 S6a 就完成**（S6a 的 `rotating_inverse` 已使它由 10 变 11），否则 S6a 的 commit 一落地即红）<!-- REVIEW-R1-FIX: ISSUE-929 -->+ `config/config.toml` + 手册。**已删除 `core/config_toml.py`（校验）**：该白名单不存在，见 §3.10.4 配套第 2 条

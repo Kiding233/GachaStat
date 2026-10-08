@@ -6,7 +6,7 @@
 > - `docs/superpowers/plans/2026-05-18-bootstrap-stability-analysis.md`（原始 Bootstrap 引擎 + UI 计划，v3）
 > - `docs/拉普拉斯平滑与Bootstrap改进计划.md` §二（引擎已知问题修复）+ §三（UI MVP 方案）
 > 关联：P3（Bootstrap 引擎）、P4（自适应模拟 + EVT）
-> 状态：**阶段一 ✅ · 阶段二 70%（3/6完成+2项架构绕过）· 阶段三 3A✅/3B 待做（UI方案原文保留，实施子任务同步至 [P48](P48 Bootstrap UI集成计划.md)）**
+> 状态：**阶段一 ✅ · 阶段二：原 6 项已全处置（3 完成 + 2 架构绕过 + 1 于 2026-10-08 补修）· 追加项 B2.8/B2.9 待做 · 阶段三 3A✅/3B 待做（UI方案原文保留，实施子任务同步至 [P48](P48 Bootstrap UI集成计划.md)）**
 
 ---
 
@@ -231,7 +231,7 @@ class BootstrapResult:
 
 ---
 
-## 六、阶段2：引擎已知问题修复（70% 完成）
+## 六、阶段2：引擎已知问题修复（原 6 项已全处置；追加项 B2.8/B2.9 待做）
 
 > 来源：§四 4.4 的六个问题。本节是 `docs/拉普拉斯平滑与Bootstrap改进计划.md` §二 的完整迁移。
 > 
@@ -251,10 +251,10 @@ class BootstrapResult:
 - [x] **2.3: BCa n<50 守卫**——~~小样本自动回退百分位法~~ **主动拒绝**：测试验证 scipy BCa 在 n=25-30 下可用，n<50 守卫不必要
 - [x] **2.4: m-out-of-n m 选择策略**——✅ `_select_m()` 使用 Bickel & Sakov (2008): m = n^(2/3)
 - [x] **2.5: Hill k 选择策略**——✅ `_select_hill_k()` 基于 Hill 图一阶差分最小区域（拐点检测）
-- [ ] **2.6: 离散 BCa 守卫**——检测 Bootstrap 分布离散度，过离散时回退百分位法（低优先级——scipy BCa失败时已有 `except Exception: pass` 回退）
+- [x] **2.6: 离散 BCa 守卫**——✅ **已实现**（2026-10-08，见 §4.4 问题 8）：新增 `_ci_is_valid()` 守卫（`isfinite` 且 `lower ≤ upper`），BCa 返回前校验，失败回退百分位法。**原「低优先级」定性基于错误前提**：「scipy BCa 失败时已有 `except Exception: pass` 回退」不成立——退化路径只发 `DegenerateDataWarning` 而不抛异常，nan 会原样返回并被 `format_ci` 显示为 `nan [nan, nan]`
 - [x] **2.7: 更新测试 + 提交**——✅ 测试覆盖完整
 
-> 问题 2.6 优先级低，scipy BCa 失败时的 Exception 回退已提供兜底。
+> 问题 2.6 原定低优先级，其理由（Exception 回退兜底）经 2026-10-08 实测证伪，已随 §4.4 问题 8 修复；阶段二原 6 项至此全部处置。
 
 - [ ] **2.8: EVT 拟合路径统一（NEW — 2026-05-28，来源：P25 §八）**——`_bootstrap_tail_gpd()` 当前直接调用 `genpareto.fit()` 自行拟合 GPD，与 `evt_tail.py` 中的 GPD 拟合逻辑重复且不一致。改为委托 `evt_tail.fit_gpd_lower()` + `evt_tail.evt_var_right()`，消除重复实现并统一：
   1. 替换直接 `genpareto.fit()` 为委托 `evt_tail.fit_gpd_lower()`
@@ -478,7 +478,7 @@ B2.8完成后，B2.9（TIB 替代百分位法）在此基础上替换 CI 构造�
 
 ```
 P18（本文件：引擎层）
-    ├── 2.6 离散BCa守卫（低优先级）
+    ├── 2.6 离散BCa守卫 ✅（2026-10-08 补修）
     ├── B2.8 EVT路径统一 ← P24/P25接口就绪
     └── B2.9 TIB ← B2.8前置
          ↓

@@ -182,48 +182,12 @@ body{
 <body>
 
 <!-- ============================================================
-     图形本体：只此一份。fill/stroke 用表现属性写死，不走 class，
-     否则 <use> 的 shadow tree 里匹配不到。
+     图形本体：改由 ECharts 画（libs/gs-charts.js），六个方案各挂一个
+     <div class="gs-chart" data-spec="cdf"> 宿主，喂同一份 ChartSpec。
+     原来这里是「一份共用 <symbol> + 六处 <use>」的手绘累积分布曲线，
+     已随换图一并删除。图上那层 HTML 标注（.dot / .an / .xax）保留，
+     它正是本页要比的版面元素。
      ============================================================ -->
-<svg id="sprite" aria-hidden="true" focusable="false"
-     style="position:absolute;width:0;height:0;overflow:hidden">
-  <defs>
-    <linearGradient id="gArea" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1976d2" stop-opacity=".16"/>
-      <stop offset="1" stop-color="#1976d2" stop-opacity=".02"/>
-    </linearGradient>
-  </defs>
-  <!-- 出金抽数累计分布  viewBox 800×240  preserveAspectRatio="none" 保证
-       任何宽高比下坐标都线性铺满，文字全部走 HTML 覆盖层，字形不被拉伸 -->
-  <symbol id="cdf" viewBox="0 0 800 240" preserveAspectRatio="none">
-    <!-- 尾部区间 86-90 抽（红＝结果语义：高风险段） -->
-    <rect x="752.4" y="0" width="47.6" height="240" fill="#c62828" opacity=".06"/>
-    <!-- 递减的水平网格 -->
-    <line x1="0" y1="66" x2="800" y2="66" stroke="#eef1f5" stroke-width="1" vector-effect="non-scaling-stroke"/>
-    <line x1="0" y1="182" x2="800" y2="182" stroke="#eef1f5" stroke-width="1" vector-effect="non-scaling-stroke"/>
-    <!-- 50% 参考线 -->
-    <line x1="0" y1="124" x2="800" y2="124" stroke="#d0d5dd" stroke-width="1"
-          stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>
-    <!-- 软保底启动位（74 抽） -->
-    <line x1="651" y1="0" x2="651" y2="240" stroke="#c8ced9" stroke-width="1"
-          stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>
-    <!-- 面积 + 累计曲线 -->
-    <path d="M8,238.4 L78.5,226 L148.9,213.6 L219.4,201.1 L289.9,188.7 L360.4,176.3
-             L430.8,163.8 L501.3,151.4 L571.8,138.9 L642.2,126.5 L651,123.7 L659.9,119.6
-             L668.7,114 L677.5,106.8 L686.3,98 L695.1,87.6 L703.9,76 L712.7,63.9
-             L721.6,52.3 L730.4,41.6 L739.2,32.3 L748,24.7 L756.8,18.6 L765.6,14.2
-             L774.5,11.2 L783.3,9.4 L792,8 L800,8 L800,240 L8,240 Z"
-          fill="url(#gArea)"/>
-    <path d="M8,238.4 L78.5,226 L148.9,213.6 L219.4,201.1 L289.9,188.7 L360.4,176.3
-             L430.8,163.8 L501.3,151.4 L571.8,138.9 L642.2,126.5 L651,123.7 L659.9,119.6
-             L668.7,114 L677.5,106.8 L686.3,98 L695.1,87.6 L703.9,76 L712.7,63.9
-             L721.6,52.3 L730.4,41.6 L739.2,32.3 L748,24.7 L756.8,18.6 L765.6,14.2
-             L774.5,11.2 L783.3,9.4 L792,8 L800,8"
-          fill="none" stroke="#1976d2" stroke-width="2" vector-effect="non-scaling-stroke"/>
-    <!-- 基线 -->
-    <line x1="0" y1="239.5" x2="800" y2="239.5" stroke="#d0d5dd" stroke-width="1" vector-effect="non-scaling-stroke"/>
-  </symbol>
-</svg>
 
 <div class="wrap">
 

@@ -1989,7 +1989,9 @@ const app = createApp({
         data: { series, labels, means, vuln_regions, colors },
         /* selected 让选中行在图上看得出来：非选中行降透明度。
            没有它的话点选之后读者在图上找不到自己选了哪一行。 */
-        layout_hints: { nbins: 28, selected: vulnPool.value },
+        /* pick_rows：点行即选中该池。这是脆弱性这个用法的属性，不是 ridge 的属性，
+           所以要显式声明（P80 的出卡间隔也用山脊，但它的行是配置分档，点了没有选中语义）。 */
+        layout_hints: { nbins: 28, selected: vulnPool.value, pick_rows: true },
       };
     });
     /* 容器高度跟着行数走：行高固定，池数涨上去靠外层限高滚动，不顶掉页面 */

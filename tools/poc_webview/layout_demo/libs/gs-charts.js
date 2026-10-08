@@ -195,22 +195,14 @@
       right: 6, top: 0, itemSize: 13,
       iconStyle: { borderColor: TOK.ink3 },
       emphasis: { iconStyle: { borderColor: TOK.accent } },
+      /* 这里不放 dataZoom：主题的 toolbox.feature 会与每个图的合并，
+         于是每张图都会长出一个点了没反应的缩放按钮。缩放按钮由
+         specToOption 在「图确实有缩放轴」时才补。 */
       feature: {
-        dataZoom: { yAxisIndex: 'none' },
         restore: {},
         saveAsImage: { name: 'gachastat', pixelRatio: 2, backgroundColor: TOK.surface },
       },
     },
-
-    dataZoom: [
-      { type: 'inside', throttle: 40 },
-      {
-        type: 'slider', height: 14, bottom: 4, borderColor: TOK.grid,
-        fillerColor: 'rgba(25,118,210,.08)',
-        handleStyle: { color: TOK.surface, borderColor: TOK.axis },
-        textStyle: { color: TOK.ink3, fontSize: 10 },
-      },
-    ],
 
     /* 色阶图例：矩阵型的主要版面问题是它的落位，这里交给调用方按需覆写 */
     visualMap: {
@@ -552,8 +544,12 @@
           return (p.seriesName || '') + '<br>资源剩余 ' + comma(p.value[0])
             + '<br>相对频次 ' + num(p.value[1], 3);
         } },
+      /* 不挂 dataZoom。两个理由：
+         1) inside 型 dataZoom 会接管整个图表元素上的滚轮，把「滚轮下滑看剩下的池」
+            和「滚轮缩放横轴」变成互相打架，实测是两者都没发生（滚轮被整个吞掉）。
+            山脊装在一个 overflow-y:auto 的容器里，垂直滚动是它唯一的导航方式。
+         2) 山脊的用途是一眼看全所有池的完整区间；缩放横轴恰好破坏这个用途。 */
       grid: grid, xAxis: xAxis, yAxis: yAxis, series: series,
-      dataZoom: [{ type: 'inside', xAxisIndex: keys.map(function (_, i) { return i; }) }],
     };
   }
 
@@ -687,9 +683,19 @@
       yAxis: Object.assign(horiz ? Object.assign({}, catAxis, yName(spec))
                                  : Object.assign({}, valAxis, yName(spec)),
         sparkB ? { axisLabel: { show: false }, splitLine: { show: false } } : {}),
+      /* 分类多时给横轴缩放。两点：
+         1) 缩放靠可见的滑块，滚轮留给页面滚动（zoomOnMouseWheel:'shift' 需要按 Shift）。
+            默认的「滚轮即缩放」在会滚动的页面里会静默吃掉滚动，而 inside 型
+            没有可见的滑块提示这件事。
+         2) 样式写在这里而不是主题里：主题的 dataZoom 会让每张图的工具箱都长出
+            一个缩放按钮，包括那些根本没有可缩放轴的图。 */
       dataZoom: zoomed
-        ? [{ type: 'inside', xAxisIndex: 0 },
-           { type: 'slider', xAxisIndex: 0, height: 14, bottom: 2 }]
+        ? [{ type: 'inside', xAxisIndex: 0, zoomOnMouseWheel: 'shift',
+             moveOnMouseMove: true, throttle: 40 },
+           { type: 'slider', xAxisIndex: 0, height: 14, bottom: 2,
+             borderColor: TOK.grid, fillerColor: 'rgba(25,118,210,.08)',
+             handleStyle: { color: TOK.surface, borderColor: TOK.axis },
+             textStyle: { color: TOK.ink3, fontSize: 10 } }]
         : undefined,
       legend: spans ? { show: false } : undefined,
       series: spans ? [
@@ -1003,7 +1009,7 @@
     if (!onPick) return;
     chart.off('click');
     if (chart.__gsZrOff) { chart.__gsZrOff(); chart.__gsZrOff = null; }
-    if (spec && spec.chart_type === 'ridge') {
+    if (spec && (spec.layout_hints || {}).pick_rows) {
       var keys = Object.keys(((spec.data || {}).series) || {});
       var nrow = keys.length || 1;
       var handler = function (e) {

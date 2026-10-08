@@ -464,7 +464,8 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
                         day_overrides: Any = None,
                         sim_start_date: Any = None,
                         resource_lifecycle: Any = None,
-                        card_overflow_map: Any = None) -> str:
+                        card_overflow_map: Any = None,
+                        card_weights: Any = None) -> str:
     """计算配置的确定性 hash（用于可比性判断）。
 
     P61（Ph7 / ISSUE-013）：纳入 Banner 级配置。pools_config 现为
@@ -582,6 +583,23 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
                 _update(str(getattr(_band, 'min', None)))
                 _update(str(getattr(_band, 'max', None)))
                 _update(str(sorted((getattr(_band, 'resources', {}) or {}).items())))
+    if card_weights:
+        # 2026-10-07（用户裁决「无条件纳入」）：抽取意愿 / 错失代价 / 单卡价值三维权重。
+        #
+        # 它们不参与模拟，但**是 GDR 的输入**，因而改变基于 GDR 的一切分析结论
+        # （加权满意度、总出卡价值），以及将来消费加权 GDR 的策略。纳入与否**不由
+        # 「当前有没有策略消费它」决定**：若按当前事实决定，将来加了消费它的策略时，
+        # 历史数据集的配置身份会静默失效（与 2026-10-01 补七项同一类事故）。
+        #
+        # 不纳入时的失效形态：两份只有权重不同的配置被判「配置完全相同」，而它们的
+        # GDR 分析结论不同，且无任何提示。
+        _update('card_weights')
+        for _cwid in sorted(card_weights):
+            _cw = card_weights[_cwid]
+            _update(str(_cwid))
+            _update(str(getattr(_cw, 'desire_weight', None)))
+            _update(str(getattr(_cw, 'miss_cost_weight', None)))
+            _update(str(getattr(_cw, 'card_value', None)))
     # 里程碑配置（P58 ISSUE-008——仅 milestone 不同的数据集判「配置: 不同」）
     if milestone_config is not None and hasattr(milestone_config, 'milestones'):
         _update(str(getattr(milestone_config, 'enabled', True)))
@@ -628,6 +646,7 @@ def compute_config_hash_for_store(store, *, stop_condition_summary: Any = None) 
         sim_start_date=getattr(store, 'sim_start_date', None),
         resource_lifecycle=getattr(store, 'resource_lifecycle', None),
         card_overflow_map=getattr(store, 'card_overflow_map', None),
+        card_weights=getattr(store, 'card_weights', None),
     )
 
 

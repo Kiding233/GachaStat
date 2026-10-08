@@ -10,6 +10,7 @@
      这一页解决它留下的问题：不同分析方法的主元素根本不同，
      一个骨架盖不住，必须先分类再套骨架。
      自包含，无外部依赖。 -->
+<link rel="stylesheet" href="libs/gs-charts.css">
 <style>
 :root{
   --bg:#f4f5f7; --panel:#fff; --line:#dcdfe4; --line2:#e9ebef; --line3:#f2f4f6;
@@ -149,25 +150,7 @@ td.n{font-variant-numeric:tabular-nums;font-family:Consolas,monospace;color:var(
         <div class="kicker">风险分析 · 最差情形分析</div>
         <div class="h">资源剩余的条件分布</div>
         <div class="deck">1,000 次模拟 · 条件：抽出全部目标卡 · 主指标 简单目标达成率 · α = 0.05</div>
-        <svg viewBox="0 0 640 130" style="width:100%;height:auto;display:block">
-          <line x1="46" y1="112" x2="620" y2="112" stroke="#c8ced9"/>
-          <g fill="#b9c7d6">
-            <rect x="50" y="88" width="22" height="24"/><rect x="74" y="72" width="22" height="40"/>
-            <rect x="98" y="52" width="22" height="60"/><rect x="122" y="34" width="22" height="78"/>
-            <rect x="146" y="44" width="22" height="68"/><rect x="170" y="62" width="22" height="50"/>
-            <rect x="194" y="78" width="22" height="34"/><rect x="218" y="90" width="22" height="22"/>
-          </g>
-          <g fill="#d8a7a7">
-            <rect x="242" y="96" width="22" height="16"/><rect x="266" y="100" width="22" height="12"/>
-            <rect x="290" y="103" width="22" height="9"/><rect x="314" y="105" width="22" height="7"/>
-          </g>
-          <line x1="242" y1="12" x2="242" y2="112" stroke="#c62828" stroke-dasharray="3 2"/>
-          <text x="247" y="22" font-size="10" fill="#c62828">P5 尾部 4.6%</text>
-          <line x1="134" y1="12" x2="134" y2="112" stroke="#1976d2" stroke-dasharray="3 2"/>
-          <text x="139" y="22" font-size="10" fill="#1976d2">中位 1,180</text>
-          <text x="50" y="126" font-size="10" fill="#8b93a1">0</text>
-          <text x="600" y="126" font-size="10" fill="#8b93a1">3,600 资源剩余</text>
-        </svg>
+        <div class="gs-chart" data-spec="t1" style="height:152px"></div>
         <div class="cap"><b>图 1</b>　最差情形下的资源剩余分布。浅红为 P5 以下尾部，红线为 P5 分位。</div>
         <div class="band">
           <div class="it"><span class="k">P5</span><span class="v">420</span></div>
@@ -196,21 +179,7 @@ td.n{font-variant-numeric:tabular-nums;font-family:Consolas,monospace;color:var(
         <div class="kicker">成功率分析 · 阈值扫描</div>
         <div class="h">成功率随目标阈值的变化</div>
         <div class="deck">1,000 次模拟 · 判据 全部目标达成 · 置信水平 95%</div>
-        <svg viewBox="0 0 640 130" style="width:100%;height:auto;display:block">
-          <line x1="46" y1="112" x2="620" y2="112" stroke="#c8ced9"/>
-          <line x1="46" y1="12" x2="46" y2="112" stroke="#c8ced9"/>
-          <polyline points="46,20 130,26 214,42 298,72 382,96 466,105 550,109 620,111"
-                    fill="none" stroke="#1976d2" stroke-width="2"/>
-          <circle cx="298" cy="72" r="3.5" fill="#1976d2"/>
-          <line x1="298" y1="72" x2="298" y2="112" stroke="#8b93a1" stroke-dasharray="2 2"/>
-          <text x="303" y="66" font-size="10" fill="#1976d2">拐点：阈值 0.70 起陡降</text>
-          <line x1="382" y1="12" x2="382" y2="112" stroke="#c62828" stroke-dasharray="3 2"/>
-          <text x="387" y="22" font-size="10" fill="#c62828">目标阈值 0.80 → 34.1%</text>
-          <text x="42" y="16" font-size="10" fill="#8b93a1" text-anchor="end">100%</text>
-          <text x="42" y="115" font-size="10" fill="#8b93a1" text-anchor="end">0</text>
-          <text x="298" y="126" font-size="10" fill="#8b93a1" text-anchor="middle">0.70</text>
-          <text x="382" y="126" font-size="10" fill="#8b93a1" text-anchor="middle">0.80</text>
-        </svg>
+        <div class="gs-chart" data-spec="t2" style="height:152px"></div>
         <div class="cap"><b>图 1</b>　成功率随阈值的下降曲线。0.70 之前平缓，之后陡降，拐点即判据的实际松紧边界。</div>
         <div class="band">
           <div class="it"><span class="k">阈值 0.60</span><span class="v">92.4<small>%</small></span></div>
@@ -239,22 +208,7 @@ td.n{font-variant-numeric:tabular-nums;font-family:Consolas,monospace;color:var(
         <div class="kicker">每池分析 · 每池抽卡数</div>
         <div class="h">各池平均抽卡数</div>
         <div class="deck">1,000 次模拟 · 按池分组 · 单位 抽</div>
-        <svg viewBox="0 0 640 130" style="width:100%;height:auto;display:block">
-          <line x1="46" y1="112" x2="620" y2="112" stroke="#c8ced9"/>
-          <g fill="#b9c7d6">
-            <rect x="60" y="60" width="34" height="52"/><rect x="120" y="52" width="34" height="60"/>
-            <rect x="180" y="68" width="34" height="44"/><rect x="240" y="58" width="34" height="54"/>
-            <rect x="300" y="46" width="34" height="66"/><rect x="360" y="74" width="34" height="38"/>
-            <rect x="420" y="64" width="34" height="48"/>
-          </g>
-          <rect x="480" y="18" width="34" height="94" fill="#c62828"/>
-          <text x="497" y="12" font-size="10" fill="#c62828" text-anchor="middle">最差 96.4 抽</text>
-          <g font-size="10" fill="#8b93a1" text-anchor="middle">
-            <text x="77" y="126">角色</text><text x="137" y="126">武器</text><text x="197" y="126">常驻</text>
-            <text x="257" y="126">复刻</text><text x="317" y="126">交换</text><text x="377" y="126">自选</text>
-            <text x="437" y="126">阶梯</text><text x="497" y="126">轮换</text>
-          </g>
-        </svg>
+        <div class="gs-chart" data-spec="t3" style="height:152px"></div>
         <div class="cap"><b>图 1</b>　各池平均抽卡数。轮换池（红）显著高于其余，是资源占用的主要来源。</div>
         <div class="band">
           <div class="it"><span class="k">最低 · 自选池</span><span class="v grn">61.2</span></div>
@@ -283,30 +237,7 @@ td.n{font-variant-numeric:tabular-nums;font-family:Consolas,monospace;color:var(
         <div class="kicker">每池分析 · 转变分析</div>
         <div class="h">池间转移概率矩阵</div>
         <div class="deck">1,000 次模拟 · 事件模式 池成败 · 行为当前池、列为下一个池</div>
-        <div style="display:flex;gap:14px;align-items:flex-start">
-          <div class="mx" style="grid-template-columns:56px repeat(4,52px);flex:1;min-width:0">
-            <span class="hd"></span><span class="hd">角色</span><span class="hd">武器</span><span class="hd">常驻</span><span class="hd">轮换</span>
-            <span class="hd">角色</span>
-            <span style="background:#cfe1f5">0.62</span><span style="background:#e8f0fa">0.21</span>
-            <span style="background:#f2f6fb">0.12</span><span style="background:#f7fafd">0.05</span>
-            <span class="hd">武器</span>
-            <span style="background:#e8f0fa">0.24</span><span style="background:#cfe1f5">0.58</span>
-            <span style="background:#f2f6fb">0.14</span><span style="background:#f7fafd">0.04</span>
-            <span class="hd">常驻</span>
-            <span style="background:#f2f6fb">0.18</span><span style="background:#e8f0fa">0.19</span>
-            <span style="background:#cfe1f5">0.55</span><span style="background:#f7fafd">0.08</span>
-            <span class="hd">轮换</span>
-            <span style="background:#fdf1f1;box-shadow:inset 0 0 0 1.5px #c62828">0.03</span>
-            <span style="background:#f7fafd">0.09</span><span style="background:#e8f0fa">0.16</span>
-            <span style="background:#cfe1f5">0.72</span>
-          </div>
-          <div style="flex:0 0 96px">
-            <div style="font-size:10px;color:#8b93a1;margin-bottom:4px">转移概率</div>
-            <div style="height:78px;width:14px;border-radius:2px;
-              background:linear-gradient(#cfe1f5,#f7fafd);border:1px solid var(--line2)"></div>
-            <div style="font-size:10px;color:#8b93a1;margin-top:4px">高 → 低</div>
-          </div>
-        </div>
+        <div class="gs-chart" data-spec="t4" style="height:210px"></div>
         <div class="cap"><b>图 1</b>　池间转移概率。对角线为自持概率；<b>红框格</b>为最小转移（轮换 → 角色，0.03），
         即从轮换池切到角色池几乎不发生。</div>
         <div class="band">
@@ -389,17 +320,7 @@ td.n{font-variant-numeric:tabular-nums;font-family:Consolas,monospace;color:var(
           </div>
           <div class="side">
             <div style="font-size:10px;color:var(--ink3);margin-bottom:3px">覆盖率分布（降权佐证）</div>
-            <svg viewBox="0 0 300 62" style="width:100%;height:auto;display:block">
-              <line x1="0" y1="56" x2="300" y2="56" stroke="#c8ced9"/>
-              <g fill="#d3dde8">
-                <rect x="10" y="44" width="26" height="12"/><rect x="40" y="34" width="26" height="22"/>
-                <rect x="70" y="22" width="26" height="34"/><rect x="100" y="12" width="26" height="44"/>
-                <rect x="130" y="18" width="26" height="38"/><rect x="160" y="30" width="26" height="26"/>
-                <rect x="190" y="40" width="26" height="16"/><rect x="220" y="48" width="26" height="8"/>
-              </g>
-              <line x1="86" y1="4" x2="86" y2="56" stroke="#2e7d32" stroke-dasharray="3 2"/>
-              <text x="90" y="12" font-size="9" fill="#2e7d32">阈值 100%</text>
-            </svg>
+            <div class="gs-chart" data-spec="t6" style="height:96px"></div>
           </div>
         </div>
         <div class="foot">口径　覆盖率为「可用资源 ÷ 覆盖后续池所需」；最差一次指 1,000 次模拟中的最小值。</div>
@@ -456,5 +377,122 @@ td.n{font-variant-numeric:tabular-nums;font-family:Consolas,monospace;color:var(
   </section>
 
 </div>
+
+<div class="err" id="depfail" style="display:none;background:#fdf3f3;border:1px solid #f0c8c8;
+  border-radius:4px;padding:10px 12px;font-size:12px;color:#8e1b1b;margin-bottom:14px">
+  <b>依赖没加载上。</b>本页的图需要 <code>libs/echarts.min.js</code> 与 <code>libs/gs-charts.js</code>，
+  两者都在仓库里，走 file:// 打开即可，不需要联网。
+</div>
+
+<script src="libs/echarts.min.js"></script>
+<script src="libs/gs-charts.js"></script>
+<script>
+/* 本页是静态参考页，没有别的地方需要响应式，所以直接用 GS.mount 而不过 Vue，
+   顺便也把 renderer 的非 Vue 路径跑一遍。 */
+(function () {
+  'use strict';
+  if (typeof echarts === 'undefined' || typeof GS === 'undefined') {
+    var b = document.getElementById('depfail');
+    if (b) b.style.display = 'block';
+    return;
+  }
+
+  /* 稳定伪随机，保证两次打开页面的图一模一样，截图可比 */
+  var _s = 20261008;
+  function rnd() { _s = (_s * 1103515245 + 12345) & 0x7fffffff; return _s / 0x7fffffff; }
+  function gauss(n, mu, sd) {
+    var a = [];
+    for (var i = 0; i < n; i++) {
+      var u = 0, v = 0;
+      while (u === 0) u = rnd();
+      while (v === 0) v = rnd();
+      a.push(mu + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v));
+    }
+    return a;
+  }
+
+  /* 资源剩余：右偏。P5 落在 420、中位 1180、P95 落在 2240，
+     与下面数据带里的三个数对得上（原来的手绘图把 P5 画到了中位右边，是错的）。 */
+  var RES = gauss(1000, 0, 1).map(function (z) {
+    return Math.max(0, Math.round(1180 + (z < 0 ? 462 : 640) * z));
+  });
+
+  /* 成功率曲线：按数据带里的三个锚点插值，不硬套 logistic（套不上三个点） */
+  var ANCH = [[0.55, 0.981], [0.60, 0.924], [0.65, 0.801], [0.70, 0.618],
+              [0.75, 0.470], [0.80, 0.341], [0.85, 0.238], [0.90, 0.162], [0.95, 0.103]];
+  var THR = ANCH.map(function (a) { return a[0]; });
+  var ACC = ANCH.map(function (a) { return a[1]; });
+
+  /* 每池平均抽卡数：与数据带的 最低 61.2 / 最高 96.4 / 极差 35.2 一致 */
+  var POOLS = ['角色池', '武器池', '常驻池', '复刻池', '交换池', '自选池', '阶梯池', '轮换池'];
+  var PVAL = [72.4, 78.1, 66.3, 74.9, 81.5, 61.2, 88.7, 96.4];
+
+  var TN = ['角色', '武器', '常驻', '轮换'];
+  var TM = [
+    [0.62, 0.21, 0.12, 0.05],
+    [0.24, 0.58, 0.14, 0.04],
+    [0.18, 0.19, 0.55, 0.08],
+    [0.03, 0.09, 0.16, 0.72],
+  ];
+
+  /* 大保底资源覆盖率：均值 128%、95% 区间 [119, 137]，阈值 100% */
+  var COV = gauss(1000, 128, 9.2).map(function (v) { return +v.toFixed(2); });
+
+  var SPECS = {
+    t1: {
+      chart_type: 'histogram', title: '资源剩余的条件分布',
+      xlabel: '资源剩余', ylabel: '密度',
+      data: { samples: RES, mean_line: true, quantile_lines: [0.05], density: true },
+      annotations: [
+        { type: 'vline', value: 420, color: '#c62828', dash: 'dash', text: 'P5 420 · 尾部 4.6%' },
+        { type: 'vline', value: 1180, color: '#5a6270', dash: 'dot', text: '中位 1,180' },
+      ],
+      shaded_regions: [{ lower: 0, upper: 420, color: 'rgba(198,40,40,.10)' }],
+      layout_hints: { nbins: 26 },
+    },
+    t2: {
+      chart_type: 'scatter', title: '成功率随目标阈值的变化',
+      xlabel: '目标阈值', ylabel: '达成率',
+      data: { traces: [{ name: '达成率', mode: 'lines', x: THR, y: ACC,
+        marker_color: '#1976d2' }] },
+      annotations: [
+        { type: 'vline', value: 0.70, color: '#5a6270', dash: 'dash', text: '拐点 0.70' },
+        { type: 'vline', value: 0.80, color: '#c62828', dash: 'dash', text: '目标 0.80 → 34.1%' },
+      ],
+      layout_hints: {
+        y_range: [0, 1], y_percent: true,
+        mark_points: [{ x: 0.70, y: 0.618, text: '拐点 61.8%',
+          color: '#1976d2', pos: 'bottom' }],
+      },
+    },
+    t3: {
+      chart_type: 'bar', title: '各池平均抽卡数', xlabel: '', ylabel: '抽',
+      data: { labels: POOLS, values: PVAL },
+      layout_hints: { worst_index: 7 },
+    },
+    t4: {
+      chart_type: 'heatmap', title: '池间转移概率',
+      data: { matrix: TM, row_labels: TN, col_labels: TN },
+      layout_hints: {
+        label_extremes: true,
+        mark_cells: [[0, 3, '#c62828', true]],
+      },
+    },
+    t6: {
+      chart_type: 'histogram', title: '覆盖率分布', xlabel: '', ylabel: '',
+      data: { samples: COV, mean_line: false, quantile_lines: null, density: false },
+      annotations: [{ type: 'vline', value: 100, color: '#2e7d32', dash: 'dash',
+        text: '阈值 100%' }],
+      layout_hints: { nbins: 16, sparkline: true },
+    },
+  };
+
+  Object.keys(SPECS).forEach(function (k) {
+    var el = document.querySelector('[data-spec="' + k + '"]');
+    if (el) GS.mount(el, SPECS[k]);
+  });
+  window.addEventListener('resize', GS.resizeAll);
+})();
+</script>
 </body>
 </html>

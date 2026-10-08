@@ -8,6 +8,7 @@
 <!-- 一次性布局探针：数据全假，不接 Python。用于评估「左树 + 右侧详情/分析双模式」方案。
      Vue 3 + Element Plus 走 cdnjs，版本与 tools/poc_webview/ui_compare 一致。 -->
 <link rel="stylesheet" href="libs/ep.min.css">
+<link rel="stylesheet" href="libs/gs-charts.css">
 <style>
 :root{
   --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --line-strong:#d0d5dd;
@@ -629,22 +630,8 @@ body{
             <div class="cfg-pane" v-show="cfgTab==='resgain'">
               <div class="embed">
                 <div class="embed-h"><b>累积收入</b>
-                  <span>横轴＝模拟天数，纵轴＝下发资源累计（0–7200）；实线＝实际下发，虚线＝按日均 60 折算的等速线，两线贴近即收入规则稳定</span></div>
-                <svg viewBox="0 0 560 104" role="img" aria-label="累积资源曲线">
-                  <line class="axis" x1="48" y1="84" x2="540" y2="84"/>
-                  <line class="axis" x1="48" y1="12" x2="48" y2="84"/>
-                  <line class="grid" x1="48" y1="24" x2="540" y2="24"/>
-                  <text class="tick" x="44" y="28" text-anchor="end">7200</text>
-                  <text class="tick" x="44" y="88" text-anchor="end">0</text>
-                  <text class="tick" x="48" y="98" text-anchor="middle">0</text>
-                  <text class="tick" x="294" y="98" text-anchor="middle">60</text>
-                  <text class="tick" x="540" y="98" text-anchor="middle">120 天</text>
-                  <polyline class="ln" points="48,84 130,72 212,60 294,48 376,36 458,24 540,12"/>
-                  <polyline class="ln2" points="48,84 540,46"/>
-                  <circle class="dot" cx="294" cy="48" r="2.5"/>
-                  <text class="tick" x="294" y="38" text-anchor="middle" fill="#1976d2">第 60 天 3680</text>
-                  <text class="tick" x="536" y="41" text-anchor="end" fill="#c07a2a">日均 60</text>
-                </svg>
+                  <span>横轴＝模拟天数，纵轴＝累计下发的抽卡资源；当前规则是每日 +60，所以线是斜率恒定的阶梯，到第 120 天累计 7,200。规则若改成每周一次，台阶就会显出来</span></div>
+                <gs-chart :spec="CHARTS.income" :height="168"></gs-chart>
               </div>
               <el-table :data="draft.resGains" size="small">
                 <el-table-column prop="res" label="资源" width="140"></el-table-column>
@@ -660,27 +647,7 @@ body{
               <div class="embed">
                 <div class="embed-h"><b>开放区间</b>
                   <span>横轴＝模拟时间（0–120 天）；蓝条＝池子可抽区间，虚线＝当前时刻。所有涉及时间窗口的字段都读这张图</span></div>
-                <svg viewBox="0 0 560 96" role="img" aria-label="Banner 开放区间甘特图">
-                  <line class="grid" x1="88" y1="10" x2="88" y2="84"/>
-                  <line class="grid" x1="196" y1="10" x2="196" y2="84"/>
-                  <line class="grid" x1="304" y1="10" x2="304" y2="84"/>
-                  <line class="grid" x1="412" y1="10" x2="412" y2="84"/>
-                  <line class="grid" x1="520" y1="10" x2="520" y2="84"/>
-                  <text class="tick" x="88" y="94" text-anchor="middle">0</text>
-                  <text class="tick" x="304" y="94" text-anchor="middle">60</text>
-                  <text class="tick" x="520" y="94" text-anchor="middle">120 天</text>
-                  <text class="lbl" x="80" y="24" text-anchor="end">角色池 UP</text>
-                  <rect class="band on" x="88" y="14" width="54" height="14" rx="1"/>
-                  <text class="tick" x="150" y="25">第 21 天下架</text>
-                  <text class="lbl" x="80" y="46" text-anchor="end">武器池 UP</text>
-                  <rect class="band on" x="88" y="36" width="54" height="14" rx="1"/>
-                  <text class="tick" x="150" y="47">第 21 天下架</text>
-                  <text class="lbl" x="80" y="68" text-anchor="end">常驻池</text>
-                  <rect class="band" x="88" y="58" width="432" height="14" rx="1"/>
-                  <text class="tick" x="524" y="69" text-anchor="end">不下架</text>
-                  <line class="now" x1="196" y1="8" x2="196" y2="84"/>
-                  <text class="tick" x="200" y="10" fill="#1976d2">当前 第 30 天</text>
-                </svg>
+                <gs-chart :spec="CHARTS.gantt" :height="150"></gs-chart>
               </div>
               <div class="sub2">
                 <button :class="{on: poolSubTab==='pool'}" @click="poolSubTab='pool'">池</button>
@@ -707,22 +674,7 @@ body{
               <div class="embed">
                 <div class="embed-h"><b>出率曲线</b>
                   <span>横轴＝距上次出货的累计抽数，纵轴＝该抽命中率（0–100%）。软保底段逐步抬升，到阈值起为 100%；基础段是贴着底的平台，所以另注 0.6%</span></div>
-                <svg viewBox="0 0 560 104" role="img" aria-label="保底出率曲线">
-                  <line class="axis" x1="48" y1="84" x2="540" y2="84"/>
-                  <line class="axis" x1="48" y1="12" x2="48" y2="84"/>
-                  <text class="tick" x="44" y="16" text-anchor="end">100%</text>
-                  <text class="tick" x="44" y="88" text-anchor="end">0</text>
-                  <text class="tick" x="48" y="98" text-anchor="middle">0</text>
-                  <text class="tick" x="294" y="98" text-anchor="middle">90 抽</text>
-                  <text class="tick" x="516" y="98" text-anchor="middle">180</text>
-                  <line class="grid" x1="48" y1="82" x2="540" y2="82"/>
-                  <text class="tick" x="44" y="80" text-anchor="end">0.6%</text>
-                  <polyline class="ln" points="48,82 294,82 320,68 346,55 372,42 398,29 424,17 444,12 540,12"/>
-                  <text class="tick" x="448" y="10" fill="#2e7d32">阈值起 100%</text>
-                  <line class="now" x1="294" y1="12" x2="294" y2="84"/>
-                  <text class="tick" x="298" y="22" fill="#1976d2">硬保底 90</text>
-                  <text class="tick" x="52" y="78" fill="#5a6272">基础 0.6% 平台</text>
-                </svg>
+                <gs-chart :spec="CHARTS.pity" :height="168"></gs-chart>
               </div>
               <el-table :data="draft.pities" size="small">
                 <el-table-column prop="scope" label="适用稀有度" width="110"></el-table-column>
@@ -736,21 +688,7 @@ body{
               <div class="embed">
                 <div class="embed-h"><b>阈值尺</b>
                   <span>横轴＝累计抽数，刻度＝里程碑阈值；实心＝已达，空心＝未达。虚线＝本轮已抽数</span></div>
-                <svg viewBox="0 0 560 78" role="img" aria-label="累抽奖励阈值尺">
-                  <line class="axis" x1="48" y1="42" x2="540" y2="42"/>
-                  <text class="tick" x="48" y="66" text-anchor="middle">0</text>
-                  <text class="tick" x="212" y="66" text-anchor="middle">100</text>
-                  <text class="tick" x="376" y="66" text-anchor="middle">300</text>
-                  <text class="tick" x="540" y="66" text-anchor="middle">500</text>
-                  <circle class="dot" cx="212" cy="42" r="4.5"/>
-                  <text class="tick" x="212" y="26" text-anchor="middle" fill="#1976d2">×30 抽卡资源</text>
-                  <circle cx="376" cy="42" r="4.5" fill="none" stroke="#8b93a3" stroke-width="1.5"/>
-                  <text class="tick" x="376" y="26" text-anchor="middle">×1 自选券</text>
-                  <circle cx="540" cy="42" r="4.5" fill="none" stroke="#8b93a3" stroke-width="1.5"/>
-                  <text class="tick" x="536" y="26" text-anchor="end">×1 自选券</text>
-                  <line class="now" x1="268" y1="34" x2="268" y2="52"/>
-                  <text class="tick" x="272" y="60" fill="#1976d2">已抽 132</text>
-                </svg>
+                <gs-chart :spec="CHARTS.milestone" :height="128"></gs-chart>
               </div>
               <el-table :data="draft.milestones" size="small">
                 <el-table-column prop="threshold" label="累抽阈值" width="110"></el-table-column>
@@ -1101,39 +1039,14 @@ body{
                               </span>
                             </div>
 
-                            <div class="ridge">
-                              <div class="ridge-row" v-for="r in ridgeRows" :key="r.id"
-                                   :class="{on: r.id===vulnPool, grp: r.first}"
-                                   @click="vulnPool = r.id">
-                                <span class="ridge-name">{{ r.name }}</span>
-                                <span class="ridge-plot">
-                                  <svg viewBox="0 0 100 30" preserveAspectRatio="none">
-                                    <rect v-for="(b,i) in r.bandRects" :key="i" :x="b.x" y="0"
-                                          :width="b.w" height="30" class="vband"/>
-                                    <polygon :points="r.area" class="area"/>
-                                    <polyline :points="r.pts" class="ln"/>
-                                    <line :x1="r.meanX" y1="0" :x2="r.meanX" y2="30" class="mean"/>
-                                    <circle v-if="r.baseX!==null" :cx="r.baseX" :cy="r.baseY"
-                                            r="1.5" class="base"/>
-                                  </svg>
-                                </span>
-                                <span class="ridge-meta">
-                                  <i v-if="r.ranges.length" class="bad">{{ r.ranges.length }} 段脆弱</i>
-                                  <i v-else class="none">无脆弱段</i>
-                                </span>
-                              </div>
-                            </div>
-                            <div class="ridge-axis">
-                              <span class="ridge-name"></span>
-                              <span class="ridge-plot">
-                                <i v-for="t in ridgeTicks" :key="t"
-                                   :style="{left: (100*t/RMAX)+'%'}">{{ t }}</i>
-                              </span>
-                              <span class="ridge-meta"><i class="none">资源剩余</i></span>
+                            <div class="ridge-wrap">
+                              <gs-chart :spec="vulnRidgeSpec" :height="vulnRidgeH"
+                                        @pick="onRidgePick"></gs-chart>
                             </div>
                             <p class="tmeta" style="margin:6px 0 0">
-                              每行一个池：浅红带＝脆弱区间，红虚线＝均值，绿点＝不抽卡基线。
-                              行高 30px、区域限高可滚，所以池数涨到几十个也不会把页面顶掉。
+                              每行一个池：浅红带＝脆弱区间，红虚线＝均值。行高固定 28px、
+                              区域限高可滚，所以池数涨到几十个也不会把页面顶掉。
+                              <b>图本身就是选择器</b>：点哪一行就选中哪个池，不再另设池选择器。
                             </p>
                           </div>
                         </div>
@@ -1156,31 +1069,17 @@ body{
 
                             <div class="sub3">
                               <div class="sub3-h">① 资源剩余分布（等距直方图）</div>
-                              <svg viewBox="0 0 640 90">
-                                <line :x1="SUB.x0" :y1="SUB.y1" :x2="SUB.x1" :y2="SUB.y1" class="axis"/>
-                                <rect v-for="(b,i) in vulnHist" :key="i" :x="b.x" :y="b.h"
-                                      :width="b.w" :height="SUB.y1-b.h" class="bar"/>
-                              </svg>
+                              <gs-chart :spec="vulnSub1" :height="124"></gs-chart>
                             </div>
 
                             <div class="sub3">
                               <div class="sub3-h">② PAVA 保序推断（灰点＝分箱观测，红线＝单调拟合）</div>
-                              <svg viewBox="0 0 640 90">
-                                <line :x1="SUB.x0" :y1="SUB.y1" :x2="SUB.x1" :y2="SUB.y1" class="axis"/>
-                                <line v-for="(s,i) in vulnPava.step" :key="'s'+i" :x1="s.x0" :y1="s.y"
-                                      :x2="s.x1" :y2="s.y" class="step"/>
-                                <circle v-for="(d,i) in vulnPava.dots" :key="'d'+i" :cx="d.cx"
-                                        :cy="d.cy" r="2.2" class="pdot"/>
-                              </svg>
+                              <gs-chart :spec="vulnSub2" :height="124"></gs-chart>
                             </div>
 
                             <div class="sub3">
                               <div class="sub3-h">③ 分位数分箱 N_j 分布</div>
-                              <svg viewBox="0 0 640 90">
-                                <line :x1="SUB.x0" :y1="SUB.y1" :x2="SUB.x1" :y2="SUB.y1" class="axis"/>
-                                <rect v-for="(b,i) in vulnNj" :key="i" :x="b.x" :y="b.h"
-                                      :width="b.w" :height="SUB.y1-b.h" class="nbar"/>
-                              </svg>
+                              <gs-chart :spec="vulnSub3" :height="124"></gs-chart>
                             </div>
                             <p class="tmeta" style="margin:7px 0 0">
                               三个子图共用横轴（资源剩余），与 core/vulnerability.py 的
@@ -1191,14 +1090,10 @@ body{
                       </div>
                     </template>
                     <template v-else-if="it.chart==='bars'">
-                      <div class="mini"><i v-for="(h,i) in bars(it.key)" :key="i" :style="{height:(h*100)+'%'}"></i></div>
+                      <gs-chart :spec="miniSpec(it.key,'bars')" :height="104"></gs-chart>
                     </template>
                     <template v-else-if="it.chart==='line'">
-                      <div class="mini-line">
-                        <svg width="100%" height="92" viewBox="0 0 300 92" preserveAspectRatio="none">
-                          <polyline :points="linePoints(it.key)" fill="none" stroke="#3f8fd9" stroke-width="2" />
-                        </svg>
-                      </div>
+                      <gs-chart :spec="miniSpec(it.key,'line')" :height="104"></gs-chart>
                     </template>
                     <template v-else>
                       <table class="kv">
@@ -1301,20 +1196,25 @@ body{
      因为外观是按这两个版本验过的。 -->
 <script src="libs/vuemin.js"></script>
 <script src="libs/ep.min.js"></script>
+<script src="libs/echarts.min.js"></script>
+<script src="libs/gs-charts.js"></script>
 <script>
 // 本地化之后仍要防「文件缺失/损坏」：那时页面同样会退化成裸模板。
 // 与其让人对着一屏 {{ }} 猜，不如直接说是依赖没起来。
-if (typeof Vue === 'undefined' || typeof ElementPlus === 'undefined') {
+if (typeof Vue === 'undefined' || typeof ElementPlus === 'undefined'
+    || typeof echarts === 'undefined' || typeof GS === 'undefined') {
   document.addEventListener('DOMContentLoaded', function () {
     var miss = (typeof Vue === 'undefined' ? 'Vue ' : '')
-             + (typeof ElementPlus === 'undefined' ? 'Element Plus' : '');
+             + (typeof ElementPlus === 'undefined' ? 'Element Plus ' : '')
+             + (typeof echarts === 'undefined' ? 'ECharts ' : '')
+             + (typeof GS === 'undefined' ? 'gs-charts ' : '');
     var d = document.createElement('div');
     d.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#fff;color:#c62828;'
       + 'font:14px/1.8 "Microsoft YaHei",sans-serif;padding:48px;white-space:pre-wrap';
     d.textContent = '依赖未加载：' + miss.trim()
-      + '\n\n本页依赖同目录 libs/ 下的 vuemin.js（Vue）与 ep.min.js（Element Plus）。'
+      + '\n\n本页依赖同目录 libs/ 下的 vuemin.js（Vue）、ep.min.js（Element Plus）、echarts.min.js 与 gs-charts.js（图表）。'
       + '\n文件缺失或损坏时，页面会退化成裸模板（工具栏显示 {{ ... }}、文件树为空）。'
-      + '\n检查这两个文件是否在位、大小是否正常。';
+      + '\n检查这几个文件是否在位、大小是否正常。图表库缺失时图会静默变成空白框，不会报错，所以一并列在这里。';
     document.body.appendChild(d);
   });
 }
@@ -1640,64 +1540,9 @@ const vulnOverview = computed(() => ({
   总体失败率: '12.3%', α: '0.50', 模拟数: '1000',
 }));
 
-/* 山脊：横轴用百分比（0-100），配 preserveAspectRatio="none" 拉伸到容器宽。
-   图内不放任何文字，所以横向拉伸不会扭曲字形；池名与轴标走 HTML。 */
-const RVB = { w: 100, h: 30, base: 28, peak: 21 };
-function poolCurve(p) {
-  const pts = [];
-  for (let k = 0; k <= 56; k++) {
-    const t = k / 56, v = RMAX * t;
-    const d = Math.exp(-0.5 * Math.pow((v - p.mean) / p.sd, 2));
-    pts.push(`${(100 * t).toFixed(2)},${(RVB.base - d * RVB.peak).toFixed(2)}`);
-  }
-  return {
-    ...p, pts: pts.join(' '),
-    area: `0,${RVB.base} ${pts.join(' ')} 100,${RVB.base}`,
-    bandRects: p.bands.map(([lo, hi]) =>
-      ({ x: 100 * lo / RMAX, w: 100 * (hi - lo) / RMAX })),
-    meanX: 100 * p.mean / RMAX,
-    baseX: p.base != null ? 100 * p.base / RMAX : null,
-    baseY: RVB.base - 1,
-  };
-}
-const ridgeRows = computed(() => vulnShown.value.map(poolCurve));
-const ridgeTicks = [0, 900, 1800, 2700, 3600];
-
-/* 单池详情的三个子图。用池参数确定性生成，便于逐次截图比对（不引随机） */
-const SUB = { x0: 46, x1: 620, y0: 8, y1: 82 };
-const subX = t => SUB.x0 + (SUB.x1 - SUB.x0) * t;
-const subY = v => SUB.y1 - (SUB.y1 - SUB.y0) * Math.max(0, Math.min(1, v));
-function histBars(p, n = 24) {
-  const out = [];
-  for (let k = 0; k < n; k++) {
-    const v = RMAX * (k + 0.5) / n;
-    out.push(Math.max(0.05, Math.exp(-0.5 * Math.pow((v - p.mean) / p.sd, 2))));
-  }
-  const m = Math.max(...out);
-  return out.map((h, k) =>
-    ({ x: subX(k / n), w: (SUB.x1 - SUB.x0) / n - 1.5, h: subY(h / m), y: SUB.y1 }));
-}
-function pavaFit(p, n = 16) {
-  const dots = [], step = [];
-  let cur = 1;
-  for (let k = 0; k < n; k++) {
-    const t = (k + 0.5) / n;
-    const raw = 1 / (1 + Math.exp((t - 0.46) * 7.5));
-    dots.push({ cx: subX(t), cy: subY(raw * (0.86 + ((k * 37) % 11) / 42)) });
-    cur = Math.min(cur, raw);                       // PAVA：单调不增的产物
-    step.push({ x0: subX(k / n), x1: subX((k + 1) / n), y: subY(cur) });
-  }
-  return { dots, step };
-}
-function njBars(n = 16) {
-  return Array.from({ length: n }, (_, k) => ({
-    x: subX(k / n), w: (SUB.x1 - SUB.x0) / n - 2,
-    h: subY(0.45 + ((k * 53) % 9) / 22), y: SUB.y1,
-  }));
-}
-const vulnHist = computed(() => histBars(vulnCur.value));
-const vulnPava = computed(() => pavaFit(vulnCur.value));
-const vulnNj = computed(() => njBars());
+/* 山脊与三行子图的几何计算已由 libs/gs-charts.js 的 ridge / histogram /
+   scatter / bar renderer 接管（原来这里是手算 SVG 坐标，现在走 ChartSpec）。
+   只留下横轴上限，vulnSub2 的横坐标还用它。 */
 
 
 const compareTasks = [
@@ -2060,11 +1905,185 @@ const app = createApp({
       for (let i = 0; i < 18; i++) { x = (x * 1103515245 + 12345) % 2147483648; a.push(0.15 + (x % 1000) / 1200); }
       return a;
     }
-    function linePoints(key) {
-      const a = bars(key); return a.map((v, i) => (i / (a.length - 1) * 300).toFixed(1) + ',' + (90 - v * 80).toFixed(1)).join(' ');
+
+
+    /* ── 图表规格 ──
+       一律走 ChartSpec 形状（与 gacha_simulator/visualization/chart_spec.py 字段同名），
+       由 libs/gs-charts.js 渲成 ECharts。数据全是假值，但要与页面上的表格、
+       数据带对得上，否则同一页两个地方说两套数。 */
+
+    /* 累积资源下发：配置里唯一的收入规则是 every_n_days +60，所以是恒定斜率的阶梯。
+       到第 60 天 3,600，第 120 天 7,200。 */
+    const INCOME_DAYS = Array.from({ length: 121 }, (_, d) => d);
+    const INCOME_CUM = INCOME_DAYS.map(d => d * 60);
+    /* 保底出率曲线：基础段 0.6% 平到第 73 抽，软保底段线性抬升，第 90 抽起 100%。
+       阶梯线（step）而不是直线：保底在阈值处是跳变，用直线连会把跳变画成斜坡。 */
+    const PITY_X = (() => {
+      const a = [];
+      for (let d = 0; d <= 73; d++) a.push(d);
+      for (let d = 74; d <= 90; d++) a.push(d);
+      return a;
+    })();
+    const PITY_Y = PITY_X.map(d => {
+      if (d <= 73) return 0.006;
+      if (d >= 90) return 1;
+      return +(0.006 + (1 - 0.006) * Math.pow((d - 73) / 17, 1.3)).toFixed(4);
+    });
+
+    const CHARTS = {
+      income: {
+        chart_type: 'scatter', title: '累积收入', xlabel: '模拟天数', ylabel: '累计下发',
+        data: { traces: [{ name: '抽卡资源', mode: 'lines', marker_color: GS.CAT[0],
+          x: INCOME_DAYS, y: INCOME_CUM }] },
+        layout_hints: { step: 'end', x_range: [0, 120], y_range: [0, 7600],
+          mark_points: [{ x: 60, y: 3600, text: '第 60 天 3,600', pos: 'bottom' }],
+        },
+      },
+      gantt: {
+        chart_type: 'bar', title: '开放区间', xlabel: '模拟天数', ylabel: '',
+        /* 三个池的窗口与下面「卡池管理」表里的一致：两个 UP 池第 21 天下架，
+           常驻池不下架（画到模拟终点 120 天）。 */
+        data: { labels: ['角色池 UP', '武器池 UP', '常驻池'], values: [], orientation: 'h' },
+        annotations: [{ type: 'vline', value: 30, color: GS.CAT[0], dash: 'dash',
+          text: '当前 第 30 天' }],
+        /* y_inverse：甘特要与下面的「卡池管理」表同序（自上而下），
+           而类别轴默认是自下而上的。 */
+        layout_hints: { bar_spans: [[0, 21], [0, 21], [0, 120]], x_range: [0, 120],
+          y_inverse: true },
+      },
+      pity: {
+        chart_type: 'scatter', title: '出率曲线',
+        xlabel: '距上次出货的累计抽数', ylabel: '该抽命中率',
+        data: { traces: [{ name: '命中率', mode: 'lines', marker_color: GS.CAT[0],
+          x: PITY_X, y: PITY_Y }] },
+        annotations: [{ type: 'vline', value: 90, color: '#5a6270', dash: 'dash',
+          text: '硬保底 90' }],
+        layout_hints: {
+          step: 'end', x_range: [0, 90], y_range: [0, 1], y_percent: true,
+          /* 基础段是贴着底的平台，0.6% 在 0–100% 的轴上就是一条线，
+             所以直接注一个点，不让读者去对刻度。 */
+          mark_points: [{ x: 2, y: 0.006, text: '基础 0.6% 平台', pos: 'top' }],
+        },
+      },
+      milestone: {
+        chart_type: 'scatter', title: '累抽奖励阈值', xlabel: '累计抽数', ylabel: '',
+        /* 阈值 100 可重复 5 次，所以出现在 100/200/300/400/500；
+           阈值 300 不重复，只出现一次。实心＝已达（已抽 132），空心＝未达。 */
+        data: { x: [100, 200, 300, 400, 500], y: [0, 0, 0, 0, 0] },
+        annotations: [{ type: 'vline', value: 132, color: GS.CAT[0], dash: 'dash',
+          text: '已抽 132' }],
+        layout_hints: {
+          x_range: [0, 560], y_range: [-1, 1], hide_y: true,
+          point_styles: [{ size: 13 }, { size: 13, hollow: true }, { size: 13, hollow: true },
+            { size: 13, hollow: true }, { size: 13, hollow: true }],
+          mark_points: [
+            { x: 100, y: 0, text: '×30 抽卡资源', pos: 'top' },
+            { x: 300, y: 0, text: '×1 自选券', pos: 'top' },
+          ],
+        },
+      },
+    };
+
+    /* 通用结果块里的示意图：稳定伪随机，按项 key 生成，切项时跟着换 */
+    function miniSpec(key, kind) {
+      const a = bars(key);
+      if (kind === 'line') {
+        return {
+          chart_type: 'scatter', title: '', xlabel: '', ylabel: '',
+          data: { traces: [{ name: '趋势', mode: 'lines', marker_color: GS.CAT[0],
+            x: a.map((_, i) => i + 1), y: a.map(v => +(v * 100).toFixed(1)) }] },
+          layout_hints: { sparkline: true },
+        };
+      }
+      return {
+        chart_type: 'bar', title: '', xlabel: '', ylabel: '',
+        data: { labels: a.map((_, i) => String(i + 1)),
+          values: a.map(v => +(v * 100).toFixed(1)) },
+        layout_hints: { sparkline: true },
+      };
     }
 
+    /* 山脊：每池一行。原来是把每行画成一条解析高斯曲线（poolCurve），
+       现在直接给样本数组，走真实的 histogram 分箱路径，与后端一致。
+       每池 120 个样本 × 几十个池仍在 SVG 渲染器的预算内。 */
+    function poolSamples(p, n) {
+      let seed = 0;
+      for (const ch of p.id) seed = (seed * 31 + ch.charCodeAt(0)) % 2147483647;
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        const u = (seed % 100000) / 100000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        const v = (seed % 100000) / 100000;
+        const z = Math.sqrt(-2 * Math.log(u || 1e-6)) * Math.cos(2 * Math.PI * v);
+        out.push(Math.max(0, p.mean + p.sd * z));
+      }
+      return out;
+    }
+    const vulnRidgeSpec = computed(() => {
+      const rows = vulnShown.value;
+      const series = {}, labels = {}, means = {}, vuln_regions = {}, colors = {};
+      rows.forEach(p => {
+        series[p.id] = poolSamples(p, 120);
+        labels[p.id] = p.name;
+        means[p.id] = p.mean;
+        if (p.bands.length) vuln_regions[p.id] = p.bands[0];
+        colors[p.id] = p.ranges.length ? GS.STATUS.danger : GS.CAT[0];
+      });
+      return {
+        chart_type: 'ridge', title: '各池资源剩余', xlabel: '资源剩余', ylabel: '',
+        data: { series, labels, means, vuln_regions, colors },
+        /* selected 让选中行在图上看得出来：非选中行降透明度。
+           没有它的话点选之后读者在图上找不到自己选了哪一行。 */
+        layout_hints: { nbins: 28, selected: vulnPool.value },
+      };
+    });
+    /* 容器高度跟着行数走：行高固定，池数涨上去靠外层限高滚动，不顶掉页面 */
+    const vulnRidgeH = computed(() => Math.max(90, vulnShown.value.length * 28 + 26));
+    function onRidgePick(p) {
+      const row = vulnShown.value[p.seriesIndex];
+      if (row) vulnPool.value = row.id;
+    }
+
+    /* 单池三子图：① 资源剩余分布 ② PAVA 保序推断 ③ 分位数分箱 N_j。
+       与 core/vulnerability.py 的 plot_vulnerability 三行子图同构，
+       但这里保持三个独立块（每块自带小节标题），没有并成一张组合图。 */
+    const vulnSub1 = computed(() => ({
+      chart_type: 'histogram', title: '资源剩余分布', xlabel: '资源剩余', ylabel: '频次',
+      data: { samples: poolSamples(vulnCur.value, 400), mean_line: true,
+        quantile_lines: null, density: false },
+      layout_hints: { nbins: 24, sparkline: true },
+    }));
+    const vulnSub2 = computed(() => {
+      const p = vulnCur.value, n = 18, dots = [], line = [];
+      for (let k = 0; k < n; k++) {
+        const t = (k + 0.5) / n;
+        const raw = 1 / (1 + Math.exp((t - 0.46) * 7.5));
+        const x = +(RMAX * t).toFixed(1);
+        dots.push([x, +(raw * (0.86 + ((k * 37) % 11) / 42)).toFixed(4)]);
+        line.push([x, +Math.min(1, 1 / (1 + Math.exp((t - 0.52) * 5))).toFixed(4)]);
+      }
+      return {
+        chart_type: 'scatter', title: 'PAVA 保序推断', xlabel: '资源剩余', ylabel: 'P(失败|剩余)',
+        data: { traces: [
+          { name: '分箱观测', mode: 'markers', marker_size: 7, opacity: 0.55,
+            marker_color: GS.STATUS.muted, x: dots.map(d => d[0]), y: dots.map(d => d[1]) },
+          { name: '单调拟合', mode: 'lines', marker_symbol: 'none', line_width: 2.5,
+            line_color: GS.STATUS.danger, x: line.map(d => d[0]), y: line.map(d => d[1]) },
+        ] },
+        layout_hints: { y_range: [0, 1] },
+      };
+    });
+    const vulnSub3 = computed(() => ({
+      chart_type: 'bar', title: '分位数分箱 N_j', xlabel: '分位区间', ylabel: 'N_j',
+      data: { labels: Array.from({ length: 16 }, (_, i) => String(i + 1)),
+        values: Array.from({ length: 16 }, (_, i) => 12 + ((i * 53) % 9) * 2) },
+      layout_hints: { no_zoom: true },
+    }));
+
     return {
+      CHARTS, miniSpec, vulnRidgeSpec, vulnRidgeH, onRidgePick,
+      vulnSub1, vulnSub2, vulnSub3,
       mode, subjectId, subjectKind, anchorId, analysisDatasetId, analysisTab,
       notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
@@ -2072,11 +2091,11 @@ const app = createApp({
       canAnalyze, canRun, runDisabledReason, cfgTab, poolSubTab, activeCategories,
       catName, catCount, AN_ICONS, selItems, picked, isPicked, togglePick,
       allPools, vulnPool, vulnOnly, vulnShown, vulnCur, vulnCount, vulnOverview,
-      ridgeRows, ridgeTicks, RMAX, SUB, vulnHist, vulnPava, vulnNj,
+      RMAX,
       taskDrawer, openTasks, runningCount, workersActive, workersMax, cpu, mem, now,
       onNodeClick, selectCompare, toggleMode, markDirty, dispatch, runNow, saveDraft,
       runParams, runPop, runningForSubject, sameRunCount,
-      typeColor, shapeClass, itemRunnable, itemReason, bars, linePoints,
+      typeColor, shapeClass, itemRunnable, itemReason, bars,
     };
   }
 });
@@ -2150,7 +2169,7 @@ app.component('task-table', {
     </el-table>`
 });
 
-app.use(ElementPlus).mount('#app');
+app.use(ElementPlus).use(GS).mount('#app');
 </script>
 
 </body>

@@ -279,6 +279,15 @@
 
   /* 栅格与轴名：containLabel 保证轴标签不被裁；top/bottom 留出轴名与工具箱的位置。
      这两处不留白是实际出过的排版事故（工具箱压住曲线、轴名压在刻度上）。 */
+  /* 轴范围与比例量格式：比例量的纵轴截断会把「0.9 与 1.0 差不多」读成「差了 10%」，
+     所以由 spec 显式声明范围，声明了就按声明画。 */
+  function rng(spec, which) {
+    var h = spec.layout_hints || {};
+    var r = (which === 'x' ? h.x_range : h.y_range) || [];
+    return [r[0] == null ? null : r[0], r[1] == null ? null : r[1]];
+  }
+  function pctAxis(spec) { return !!(spec.layout_hints || {}).y_percent; }
+
   function gridOf(o) {
     return Object.assign(
       { left: 6, right: 18, top: 22, bottom: 10, containLabel: true }, o || {});
@@ -289,6 +298,10 @@
      注意：这个开关只管「轴名」，不管山脊的行名（行名也是 yAxis.name，
      但它是行标签，任何时候都得画）。 */
   function aliasOn(spec) { return !!(spec.layout_hints || {}).axis_names; }
+  /* 这两个开关在多处用到，做成 helper 而不是各构造器的局部变量：
+     局部变量版本出过一次错，同一个写法在另一个构造器里引用未定义的名字。 */
+  function compactOn(spec) { return !!(spec.layout_hints || {}).compact; }
+  function sparkOn(spec) { return !!(spec.layout_hints || {}).sparkline; }
   function xName(spec) {
     return {
       name: aliasOn(spec) ? (spec.xlabel || '') : '',
@@ -314,10 +327,10 @@
       if (axis === 'x' && !isV) return;
       if (axis === 'y' && isV) return;
       /* 两条竖直标注线靠得近时（P50 与 P90 本来就近），标签会叠在一起。
-         相邻的竖线标签上下交替，比把它们错开水平距离更不容易再次撞上。 */
-      var pos = a.label_pos
-        || (isV ? (vi % 2 === 0 ? 'insideEndTop' : 'insideStartBottom')
-                : 'insideEndRight');
+         错开靠垂直 offset，不靠换位置：标注线标签一律贴顶，
+         往下的位置是柱子的地盘，标签压上去就没法读了。 */
+      var pos = a.label_pos || (isV ? 'insideEndTop' : 'insideEndRight');
+      var dy = isV ? (vi % 2) * 15 : 0;
       if (isV) vi++;
       out.push({
         xAxis: isV ? a.value : undefined,
@@ -327,6 +340,7 @@
         label: {
           formatter: a.text || num(a.value),
           color: TOK.ink2, fontSize: 11, position: pos,
+          offset: [0, dy],
           rotate: 0,   // 默认会随竖线转 90°，中文竖排既难读又压住着色带
         },
       });
@@ -350,12 +364,30 @@
     return { show: true, position: 'insideTop', color: TOK.ink2, fontSize: 10, formatter: r.label };
   }
 
+  /* 数据点标注：拐点、阈值点、极值点。型 2 要求「直接标在图上并给出坐标」，
+     不让读者去对刻度。 */
+  function markPointOf(spec) {
+    var pts = (spec.layout_hints || {}).mark_points || [];
+    return pts.map(function (p) {
+      return {
+        coord: [p.x, p.y], symbol: 'circle', symbolSize: 9,
+        itemStyle: { color: p.color || TOK.accent, borderColor: TOK.surface, borderWidth: 2 },
+        label: {
+          show: true, position: p.pos || 'top', distance: 7,
+          formatter: p.text || num(p.y), color: TOK.ink2, fontSize: 11,
+        },
+      };
+    });
+  }
+
   /* 把标注层挂到主序列上；没有主序列时由调用方自行处理 */
   function withMarks(series, spec, axis) {
     var ml = markLineOf(spec, axis || 'x');
     var ma = markAreaOf(spec, axis || 'x');
+    var mp = markPointOf(spec);
     if (ml.length) series.markLine = { data: ml };
     if (ma.length) series.markArea = { data: ma };
+    if (mp.length) series.markPoint = { data: mp, silent: true };
     return series;
   }
 
@@ -375,11 +407,14 @@
     });
     var sorted = samples.slice().sort(function (x, y) { return x - y; });
     var marks = [];
-    var compact = (spec.layout_hints || {}).compact;
+    var compact = compactOn(spec);
+    /* sparkline：支撑性小图，只要形状不要刻度 */
+    var spark = sparkOn(spec);
     if (d.mean_line) {
       var m = samples.reduce(function (a, x) { return a + x; }, 0) / total;
       marks.push({ xAxis: +m.toFixed(2),
-        label: compact ? { show: false } : { formatter: '均值 ' + num(m) } });
+        label: compact ? { show: false }
+          : { formatter: '均值 ' + comma(Math.round(m)) } });
     }
     (d.quantile_lines || []).forEach(function (q) {
       var qv = quantile(sorted, q);
@@ -405,8 +440,15 @@
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
         valueFormatter: function (v) { return num(v, 4); } },
       grid: gridOf(),
-      xAxis: Object.assign({ type: 'value', axisLabel: { formatter: axisNum } }, xName(spec)),
-      yAxis: Object.assign({ type: 'value', axisLabel: { formatter: axisNum } }, yName(spec)),
+      xAxis: Object.assign({ type: 'value',
+        axisLabel: { show: !spark, formatter: axisNum },
+        axisLine: { show: true } }, xName(spec)),
+      yAxis: Object.assign({
+        type: 'value',
+        axisLabel: { show: !spark, formatter: axisNum },
+        splitLine: { show: !spark },
+        axisLine: { show: false },
+      }, yName(spec)),
       series: series,
     };
   }
@@ -420,7 +462,9 @@
       tooltip: { trigger: 'axis', axisPointer: { type: 'line' },
         valueFormatter: function (v) { return num(v, 4); } },
       grid: gridOf(),
-      xAxis: Object.assign({ type: 'value', axisLabel: { formatter: axisNum } }, xName(spec)),
+      xAxis: Object.assign({ type: 'value',
+        axisLabel: { show: !sparkOn(spec), formatter: axisNum },
+        axisLine: { show: true } }, xName(spec)),
       yAxis: Object.assign({
         type: 'value', min: 0, max: 1,
         axisLabel: { formatter: function (v) { return Math.round(v * 100) + '%'; } },
@@ -429,6 +473,7 @@
         type: 'line', data: pts, showSymbol: false, sampling: 'lttb',
         lineStyle: { width: 2, cap: 'round', join: 'round', color: cat(0) },
         areaStyle: { color: cat(0), opacity: 0.10 },   // 一层薄雾，不是实块
+        step: (spec.layout_hints || {}).step || false,
         name: spec.ylabel || '累积概率',
       }, spec)],
     };
@@ -473,6 +518,8 @@
       var b = binCounts(arr(d.series[k]), nbins);
       var mx = Math.max.apply(null, b.counts.concat([1]));
       var col = (d.colors && d.colors[k]) || cat(0);
+      var sel = (spec.layout_hints || {}).selected;
+      var dim = sel && sel !== k;
       var marks = [];
       if (d.means && d.means[k] != null) {
         marks.push({ xAxis: +d.means[k].toFixed(2), lineStyle: { type: 'dashed', color: STATUS.danger },
@@ -489,7 +536,7 @@
         type: 'bar', xAxisIndex: i, yAxisIndex: i,
         data: b.centers.map(function (c, j) { return [c, +(b.counts[j] / mx).toFixed(4)]; }),
         barWidth: '86%',
-        itemStyle: { color: col, opacity: 0.85 },
+        itemStyle: { color: col, opacity: dim ? 0.32 : 0.88 },
         name: (d.labels && d.labels[k]) || k,
         silent: false,
         emphasis: { itemStyle: { opacity: 1 } },
@@ -535,16 +582,23 @@
 
   function optScatter(spec) {
     var d = spec.data || {};
+    var hintsS = spec.layout_hints || {};
+    var hiddenY = hintsS.hide_y || hintsS.sparkline;
     var traces = d.traces;
     var series = [], legend = false;
     if (traces && traces.length) {
       legend = traces.length >= 2;   // 单序列不给图例：标题已经说明画的是什么
       series = traces.map(function (t, i) {
         var col = t.marker_color || t.line_color || cat(i);
+        /* 标注层挂到第一条轨迹上。traces 分支原来漏了这一步，
+           于是「硬保底 90」这类竖线和数据点标注整个丢失，页面上毫无提示。 */
         return {
           type: 'line', name: t.name || ('序列 ' + (i + 1)),
           data: arr(t.x).map(function (x, j) { return [x, arr(t.y)[j], (t.customdata || [])[j]]; }),
-          showSymbol: t.mode === 'markers' || t.marker_symbol !== 'circle',
+          /* 数据点该不该画：markers 模式必画；lines 模式点少才画（点多会连成虚线，
+             形状反而看不清）；marker_symbol='none' 是显式要求不画。 */
+          showSymbol: t.marker_symbol !== 'none'
+            && (t.mode === 'markers' || arr(t.x).length <= 24),
           symbol: t.marker_symbol === 'circle' ? 'circle' : (t.marker_symbol || 'circle'),
           symbolSize: t.marker_size || 8,
           lineStyle: t.mode === 'markers' ? { width: 0 }
@@ -554,10 +608,24 @@
           emphasis: { focus: 'series' },
         };
       });
+      if (series.length && (spec.annotations || []).length) {
+        series[0] = withMarks(series[0], spec);
+      }
     } else {
+      var pstyle = (spec.layout_hints || {}).point_styles;
       series = [withMarks({
         type: d.mode === 'lines' ? 'line' : 'scatter',
-        data: arr(d.x).map(function (x, i) { return [x, arr(d.y)[i]]; }),
+        data: arr(d.x).map(function (x, i) {
+          var base = { value: [x, arr(d.y)[i]] };
+          var st = pstyle && pstyle[i];
+          if (st) {
+            base.symbolSize = st.size || 10;
+            base.itemStyle = st.hollow
+              ? { color: TOK.surface, borderColor: st.color || cat(0), borderWidth: 2 }
+              : { color: st.color || cat(0), borderWidth: 2, borderColor: TOK.surface };
+          }
+          return base;
+        }),
         symbolSize: 8, itemStyle: { color: cat(0), borderWidth: 2, borderColor: TOK.surface },
       }, spec)];
     }
@@ -567,8 +635,15 @@
         valueFormatter: function (v) { return num(v, 4); } },
       legend: legend ? { show: true, top: 0, left: 0 } : { show: false },
       grid: gridOf({ top: legend ? 26 : 22 }),
-      xAxis: Object.assign({ type: 'value', scale: true, axisLabel: { formatter: axisNum } }, xName(spec)),
-      yAxis: Object.assign({ type: 'value', scale: true, axisLabel: { formatter: axisNum } }, yName(spec)),
+      xAxis: Object.assign({ type: 'value', scale: !(spec.layout_hints || {}).x_range,
+        min: rng(spec, 'x')[0], max: rng(spec, 'x')[1],
+        axisLabel: { show: !sparkOn(spec), formatter: axisNum },
+        splitLine: { show: !sparkOn(spec) } }, xName(spec)),
+      yAxis: Object.assign({ type: 'value', scale: !rng(spec, 'y'),
+        min: rng(spec, 'y')[0], max: rng(spec, 'y')[1],
+        axisLabel: { show: !hiddenY, formatter: pctAxis(spec) ? function (v) {
+          return Math.round(v * 100) + '%'; } : axisNum },
+        splitLine: { show: !hiddenY } }, yName(spec)),
       series: series,
     };
   }
@@ -580,7 +655,11 @@
     var horiz = d.orientation === 'h';
     /* 分类色只给一条柱：柱长已经编码了量级，再按大小深浅涂一遍是浪费通道。
        需要突出「最差那一项」时走 layout_hints.worst_index，用语义色。 */
-    var worst = (spec.layout_hints || {}).worst_index;
+    var hintsB = spec.layout_hints || {};
+    var worst = hintsB.worst_index;
+    /* bar_spans：[[start, end], ...]，end 为 null 时按 [start, end, 画到哪] 处理。
+       时间窗口、开放区间这类「有起止的条」用它，不必新加 chart_type。 */
+    var spans = hintsB.bar_spans;
     var data = values.map(function (v, i) {
       return {
         value: v,
@@ -590,26 +669,42 @@
       };
     });
     var catAxis = {
-      type: 'category', data: labels,
+      type: 'category', data: labels, inverse: !!hintsB.y_inverse,
       axisLabel: { color: TOK.ink3, fontSize: 11, hideOverlap: true,
         rotate: (!horiz && labels.length > 10) ? 30 : 0 },
     };
     var valAxis = { type: 'value', axisLabel: { formatter: axisNum } };
     /* 分类多时给横轴缩放（几十个池会挤，见 §5.9 的池数规模） */
-    var zoomed = !horiz && labels.length > 14;
+    var sparkB = !!hintsB.sparkline;
+    var zoomed = !horiz && labels.length > 14 && !hintsB.no_zoom && !sparkB;
     return {
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
         valueFormatter: function (v) { return comma(v); } },
       grid: gridOf({ bottom: zoomed ? 30 : 18 }),
-      xAxis: horiz ? Object.assign({}, valAxis, xName(spec))
-                   : Object.assign({}, catAxis, xName(spec)),
-      yAxis: horiz ? Object.assign({}, catAxis, yName(spec))
-                   : Object.assign({}, valAxis, yName(spec)),
+      xAxis: Object.assign(horiz ? Object.assign({}, valAxis, xName(spec))
+                                 : Object.assign({}, catAxis, xName(spec)),
+        sparkB ? { axisLabel: { show: false }, axisLine: { show: false } } : {}),
+      yAxis: Object.assign(horiz ? Object.assign({}, catAxis, yName(spec))
+                                 : Object.assign({}, valAxis, yName(spec)),
+        sparkB ? { axisLabel: { show: false }, splitLine: { show: false } } : {}),
       dataZoom: zoomed
         ? [{ type: 'inside', xAxisIndex: 0 },
            { type: 'slider', xAxisIndex: 0, height: 14, bottom: 2 }]
         : undefined,
-      series: [{ type: 'bar', data: data, name: spec.ylabel || '数值', barMaxWidth: 24 }],
+      legend: spans ? { show: false } : undefined,
+      series: spans ? [
+        /* 甘特：一条透明偏移序列 + 一条可见长度序列叠起来，值仍是 длины区间 */
+        { type: 'bar', stack: 'span', silent: true,
+          data: spans.map(function (r) { return r[0]; }),
+          itemStyle: { color: 'transparent' }, barMaxWidth: 22 },
+        withMarks({ type: 'bar', stack: 'span', data: spans.map(function (r) {
+          var open = r[1] == null;
+          return { value: (r[1] == null ? r[2] : r[1]) - r[0],
+            itemStyle: { color: open ? 'rgba(25,118,210,.22)' : cat(0),
+              borderRadius: 2 } };
+        }), barMaxWidth: 22, name: '区间' }, spec),
+      ] : [withMarks({ type: 'bar', data: data,
+        name: spec.ylabel || '数值', barMaxWidth: 24 }, spec)],
     };
   }
 
@@ -641,6 +736,37 @@
     }
     if (!isFinite(lo)) { lo = 0; hi = 1; }
     if (hi === lo) { hi = lo + 1; }
+    /* 极值格直接标数值：颜色深浅只能读个大概，结论要精确到数。
+       mark_cells 用来框出「最强/最弱那一对」并说明它为什么是结论。 */
+    var cells = data.map(function (d0) { return d0; });
+    (opts.markCells || []).forEach(function (mc) {
+      cells = cells.map(function (d0) {
+        if (d0[0] === mc[0] && d0[1] === mc[1]) {
+          return { value: d0, itemStyle: { borderColor: mc[2] || STATUS.danger,
+            borderWidth: 2, borderType: 'solid' },
+            label: mc[3] ? { show: true, color: TOK.ink, fontSize: 10,
+              formatter: num(d0[2], 2) } : { show: false } };
+        }
+        return d0;
+      });
+    });
+    if (opts.labelExtremes && data.length) {
+      var best = data[0], worst = data[0];
+      data.forEach(function (d0) {
+        if (d0[2] > best[2]) best = d0;
+        if (d0[2] < worst[2]) worst = d0;
+      });
+      [best, worst].forEach(function (t) {
+        cells = cells.map(function (d0) {
+          var v = d0 && d0.value ? d0.value : d0;
+          if (v[0] === t[0] && v[1] === t[1]) {
+            return { value: v, label: { show: true, color: TOK.surface,
+              fontSize: 10, fontWeight: 600, formatter: num(t[2], 2) } };
+          }
+          return d0;
+        });
+      });
+    }
     var vm = Object.assign({
       type: 'continuous', min: lo, max: hi,
       calculable: true, orient: 'vertical', right: 4, top: 'middle',
@@ -663,16 +789,17 @@
         splitArea: { show: false },
         axisLabel: { color: TOK.ink3, fontSize: 11, hideOverlap: true } },
       visualMap: vm,
-      series: [{ type: 'heatmap', data: data, progressive: 0,
+      series: [{ type: 'heatmap', data: cells, progressive: 0,
         itemStyle: { borderWidth: 2, borderColor: TOK.surface } }],
     };
   }
 
   function optHeatmap(spec, ctx) {
     var d = spec.data || {};
+    var h = spec.layout_hints || {};
     return heatOption(arr(d.matrix), d.row_labels || [], d.col_labels || [], {
-      h: ctx && ctx.h,
-      visualMap: spec.layout_hints && spec.layout_hints.visual_map,
+      h: ctx && ctx.h, visualMap: h.visual_map,
+      markCells: h.mark_cells, labelExtremes: h.label_extremes,
     });
   }
 
@@ -870,6 +997,29 @@
 
   var instances = [];
 
+  /* 山脊把「行」作为选择单位，而柱子的高度是数据本身，行内大量空白点不动。
+     所以在 zr 层按 y 坐标定位行：点行内任意位置都算选中该行。 */
+  function bindPick(chart, el, spec, onPick) {
+    if (!onPick) return;
+    chart.off('click');
+    if (chart.__gsZrOff) { chart.__gsZrOff(); chart.__gsZrOff = null; }
+    if (spec && spec.chart_type === 'ridge') {
+      var keys = Object.keys(((spec.data || {}).series) || {});
+      var nrow = keys.length || 1;
+      var handler = function (e) {
+        var h = el.clientHeight || 1;
+        var i = Math.floor((e.offsetY / h) * nrow);
+        if (i < 0) i = 0;
+        if (i >= nrow) i = nrow - 1;
+        onPick({ seriesIndex: i, seriesName: keys[i], fromRowBand: true });
+      };
+      chart.getZr().on('click', handler);
+      chart.__gsZrOff = function () { chart.getZr().off('click', handler); };
+      return;
+    }
+    chart.on('click', function (p) { onPick(p); });
+  }
+
   function mount(el, spec, opts) {
     opts = opts || {};
     var option = specToOption(spec, { w: el.clientWidth, h: el.clientHeight });
@@ -888,6 +1038,7 @@
     }
     chart.setOption(option, { notMerge: true, lazyUpdate: false });
     chart.resize();
+    bindPick(chart, el, spec, opts.onPick);
     return chart;
   }
 
@@ -937,12 +1088,13 @@
           this.inst = null;
           return;
         }
-        var chart = mount(el, this.spec, { renderer: this.renderer });
+        var self = this;
+        var chart = mount(el, this.spec, {
+          renderer: this.renderer,
+          onPick: function (p) { self.$emit('pick', p); },
+        });
         if (chart && chart !== this.inst) {
           this.inst = chart;
-          var self = this;
-          chart.off('click');
-          chart.on('click', function (p) { self.$emit('pick', p); });
           this.$emit('ready', chart);
         }
       },

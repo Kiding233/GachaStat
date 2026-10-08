@@ -180,7 +180,11 @@ def main() -> None:
             result = pg.evaluate(probe)
             # 模板未渲染 = Vue 没挂上（CDN 抖动或自闭合标签吃掉子树）。
             # 这种坏帧必须重试，且最终一定要报出来，不能拍张图就过。
-            broken = result.get("unrendered", 0) > 0 or result.get("cloaked", 0) > 0
+            # bodyText 为 0 = 应用整个没挂上（setup 抛错、依赖缺失）。
+            # 出过真事故：setup 里一处引用顺序错，页面全白，但 unrendered 是 0，
+            # 探针照样报「渲染通过」。这种坏帧比模板残留更隐蔽。
+            broken = (result.get("unrendered", 0) > 0 or result.get("cloaked", 0) > 0
+                      or result.get("bodyText", 1) == 0)
             if not broken or attempt == 2:
                 pg.screenshot(path=str(out), full_page="--full" in args)
                 for n in at:

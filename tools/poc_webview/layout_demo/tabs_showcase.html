@@ -7,6 +7,7 @@
 
 <!-- 一次性样式对照页：不属于方案，只为挑标签页样式。
      纯 HTML + CSS，不依赖框架；每格的做法与代价写在标题行。 -->
+<link rel="stylesheet" href="libs/gs-charts.css">
 <style>
 :root{
   --bg:#eef1f5; --panel:#ffffff; --result:#f5f6f8; --header:#f7f8fa;
@@ -1234,20 +1235,7 @@ body{
           <div class="band-head"><b>本 Banner 开放区间</b>
             <span style="color:var(--muted);font-size:11px">天 0 → 84</span></div>
           <div class="band-body">
-            <svg viewBox="0 0 820 66" width="100%" height="66">
-              <g font-size="9" fill="#9aa5b1">
-                <text x="0" y="9">0</text><text x="190" y="9">21</text><text x="385" y="9">42</text>
-                <text x="580" y="9">63</text><text x="775" y="9">84</text>
-              </g>
-              <rect x="0" y="16" width="205" height="11" fill="#3f8fd9" rx="1"/>
-              <rect x="150" y="32" width="290" height="11" fill="#a8c8ea" rx="1"/>
-              <rect x="0" y="48" width="820" height="11" fill="#d7dee8" rx="1"/>
-              <g font-size="10" fill="#6b7280">
-                <text x="212" y="25">角色池 UP</text>
-                <text x="446" y="41">武器池 UP</text>
-                <text x="760" y="57">常驻池</text>
-              </g>
-            </svg>
+            <div class="gs-chart" data-spec="gantt" style="height:96px"></div>
             <p class="rail-note">高亮那条（角色池 UP）正被编辑；它和第 2 条的重叠区间一眼可见，这就是「池子互相抢时间」的地方。</p>
           </div>
         </div>
@@ -1274,15 +1262,7 @@ body{
           <div class="band-head"><b>累积资源（按当前规则推演）</b>
             <span style="color:var(--muted);font-size:11px">120 天</span></div>
           <div class="band-body">
-            <svg viewBox="0 0 820 60" width="100%" height="60">
-              <polyline points="0,54 82,50 164,46 246,42 328,38 410,34 492,30 574,26 656,22 738,18 820,14"
-                fill="none" stroke="#3f8fd9" stroke-width="1.8"/>
-              <line x1="0" y1="14" x2="820" y2="14" stroke="#e0e5ec" stroke-dasharray="3 3"/>
-              <g font-size="10" fill="#6b7280">
-                <text x="4" y="12">开始 66420</text>
-                <text x="700" y="12">120 天末 73620</text>
-              </g>
-            </svg>
+            <div class="gs-chart" data-spec="cum" style="height:96px"></div>
             <p class="rail-note">规则是线性的，所以是直线；换成每周 +5 的规则，台阶就会显出来。</p>
           </div>
         </div>
@@ -1309,15 +1289,7 @@ body{
           <div class="band-head"><b>出率曲线</b>
             <span style="color:var(--muted);font-size:11px">抽数 1 → 90</span></div>
           <div class="band-body">
-            <svg viewBox="0 0 820 62" width="100%" height="62">
-              <polyline points="0,50 660,50 700,46 740,36 780,20 820,6"
-                fill="none" stroke="#3f8fd9" stroke-width="1.8"/>
-              <line x1="820" y1="0" x2="820" y2="62" stroke="#c62828" stroke-dasharray="3 3"/>
-              <g font-size="10" fill="#6b7280">
-                <text x="4" y="13">第 1 至 74 抽 0.6%</text>
-                <text x="640" y="60">第 90 抽硬保底 100%</text>
-              </g>
-            </svg>
+            <div class="gs-chart" data-spec="pity" style="height:104px"></div>
             <p class="rail-note">曲线的拐点位置就是软保底起点；把它画出来，比在 deltas 表里数数字直观得多。</p>
           </div>
         </div>
@@ -1344,24 +1316,7 @@ body{
           <div class="band-head"><b>阈值分布</b>
             <span style="color:var(--muted);font-size:11px">累抽 0 → 600</span></div>
           <div class="band-body">
-            <svg viewBox="0 0 820 62" width="100%" height="62">
-              <line x1="0" y1="30" x2="820" y2="30" stroke="#d7dee8" stroke-width="2"/>
-              <g fill="#3f8fd9">
-                <circle cx="120" cy="30" r="4"/><circle cx="256" cy="30" r="4"/>
-                <circle cx="392" cy="30" r="4"/><circle cx="528" cy="30" r="4"/><circle cx="664" cy="30" r="4"/>
-              </g>
-              <circle cx="800" cy="30" r="4" fill="#7aa9dd"/>
-              <g font-size="10" fill="#6b7280">
-                <text x="100" y="20">100</text><text x="236" y="20">200</text><text x="372" y="20">300</text>
-                <text x="508" y="20">400</text><text x="644" y="20">500</text><text x="770" y="20">600</text>
-              </g>
-              <g font-size="10" fill="#3f8fd9">
-                <text x="86" y="50">×30 资源</text>
-              </g>
-              <g font-size="10" fill="#7aa9dd">
-                <text x="748" y="50">自选券 ×1</text>
-              </g>
-            </svg>
+            <div class="gs-chart" data-spec="mile" style="height:104px"></div>
             <p class="rail-note">蓝点是「重复」那条规则的 5 次触发（到上限为止），浅蓝点是单独一条不重复的规则。</p>
           </div>
         </div>
@@ -1377,5 +1332,65 @@ body{
 
 </div>
 
+
+<script src="libs/echarts.min.js"></script>
+<script src="libs/gs-charts.js"></script>
+<script>
+(function () {
+  'use strict';
+  if (typeof echarts === 'undefined' || typeof GS === 'undefined') {
+    var d = document.createElement('div');
+    d.style.cssText = 'background:#fdf3f3;border:1px solid #f0c8c8;border-radius:4px;'
+      + 'padding:10px 12px;font-size:12px;color:#8e1b1b;margin:10px 0';
+    d.textContent = '依赖没加载上：本页的图需要 libs/echarts.min.js 与 libs/gs-charts.js。';
+    document.body.insertBefore(d, document.body.firstChild);
+    return;
+  }
+  var PITY_X = [], PITY_Y = [];
+  for (var d0 = 1; d0 <= 90; d0++) {
+    PITY_X.push(d0);
+    PITY_Y.push(d0 <= 74 ? 0.006
+      : (d0 >= 90 ? 1 : +(0.006 + (1 - 0.006) * Math.pow((d0 - 74) / 16, 1.3)).toFixed(4)));
+  }
+  var SPECS = {
+    gantt: {
+      chart_type: 'bar', title: '本 Banner 开放区间', xlabel: '天', ylabel: '',
+      data: { labels: ['角色池 UP', '武器池 UP', '常驻池'], values: [], orientation: 'h' },
+      layout_hints: { bar_spans: [[0, 21], [15, 45], [0, 84]], x_range: [0, 84],
+        y_inverse: true },
+    },
+    cum: {
+      chart_type: 'scatter', title: '累积资源', xlabel: '天', ylabel: '累计资源',
+      data: { traces: [{ name: '累计', mode: 'lines', marker_color: GS.CAT[0],
+        x: Array.from({ length: 121 }, function (_, d) { return d; }),
+        y: Array.from({ length: 121 }, function (_, d) { return 66420 + d * 60; }) }] },
+      layout_hints: { step: 'end', x_range: [0, 120], y_range: [66000, 74000],
+        mark_points: [{ x: 2, y: 66420, text: '开始 66,420', pos: 'top' },
+                      { x: 120, y: 73620, text: '120 天末 73,620', pos: 'top' }] },
+    },
+    pity: {
+      chart_type: 'scatter', title: '保底出率曲线', xlabel: '抽数', ylabel: '命中率',
+      data: { traces: [{ name: '命中率', mode: 'lines', marker_color: GS.CAT[0],
+        x: PITY_X, y: PITY_Y }] },
+      annotations: [{ type: 'vline', value: 90, color: '#c62828', dash: 'dash',
+        text: '第 90 抽硬保底' }],
+      layout_hints: { step: 'end', x_range: [1, 90], y_range: [0, 1], y_percent: true,
+        mark_points: [{ x: 20, y: 0.006, text: '第 1 至 74 抽 0.6%', pos: 'top' }] },
+    },
+    mile: {
+      chart_type: 'scatter', title: '累抽奖励阈值', xlabel: '累抽', ylabel: '',
+      data: { x: [100, 200, 300, 400, 500, 600], y: [0, 0, 0, 0, 0, 0] },
+      layout_hints: { x_range: [0, 660], y_range: [-1, 1], hide_y: true,
+        point_styles: [{ size: 12 }, { size: 12 }, { size: 12 }, { size: 12 },
+          { size: 12 }, { size: 12, hollow: true }] },
+    },
+  };
+  Object.keys(SPECS).forEach(function (k) {
+    var el = document.querySelector('[data-spec="' + k + '"]');
+    if (el) GS.mount(el, SPECS[k]);
+  });
+  window.addEventListener('resize', GS.resizeAll);
+})();
+</script>
 </body>
 </html>

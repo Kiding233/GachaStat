@@ -6,11 +6,12 @@
 <title>分析页右栏（结果区）排版参考 · GachaStat</title>
 
 <!-- 一次性排版参考页：纯 HTML + CSS + 内联 SVG，零外部依赖（不引 libs/、不引 CDN），
-     必须能离线渲染。图形本体只定义一次（下面的 <symbol id="cdf">），
+     必须能离线渲染。图形本体由 ECharts 画（libs/gs-charts.js），每个方案各挂一个宿主（<div class="gs-chart" data-spec="cdf">），
      六种方案用 <use> 引用同一个 symbol，所以「图」在所有方案里逐像素相同，
      差异只来自版面（字阶 / 栅格 / 留白 / 注记层 / 表格地位）。
      图形内部的样式一律写 SVG 表现属性（fill=/stroke=），不写 class：
      <use> 的内容在 shadow tree 里，文档的类选择器匹配不到它，这是 SVG 的已知坑。 -->
+<link rel="stylesheet" href="libs/gs-charts.css">
 <style>
 /* ============================================================
    0. 设计令牌：黑白灰骨架 + 彩色只做语义（与探针 index.html 同源）
@@ -305,7 +306,7 @@ body{
                 <span style="bottom:0">0%</span>
               </div>
               <div class="pbox">
-                <svg class="psvg" viewBox="0 0 800 240" preserveAspectRatio="none"><use href="#cdf"/></svg>
+                <div class="psvg gs-chart" data-spec="cdf"></div>
                 <i class="dot" style="left:84.69%;top:44.5%"></i>
                 <i class="dot" style="left:93.5%;top:10.29%"></i>
                 <span class="an p50">P50 <b>77</b> 抽</span>
@@ -440,7 +441,7 @@ body{
                 <span style="bottom:0">0%</span>
               </div>
               <div class="pbox">
-                <svg class="psvg" viewBox="0 0 800 240" preserveAspectRatio="none"><use href="#cdf"/></svg>
+                <div class="psvg gs-chart" data-spec="cdf"></div>
                 <i class="dot" style="left:84.69%;top:44.5%"></i>
                 <i class="dot" style="left:93.5%;top:10.29%"></i>
                 <span class="an p50">P50 <b>77</b> 抽</span>
@@ -546,7 +547,7 @@ body{
                   <span style="bottom:0">0%</span>
                 </div>
                 <div class="pbox">
-                  <svg class="psvg" viewBox="0 0 800 240" preserveAspectRatio="none"><use href="#cdf"/></svg>
+                  <div class="psvg gs-chart" data-spec="cdf"></div>
                   <i class="dot" style="left:84.69%;top:44.5%"></i>
                   <i class="dot" style="left:93.5%;top:10.29%"></i>
                   <span class="an p50">P50 <b>77</b> 抽</span>
@@ -664,7 +665,7 @@ body{
               <span style="bottom:0">0%</span>
             </div>
             <div class="pbox">
-              <svg class="psvg" viewBox="0 0 800 240" preserveAspectRatio="none"><use href="#cdf"/></svg>
+              <div class="psvg gs-chart" data-spec="cdf"></div>
               <i class="dot" style="left:84.69%;top:44.5%"></i>
               <i class="dot" style="left:93.5%;top:10.29%"></i>
               <span class="an p50">P50 <b>77</b> 抽</span>
@@ -787,7 +788,7 @@ body{
               <span style="bottom:0">0%</span>
             </div>
             <div class="pbox">
-              <svg class="psvg" viewBox="0 0 800 240" preserveAspectRatio="none"><use href="#cdf"/></svg>
+              <div class="psvg gs-chart" data-spec="cdf"></div>
               <i class="dot" style="left:84.69%;top:44.5%"></i>
               <i class="dot" style="left:93.5%;top:10.29%"></i>
               <span class="an p50">P50 <b>77</b> 抽</span>
@@ -883,7 +884,7 @@ body{
                 <span style="bottom:0">0%</span>
               </div>
               <div class="pbox">
-                <svg class="psvg" viewBox="0 0 800 240" preserveAspectRatio="none"><use href="#cdf"/></svg>
+                <div class="psvg gs-chart" data-spec="cdf"></div>
               </div>
               <div class="xax">
                 <span class="first" style="left:0">1</span>
@@ -990,5 +991,50 @@ body{
 </section>
 
 </div>
+
+<div id="depfail" style="display:none;background:#fdf3f3;border:1px solid #f0c8c8;
+  border-radius:4px;padding:10px 12px;font-size:12px;color:#8e1b1b;margin:0 0 14px">
+  <b>依赖没加载上。</b>本页的图需要 <code>libs/echarts.min.js</code> 与 <code>libs/gs-charts.js</code>。
+</div>
+<script src="libs/echarts.min.js"></script>
+<script src="libs/gs-charts.js"></script>
+<script>
+(function () {
+  'use strict';
+  if (typeof echarts === 'undefined' || typeof GS === 'undefined') {
+    var b = document.getElementById('depfail');
+    if (b) b.style.display = 'block';
+    return;
+  }
+  /* 按分位数锚点反演采样，保证 P50=77、P90=85 与图上标注对得上。
+     图里不画标注：本页的标注层是 HTML 的 .dot / .an，那正是要比的版面元素。 */
+  var ANCH = [[0.01, 20], [0.10, 45], [0.25, 60], [0.50, 77],
+              [0.75, 83], [0.90, 85], [0.95, 87], [0.99, 90]];
+  var _s = 20261008;
+  function rnd() { _s = (_s * 1103515245 + 12345) & 0x7fffffff; return _s / 0x7fffffff; }
+  function inv(p) {
+    for (var i = 1; i < ANCH.length; i++) {
+      if (p <= ANCH[i][0]) {
+        var a = ANCH[i - 1], b = ANCH[i];
+        var t = (p - a[0]) / (b[0] - a[0] || 1);
+        return a[1] + (b[1] - a[1]) * t;
+      }
+    }
+    return ANCH[ANCH.length - 1][1];
+  }
+  var samples = [];
+  for (var i = 0; i < 1200; i++) samples.push(+inv(rnd()).toFixed(3));
+
+  var SPEC = {
+    chart_type: 'cdf', title: '单池出货抽数的累积分布',
+    xlabel: '抽数', ylabel: '累积概率',
+    data: { samples: samples },
+    layout_hints: { x_range: [1, 90] },
+  };
+  [].slice.call(document.querySelectorAll('[data-spec="cdf"]'))
+    .forEach(function (el) { GS.mount(el, SPEC); });
+  window.addEventListener('resize', GS.resizeAll);
+})();
+</script>
 </body>
 </html>

@@ -123,7 +123,7 @@ def main() -> None:
             pg.on("console", lambda m: errs.append(f"console.{m.type}: {m.text}")
                   if m.type == "error" else None)
             # 一律屏蔽外部请求：这些页面必须能离线渲染。
-            # 出过一次真事故——页面从 CDN 取 Vue，CDN 一抖动整个应用退化成裸模板
+            # 出过一次真事故：页面从 CDN 取 Vue，CDN 一抖动整个应用退化成裸模板
             # （工具栏显示 {{ ... }}、文件树一个节点都没有），而当时的验证在联网下跑，
             # 完全看不出来。依赖现在本地化了，这里把「不许联网」变成硬约束。
             pg.route(
@@ -156,7 +156,7 @@ def main() -> None:
         print("ERRORS", json.dumps(errs[:8], ensure_ascii=False))
     print("PROBE", json.dumps(result, ensure_ascii=False))
     if broken:
-        print("FAIL 模板未渲染 —— 该截图不可作为渲染证据")
+        print("FAIL 模板未渲染。该截图不可作为渲染证据")
         raise SystemExit(1)
     print("OK 渲染通过")
 

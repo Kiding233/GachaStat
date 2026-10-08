@@ -290,21 +290,30 @@ body{
 .an-it:hover{background:#f4f7fb}
 .an-it.on{background:var(--accent-soft);color:var(--ink);font-weight:600;
   border-left-color:var(--accent)}
-/* ● 主方法 / ○ 附属 —— 主次不靠位置猜，直接给形状 */
+/* ● 主方法 / ○ 附属 —— 主次不靠位置猜，直接给形状。
+   勾选框独立于 ●/○：前者是「看不看」，后者是「在这专题里主不主」。 */
 .an-it .an-nm::before{content:"○";font-size:8px;color:var(--ink-3);
   margin-right:6px;vertical-align:1px}
 .an-it.main .an-nm::before{content:"●";color:var(--accent)}
+.an-cb{flex:0 0 auto;width:11px;height:11px;border:1px solid var(--line-strong);
+  border-radius:2px;background:var(--panel);position:relative}
+.an-cb.on{background:var(--accent);border-color:var(--accent)}
+.an-cb.on::after{content:"";position:absolute;left:2.5px;top:0.5px;width:3px;height:6px;
+  border:solid #fff;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.an-tip{margin:0;padding:6px 10px 8px;font-size:10px;color:var(--ink-3);
+  border-top:1px solid var(--line2)}
 .an-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .an-bd{flex:0 0 auto;font-size:9px;line-height:13px;padding:0 4px;border-radius:7px}
 .an-bd.s{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
 .an-bd.d{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
-.an-side-h2{padding:5px 10px;font-size:11px;color:var(--ink-3);
-  border-top:1px solid var(--line);border-bottom:1px solid var(--line2);background:#fcfdfe}
-.an-pwrap{padding:9px}
-.an-pwrap .pform{margin-bottom:0;background:transparent;border:0;padding:0}
-.an-pwrap .pform .pf > label{flex:0 0 62px;text-align:left}
+/* 参数不再放左栏（多选时每个方法各有参数），这两条留给结果块内的参数区 */
+.an-res-b .pform{margin-bottom:12px}
 .an-main{flex:1;min-width:0}
+/* 多选后结果依序堆叠，块间要有明显间距，否则会读成一块 */
+.an-res + .an-res{margin-top:12px}
 .an-res{border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow:hidden}
+.an-empty{border:1px dashed var(--line-strong);border-radius:var(--radius);
+  background:#fcfdfe;padding:26px;text-align:center;color:var(--ink-3);font-size:12px}
 .an-res.dim{opacity:.55}
 .an-res-h{display:flex;align-items:center;gap:9px;padding:8px 11px;
   border-bottom:1px solid var(--line);background:#fafbfd}
@@ -377,12 +386,15 @@ body{
 .ovs .step{stroke:#b03a3a;stroke-width:1.3}
 .ovs .pdot{fill:#8b93a3;opacity:.62}
 
-/* 二级标签：B 下划线式（与一级 card 式形状不同，不混层） */
-.sub2{display:flex;gap:14px;margin:0 0 10px;border-bottom:1px solid var(--line)}
-.sub2 button{border:0;background:transparent;font:inherit;font-size:12px;color:var(--muted);
-  cursor:pointer;padding:4px 0;border-bottom:2px solid transparent;margin-bottom:-1px}
-.sub2 button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
-.sub2 button:hover:not(.on){color:var(--ink-2)}
+/* 二级标签：定型为 F —— 一级同款缩小。
+   同边框、同圆角、同步共边，只把尺寸与字重调小一号，与一级同族。
+   gap 必须是 0：默认的 6px 间隙会把共边拆开，与一级的共边不一致。 */
+.sub2{display:flex;gap:0;margin:0 0 10px;border-bottom:1px solid var(--line)}
+.sub2 button{border:1px solid var(--line);border-bottom:0;background:var(--result);
+  border-radius:2px 2px 0 0;padding:4px 9px;margin:0 -1px -1px 0;font:inherit;
+  font-size:11px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.sub2 button.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-bottom:1px solid var(--panel);position:relative;z-index:1}
 
 /* 分析面板 */
 .anchor-bar{
@@ -983,27 +995,50 @@ body{
             </div>
 
             <div v-else class="an-split">
-              <!-- 左：本专题的方法都聚在这里，main 标出主方法；下面是选中项的参数。
+              <!-- 左：本专题的方法都聚在这里，勾选框决定哪些出结果，●/○ 标出主次。
                    原来所有方法是一堆等权卡片，看不出谁主谁次、谁和谁相关；
-                   收进一个专题的左栏之后，关联由「在一起」表达，主次由 main 表达。 -->
+                   收进一个专题的左栏之后，关联由「在一起」表达，主次由 ●/○ 表达。
+                   左栏只管「选哪些」，参数不在这里——多选时每个方法各有自己的参数，
+                   放在左栏只能显示一份，所以参数回到右栏各自的结果块里。 -->
               <aside class="an-side">
                 <div class="an-side-h">
-                  <span>{{ cat.name }}</span><span class="n">{{ cat.items.length }} 项</span>
+                  <span>{{ cat.name }}</span>
+                  <span class="n">{{ picked(cat).length }}/{{ cat.items.length }} 项</span>
                 </div>
                 <div class="an-list">
                   <button v-for="it in cat.items" :key="it.key" class="an-it"
-                          :class="{on: curItem(cat) && curItem(cat).key===it.key, main: it.main}"
-                          @click="selItem[cat.key]=it.key">
+                          :class="{on: isPicked(cat, it), main: it.main}"
+                          @click="togglePick(cat, it)">
+                    <span class="an-cb" :class="{on: isPicked(cat, it)}"></span>
                     <span class="an-nm">{{ it.name }}</span>
                     <span class="an-bd" :class="it.shape==='dispatch'?'d':'s'">
                       {{ it.shape==='dispatch' ? '派发' : '即时' }}</span>
                   </button>
                 </div>
-                <template v-if="curItem(cat)">
-                  <div class="an-side-h2">参数</div>
-                  <div class="an-pwrap">
-                    <div class="pform" v-if="curItem(cat).fields">
-                      <div class="pf" v-for="f in curItem(cat).fields" :key="f.k">
+                <p class="an-tip">可多选，选中的在右侧依序列出</p>
+              </aside>
+
+              <!-- 右：选中的方法各自成块依次列出。参数在各自块内。
+                   v-for + v-show 是为了留住 it 这个局部名，让下面的分支原样可用。 -->
+              <main class="an-main">
+                <div v-if="!picked(cat).length" class="an-empty">
+                  这一专题没有勾选任何分析项。在左栏点一下方法名即可勾上。
+                </div>
+                <div v-for="it in cat.items" :key="it.key" class="an-res"
+                     v-show="isPicked(cat, it)"
+                     :class="{dim: !itemRunnable(it)}">
+                  <div class="an-res-h">
+                    <b>{{ it.name }}</b>
+                    <span class="shape" :class="it.shape">
+                      {{ it.shape==='sync' ? '即时分析' : '需派发模拟' }}</span>
+                    <span class="tmeta" v-if="it.hint" style="margin-left:auto">{{ it.hint }}</span>
+                  </div>
+                  <div class="an-res-b">
+                    <!-- 参数在各自结果块内：多选时每个方法各有自己的参数，
+                         放左栏只能显示一份。字段与 gui/analysis_panel.py 的
+                         add_config_row（label + 控件成对）对齐，不是只读展示。 -->
+                    <div class="pform" v-if="it.fields">
+                      <div class="pf" v-for="f in it.fields" :key="f.k">
                         <label>{{ f.k }}</label>
                         <el-select v-if="f.t==='sel'" :model-value="f.v" size="small">
                           <el-option v-for="o in f.opts" :key="o" :label="o" :value="o"></el-option>
@@ -1020,25 +1055,6 @@ body{
                         </span>
                       </div>
                     </div>
-                    <p v-else class="tmeta" style="margin:0">该方法无可调参数。</p>
-                  </div>
-                </template>
-              </aside>
-
-              <!-- 右：选中项的结果。只有选中那张渲染出来，所以「重点」就是
-                   一个方法占满结果区，而不是十几张卡片平分视觉重量。
-                   v-for + v-show 是为了留住 it 这个局部名，让下面的分支原样可用。 -->
-              <main class="an-main">
-                <div v-for="it in cat.items" :key="it.key" class="an-res"
-                     v-show="curItem(cat) && curItem(cat).key===it.key"
-                     :class="{dim: !itemRunnable(it)}">
-                  <div class="an-res-h">
-                    <b>{{ it.name }}</b>
-                    <span class="shape" :class="it.shape">
-                      {{ it.shape==='sync' ? '即时分析' : '需派发模拟' }}</span>
-                    <span class="tmeta" v-if="it.hint" style="margin-left:auto">{{ it.hint }}</span>
-                  </div>
-                  <div class="an-res-b">
 
                     <div v-if="!itemRunnable(it)" class="reason">
                       <span>✕</span>
@@ -1716,12 +1732,23 @@ const app = createApp({
     const cfgTab = ref('cards');             // 配置详情的 tag，与 GUI 的 11 个标签页同名同序
     const poolSubTab = ref('pool');          // 「卡池管理」下的二级 tag：池 / 生命周期
     const analysisTab = ref('gdr');
-    // 每个专题各自记住选中的分析项（不共享一个全局选择，切专题回来还在原处）
-    const selItem = reactive({});
-    function curItem(cat) {
-      if (!cat || !cat.items || !cat.items.length) return null;
-      const k = selItem[cat.key];
-      return cat.items.find(i => i.key === k) || cat.items[0];
+    /* 每个专题各自记住选中了哪些分析项（多选）。切走再回来还在原处。
+       默认选中该专题的主方法（●），没有标 main 就选第一项。
+       picked() 只读不写：渲染期给 reactive 赋值是副作用，Vue 会告警。 */
+    const selItems = reactive({});
+    function picked(cat) {
+      if (!cat || !cat.items || !cat.items.length) return [];
+      const saved = selItems[cat.key];
+      if (saved) return saved;
+      const d = cat.items.find(i => i.main) || cat.items[0];
+      return [d.key];
+    }
+    function isPicked(cat, it) { return picked(cat).indexOf(it.key) >= 0; }
+    function togglePick(cat, it) {
+      const cur = picked(cat).slice();
+      const i = cur.indexOf(it.key);
+      if (i >= 0) cur.splice(i, 1); else cur.push(it.key);
+      selItems[cat.key] = cur;
     }
     const taskDrawer = ref(false);
     const notice = ref('');
@@ -1732,10 +1759,14 @@ const app = createApp({
     const workersMax = ref(navigator.hardwareConcurrency || 8);
     setInterval(() => {
       now.value = Date.now();
-      // 让派发出去的模拟真的走起来：进度推进，到 100% 转为完成
+      // 让派发出去的模拟真的走起来：进度推进，到 100% 转为完成。
+      // 步进后取整到一位小数：0.4 连加会累积浮点误差，
+      // 直接绑到 el-progress 上会显示成 43.200000000000003%。
+      // 真实应用没这问题（api.py 的 pct = int(done / total * 100) 已取整），
+      // 这是探针里假造进度时引入的。
       for (const t of tasks) {
         if (t.status !== 'running') continue;
-        t.pct = Math.min(100, t.pct + 0.4);
+        t.pct = Math.min(100, Math.round((t.pct + 0.4) * 10) / 10);
         if (t.pct >= 100) {
           t.status = 'done';
           t.elapsed = (Date.now() - t.startTime) / 1000;
@@ -2039,7 +2070,7 @@ const app = createApp({
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
       canAnalyze, canRun, runDisabledReason, cfgTab, poolSubTab, activeCategories,
-      catName, catCount, AN_ICONS, selItem, curItem,
+      catName, catCount, AN_ICONS, selItems, picked, isPicked, togglePick,
       allPools, vulnPool, vulnOnly, vulnShown, vulnCur, vulnCount, vulnOverview,
       ridgeRows, ridgeTicks, RMAX, SUB, vulnHist, vulnPava, vulnNj,
       taskDrawer, openTasks, runningCount, workersActive, workersMax, cpu, mem, now,
@@ -2063,6 +2094,12 @@ app.component('task-table', {
         return ((this.now - row.startTime) / 1000).toFixed(1);
       }
       return row.elapsed ? row.elapsed.toFixed(1) : '—';
+    },
+    // 进度文本：整数不补 .0，非整数只留一位小数。
+    // el-progress 默认把 percentage 直接拼进文本，浮点误差会整串露出来。
+    pctFmt(p) {
+      const n = Number(p) || 0;
+      return (Number.isInteger(n) ? String(n) : n.toFixed(1)) + '%';
     },
   },
   template: `
@@ -2091,7 +2128,9 @@ app.component('task-table', {
       </el-table-column>
       <el-table-column label="进度" width="150">
         <template #default="{ row }">
-          <el-progress :percentage="row.pct" :stroke-width="8"
+          <!-- format 兜底：进度只要不是整数就只显示一位小数。
+               el-progress 默认把 percentage 原样拼成文本，浮点会整串露出来。 -->
+          <el-progress :percentage="row.pct" :stroke-width="8" :format="pctFmt"
                        :status="row.status === 'failed' ? 'exception' : undefined"></el-progress>
         </template>
       </el-table-column>

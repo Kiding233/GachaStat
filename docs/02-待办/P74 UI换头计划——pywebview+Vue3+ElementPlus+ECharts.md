@@ -6,7 +6,8 @@
 > 触发：用户要求全面替换 PyQt6 + Plotly（WebEngine）为更现代、更灵活、视觉更好的 UI，且不随安装包附带浏览器内核。
 > 前置：完整调查与实证验证已完成，见 [调查报告-换头计划-UI框架替换-2026-08-05](../04-收件箱/调查报告-换头计划-UI框架替换-2026-08-05.md)
 > **界面裁决来源**：`docs/00-meta/UI设计体系/`（阶段 1a 的产出，共五份文档）。其中 [工作区交互形态.md](../00-meta/UI设计体系/工作区交互形态.md) 是结构定稿，它的 §八 是与 P86/P87 的接线表、§九 是实施顺序、§九 的 9.1 是探针纪律
-> **前端方案已换（2026-10-09，用户裁决）**：阶段 1b/2 在 `tools/poc_webview/ui_compare/` 上做的那套 **UI 设计与交互形态作废**，其入口 `gacha_simulator/main_webview.py` 随之作废。当前前端方案是 [`tools/poc_webview/layout_demo/`](../../tools/poc_webview/layout_demo/)，它才是 `工作区交互形态.md` 的实现（纯静态探针，尚未接后端）。
+> **前端方案已换（2026-10-09，用户裁决）**：阶段 1b/2 在 `tools/poc_webview/ui_compare/` 上做的那套 **UI 设计与交互形态作废**。当前前端方案是 [`tools/poc_webview/layout_demo/`](../../tools/poc_webview/layout_demo/)，它才是 `工作区交互形态.md` 的实现（纯静态探针，尚未接后端）。
+> **入口 `gacha_simulator/main_webview.py` 保留**（同日裁决）：它只是加载页面，把加载目标从 `ui_compare/dist` 换成新前端的产物即可，其余不动。
 > **后端未作废**：`gacha_simulator/webui/` 仍在。`工作区交互形态.md` §八 接线表明确要复用它的 `get_resource_usage()`（资源监控数据源），§六 引用它的 `pct = int(done/total*100)` 作为取整口径。故本计划与 P86/P87 中凡涉及 `webui/api.py` 与 `webui/*_service.py` 的条款**仍然有效**。
 > **新架构依赖**：阶段 2 的部分面板是「接新架构」而非复刻旧界面，前置见 §五「阶段 2 的门控」与 §十
 
@@ -66,7 +67,7 @@
         其中工作区交互形态.md 是**结构定稿**（页面结构、工作区树、详情页、分析页、切换机制、任务管理）
         design tokens CSS 实现放前端工程（src/styles/tokens.css）
 
-阶段 1b 图表与容器层  ⚠️ 2026-10-09：其产物（ui_compare 的 Vue 工程 + main_webview 入口）**UI 设计与交互形态已作废**，见头部「前端方案已换」。技术结论仍有效，**载体要重做**
+阶段 1b 图表与容器层  ⚠️ 2026-10-09：其产物中的 **ui_compare Vue 工程**那部分，UI 设计与交互形态**已作废**（入口 `main_webview.py` 保留，改指新前端），见头部「前端方案已换」。技术结论仍有效，**载体要重做**
         ChartSpec → ECharts 前端 renderer
         pywebview 容器替换 ChartWebView
         Vite 工程化（Vue 3 + Element Plus + ECharts 脚手架）
@@ -113,7 +114,7 @@
 | `GachaStat.spec` | 重写（移除 Qt/WebEngine/plotly，加入前端产物 + WebView2 相关） |
 | `pyproject.toml` | gui 依赖调整（PyQt6 → pywebview）；顺带修正 `version`（当前 `1.6.0`，与 `_version.py` 的 `2.4.0` 不一致，见评估 §五） |
 | 图表引擎子系统 | ChartSpec 保留为数据契约，渲染层前端化 |
-| `gacha_simulator/main_webview.py` | **作废（2026-10-09）**：它是已作废那套前端方案的入口。新前端如何启动待定（见 §八） |
+| `gacha_simulator/main_webview.py` | **保留**（2026-10-09）：入口本身不随前端方案作废，改的是它加载的页面（`_DIST_INDEX` 从 `ui_compare/dist/index.html` 指向新前端产物），以及 dev 模式下的 dev server 地址 |
 | `tools/poc_webview/ui_compare/`（460MB，24 个 src 文件） | **作废（2026-10-09）**：其 UI 设计与交互形态不符 `工作区交互形态.md`。技术结论保留，实现只作参考 |
 | `webui/api.py` | **保留**（后端未作废）。`toggle_plugin` 直写裸 dict 回 `config.toml`（`:602-604`，用 `tomli_w.dump`），绕过 `save_toml()` 序列化纪律。该写路径会随迁移存活（本计划保留 core 与 `config.toml`），且现已经由 `main_webview` 入口对用户可达 |
 | `webui/worst_impact_service.py` | `generate_worst_config()`（`:57-110`）用 7 个私有成员重写 core 计算管线（见 §二 附注）。阶段 2 第二批迁移最差影响面板时须改为复用 `WorstImpactAnalyzer.analyze()` |
@@ -146,7 +147,7 @@
   - **A2｜进度推送无节流（实现质量）**：`webui/api.py:288-291` 每完成**一次**模拟就推一次 JS，而 `_push_task` 最终走 `self._window.evaluate_js(...)`（`:89-95`），即每次模拟一次跨语言调用。CLI 与 GUI 都做了节流（CLI 每 1/10、GUI 每 N/50），唯独 WebUI 没有。**未测量**实际开销，故只登记代码事实与方向。
   - **C2｜不抽卡基线的异常被静默吞掉**：`webui/api.py:320-321` 与 `gui/gacha_panel.py:121-122` 同为 `except Exception: pass`。同一段逻辑在 CLI 侧已改为打印 stderr 告警（`cli.py:382-385`），理由是「静默吞掉会让『基线缺失』与『基线为 0』无从区分」。三处应统一向 CLI 看齐。
 
-- **新增（2026-10-01）：WebUI 进度文案通道无消费者（实现质量）。** 后端 `_push_task(task_id, kind, done, total, pct, msg)`（`webui/api.py:431`）一直在发文案：`:274` 发「正在构建模拟环境…」、`:301` 发「正在计算不抽卡基线…」（`:290` 的逐次进度发 `None`）。而前端 `onTaskProgress`（`tools/poc_webview/ui_compare/src/App.vue:873-876`）**只取了 `p.pct`**，`msg` 在 `src/` 全目录零引用。**后果**：WebUI 跑模拟时整段时间只看到一个百分比，用户不知道程序是在构建环境、跑模拟还是算基线。**与 A2 的关系**：A2 是「推得太频繁」，本条是「推了没人看」，同一通道的两面，建议合并处置。**修法（2026-10-09 修正）**：原写「前端把 `p.msg` 显示在任务条上（约 1 行）、改后重建 `dist/`」。**该修法随前端方案作废而失效**（`ui_compare` 与 `main_webview.py` 均不作数）。后端继续发 `msg` 的事实与「发了没人看」的判定仍成立，处置改为：**新前端接后端时，任务条必须消费 `p.msg`**，列为新前端的验收项。
+- **新增（2026-10-01）：WebUI 进度文案通道无消费者（实现质量）。** 后端 `_push_task(task_id, kind, done, total, pct, msg)`（`webui/api.py:431`）一直在发文案：`:274` 发「正在构建模拟环境…」、`:301` 发「正在计算不抽卡基线…」（`:290` 的逐次进度发 `None`）。而前端 `onTaskProgress`（`tools/poc_webview/ui_compare/src/App.vue:873-876`）**只取了 `p.pct`**，`msg` 在 `src/` 全目录零引用。**后果**：WebUI 跑模拟时整段时间只看到一个百分比，用户不知道程序是在构建环境、跑模拟还是算基线。**与 A2 的关系**：A2 是「推得太频繁」，本条是「推了没人看」，同一通道的两面，建议合并处置。**修法（2026-10-09 修正）**：原写「前端把 `p.msg` 显示在任务条上（约 1 行）、改后重建 `dist/`」。**该修法随 `ui_compare` 前端方案作废而失效**（入口 `main_webview.py` 保留，但不再加载 `ui_compare`）。后端继续发 `msg` 的事实与「发了没人看」的判定仍成立，处置改为：**新前端接后端时，任务条必须消费 `p.msg`**，列为新前端的验收项。
 
 ## 九、验收
 
@@ -186,3 +187,4 @@
 | 2026-10-01 | 登记 WebUI 进度文案通道无消费者（后端发 `msg`、前端只取 `pct`），与 A2 合并处置 |
 | 2026-10-09 | **系统更新**：① 补「界面裁决来源」（UI 设计体系的五份文档，阶段 1a 产出清单改为实际内容并标注实质完成）；② 新增 §五「阶段 2 的门控」——树 / 任务抽屉 / 分析页 / 最差影响 / 方案搜索各有前置，逐项写死；③ 新增本节与 §十（与相邻计划的关系）；④ 影响面补 `gui/analysis_panel.py` 一行（不是复刻而是接 P86）；⑤ 风险补依赖抢跑一条；⑥ 验收补「六项以 `工作区交互形态.md` §十 为准」 |
 | 2026-10-09 | **前端方案更换（用户裁决）**：`main_webview.py` 对应的 **UI 设计与交互形态作废**，新前端方案是 `tools/poc_webview/layout_demo/`（`工作区交互形态.md` 的实现）。**后端 `webui/` 未作废**（§八 接线表要复用其 `get_resource_usage()`，§六 引用其取整口径）。相应更新：头部补两段；阶段 1b/2 标注产物作废、阶段 2 的目标载体改为新前端且 ui_compare 不作迁移源；影响面补 `main_webview.py` 与 `ui_compare/` 两行作废、`webui/api.py` 标注保留；§八 进度文案那条的修法失效并改判；§十 补新前端一行。 |
+| 2026-10-09 | **入口更正（用户同日裁决）**：`main_webview.py` **不作废**，它只加载页面，改指新前端产物即可。前一条状态把「前端作废」推及入口，过宽，此处更正。 |

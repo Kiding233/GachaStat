@@ -310,40 +310,41 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 |----------|------|---------|---------|
 | `Modifier.delta(view, dist, ctx)` | **唯一接口**：返回增量向量 `{card_id: δ}`，未列出的卡 `δ = 0`，`None` 表示恒等。框架统一归一化 | 见下方「七个机制」 | 由各机制自己的 `delta()` 开头判定（条件内联） |
 
-**`ctx` 的字段（2026-10-06 定稿）**：
+**`ctx` 的字段（2026-10-06 定稿；2026-10-08 增 `base_probabilities`）**：
 
 | 字段 | 内容 |
 |------|------|
 | `scope_cards` | `{稀有度: tuple[card_id]}`，该稀有度的全部卡 |
 | `featured_cards` | `{稀有度: tuple[card_id]}`，该稀有度内的 UP 卡（**只对有 UP 卡的稀有度建键**） |
 | `rarity_rank` | `{稀有度: int}`，**0 = 最高** |
+| `base_probabilities` | `{card_id: float}`，池子声明的基础权重（即 `DrawInfo.base_probabilities`，S8 后为卡级）。**`shape = 'declared'` 的 `w` 来源**；它归一化后就是初始分布（`PityContext.current` 的初值），故「按声明形状」与「按初始形状」只在 `current` 已被改动后才分岔 |
 | `sim` | `SimView`，模拟级状态的只读视图（`owns(card_id)`）。**非 Optional，永远填充**（§3.10.2） |
 
-> **`ctx` 保留扩展能力（强制）**：四字段是**当前机制需要的全部**，但 `ctx` 的类型是开放的。新机制若需要新的静态事实（池子类型、banner 开放时刻、已拥有集合等），**加字段，不改签名**。`delta(view, dist, ctx)` 三参数是定稿，**不得再增形参**（G3 的 `owns` 即按此走 `ctx.sim`，见 §3.10.2）。
+> **`ctx` 保留扩展能力（强制）**：五字段是**当前机制需要的全部**，但 `ctx` 的类型是开放的。新机制若需要新的静态事实（池子类型、banner 开放时刻、已拥有集合等），**加字段，不改签名**。`delta(view, dist, ctx)` 三参数是定稿，**不得再增形参**（G3 的 `owns` 即按此走 `ctx.sim`，见 §3.10.2）。
 
 **七个机制形态（六个类；`HardModifier` 按 `target_featured` 分两行，每类只写一个 `delta()`，方法体里只算五样）**：
 
 | 类 | 条件 | A（加组） | Q（减组） | 转移量 | A 侧形状 |
 |----|------|----------|----------|--------|---------|
 | `HardModifier`（`target_featured=false`） | `counter >= τ` | `scope_cards[scope]` | 更低稀有度 | `p(Q)` | `current` |
-| `HardModifier`（`target_featured=true`） | 同上 | `featured_cards[scope]` | 更低稀有度 ∪ `scope\featured` | `p(Q)` | `current` |
+| `HardModifier`（`target_featured=true`） | 同上 | `featured_cards[scope]` | 更低稀有度 ∪ `scope\featured` | `p(Q)` | `declared` |
 | `SoftModifier` | `boost > 0` | `scope_cards[scope]` | 更低稀有度 | `boost/100` | `current` |
 | `RotatingModifier` | `guaranteed` | `featured_cards[scope]` | `scope\featured` | `p(Q)` | `current` |
-| `NonFeaturedModifier`（G1） | `forced_loss` | `scope\featured` | `featured_cards[scope]` | `p(Q)` | `current` |
-| `SelectedModifier`（targeted） | `guaranteed ∨ fate_ready` | `(selected,)` | `scope\selected` | `p(Q)` | `current` |
+| `NonFeaturedModifier`（G1） | `forced_loss` | `scope\featured` | `featured_cards[scope]` | `p(Q)` | `declared` |
+| `SelectedModifier`（targeted） | `guaranteed ∨ fate_ready` | `(selected,)` | `scope\selected` | `p(Q)` | `declared` |
 | `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\A` | `p(Q)` | `current` |
 
-**五样都是 `factor()` 方法体内的局部量**，不是构造形参、不进接口。「更低稀有度」= `rarity_rank` 中 `rank > rank(scope)` 的稀有度下的全部卡；「`scope\X`」= scope 卡集去掉 X。
+**五样都是 `delta()` 方法体内的局部量**，不是构造形参、不进接口。「更低稀有度」= `rarity_rank` 中 `rank > rank(scope)` 的稀有度下的全部卡；「`scope\X`」= scope 卡集去掉 X。
 
 > **G3 的 Q 含已拥有的 UP（2026-10-07 用户裁决）**：G3 的 A = featured 中**未拥有**者，故 `scope\A` = (featured 中已拥有者) ∪ `scope\featured`。已拥有的 UP 落在 Q 内、本抽被搬空，从而「50 抽必出**未获得的** UP」成立。若按 `scope\featured`（不含已拥有者）取 Q，已拥有的 UP 保留原概率、本抽仍可被抽到，与手册「已获得的装备从 UP 组中排除」冲突。
 
-**表里只有两列变出花样**：A/Q 的取法（5 种）与转移量（2 种：`p(Q)` 与 `boost/100`）。条件各不相同，但与这两列无关。A 侧形状当前无自由度（恒为 `current`，见下）。
+**表里只有三列变出花样**：A/Q 的取法（5 种）、转移量（2 种：`p(Q)` 与 `boost/100`）、A 侧形状（2 种，见下）。条件各不相同，但与这三列无关。
 
-> **A 侧形状（2026-10-08）**：`current` = A 内按当前比例 `p_c/p(A)` 分配增量。**当前 7 个形态全部取 `current`**（保持当前比例），这是乘性因子形式下唯一可用的形状：逐卡因子必须依赖 `p_c`，按声明权重分配会让因子在 `p_c = 0` 时发散（即「因子取无穷」，§3.9.5 曾为 `assign` 描述过该情形）。若将来改用增量表示（见《保底算子表示切换·因子向量转增量向量·改写方案》），可增设 `declared`。**Q 侧形状不可指定，恒为当前形状**（否则在 `p_c → 0` 时产出负概率）。
+> **A 侧形状（2026-10-08 用户裁决）**：`current` = A 内按当前比例 `p_c/p(A)` 分配增量；`declared` = A 内按声明权重 `w_c/w(A)` 分配（`w` 由 `ctx.base_probabilities` 传入，见 §3.9.4 的 `weights` 形参）。**分发依据**（三案推演 §8.4 的穷举）：**可能遇到 `p(A) = 0` 的机制取 `declared`**（`HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier`，它们的 A 是 featured 的真子集，会被同 scope 的 counter 驱动算子清空），**其余取 `current`**（`soft` 只加总量不动形状，其余机制的 A 不会整组归零）。`declared` 在 `p(A) = 0` 时仍可分配，这是它唯一的用武之地；`w(A) = 0`（池子声明该组不可获得）时它返回 `None`，与 `current` 同。**Q 侧形状不可指定，恒为当前形状**（否则在 `p_c → 0` 时产出负概率）。
 
 > **边界一：`hard` 的 scope 为最低稀有度时，本族表达不了（2026-10-06 实测）**。`Q = 更低稀有度` 为空 → `amount = 0` → `transfer_linear` 返回恒等，**保底完全不生效**。旧实现靠「绝对赋值 + 更高稀有度豁免」造出 Σ > 1 的分布（实测 `hard(scope='r')` 得 Σ = 1.061），这是**造质量**，不属于「A 加 Q 减」族。**手册无此配置**（全部 `hard` 的 scope 为 `ssr`，除 `sr_pity` 为 `sr`），故登记为**边界**而非缺口。真要支持，须另写一个 `delta()`（直接返回自定义增量表），**接口不变**。
 
-> **边界二：`hard` 的 scope 为中间稀有度时与旧实现有差（2026-10-06 实测）**。`hard(scope='sr')`：新模型 `sr = 0.9890、ssr = 0.0110（原值不动）`；旧实现 `sr = 0.9891、ssr = 0.0109`。差 1.2e-04，成因是**旧实现在此情形 Σ = 1.011**（更高稀有度被「豁免」保留了绝对值），归一化后按比例缩水；新模型 `⟨m,p⟩ ≡ 1`，更高稀有度**不写因子即精确保留**。量级 1e-4 ~ 3.5e-3（scope 越低差越大），属 §3.9.5 已登记的差异类。
+> **边界二：`hard` 的 scope 为中间稀有度时与旧实现有差（2026-10-06 实测）**。`hard(scope='sr')`：新模型 `sr = 0.9890、ssr = 0.0110（原值不动）`；旧实现 `sr = 0.9891、ssr = 0.0109`。差 1.2e-04，成因是**旧实现在此情形 Σ = 1.011**（更高稀有度被「豁免」保留了绝对值），归一化后按比例缩水；新模型 `Σδ = 0`，更高稀有度**不写增量即精确保留**。量级 1e-4 ~ 3.5e-3（scope 越低差越大），属 §3.9.5 已登记的差异类。
 
 **条件内联（2026-10-06 裁决）**：条件写在各类 `factor()` 开头，不生效即 `return None`。**取消 §3.14 的 `ConditionalModifier` 与整个条件类族**（理由见 §3.14 的改判）。
 
@@ -820,14 +821,14 @@ Q 内每卡  − amount · p_c / p(Q)
 其余      不写（= 0）
 ```
 
-`amount` 是从 Q 搬到 A 的概率质量；`u_A` 是 A 上的单位分布（即「形状」），取值由 §3.9.4 的 `shape` 参数决定（当前七个机制全取 `'current'`，即 `u_A(c) = p_c / p(A)`）。该形状在 U 内**配平**（`Σδ = 0`），故 `Σ(p + δ) = 1`，归一化退化为恒等。
+`amount` 是从 Q 搬到 A 的概率质量；`u_A` 是 A 上的单位分布（即「形状」），取值由 §3.9.4 的 `shape` 参数决定（七个机制中四个取 `'current'`，即 `u_A(c) = p_c / p(A)`；三个取 `'declared'`，即 `u_A(c) = w_c / w(A)`，见 §3.1.2 表的「A 侧形状」列）。两种形状都在 U 内**配平**（`Σδ = 0`），故 `Σ(p + δ) = 1`，归一化退化为恒等。
 
 **这不是定义，是一个族。** 三条前提都不是「Modifier 必须如此」：
 
 | 前提 | 当前七个机制 | 若不满足 |
 |------|-------------|---------|
 | 恰好两个组 | 满足 | 直接写自定义增量表 |
-| A 内形状规则统一 | 满足（全取 `current`） | 同上 |
+| A 内形状规则统一 | 满足（`current` 或 `declared` 二选一） | 同上 |
 | 配平（`Σδ = 0`） | 满足 | 同上；框架归一化会真的干活 |
 
 **因此 `transfer_linear(dist, A, Q, amount, shape='current')` 是助手函数，不是接口的一部分**（§3.9.4）。新机制若不属于该族，直接实现 `delta()` 即可，**接口不变**。
@@ -849,7 +850,7 @@ Q 内每卡  − amount · p_c / p(Q)
 | `F(T)` | 夺取型：A = T，Q = 全池减 A 再减更高稀有度，`amount = p(Q)` |
 | `B_β(T; Q)` | soft 型：A = T，Q = 源集，`amount = β·p(Q)` |
 
-旧实现跑在**槽位级**，目标恒为单槽。S8 降到卡级后 |A| 可大于 1，此时「A 内部按什么分」才第一次成为问题。**本族的答案是：A 内按当前形状分配**（`shape = 'current'`，即保持当前比例），依据见 §3.1.5.4 的表。
+旧实现跑在**槽位级**，目标恒为单槽。S8 降到卡级后 |A| 可大于 1，此时「A 内部按什么分」才第一次成为问题。**本族的答案是：A 内形状由机制声明**（§3.1.2 的「A 侧形状」列；四个取 `current` 即保持当前比例，三个取 `declared` 即按声明权重），依据见 §3.1.5.4 的表与三案推演 §8.4 的穷举。
 
 ##### 3.1.5.2.4 本轮修正的两处实现错误（2026-10-05）
 
@@ -1031,11 +1032,11 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 原「形式化待决」列了四条候选（甲不动 / 乙全局换加法 / 丙混合通道 / 丁堵输入）。2026-10-08 用户裁决走**换增量**，但它与乙案不完全等同，两点须分清：
 
 - **换增量的直接动机是消除转写层与一批边界特判**（§3.9.5 的「⟨m,p⟩ ≠ 1」一条随之消失），**不是**专门为 `p(A) = 0` 而换。**ISSUE-011 / ISSUE-903 的 M1 与 M2 的 `Σp` 口径分歧不受影响**（M1 沿用旧实现、F 型豁免更高稀有度、输出 Σ = 1.009；M2 框架无条件归一化、输出 Σ = 1；成因是两期的 hard 语义与归一化时机不同，与表示无关）
-- **`p(A) = 0` 本身仍处置为「不转移」**：`shape = 'current'` 下 `u_A` 无定义，返回 `None`。这是来源一（池子声明不可获得）的正确行为。原候选表里「乙 / 丙 能让来源二生效」这一点，在裁决后只以 `shape = 'declared'` 的形式保留为**预留能力**（见下）
+- **`p(A) = 0` 本身仍处置为「不转移」**：`shape = 'current'` 下 `u_A` 无定义，返回 `None`。这是来源一（池子声明不可获得）的正确行为。原候选表里「乙 / 丙 能让来源二生效」这一点，在裁决后由 `shape = 'declared'` 落地（2026-10-08 启用，见下）
 
 **来源二在新框架下的可达性（2026-10-08 重新穷举）**：原实测的 `hard → hard → soft` 链依赖旧 `hard` 的「造质量」（`Σ = 2.0`），而新 `hard` 是夺取型、`⟨m,p⟩ ≡ 1`，且 `hard(scope=最低稀有度)` 的 Q 为空会空转（§3.1.2 边界一），故该链**不可达**。但另一条链**可达**：`NF(ssr)` / `Sel(ssr)` 清空 UP 之后 `H_tfT(ssr)` 要保 UP，此时 `p(A) = 0` 而 `p(Q) > 0`。这类组合全部是语义对撞（夺 UP 与保 UP），穷举结果见三案推演 §8.4 与 `.recycle_bin/probe_pA0_reach.py`。
 
-**`shape = 'declared'` 是让来源二在冲突配置下生效的手段**：按声明权重分配对 `p_c = 0` 安全（`δ_c = t·w_c/w(A)` 不依赖 `p_c`），它已进 `transfer_linear` 签名但当前抛 `NotImplementedError`（缺 `ctx` 的声明权重字段）。当前 7 个机制全取 `'current'`，故不启用。
+**`shape = 'declared'` 已启用（2026-10-08 用户裁决）**：按声明权重分配对 `p_c = 0` 安全（`δ_c = t·w_c/w(A)` 不依赖 `p_c`），故 `HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier` 三个机制取它（§3.1.2 表的「A 侧形状」列），来源二在冲突配置下由此生效。`w` 取自 `ctx.base_probabilities`（2026-10-08 新增的 `ctx` 字段；它归一化后就是初始分布，见 §3.1.2 的字段表）。其余四个机制仍取 `current`。
 
 **三条「支持换加法」的实测事实的现状**（2026-10-08 复核）：
 
@@ -1675,7 +1676,7 @@ def _apply_delta(dist, d):
 | `PoolPitySpec.scope_slots` / `featured_slots` / `card_to_slot` | **推迟删除**（ISSUE-901，改判；随 GATE-5 末条「发布前一次性移除旧保底类」的同一 commit） | 槽位名与卡→槽位映射在**卡级管道**下确无消费者，但**旧保底类及其调用链仍在读它们**：`SoftStepBehavior._compute_probabilities`（[pity.py:277-284](gacha_simulator/core/pity.py#L277-L284)）、`HardPityBehavior`（:372-398）、`RotatingBehavior`（:494-498）、`TargetedBehavior`（:648-698）一律以 `ctx.draw.scope_slots.get(self._scope, ())` 取源集，`_redistribute_scope` 的函数体（[pity.py:432](gacha_simulator/core/pity.py#L432)）亦然。**ISSUE-502 只保住了函数本体、没有保住它的输入**——同批删字段即让该函数「在而不可调用」（模块级名字在调用时解析，导入期与 ruff 都不报错），S5a harness 的旧实现对照基准与 S8-6 的「对 S5 产物容差 1e-12」双双落空。**旧稿残留句已删（ISSUE-908，2026-10-01）**：原句写「`_resolve_selected_slots` 的目标定位**仍**改为直接给出卡集合 `(selected,)`（新骨架不依赖槽位）」——该名字全库只有一个定义，即旧 `TargetedBehavior._resolve_selected_slots`（[pity.py:681](gacha_simulator/core/pity.py#L681)），其返回值直接喂给 `_redistribute_scope(ctx, featured_ratio, total, targeted_slots, self._scope)`（[:655](gacha_simulator/core/pity.py#L655)）。照该句施工会同时造成两件坏事：(a) 动了 ISSUE-502 / ISSUE-901 明令**保留至发布前**的旧类，S8-6 的「现跑旧类」基线当场变质；(b) 该旧类下游是槽位级函数（`result[s] = featured_total * w / f_total_w`、`base_probabilities.get(s, 0.0)`），传入卡 id 只会**新增键**而不命中目标槽，目标槽拿不到 100%。**新架构下该职责由 §3.1.2 机制表的 `SelectedModifier`（A = `(selected,)`）承担；旧 `TargetedBehavior` 的该私有方法一律不改** | <!-- REVIEW-R1-FIX: ISSUE-908 --> <!-- REVIEW-R1-FIX: ISSUE-901 -->
 | `compute_scope_mappings` | **推迟改造（减量部分）** | **卡集合本就存在**：该函数五元组的前两项即 `scope_cards` / `featured_cards`（[pity.py:1067-1068](gacha_simulator/core/pity.py#L1067-L1068)），且 `PityEngine` 三个调度入口已把它们透传进 `DrawInfo`（[pity.py:1295-1299](gacha_simulator/core/pity.py#L1295-L1299)）——**S8-4 对卡级路径零改动，无「增量」可做**。原定的「不再生成槽位名」是**减量**改造，必须与槽位三字段同批（同一函数无法只留一半产出），随 GATE-5 末条「发布前一次性移除旧保底类」commit（**ISSUE-901**）。**不得在 S8-4 提前减量**：三个解包点（[batch_simulator.py:273](gacha_simulator/service/batch_simulator.py#L273) / [worst_impact.py:506](gacha_simulator/core/worst_impact.py#L506) / [test_pity_integration.py:107](tests/core/test_pity_integration.py#L107)、:160）一律按五元组解包，提前改返回值元数会同时波及 `PoolPitySpec` 构造与 `DrawInfo` 构造，波及面反而大于「本步不动」 | <!-- REVIEW-R1-FIX: ISSUE-901 -->
 | `aggregate_probs_by_rarity` | **删除** | 唯一调用点在 [banner.py:227](gacha_simulator/core/banner.py#L227)；同时清 `core/__init__.py` 的导出 |
-| `_redistribute_scope(ctx, ratio, total, target_slots, scope)` | **替换（下游切换到新函数；函数本体保留至「发布前一次性移除旧类」的 commit）** | 新骨架（`Pity` + 卡级 Modifier 链）改用卡级版 `transfer_linear(dist, A, Q, amount, shape='current')`（**5 参，定稿签名以 §3.9.4 的定义为准**；无 `base_weights`，组内按「当前比例」而非基础权重，理由见 §3.9.4），产出增量向量而非新分布。**ISSUE-022**：原稿此表写 5 参（多 `base_weights`）、§3.9.4 写 4 参、§3.14.3 写关键字 `scope=`，三处互不兼容，2026-09-22 统一为 4 参；**2026-10-08 加 `shape` 形参后为 5 参**（`dist, A, Q, amount, shape='current'`，其中仍不含 `base_weights`）。<br>**ISSUE-502（2026-10-01 补，强制）**：**函数本体在 S8 不删**。`pity.py` 内仍有 4 处调用点（:477 `RotatingBehavior`、:589 `RotatingCRBehavior._force_featured`、:655/:659 `TargetedBehavior`），全部位于**按 GATE-5 要保留到发布前的旧类体内**——删函数本体即 `NameError`（模块级名字在**调用时**解析，导入期与 ruff 都不报错），而 S5a 等价性 harness 与 S8-6 的对照基准正是这些旧类。故 S8 的处置是：**新增 `transfer_linear` + 让新骨架改用**，`_redistribute_scope` 与 `transfer_linear` 并存；**只删 `core/__init__.py` 的导出**（:20 import + :117 `__all__` 条目，随 S8-4），不删 `pity.py` 内的定义。函数本体的删除并入 GATE-5 末条的「发布前一次性移除旧保底类」commit（旧类与其调用点同时消失） | <!-- REVIEW-FIX-PREV: ISSUE-022 --> <!-- REVIEW-R1-FIX: ISSUE-502 -->
+| `_redistribute_scope(ctx, ratio, total, target_slots, scope)` | **替换（下游切换到新函数；函数本体保留至「发布前一次性移除旧类」的 commit）** | 新骨架（`Pity` + 卡级 Modifier 链）改用卡级版 `transfer_linear(dist, A, Q, amount, shape='current', weights=None)`（**6 参，定稿签名以 §3.9.4 的定义为准**；无 `base_weights` 这个旧形参，A 内分配由 `shape` 决定、`declared` 时权重经 `weights` 传入，理由见 §3.9.4），产出增量向量而非新分布。**ISSUE-022**：原稿此表写 5 参（多 `base_weights`）、§3.9.4 写 4 参、§3.14.3 写关键字 `scope=`，三处互不兼容，2026-09-22 统一为 4 参；**2026-10-08 加 `shape` 形参后为 5 参**（`dist, A, Q, amount, shape='current'`，其中仍不含 `base_weights`）。<br>**ISSUE-502（2026-10-01 补，强制）**：**函数本体在 S8 不删**。`pity.py` 内仍有 4 处调用点（:477 `RotatingBehavior`、:589 `RotatingCRBehavior._force_featured`、:655/:659 `TargetedBehavior`），全部位于**按 GATE-5 要保留到发布前的旧类体内**——删函数本体即 `NameError`（模块级名字在**调用时**解析，导入期与 ruff 都不报错），而 S5a 等价性 harness 与 S8-6 的对照基准正是这些旧类。故 S8 的处置是：**新增 `transfer_linear` + 让新骨架改用**，`_redistribute_scope` 与 `transfer_linear` 并存；**只删 `core/__init__.py` 的导出**（:20 import + :117 `__all__` 条目，随 S8-4），不删 `pity.py` 内的定义。函数本体的删除并入 GATE-5 末条的「发布前一次性移除旧保底类」commit（旧类与其调用点同时消失） | <!-- REVIEW-FIX-PREV: ISSUE-022 --> <!-- REVIEW-R1-FIX: ISSUE-502 -->
 | `infer_rarity_from_spec` | **删除**（**随 `aggregate_probs_by_rarity` 一并删**，含 `core/__init__.py` 的 import 与 `__all__` 导出） | **ISSUE-504（2026-10-01 复核，推翻原「保留」定稿）**：全库引用实测只有 4 类——① 定义 [pool.py:234](gacha_simulator/core/pool.py#L234)；② 内部消费 [pool.py:270](gacha_simulator/core/pool.py#L270) / [pool.py:275](gacha_simulator/core/pool.py#L275)，两者都在将随本表删除的 `aggregate_probs_by_rarity` 内；③ [banner.py:242](gacha_simulator/core/banner.py#L242) / [banner.py:244](gacha_simulator/core/banner.py#L244) 与 [banner.py:209](gacha_simulator/core/banner.py#L209) 的局部 import，全在将随 S8-2 删除的 `scale_factors` 段内；④ 导出 [core/\_\_init\_\_.py:3](gacha_simulator/core/__init__.py#L3) 与 [:101](gacha_simulator/core/__init__.py#L101)。①②③ 消灭后本函数**零消费者**（`_infer_rarity`（[pity.py:1344](gacha_simulator/core/pity.py#L1344)）用的是 `spec.ssr_ids` / `scope_cards`，与本函数无关），故 S8 后保留它只会留下无人调用的死代码，并与 §六 / S8-2 的 `grep` 零命中验收**恒冲突**（原「保留」定稿下该 grep 永远为红）。**原稿的「S8 时再复核」已由本节复核取代** | <!-- REVIEW-R1-FIX: ISSUE-504 -->
 | `DrawInfo.scope_slots` / `featured_slots` / `card_to_slot` | **推迟删除**（ISSUE-901，随 `PoolPitySpec` 同步） | `PityEngine` 的三个调度入口（`before_draw` / `after_draw` / `get_probabilities`）在此期间**继续透传**三字段（[pity.py:1290-1300](gacha_simulator/core/pity.py#L1290-L1300)），否则旧类首次读 `ctx.draw.scope_slots` 即 `AttributeError`，S5a harness 连 `DrawInfo` 都构造不出来。`DrawInfo.base_probabilities` 语义由「槽位级」改为「卡级」**仍按 S8 执行**（该字段是卡级管道的输入，与槽位三字段的存废无关） | <!-- REVIEW-R1-FIX: ISSUE-901 -->
 | `service/batch_simulator.py` | **改造（推迟，ISSUE-901）** | [batch_simulator.py:274-283](gacha_simulator/service/batch_simulator.py#L274-L283) 解包 `compute_scope_mappings` 的五元组并构造含槽位字段的 `PoolPitySpec`——与 worst_impact 同属构造点。**S8-4 对它零改动**：槽位三字段推迟删除（见上两行），`PoolPitySpec` 的 8 字段构造在 S8 期间保持原样，新骨架读的 `scope_cards` / `featured_cards` 本就由同一五元组产出并存入该 spec。与 worst_impact 的构造点改造、`compute_scope_mappings` 的减量**同批**并入 GATE-5 末条 commit。**2026-09-21 审查补** | <!-- REVIEW-R1-FIX: ISSUE-901 -->
@@ -1726,10 +1727,12 @@ def _apply_delta(dist, d):
 **定位：助手，不是接口。** Modifier 的接口是 `delta(view, dist, ctx)` 返回任意增量向量（§3.1.2）；当前七个机制恰好都落在「A 加 Q 减」这一族（§3.1.5.2.1），故提供本函数供其复用。**不属于该族的新机制直接实现 `delta()`，不经过本函数。**
 
 ```python
-def transfer_linear(dist, A, Q, amount, shape='current'):
+def transfer_linear(dist, A, Q, amount, shape='current', weights=None):
     """把 amount 的概率质量从 Q 搬到 A，返回增量向量。
 
-    A 内每卡 + amount · u_A(c)        u_A 由 shape 定：'current' → p_c/p(A)
+    A 内每卡 + amount · u_A(c)        u_A 由 shape 定：
+                                        'current'  → p_c / p(A)
+                                        'declared' → w_c / w(A)，w 由 weights 传入
     Q 内每卡 − amount · p_c / p(Q)    （Q 侧恒为当前形状，不可指定）
     其余不写（= 0）
 
@@ -1745,9 +1748,13 @@ def transfer_linear(dist, A, Q, amount, shape='current'):
             return None                  # 目标组当前无概率 → 未定义（见前置条件表）
         uA = {c: dist[c] / pA for c in A}
     elif shape == 'declared':
-        raise NotImplementedError(
-            "shape='declared' 需要声明权重 w，而当前 ctx 无该字段；"
-            "当前 7 个机制全部使用 'current'（§3.1.2 的 A 侧形状列）")
+        if not weights:
+            raise ValueError("shape='declared' 必须同时传 weights"
+                             "（声明权重，即 ctx.base_probabilities）")
+        wA = sum(weights.get(c, 0.0) for c in A)
+        if wA <= 0:
+            return None                  # 池子声明该组不可获得 → 不转移（来源一）
+        uA = {c: weights.get(c, 0.0) / wA for c in A}
     else:
         raise ValueError("未知的 shape: %r" % (shape,))
 
@@ -1763,10 +1770,12 @@ def transfer_linear(dist, A, Q, amount, shape='current'):
 |------|---------|
 | `A` 与 `Q` 不交 | 增量冲突，结果无定义 |
 | `p(Q) > 0` | 无货可取，返回 `None`（恒等） |
-| `p(A) > 0`（`shape = 'current'` 时） | 目标组当前无概率，`u_A` 未定义，返回 `None`（恒等）。**这是「来源一」（池子声明该组不可获得）的正确处置：不转移。** `shape = 'declared'` 无此限制，但该形状当前不可用（需 `ctx` 补声明权重字段） |
+| `p(A) > 0`（`shape = 'current'` 时） | 目标组当前无概率，`u_A` 未定义，返回 `None`（恒等）。**这是「来源一」（池子声明该组不可获得）的正确处置：不转移。** `shape = 'declared'` 无此限制 |
+| `w(A) > 0`（`shape = 'declared'` 时） | 池子声明该组不可获得，返回 `None`（恒等）。**与上一行同为来源一的处置，只是判定依据从当前分布换成声明权重** |
+| `weights` 已传（`shape = 'declared'` 时） | 未传则抛 `ValueError`（无权重即无从分配） |
 | `amount <= p(Q)` | 否则 Q 侧增量为负、产出负概率。soft 的 `boost%` 封顶 100，故 `amount <= 1`；夺取型 `amount = p(Q)` 恒满足 |
 
-**两个机制的实际调用**：
+**三个机制的实际调用**（前两个取默认 `current`，第三个演示 `declared`）：
 
 ```python
 class RotatingModifier(Modifier):
@@ -1792,6 +1801,20 @@ class SoftModifier(Modifier):
         if not A or sum(dist[c] for c in A) <= 0:
             return None
         return transfer_linear(dist, A, Q, boost / 100.0)
+
+
+class SelectedModifier(Modifier):                      # targeted：A 侧取 declared
+    def delta(self, view, dist, ctx):
+        if not (view.get('guaranteed') or view.get('fate_points', 0) >= self._tau):
+            return None
+        sel = view.get('selected_card')
+        scope = ctx.scope_cards[self._scope]
+        A = (sel,)
+        Q = tuple(c for c in scope if c != sel)
+        if not A or sum(dist[c] for c in A) <= 0:
+            return None
+        return transfer_linear(dist, A, Q, sum(dist[c] for c in Q),
+                               shape='declared', weights=ctx.base_probabilities)
 ```
 
 **模块归属**：`transfer_linear` 住叶子层 `core/pity_primitives.py`（§3.1.6 叶子行 / §四 该文件行）。理由：七个机制分居 `pity_modifier.py` 与预设工厂两处，放在任一处都会造成重复；**它与 `Pity` 骨架之间无依赖，故放叶子层不构成循环。**
@@ -1807,7 +1830,7 @@ class SoftModifier(Modifier):
 
 | 情形 | 处理 | 依据 |
 |------|------|------|
-| `p(A) == 0`（目标组当前无概率） | **返回 `None`（恒等，不转移）**：`shape = 'current'` 下 `u_A = p_c/p(A)` 未定义。**这是「来源一」（池子声明该组不可获得）的正确处置**，抬起来会与池子的声明冲突 | §3.1.5.6.1。**2026-10-08 由因子改为增量时重写**：原表按 `share` / `assign` 分两支（前者跳过目标因子、后者返恒等），增量形式下**两分支合一**。原记录的旧码行为（`SoftStepBehavior` 的 `steal·w/Σw` 会把零概率目标槽从 0 抬起）在新框架下不出现，故「为对齐旧行为而保留源侧写因子」的理由随之消失。**须在 S8 验收中专项覆盖** |
+| `p(A) == 0`（目标组当前无概率） | **`shape = 'current'` 时返回 `None`（恒等，不转移）**：`u_A = p_c/p(A)` 未定义。**这是「来源一」（池子声明该组不可获得）的正确处置**，抬起来会与池子的声明冲突。**`shape = 'declared'` 的三个机制不受此限**：它们按 `w` 分配，`p(A) = 0` 时仍能转移（这正是来源二在冲突配置下生效的路径），只有 `w(A) = 0` 才返 `None` | §3.1.5.6.1。**2026-10-08 由因子改为增量时重写**：原表按 `share` / `assign` 分两支（前者跳过目标因子、后者返恒等），增量形式下**两分支合一**。原记录的旧码行为（`SoftStepBehavior` 的 `steal·w/Σw` 会把零概率目标槽从 0 抬起）在新框架下不出现，故「为对齐旧行为而保留源侧写因子」的理由随之消失。**须在 S8 验收中专项覆盖** |
 | `p(Q) == 0`（无货可取） | 返回 `None`（恒等） | 同 §3.1.5.6 的「支撑上全为零」行 |
 | `p(Q) == amount`（源组被搬空） | 正常执行：`δ_Q = −amount·p_c/p(Q) = −p_c`，源组归零；`δ_A = +amount·u_A` 照常 | 原 `P − T == 0` 行。**增量形式下该情形由公式自然涵盖，无分支**。原记录的实测（现码把零概率槽 `b` 从 0 造到 0.25、卡级版保持 0）在新框架下不再出现。**须在 S8 验收中专项覆盖** |
 | **目标集为空**（`target_cards == ()`） | **返回 `None`（恒等）**，现址为 §3.9.4 的 `transfer_linear` 代码与其前置条件表（原写「§3.9.4.1 的守卫、§3.9.4.2 的守卫、§3.14.2 的说明」，那两个子节与 `ConditionalModifier` 包装器均已随 2026-10-06 改判消失） | **2026-10-05 补守卫**。原稿的 `return m or None` **不构成**该保证：`target_cards` 为空时 `T = 0`、`P − T = P > 0`，走 `ratio >= 1` 分支把**整个 U 写 0**，返回 `{'…': 0.0}` 而非 `None`。实测 `factor_redistribute(dist, ('ssr_featured','ssr'), (), 1.0)` 得 `{'ssr_featured': 0.0, 'ssr': 0.0}`，`_apply_factor` 归一化后全 scope 归零。**（本条为 2026-10-05 的历史记录，其中的 `factor_redistribute`、因子 `m` 与 `_apply_factor` 都是当时形态；表示已于 2026-10-08 改为增量，但本条的结论「目标集为空必须返回 `None`」不变。）****触发路径真实存在**：`rotating` 绑定到无 featured 卡的池（`PityDef.pools` 默认 `('*',)`，见 §3.9.5 的 scope 键缺失行）时 `featured_cards.get(scope, ())` 返空集 |

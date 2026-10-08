@@ -321,23 +321,25 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 
 > **`ctx` 保留扩展能力（强制）**：四字段是**当前机制需要的全部**，但 `ctx` 的类型是开放的。新机制若需要新的静态事实（池子类型、banner 开放时刻、已拥有集合等），**加字段，不改签名**。`factor(view, dist, ctx)` 三参数是定稿，**不得再增形参**（G3 的 `owns` 即按此走 `ctx.external`，见 §3.10.2）。
 
-**七个机制形态（六个类；`HardModifier` 按 `target_featured` 分两行，每类只写一个 `factor()`，方法体里只算四样）**：
+**七个机制形态（六个类；`HardModifier` 按 `target_featured` 分两行，每类只写一个 `factor()`，方法体里只算五样）**：
 
-| 类 | 条件 | A（加组） | Q（减组） | 转移量 |
-|----|------|----------|----------|--------|
-| `HardModifier`（`target_featured=false`） | `counter >= τ` | `scope_cards[scope]` | 更低稀有度 | `p(Q)` |
-| `HardModifier`（`target_featured=true`） | 同上 | `featured_cards[scope]` | 更低稀有度 ∪ `scope\featured` | `p(Q)` |
-| `SoftModifier` | `boost > 0` | `scope_cards[scope]` | 更低稀有度 | `boost/100` |
-| `RotatingModifier` | `guaranteed` | `featured_cards[scope]` | `scope\featured` | `p(Q)` |
-| `NonFeaturedModifier`（G1） | `forced_loss` | `scope\featured` | `featured_cards[scope]` | `p(Q)` |
-| `SelectedModifier`（targeted） | `guaranteed ∨ fate_ready` | `(selected,)` | `scope\selected` | `p(Q)` |
-| `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\A` | `p(Q)` |
+| 类 | 条件 | A（加组） | Q（减组） | 转移量 | A 侧形状 |
+|----|------|----------|----------|--------|---------|
+| `HardModifier`（`target_featured=false`） | `counter >= τ` | `scope_cards[scope]` | 更低稀有度 | `p(Q)` | `current` |
+| `HardModifier`（`target_featured=true`） | 同上 | `featured_cards[scope]` | 更低稀有度 ∪ `scope\featured` | `p(Q)` | `current` |
+| `SoftModifier` | `boost > 0` | `scope_cards[scope]` | 更低稀有度 | `boost/100` | `current` |
+| `RotatingModifier` | `guaranteed` | `featured_cards[scope]` | `scope\featured` | `p(Q)` | `current` |
+| `NonFeaturedModifier`（G1） | `forced_loss` | `scope\featured` | `featured_cards[scope]` | `p(Q)` | `current` |
+| `SelectedModifier`（targeted） | `guaranteed ∨ fate_ready` | `(selected,)` | `scope\selected` | `p(Q)` | `current` |
+| `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\A` | `p(Q)` | `current` |
 
-**四样都是 `factor()` 方法体内的局部量**，不是构造形参、不进接口。「更低稀有度」= `rarity_rank` 中 `rank > rank(scope)` 的稀有度下的全部卡；「`scope\X`」= scope 卡集去掉 X。
+**五样都是 `factor()` 方法体内的局部量**，不是构造形参、不进接口。「更低稀有度」= `rarity_rank` 中 `rank > rank(scope)` 的稀有度下的全部卡；「`scope\X`」= scope 卡集去掉 X。
 
 > **G3 的 Q 含已拥有的 UP（2026-10-07 用户裁决）**：G3 的 A = featured 中**未拥有**者，故 `scope\A` = (featured 中已拥有者) ∪ `scope\featured`。已拥有的 UP 落在 Q 内、本抽被搬空，从而「50 抽必出**未获得的** UP」成立。若按 `scope\featured`（不含已拥有者）取 Q，已拥有的 UP 保留原概率、本抽仍可被抽到，与手册「已获得的装备从 UP 组中排除」冲突。
 
-**表里只有两列变出花样**：A/Q 的取法（5 种）与转移量（2 种：`p(Q)` 与 `boost/100`）。条件各不相同，但与 A/Q/转移量无关。
+**表里只有两列变出花样**：A/Q 的取法（5 种）与转移量（2 种：`p(Q)` 与 `boost/100`）。条件各不相同，但与这两列无关。A 侧形状当前无自由度（恒为 `current`，见下）。
+
+> **A 侧形状（2026-10-08）**：`current` = A 内按当前比例 `p_c/p(A)` 分配增量。**当前 7 个形态全部取 `current`**（保持当前比例），这是乘性因子形式下唯一可用的形状：逐卡因子必须依赖 `p_c`，按声明权重分配会让因子在 `p_c = 0` 时发散（即「因子取无穷」，§3.9.5 曾为 `assign` 描述过该情形）。若将来改用增量表示（见《保底算子表示切换·因子向量转增量向量·改写方案》），可增设 `declared`。**Q 侧形状不可指定，恒为当前形状**（否则在 `p_c → 0` 时产出负概率）。
 
 > **边界一：`hard` 的 scope 为最低稀有度时，本族表达不了（2026-10-06 实测）**。`Q = 更低稀有度` 为空 → `amount = 0` → `transfer_factors` 返回恒等，**保底完全不生效**。旧实现靠「绝对赋值 + 更高稀有度豁免」造出 Σ > 1 的分布（实测 `hard(scope='r')` 得 Σ = 1.061），这是**造质量**，不属于「A 加 Q 减」族。**手册无此配置**（全部 `hard` 的 scope 为 `ssr`，除 `sr_pity` 为 `sr`），故登记为**边界**而非缺口。真要支持，须另写一个 `factor()`（直接返回自定义因子表），**接口不变**。
 

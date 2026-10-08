@@ -848,7 +848,7 @@ Q 内每卡  − amount · p_c / p(Q)
 |------|---------|
 | `R_r(T)` | 夺取型：A = T，Q = scope − T，`amount = p(Q)` |
 | `F(T)` | 夺取型：A = T，Q = 全池减 A 再减更高稀有度，`amount = p(Q)` |
-| `B_β(T; Q)` | soft 型：A = T，Q = 源集，`amount = β·p(Q)` |
+| `B_β(T; Q)` | soft 型：A = T，Q = 源集。**旧实现取 `amount = β·p(Q)`（相对量）**，新框架按修正 ① 改为**绝对百分点**（`amount = boost/100`，见 §3.1.5.2.2）；这一口径差异正是 §3.1.5.5 推论表「soft + soft（异 scope）」由可交换变为不可交换的原因 |
 
 旧实现跑在**槽位级**，目标恒为单槽。S8 降到卡级后 |A| 可大于 1，此时「A 内部按什么分」才第一次成为问题。**本族的答案是：A 内形状由机制声明**（§3.1.2 的「A 侧形状」列；四个取 `current` 即保持当前比例，三个取 `declared` 即按声明权重），依据见 §3.1.5.4 的表与三案推演 §8.4 的穷举。
 
@@ -940,13 +940,15 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 | 组合 | 可交换 | 依据 |
 |------|-------|------|
 | soft + soft（同 scope） | 是 | 裁决 7B 后同 scope 的两条 soft 目标集必为 scope（不再有「异目标集」这一形态），退化为同一 A 同一 Q 的两次转移：源侧增量按当前形状分配，两次在 Q 上线性叠加，可交换；复合等价于单次转移（原 `share` 语义下 `r = 1 − (1−r₁)(1−r₂)`） |
-| soft + soft（异 scope） | 是 | 低稀有度算子的源集与目标集都落在高稀有度算子的源集之内 |
+| soft + soft（异 scope） | **否**（绝对百分点语义下） | 原依据「低稀有度算子的源集与目标集都落在高稀有度算子的源集之内」只在**相对量**语义（`amount = β·p(Q)`）下成立。2026-10-05 修正 ① 把 `amount` 改为**绝对百分点**后不再成立：高稀有度算子固定搬 `b₁`，而低稀有度算子会改变前者源集中那一部分的值，两次顺序不同则前者从该部分取走的比例也不同。**手算反例（2026-10-08）**：`p = {ssr: 0.02, sr: 0.08, r: 0.90}`，`soft(ssr)` 的 boost = 5pp、`soft(sr)` 的 boost = 2pp，`[soft_ssr, soft_sr]` 得 `sr = 0.0959184`、`[soft_sr, soft_ssr]` 得 `sr = 0.0948980`，差 ≈ 1.02e-03 |
 | **soft(tf=False) + hard（同 scope）** | **是（2026-10-05 实测）** | 见下方「判据」专段。实测：`soft(start=2) + hard(threshold=6)` 逐抽 1..15 无反例 |
 | **hard + rotating（rotating 处于非 guaranteed 分支）** | **是（2026-10-05 实测）** | 该分支的 r = `p(S_f)/p(S_c)` 即当前份额，`share` 退化为恒等，**在任何分布上都是恒等**，故与 `hard` 可交换 |
 | **hard + rotating / targeted（guaranteed 分支）** | **否（2026-10-05 实测）** | r = 1，非恒等。实测 `hard(threshold=5)` + `rotating`（第 1 抽中非 UP 的 SSR 置 guaranteed）：**抽 6 起分歧**，`[hard, rot]` = `{ssr: 0, ssr_featured: 1.0}`、`[rot, hard]` = `{ssr: 0.5556, ssr_featured: 0.4444}`。**`targeted` 的同名分支与 `rotating` 逐位相同**（直接对照三组输入，含 `hard` 的输出，差 0），故本行同时覆盖它。**裁决 7B 未消除本条**，它是 7B 之后唯一剩下的代数型反例 |
 | 含 `rotating_cr` 的组合 | 否 | 非代数问题：增量本身可交换，但掷骰消费全局 `random`，换序导致 ω 消费位置改变、样本路径分叉。裁决 6B 后掷骰移入 Tracker，Tracker 的 `commit` 同样按行为顺序调用，**本条结论不变** |
 
 **判据（2026-10-05 实测归纳，取代原「逐类猜测」）**：
+
+> **适用范围（2026-10-08 补，强制）**：本判据的立论是「`hard`（`assign`）的输出与输入分布无关」，那只成立于 **M1 的旧类**（`HardPityBehavior` 重建分布、只读 `base_probabilities`）。**S8 起 `hard` 是夺取型**（A = `scope_cards[scope]`、Q = 更低稀有度、A 侧形状 `current`，§3.1.2 表），A 内按当前比例分配，**输出依赖输入**，本判据**不再适用**，须回到上方「逐元素比较两种顺序下的增量和」的通用判据。**已知反例（手算，2026-10-08）**：池 `{ssr: 0.01, ssr_featured: 0.01, sr: 0.08, r: 0.90}`，`hard(ssr, tf=false)` 与 `rotating(guaranteed)`：两序都得 `{ssr: 0, ssr_featured: 1.0}`（**可交换**），而 `rotating` 在 `hard` 的输出 `{ssr: 0.5, ssr_featured: 0.5, sr: 0, r: 0}` 上显然非恒等，本判据会误判为「不可交换」。**下方推论表与逐条验算表均为 M1 旧类实测**，M2 口径待 §六 的「S8 可交换性复测」重算。
 
 `hard`（`assign`）的输出**与输入分布无关**：它只读 `ctx.draw.base_probabilities`，把 U\T 置零、T 写成基础权重归一（`HardPityBehavior._compute_probabilities`，[pity.py:374-390](gacha_simulator/core/pity.py#L374-L390)，`result[s] = w / total_weight` 里的 `w` 取自 `base_probabilities` 而非 `ctx.current`）。故：
 

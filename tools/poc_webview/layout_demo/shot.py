@@ -61,6 +61,13 @@ INDEX = """
       title: (e.querySelector('.embed-h b') || {}).textContent || '' })),
     sub2: [...document.querySelectorAll('.sub2 button')].map(b => b.innerText.trim()),
     sub2Visible: vis(document.querySelector('.sub2')),
+    // 每个专题必须恰有一个主方法（●）。多一个或少一个都是标 main 时漏改，
+    // 而这种错在界面上只表现为「两个点都是实心」，不看不出来。
+    badMain: [...document.querySelectorAll('.an-pane')].map(p => ({
+      cat: (p.querySelector('.an-side-h span') || {}).textContent?.trim() || '(占位)',
+      items: p.querySelectorAll('.an-it').length,
+      mains: p.querySelectorAll('.an-it.main').length,
+    })).filter(x => x.items > 0 && x.mains !== 1),
     bodyText: (document.body.innerText || '').length,
     unrendered: ((document.body.innerText || '').match(/\\{\\{/g) || []).length,
   };

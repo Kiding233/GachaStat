@@ -255,8 +255,10 @@ body{
 /* 分析页：与配置页统一为 card 式标签行（相邻共边、选中白底连体） */
 .an-tabrow{display:flex;flex-wrap:wrap;padding-top:5px;border-bottom:1px solid var(--line);
   margin-top:6px}
+/* 分析专题标签：11 个全名一行需要 1110px，可用 1108px，只差 2px。
+   横向内边距收到 9px（每 tab 省 2px，共 22px）即落在一行内，不再折行。 */
 .an-tab{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);
-  border-bottom:0;background:var(--result);border-radius:2px 2px 0 0;padding:5px 10px;
+  border-bottom:0;background:var(--result);border-radius:2px 2px 0 0;padding:5px 9px;
   margin:0 -1px -1px 0;font:inherit;font-size:12px;color:var(--muted);cursor:pointer;
   white-space:nowrap}
 .an-tab svg{flex:0 0 auto;color:var(--ink-3)}
@@ -965,8 +967,10 @@ body{
                    width="16" height="16" fill="currentColor"
                    v-html="AN_ICONS[c.key].inner"></svg>
               <span>{{ c.name }}</span>
-              <span class="cnt" v-if="c.items.length">{{ c.items.length }}</span>
-              <span class="cnt pend" v-else>构思中</span>
+              <!-- 不再挂条目数角标：全名之后 11 个专题一行需要 1329px，可用只有 1108px，
+                   去掉角标降到 1064px 正好一行。计数本来就写在左栏标题（「… N 项」），
+                   角标是重复信息。只留「构思中」——它不是计数，是状态。 -->
+              <span class="cnt pend" v-if="c.pending">构思中</span>
             </button>
           </div>
 
@@ -974,7 +978,8 @@ body{
             <!-- 构思中的专题：占位，标出这一格将来归谁 -->
             <div v-if="cat.pending" class="an-pending">
               <b>{{ cat.name }}</b>
-              <p>这一格是构思中的分析方法，尚无实现，先占位。</p>
+              <p>{{ cat.pendingDesc || '这一格是构思中的分析方法。' }}</p>
+              <p class="tmeta" style="margin-top:8px">尚无实现，先占位。</p>
             </div>
 
             <div v-else class="an-split">
@@ -1349,7 +1354,7 @@ const AN_ICONS = {
 };
 
 const categories = [
-  { key: 'gdr', name: '总体 GDR', items: [
+  { key: 'gdr', name: '全局GDR分析', items: [
     { key: 'gdr_dist', name: 'GDR 分布', main: true, shape: 'sync', chart: 'bars',
       needsStream: true,
       fields: [{ k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
@@ -1368,7 +1373,7 @@ const categories = [
       rows: [['target_achievement ↔ total_card_value', '0.71'], ['target_achievement ↔ draw_count', '−0.42']] },
   ]},
 
-  { key: 'success', name: '成功率', items: [
+  { key: 'success', name: '成功率分析', items: [
     { key: 'success_rate', name: '成功率分析', main: true, shape: 'sync', chart: 'line',
       needsStream: false,
       // 对齐 gui：这一项的参数最多（6 个），是「参数 UI 不能省」的典型
@@ -1382,12 +1387,25 @@ const categories = [
                { k: '置信水平', t: 'num', v: 0.95, min: 0.5, max: 0.999, step: 0.01 }] },
   ]},
 
-  { key: 'risk', name: '风险', items: [
+  { key: 'risk', name: '风险分析', items: [
     { key: 'risk_var_cvar', name: 'VaR / CVaR', main: true, shape: 'sync', chart: 'bars',
       needsStream: true,
       fields: [{ k: '显著性 α', t: 'num', v: 0.05, min: 0.01, max: 0.5, step: 0.01 },
                { k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
                  opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] }] },
+    // 搬回风险分析后不再是主方法：本专题的主方法是 VaR/CVaR
+    { key: 'risk_worst_case', name: '最差情形分析', shape: 'sync', chart: 'bars',
+      needsStream: true,
+      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
+                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
+               { k: '条件分布指标', t: 'multi', v: ['资源剩余'],
+                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
+    { key: 'risk_best_case', name: '最好情形分析', shape: 'sync', chart: 'bars',
+      needsStream: true,
+      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
+                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
+               { k: '条件分布指标', t: 'multi', v: ['抽卡数'],
+                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
     { key: 'conditional_dist', name: '条件分布', shape: 'sync', chart: 'bars',
       needsStream: true,
       fields: [{ k: '条件指标', t: 'sel', v: '抽出全部目标卡',
@@ -1421,7 +1439,7 @@ const categories = [
                { k: '压缩档数', t: 'num', v: 12, min: 2, max: 60, step: 1 }] },
   ]},
 
-  { key: 'per_pool', name: '每池', items: [
+  { key: 'per_pool', name: '每池分析', items: [
     { key: 'per_pool_draws', name: '每池抽卡数', main: true, shape: 'sync', chart: 'table',
       needsStream: false,
       fields: [{ k: '池', t: 'sel', v: '角色池 UP', opts: ['角色池 UP', '武器池 UP', '常驻池'] }],
@@ -1446,7 +1464,7 @@ const categories = [
       rows: [['成功→成功', '0.74'], ['成功→失败', '0.26']] },
   ]},
 
-  { key: 'vuln', name: '脆弱性', items: [
+  { key: 'vuln', name: '脆弱性分析', items: [
     // 结果块数随池数变，所以它是唯一一种「总览常驻 + 逐项下钻」的排布
     { key: 'vulnerability', name: '脆弱性分析', main: true, shape: 'sync',
       chart: 'overview-selector', needsStream: false,
@@ -1457,7 +1475,7 @@ const categories = [
       hint: '结果 = 脆弱性总览 + 各池资源分布总览 + 每池（脆弱区间表 + PAVA 组合图），块数随池数增长。总览常驻，逐池用选择器下钻。' },
   ]},
 
-  { key: 'process', name: '过程', items: [
+  { key: 'process', name: '过程分析', items: [
     { key: 'proc_aa', name: '事件统计', main: true, shape: 'sync', chart: 'table',
       needsStream: true,
       fields: [{ k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
@@ -1481,37 +1499,27 @@ const categories = [
       rows: [['第 0 抽', '抽卡 · 未出'], ['第 1 抽', '抽卡 · 未出'], ['第 2 抽', '抽卡 · SSR 出']] },
   ]},
 
-  { key: 'worst', name: '最差', items: [
-    { key: 'risk_worst_case', name: '最差情形分析', main: true, shape: 'sync', chart: 'bars',
-      needsStream: true,
-      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
-                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
-               { k: '条件分布指标', t: 'multi', v: ['资源剩余'],
-                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
-    { key: 'risk_best_case', name: '最好情形分析', shape: 'sync', chart: 'bars',
-      needsStream: true,
-      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
-                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
-               { k: '条件分布指标', t: 'multi', v: ['抽卡数'],
-                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
-    // 派发型：异步提交、可取消，与上面的即时分析并列但操作形态不同
-    { key: 'worst_impact', name: '最差影响分析', shape: 'dispatch', needsStream: false,
+  { key: 'worst', name: '最差影响', items: [
+    // 独立面板：后续池子上线后大保底资源够不够覆盖。派发型（异步提交、可取消）
+    { key: 'worst_impact', name: '最差影响分析', main: true, shape: 'dispatch',
+      needsStream: false,
       fields: [{ k: '阈值', t: 'num', v: 0.9, min: 0, max: 1, step: 0.01 },
                { k: '迭代', t: 'num', v: 3, min: 1, max: 20, step: 1 }],
       produces: 'worst_01' },
   ]},
 
-  // 构思中：尚无分析方法，占位以标出这一格将来归谁
-  { key: 'interval', name: '间隔', pending: true, items: [] },
+  // 构思中：出卡间隔分析（两次出卡之间的间隔分布）。尚无实现，占位标出归属
+  { key: 'interval', name: '间隔分析', pending: true, items: [],
+    pendingDesc: '出卡间隔分析：两次出货之间间隔了多少抽 / 多少天。' },
 
-  { key: 'search', name: '搜索', items: [
+  { key: 'search', name: '方案搜索', items: [
     { key: 'plan_search', name: '方案搜索', main: true, shape: 'dispatch', needsStream: false,
       fields: [{ k: '目标', t: 'sel', v: '毕业', opts: ['毕业', '满突', '特定卡'] },
                { k: '轮数', t: 'num', v: 50, min: 1, max: 500, step: 1 }],
       produces: 'search-A 批次（3 份子配置）' },
   ]},
 
-  { key: 'sensitivity', name: '敏感性', items: [
+  { key: 'sensitivity', name: '敏感性分析', items: [
     { key: 'sensitivity', name: '敏感性扫描', main: true, shape: 'dispatch',
       needsStream: false,
       fields: [{ k: '维度', t: 'sel', v: '模拟次数',

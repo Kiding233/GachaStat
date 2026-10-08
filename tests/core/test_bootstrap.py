@@ -364,3 +364,38 @@ class TestBootstrapFixes:
         assert not BootstrapEngine._ci_is_valid(bad_nan)
         inverted = BootstrapResult(0.5, 0.6, 0.4, 0.05, 'BCa')
         assert not BootstrapEngine._ci_is_valid(inverted)
+    @pytest.mark.parametrize('alpha_val,use_sqrt', [
+        (3.0, True), (2.5, True), (2.0, True), (float('inf'), True),
+        (1.5, False), (1.2, False), (0.5, False),
+    ])
+    def test_m_out_of_n_scale_branch(self, monkeypatch, alpha_val, use_sqrt):
+        """缩放因子按尾指数分支：α≥2 与 α=inf 走 sqrt；0<α<2 走指数公式。
+
+        **这是 α<2 分支的唯一覆盖点**——用正态数据的测试只走 sqrt 分支，
+        把指数分支改回 sqrt 它们仍会全绿（2026-10-08 独立复核指出）。
+        monkeypatch hill_estimator 以避开 Hill 估计噪声。
+        """
+        n = 200
+        m = BootstrapEngine._select_m(n)
+        eng = BootstrapEngine(B=200, ci_level=0.95, random_seed=7)
+        monkeypatch.setattr(eng, 'hill_estimator', lambda *a, **k: alpha_val)
+        data = np.linspace(0.1, 10.0, n)
+        r = eng._bootstrap_mean_m_out_of_n(data, m)
+        want = math.sqrt(m / n) if use_sqrt else (m / n) ** (1.0 - 1.0 / alpha_val)
+        got = float(r.method.split('scale=')[1].split(',')[0])
+        assert abs(got - want) < 1e-4, 'α=%s: scale=%s 期望 %s' % (alpha_val, got, want)
+
+    def test_bca_fallback_shifts_rng_stream(self):
+        """退化回退会多消耗一次 scipy 调用的 RNG，平移同引擎后续结果。
+
+        这是修复的已知副作用（非缺陷）：同一次调用、相同 RNG 状态下逐位不变，
+        但跨调用会平移。此测试锁定该行为，防止被误认为回归。
+        """
+        data = np.random.default_rng(5).normal(0, 1, 60)
+        eng = BootstrapEngine(B=300, ci_level=0.95, random_seed=11)
+        eng.bootstrap_mean([0.0] * 30, use_bca=True)   # 触发回退，消耗 RNG
+        after = eng.bootstrap_mean(data, use_bca=True)
+        eng2 = BootstrapEngine(B=300, ci_level=0.95, random_seed=11)
+        clean = eng2.bootstrap_mean(data, use_bca=True)
+        assert math.isfinite(after.ci_lower) and math.isfinite(after.ci_upper)
+        assert (after.ci_lower, after.ci_upper) != (clean.ci_lower, clean.ci_upper)

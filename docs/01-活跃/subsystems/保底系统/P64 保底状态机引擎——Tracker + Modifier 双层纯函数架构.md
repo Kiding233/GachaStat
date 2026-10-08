@@ -7,6 +7,7 @@
 > 依赖：P55✅（counter 驱动正交分解 + deltas 展开）+ P56✅（6 个事件驱动类 + Flag/Counter/_redistribute_scope + LifecycleConfig，作为等价性基准）
 > 合并：**P82（保底管道顺序接通）于 2026-09-16 并入本计划**，见 §1.5；其结论直接影响 §1.3 的 G5 项与 §3.6 的 priority 设计，P82 文件已归档
 > 命名：Tracker（追踪器，状态转移）+ Modifier（概率修正器）+ Lifecycle（生命周期）
+> 配套分析文档（**均已归档，2026-10-09**）：正文出现的「三案推演 §X」= `docs/03-归档/subsystems/保底系统/保底算子形式化三案推演与对比·乘性因子·加法增量·混合通道.md`，「改写方案 §X」= `docs/03-归档/subsystems/保底系统/保底算子表示切换·因子向量转增量向量·改写方案.md`。两者的结论已全部落入本文，只作推演过程记录，**不再是活规格**。
 
 ## 〇、演进定位——为什么现在重建是合理的
 
@@ -1652,6 +1653,8 @@ def _apply_delta(dist, d):
     total = sum(out.values())
     return dist if total <= 0 else {c: v / total for c, v in out.items()}
 ```
+
+> **命名待裁决（2026-10-09 自《保底算子表示切换·因子向量转增量向量·改写方案》§6 第 3 项移交，该文已归档）**：Modifier 的方法名 **`delta`** 与 **`PityDef.deltas`**（软保底的 RLE 段表 `((段长, 每抽增量), …)`，§3.4.1）**同名易混**——两者都在讲增量、都在保底子系统内，但一个是方法名、一个是配置字段。原改写方案已把它列为「需裁决」，而 2026-10-08 的裁决表只裁了「是否切换」「助手命名」「`shape` 是否入签名」三项，**未及本项**。备选名：`adjust` / `increment` / `shift`。**本项不影响实现正确性**（`Modifier.delta` 是方法、`PityDef.deltas` 是 dataclass 字段，无代码层冲突），只影响可读性；**未裁决前一律沿用 `delta`**。
 
 <!-- REVIEW-R1-FIX: ISSUE-501 --> <!-- REVIEW-R1-FIX: ISSUE-505 -->
 

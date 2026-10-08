@@ -269,6 +269,52 @@ body{
   padding:0 5px;line-height:15px}
 .an-tab.on .cnt{background:var(--accent-soft);color:var(--accent)}
 
+/* ---------- 分析页：专题左栏 + 结果主区 ----------
+   取代原来的等权卡片平铺。左栏把同一专题的方法收在一起并标出主方法，
+   右区只渲染选中的那一个结果，所以重点是一个方法占满结果区，
+   关联是「同专题者在一起」+ 主/附的点形（●主 ○附）。
+   左栏 sticky：结果区很长时仍能看到方法清单与参数。 */
+.an-split{display:flex;gap:12px;align-items:flex-start}
+.an-side{flex:0 0 238px;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);overflow:hidden;position:sticky;top:0}
+.an-side-h{display:flex;align-items:center;justify-content:space-between;
+  padding:6px 10px;background:#fafbfd;border-bottom:1px solid var(--line);
+  font-size:12px;font-weight:600;color:var(--ink-2)}
+.an-side-h .n{font-size:10px;color:var(--ink-3);font-weight:400}
+.an-list{padding:4px}
+.an-it{display:flex;align-items:center;gap:6px;width:100%;border:0;background:transparent;
+  font:inherit;font-size:12px;color:var(--ink-2);cursor:pointer;text-align:left;
+  padding:6px 8px;border-radius:3px;border-left:2px solid transparent}
+.an-it:hover{background:#f4f7fb}
+.an-it.on{background:var(--accent-soft);color:var(--ink);font-weight:600;
+  border-left-color:var(--accent)}
+/* ● 主方法 / ○ 附属 —— 主次不靠位置猜，直接给形状 */
+.an-it .an-nm::before{content:"○";font-size:8px;color:var(--ink-3);
+  margin-right:6px;vertical-align:1px}
+.an-it.main .an-nm::before{content:"●";color:var(--accent)}
+.an-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.an-bd{flex:0 0 auto;font-size:9px;line-height:13px;padding:0 4px;border-radius:7px}
+.an-bd.s{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.an-bd.d{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.an-side-h2{padding:5px 10px;font-size:11px;color:var(--ink-3);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line2);background:#fcfdfe}
+.an-pwrap{padding:9px}
+.an-pwrap .pform{margin-bottom:0;background:transparent;border:0;padding:0}
+.an-pwrap .pform .pf > label{flex:0 0 62px;text-align:left}
+.an-main{flex:1;min-width:0}
+.an-res{border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow:hidden}
+.an-res.dim{opacity:.55}
+.an-res-h{display:flex;align-items:center;gap:9px;padding:8px 11px;
+  border-bottom:1px solid var(--line);background:#fafbfd}
+.an-res-h b{font-size:13px}
+.an-res-b{padding:12px}
+.an-pending{border:1px dashed var(--line-strong);border-radius:var(--radius);
+  background:#fcfdfe;padding:22px;text-align:center;color:var(--ink-3)}
+.an-pending b{font-size:14px;color:var(--ink-2);display:block;margin-bottom:6px}
+.an-pending p{margin:0;font-size:12px}
+.an-tab.pending{font-style:italic}
+.an-tab .cnt.pend{background:#fdf7ec;color:var(--warn)}
+
 /* ---------- 「总览常驻 + 逐项下钻」结果区 ----------
    用于结果块数随数据变的方法（脆弱性分析 = 1 总览 + 逐池 2 块/池）。
    要点：总览不折叠不切换，永远看得见；逐项下钻用一个选择器驱动单块详情，
@@ -909,32 +955,50 @@ body{
           </template>
 
           <div class="an-tabrow">
-            <button class="an-tab" :class="{on: analysisTab==='overall'}" @click="analysisTab='overall'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M4,2H2V28a2,2,0,0,0,2,2H30V28H4Z"/><path d="M30,9H23v2h3.59L19,18.59l-4.29-4.3a1,1,0,0,0-1.42,0L6,21.59,7.41,23,14,16.41l4.29,4.3a1,1,0,0,0,1.42,0L28,12.41V16h2Z"/></svg><span>{{ (catCount('overall')) ? catName('overall') : catName('overall') }}</span><span class="cnt" v-if="catCount('overall')">{{ catCount('overall') }}</span></button>
-            <button class="an-tab" :class="{on: analysisTab==='success'}" @click="analysisTab='success'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M26 16a9.9283 9.9283 0 00-1.1392-4.6182l-1.4961 1.4961A7.9483 7.9483 0 0124 16zM23.4141 10L22 8.5859l-4.7147 4.7147A2.9659 2.9659 0 0016 13a3 3 0 103 3 2.9659 2.9659 0 00-.3006-1.2853zM16 17a1 1 0 111-1A1.0013 1.0013 0 0116 17zM16 8a7.9515 7.9515 0 013.1223.6353l1.4961-1.4961A9.9864 9.9864 0 006 16H8A8.0092 8.0092 0 0116 8z"/><path d="M16,30A14,14,0,1,1,30,16,14.0158,14.0158,0,0,1,16,30ZM16,4A12,12,0,1,0,28,16,12.0137,12.0137,0,0,0,16,4Z"/></svg><span>{{ (catCount('success')) ? catName('success') : catName('success') }}</span><span class="cnt" v-if="catCount('success')">{{ catCount('success') }}</span></button>
-            <button class="an-tab" :class="{on: analysisTab==='risk'}" @click="analysisTab='risk'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M16 23a1.5 1.5 0 101.5 1.5A1.5 1.5 0 0016 23zM15 12H17V21H15z"/><path d="M29,30H3a1,1,0,0,1-.8872-1.4614l13-25a1,1,0,0,1,1.7744,0l13,25A1,1,0,0,1,29,30ZM4.6507,28H27.3493l.002-.0033L16.002,6.1714h-.004L4.6487,27.9967Z"/></svg><span>{{ (catCount('risk')) ? catName('risk') : catName('risk') }}</span><span class="cnt" v-if="catCount('risk')">{{ catCount('risk') }}</span></button>
-            <button class="an-tab" :class="{on: analysisTab==='time'}" @click="analysisTab='time'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M16,30A14,14,0,1,1,30,16,14,14,0,0,1,16,30ZM16,4A12,12,0,1,0,28,16,12,12,0,0,0,16,4Z"/><path d="M20.59 22L15 16.41 15 7 17 7 17 15.58 22 20.59 20.59 22z"/></svg><span>{{ (catCount('time')) ? catName('time') : catName('time') }}</span><span class="cnt" v-if="catCount('time')">{{ catCount('time') }}</span></button>
-            <button class="an-tab" :class="{on: analysisTab==='per_pool'}" @click="analysisTab='per_pool'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M4,2H2V28a2,2,0,0,0,2,2H30V28H4V25H26V17H4V13H18V5H4ZM24,19v4H4V19ZM16,7v4H4V7Z"/></svg><span>{{ (catCount('per_pool')) ? catName('per_pool') : catName('per_pool') }}</span><span class="cnt" v-if="catCount('per_pool')">{{ catCount('per_pool') }}</span></button>
-            <button class="an-tab" :class="{on: analysisTab==='dispatch'}" @click="analysisTab='dispatch'"><svg viewBox="0 0 32 32" width="16" height="16" fill="currentColor"><path d="M12 30H4a2.0023 2.0023 0 01-2-2V24a2.0023 2.0023 0 012-2h8a2.0023 2.0023 0 012 2v4A2.0023 2.0023 0 0112 30zM4 24v4h8V24zM28 20H12a2.0023 2.0023 0 01-2-2V14a2.0023 2.0023 0 012-2H28a2.0023 2.0023 0 012 2v4A2.0023 2.0023 0 0128 20zM12 14v4H28V14zM16 10H4A2.0023 2.0023 0 012 8V4A2.0023 2.0023 0 014 2H16a2.0023 2.0023 0 012 2V8A2.0023 2.0023 0 0116 10zM4 4V8H16V4z"/></svg><span>{{ (catCount('dispatch')) ? catName('dispatch') : catName('dispatch') }}</span><span class="cnt" v-if="catCount('dispatch')">{{ catCount('dispatch') }}</span></button>
+            <button class="an-tab" v-for="c in activeCategories" :key="c.key"
+                    :class="{on: analysisTab===c.key, pending: c.pending}"
+                    @click="analysisTab=c.key">
+              <!-- viewBox 必须走对象语法。in-DOM 模板里 :viewBox 会被 HTML 解析器
+                   小写成 :viewbox（静态 viewBox 有 SVG 大小写修正表兜住，绑定式没有），
+                   SVG 不认全小写的 viewbox，图标就会按 0-32 的原始坐标画进 16px 框里被裁掉 -->
+              <svg v-if="AN_ICONS[c.key]" v-bind="{viewBox: AN_ICONS[c.key].vb}"
+                   width="16" height="16" fill="currentColor"
+                   v-html="AN_ICONS[c.key].inner"></svg>
+              <span>{{ c.name }}</span>
+              <span class="cnt" v-if="c.items.length">{{ c.items.length }}</span>
+              <span class="cnt pend" v-else>构思中</span>
+            </button>
           </div>
 
           <div class="an-pane" v-show="analysisTab===cat.key" v-for="cat in activeCategories" :key="cat.key">
-              <p v-if="cat.note" class="reason" style="color:var(--warn);margin:0 0 10px">
-                {{ cat.note }}
-              </p>
-              <div class="cards">
-                <div v-for="it in cat.items" :key="it.key" class="card"
-                     :class="{dim: !itemRunnable(it), wide: it.chart==='overview-selector'}">
-                  <div class="card-h">
-                    <b>{{ it.name }}</b>
-                    <span class="shape" :class="it.shape">
-                      {{ it.shape==='sync' ? '即时分析' : '需派发模拟' }}
-                    </span>
-                  </div>
-                  <div class="card-b">
-                    <!-- 可调参数区：对齐 gui 的 add_config_row（label + 控件成对），
-                         不是只读展示。无 fields 的项才退回只读 chip。 -->
-                    <div class="pform" v-if="it.fields">
-                      <div class="pf" v-for="f in it.fields" :key="f.k">
+            <!-- 构思中的专题：占位，标出这一格将来归谁 -->
+            <div v-if="cat.pending" class="an-pending">
+              <b>{{ cat.name }}</b>
+              <p>这一格是构思中的分析方法，尚无实现，先占位。</p>
+            </div>
+
+            <div v-else class="an-split">
+              <!-- 左：本专题的方法都聚在这里，main 标出主方法；下面是选中项的参数。
+                   原来所有方法是一堆等权卡片，看不出谁主谁次、谁和谁相关；
+                   收进一个专题的左栏之后，关联由「在一起」表达，主次由 main 表达。 -->
+              <aside class="an-side">
+                <div class="an-side-h">
+                  <span>{{ cat.name }}</span><span class="n">{{ cat.items.length }} 项</span>
+                </div>
+                <div class="an-list">
+                  <button v-for="it in cat.items" :key="it.key" class="an-it"
+                          :class="{on: curItem(cat) && curItem(cat).key===it.key, main: it.main}"
+                          @click="selItem[cat.key]=it.key">
+                    <span class="an-nm">{{ it.name }}</span>
+                    <span class="an-bd" :class="it.shape==='dispatch'?'d':'s'">
+                      {{ it.shape==='dispatch' ? '派发' : '即时' }}</span>
+                  </button>
+                </div>
+                <template v-if="curItem(cat)">
+                  <div class="an-side-h2">参数</div>
+                  <div class="an-pwrap">
+                    <div class="pform" v-if="curItem(cat).fields">
+                      <div class="pf" v-for="f in curItem(cat).fields" :key="f.k">
                         <label>{{ f.k }}</label>
                         <el-select v-if="f.t==='sel'" :model-value="f.v" size="small">
                           <el-option v-for="o in f.opts" :key="o" :label="o" :value="o"></el-option>
@@ -951,9 +1015,25 @@ body{
                         </span>
                       </div>
                     </div>
-                    <div class="card-params" v-else>
-                      <span v-for="(v,k) in it.params" :key="k" class="pchip"><i>{{ k }}</i> {{ v }}</span>
-                    </div>
+                    <p v-else class="tmeta" style="margin:0">该方法无可调参数。</p>
+                  </div>
+                </template>
+              </aside>
+
+              <!-- 右：选中项的结果。只有选中那张渲染出来，所以「重点」就是
+                   一个方法占满结果区，而不是十几张卡片平分视觉重量。
+                   v-for + v-show 是为了留住 it 这个局部名，让下面的分支原样可用。 -->
+              <main class="an-main">
+                <div v-for="it in cat.items" :key="it.key" class="an-res"
+                     v-show="curItem(cat) && curItem(cat).key===it.key"
+                     :class="{dim: !itemRunnable(it)}">
+                  <div class="an-res-h">
+                    <b>{{ it.name }}</b>
+                    <span class="shape" :class="it.shape">
+                      {{ it.shape==='sync' ? '即时分析' : '需派发模拟' }}</span>
+                    <span class="tmeta" v-if="it.hint" style="margin-left:auto">{{ it.hint }}</span>
+                  </div>
+                  <div class="an-res-b">
 
                     <div v-if="!itemRunnable(it)" class="reason">
                       <span>✕</span>
@@ -961,12 +1041,9 @@ body{
                     </div>
 
                     <template v-else-if="it.shape==='dispatch'">
-                      <!-- 派发型分析：参数区 + 发起按钮都在分析页内，仿 GUI 的独立面板布局 -->
+                      <!-- 派发型：参数已在左栏，这里只放发起入口与产出说明。
+                           与即时项并列但操作形态不同（异步提交、可取消）。 -->
                       <div class="dform">
-                        <div class="drow" v-for="(v,k) in it.params" :key="k">
-                          <label>{{ k }}</label>
-                          <el-input :model-value="v" size="small" style="width:140px"></el-input>
-                        </div>
                         <div>
                           <el-button size="small" type="primary" @click="dispatch(it)">
                             开始{{ it.name }}
@@ -1113,11 +1190,12 @@ body{
                       <el-button size="small" text type="primary">重新计算</el-button>
                       <span class="tmeta">即时返回，秒级</span>
                     </div>
-                  </div>
-                </div>
-              </div>
-          </div>
-          
+                  </div><!-- /an-res-b -->
+                </div><!-- /an-res -->
+              </main>
+            </div><!-- /an-split -->
+          </div><!-- /an-pane -->
+
         </div>
 
         <div v-else class="wb-empty">该节点不能作为分析锚点（需选中某个一级配置节点）</div>
@@ -1248,24 +1326,51 @@ const cfg2 = {
 const tree = [cfg1, cfg2];
 
 /* 分析项：分类与顺序取自 gui/analysis_panel.py 的 ANALYSIS_CATEGORIES（P86 §3.2 将迁移为注册表派生） */
+/* 分析专题。原先 5 个类（总体广义出率/成功率/风险/时间/每池）把不相干的方法挤在一起：
+   风险分析里混着 VaR/CVaR、最差、最好、条件分布、脆弱性；「模拟派发」又把
+   最差影响、方案搜索、敏感性三件不相干的事凑成一格。现按专题拆开，
+   并把 GUI 里原本各自独立成面板的（脆弱性 / 过程 / 最差影响 / 搜索 / 敏感性）收进来。
+   每类的第一项标 main: true —— 它是该专题的头号产出，占据结果区主位；
+   其余为附属，排在结果区下方的紧凑带里。这是「重点与逻辑关联」的载体：
+   同一专题的方法在左栏列在一起，主次由 main 标出，不再是一堆等权卡片。 */
+/* 分析专题的图标（Carbon 真件）。key 与 categories 的 key 对齐。 */
+const AN_ICONS = {
+  gdr: { vb: '0 0 32 32', inner: '<path d="M4,2H2V28a2,2,0,0,0,2,2H30V28H4Z"/><path d="M30,9H23v2h3.59L19,18.59l-4.29-4.3a1,1,0,0,0-1.42,0L6,21.59,7.41,23,14,16.41l4.29,4.3a1,1,0,0,0,1.42,0L28,12.41V16h2Z"/>' },
+  success: { vb: '0 0 32 32', inner: '<path d="M26 16a9.9283 9.9283 0 00-1.1392-4.6182l-1.4961 1.4961A7.9483 7.9483 0 0124 16zM23.4141 10L22 8.5859l-4.7147 4.7147A2.9659 2.9659 0 0016 13a3 3 0 103 3 2.9659 2.9659 0 00-.3006-1.2853zM16 17a1 1 0 111-1A1.0013 1.0013 0 0116 17zM16 8a7.9515 7.9515 0 013.1223.6353l1.4961-1.4961A9.9864 9.9864 0 006 16H8A8.0092 8.0092 0 0116 8z"/><path d="M16,30A14,14,0,1,1,30,16,14.0158,14.0158,0,0,1,16,30ZM16,4A12,12,0,1,0,28,16,12.0137,12.0137,0,0,0,16,4Z"/>' },
+  risk: { vb: '0 0 32 32', inner: '<path d="M16 23a1.5 1.5 0 101.5 1.5A1.5 1.5 0 0016 23zM15 12H17V21H15z"/><path d="M29,30H3a1,1,0,0,1-.8872-1.4614l13-25a1,1,0,0,1,1.7744,0l13,25A1,1,0,0,1,29,30ZM4.6507,28H27.3493l.002-.0033L16.002,6.1714h-.004L4.6487,27.9967Z"/>' },
+  time: { vb: '0 0 32 32', inner: '<path d="M16,30A14,14,0,1,1,30,16,14,14,0,0,1,16,30ZM16,4A12,12,0,1,0,28,16,12,12,0,0,0,16,4Z"/><path d="M20.59 22L15 16.41 15 7 17 7 17 15.58 22 20.59 20.59 22z"/>' },
+  per_pool: { vb: '0 0 32 32', inner: '<path d="M4,2H2V28a2,2,0,0,0,2,2H30V28H4V25H26V17H4V13H18V5H4ZM24,19v4H4V19ZM16,7v4H4V7Z"/>' },
+  vuln: { vb: '0 0 32 32', inner: '<path d="M14.9 7.2H17.1V24.799H14.9z" transform="rotate(-45 16 16)"/><path d="M16,2A13.9138,13.9138,0,0,0,2,16,13.9138,13.9138,0,0,0,16,30,13.9138,13.9138,0,0,0,30,16,13.9138,13.9138,0,0,0,16,2Zm0,26A12,12,0,1,1,28,16,12.0353,12.0353,0,0,1,16,28Z"/>' },
+  process: { vb: '0 0 32 32', inner: '<path d="M27,22.14V17a2,2,0,0,0-2-2H17V9.86a4,4,0,1,0-2,0V15H7a2,2,0,0,0-2,2v5.14a4,4,0,1,0,2,0V17H25v5.14a4,4,0,1,0,2,0ZM8,26a2,2,0,1,1-2-2A2,2,0,0,1,8,26ZM14,6a2,2,0,1,1,2,2A2,2,0,0,1,14,6ZM26,28a2,2,0,1,1,2-2A2,2,0,0,1,26,28Z"/>' },
+  worst: { vb: '0 0 32 32', inner: '<path d="M6,16c2.9727,0,4.2324-2.251,5.3447-4.2373C12.4741,9.7441,13.45,8,16,8s3.5259,1.7441,4.6553,3.7627C21.7676,13.749,23.0273,16,26,16h4V14H26c-1.7129,0-2.4834-1.2207-3.5991-3.2144C21.2075,8.6543,19.7231,6,16,6s-5.2075,2.6543-6.4009,4.7856C8.4834,12.7793,7.7129,14,6,14H4V2H2V28a2,2,0,0,0,2,2H30V28H28V22H26v6H21.9992L22,20H20v8H16V16H14V28H9.9992L10,20H8v8H4V16Z"/>' },
+  interval: { vb: '0 0 32 32', inner: '<path d="M15 11H17V20H15zM13 2H19V4H13z"/><path d="M28,9,26.58,7.59,24.33,9.84a10.94,10.94,0,1,0,1.18,1.65ZM16,26a9,9,0,1,1,9-9A9,9,0,0,1,16,26Z"/>' },
+  search: { vb: '0 0 32 32', inner: '<path d="M12 30H4a2.0023 2.0023 0 01-2-2V24a2.0023 2.0023 0 012-2h8a2.0023 2.0023 0 012 2v4A2.0023 2.0023 0 0112 30zM4 24v4h8V24zM28 20H12a2.0023 2.0023 0 01-2-2V14a2.0023 2.0023 0 012-2H28a2.0023 2.0023 0 012 2v4A2.0023 2.0023 0 0128 20zM12 14v4H28V14zM16 10H4A2.0023 2.0023 0 012 8V4A2.0023 2.0023 0 014 2H16a2.0023 2.0023 0 012 2V8A2.0023 2.0023 0 0116 10zM4 4V8H16V4z"/>' },
+  sensitivity: { vb: '0 0 32 32', inner: '<path d="M20,16a5,5,0,0,0,10,0,1,1,0,0,0-.1055-.4473L25.896,7.5562a.8913.8913,0,0,0-.0454-.0816A1,1,0,0,0,25,7H18.8218A3.0155,3.0155,0,0,0,17,5.1841V2H15V5.1841A3.0155,3.0155,0,0,0,13.1782,7H7a1,1,0,0,0-.8945.5527l-4,8A1,1,0,0,0,2,16a5,5,0,0,0,10,0,1,1,0,0,0-.1055-.4473L8.6182,9h4.56A3.0147,3.0147,0,0,0,15,10.8154V28H6v2H26V28H17V10.8159A3.0155,3.0155,0,0,0,18.8218,9h4.56l-3.2763,6.5527A1,1,0,0,0,20,16ZM7,19a2.9958,2.9958,0,0,1-2.8152-2h5.63A2.9956,2.9956,0,0,1,7,19Zm2.3821-4H4.6179L7,10.2363ZM16,9a1,1,0,1,1,1-1A1.0009,1.0009,0,0,1,16,9Zm9,10a2.9958,2.9958,0,0,1-2.8152-2h5.63A2.9956,2.9956,0,0,1,25,19Zm0-8.7637L27.3821,15H22.6179Z"/>' },
+};
+
 const categories = [
-  { key: 'overall', name: '总体广义出率分析', items: [
-    { key: 'gdr_dist', name: 'GDR分布', shape: 'sync', chart: 'bars', needsStream: true,
+  { key: 'gdr', name: '总体 GDR', items: [
+    { key: 'gdr_dist', name: 'GDR 分布', main: true, shape: 'sync', chart: 'bars',
+      needsStream: true,
       fields: [{ k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
                  opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
                { k: '叠加分布', t: 'multi', v: ['直方图'], opts: ['直方图', '累积分布'] }] },
-    { key: 'gdr_statistics', name: 'GDR指标统计', shape: 'sync', chart: 'table', needsStream: true,
+    { key: 'gdr_statistics', name: 'GDR 指标统计', shape: 'sync', chart: 'table',
+      needsStream: true,
       fields: [{ k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
                  opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
                { k: '置信区间', t: 'sel', v: 'Wilson 95%',
                  opts: ['Wilson 95%', 'Wilson 99%', '正态近似 95%'] }],
       rows: [['均值', '0.612'], ['标准差', '0.184'], ['中位数', '0.640'], ['95% CI', '[0.600, 0.624]']] },
-    { key: 'correlation', name: 'GDR指标相关性', shape: 'sync', chart: 'table', needsStream: true,
+    { key: 'correlation', name: 'GDR 指标相关性', shape: 'sync', chart: 'table',
+      needsStream: true,
       fields: [{ k: '样本范围', t: 'sel', v: '全样本', opts: ['全样本', '仅成功', '仅失败'] }],
       rows: [['target_achievement ↔ total_card_value', '0.71'], ['target_achievement ↔ draw_count', '−0.42']] },
   ]},
-  { key: 'success', name: '成功率分析', items: [
-    { key: 'success_rate', name: '成功率分析', shape: 'sync', chart: 'line', needsStream: false,
+
+  { key: 'success', name: '成功率', items: [
+    { key: 'success_rate', name: '成功率分析', main: true, shape: 'sync', chart: 'line',
+      needsStream: false,
       // 对齐 gui：这一项的参数最多（6 个），是「参数 UI 不能省」的典型
       fields: [{ k: '成功判据', t: 'sel', v: '全部目标达成',
                  opts: ['全部目标达成', '达成任意目标', '达成指定目标'] },
@@ -1276,86 +1381,143 @@ const categories = [
                { k: '池序号 k', t: 'num', v: 0, min: 0, max: 99, step: 1 },
                { k: '置信水平', t: 'num', v: 0.95, min: 0.5, max: 0.999, step: 0.01 }] },
   ]},
-  { key: 'risk', name: '风险分析', items: [
-    { key: 'risk_var_cvar', name: 'VaR/CVaR分析', shape: 'sync', chart: 'bars', needsStream: true,
+
+  { key: 'risk', name: '风险', items: [
+    { key: 'risk_var_cvar', name: 'VaR / CVaR', main: true, shape: 'sync', chart: 'bars',
+      needsStream: true,
       fields: [{ k: '显著性 α', t: 'num', v: 0.05, min: 0.01, max: 0.5, step: 0.01 },
                { k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
                  opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] }] },
-    { key: 'risk_worst_case', name: '最差情形分析', shape: 'sync', chart: 'bars', needsStream: true,
-      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
-                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
-               { k: '条件分布指标', t: 'multi', v: ['资源剩余'],
-                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
-    { key: 'risk_best_case', name: '最好情形分析', shape: 'sync', chart: 'bars', needsStream: true,
-      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
-                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
-               { k: '条件分布指标', t: 'multi', v: ['抽卡数'],
-                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
-    { key: 'conditional_dist', name: '条件分布', shape: 'sync', chart: 'bars', needsStream: true,
+    { key: 'conditional_dist', name: '条件分布', shape: 'sync', chart: 'bars',
+      needsStream: true,
       fields: [{ k: '条件指标', t: 'sel', v: '抽出全部目标卡',
                  opts: ['抽出全部目标卡', '资源未耗尽', '达成任意目标'] },
                { k: '目标指标', t: 'sel', v: '资源剩余',
                  opts: ['资源剩余', '抽卡数', '未达成目标数'] },
                { k: '条件阈值', t: 'num', v: 0.5, min: 0, max: 10, step: 0.1 }] },
-    // 结果块数随池数变的方法，单独一种排布（整行占满）
-    { key: 'vulnerability', name: '脆弱性分析', shape: 'sync', chart: 'overview-selector',
-      needsStream: false,
-      fields: [{ k: '显著性 α', t: 'num', v: 0.5, min: 0.01, max: 0.99, step: 0.01 },
-               { k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
-                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度'] },
-               { k: '资源类型', t: 'sel', v: '抽卡资源', opts: ['抽卡资源', '兑换券', '自选券'] }],
-      hint: '结果 = 脆弱性总览 + 各池资源分布总览 + 每池（脆弱区间表 + PAVA 组合图），块数随池数增长（3 池 8 块、5 池 12 块）。总览常驻，逐池用选择器下钻。' },
   ]},
+
   { key: 'time', name: '时间演化', items: [
-    { key: 'time_series', name: 'GDR时间序列演化', shape: 'sync', chart: 'line', needsStream: true,
+    { key: 'time_series', name: 'GDR 时间序列', main: true, shape: 'sync', chart: 'line',
+      needsStream: true,
       fields: [{ k: '时间单位', t: 'sel', v: '天', opts: ['天', '抽', '池'] },
                { k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
                  opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度'] }] },
-    { key: 'time_heatmap', name: '时间-GDR热力图', shape: 'sync', chart: 'table', needsStream: true,
+    { key: 'time_heatmap', name: '时间-GDR 热力图', shape: 'sync', chart: 'table',
+      needsStream: true,
       fields: [{ k: '分箱数', t: 'num', v: 24, min: 4, max: 240, step: 1 },
                { k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
                  opts: ['简单目标达成率', '目标卡达成率(可达)'] }],
       rows: [['0–30 天', '0.41'], ['30–60 天', '0.58'], ['60–90 天', '0.72']] },
-    { key: 'draws_vs_gdr', name: '抽卡数-目标达成率散点图', shape: 'sync', chart: 'table', needsStream: true,
+    { key: 'draws_vs_gdr', name: '抽卡数-达成率散点', shape: 'sync', chart: 'table',
+      needsStream: true,
       fields: [{ k: '横轴单位', t: 'sel', v: '抽', opts: ['抽', '天'] }],
       rows: [['r', '0.83'], ['n', '1000']] },
-    { key: 'waterfall_3d', name: '3D瀑布图', shape: 'sync', chart: 'bars', needsStream: true,
+    { key: 'waterfall_3d', name: '3D 瀑布图', shape: 'sync', chart: 'bars', needsStream: true,
       fields: [{ k: '横轴单位', t: 'sel', v: '抽', opts: ['抽', '天'] }] },
-    { key: 'waterfall_2d', name: '2D压缩瀑布图', shape: 'sync', chart: 'bars', needsStream: true,
+    { key: 'waterfall_2d', name: '2D 压缩瀑布图', shape: 'sync', chart: 'bars',
+      needsStream: true,
       fields: [{ k: '横轴单位', t: 'sel', v: '抽', opts: ['抽', '天'] },
                { k: '压缩档数', t: 'num', v: 12, min: 2, max: 60, step: 1 }] },
   ]},
-  { key: 'per_pool', name: '每池分析', items: [
-    { key: 'per_pool_draws', name: '每池抽卡数统计', shape: 'sync', chart: 'table', needsStream: false,
+
+  { key: 'per_pool', name: '每池', items: [
+    { key: 'per_pool_draws', name: '每池抽卡数', main: true, shape: 'sync', chart: 'table',
+      needsStream: false,
       fields: [{ k: '池', t: 'sel', v: '角色池 UP', opts: ['角色池 UP', '武器池 UP', '常驻池'] }],
       rows: [['池 A', '312.4'], ['池 B', '298.1']] },
-    { key: 'per_pool_target_rate', name: '每池目标卡数', shape: 'sync', chart: 'table', needsStream: false,
+    { key: 'per_pool_target_rate', name: '每池目标卡数', shape: 'sync', chart: 'table',
+      needsStream: false,
       fields: [{ k: '池', t: 'sel', v: '角色池 UP', opts: ['角色池 UP', '武器池 UP', '常驻池'] }],
       rows: [['池 A', '1.62'], ['池 B', '1.55']] },
-    { key: 'per_pool_pity_rate', name: '每池保底数', shape: 'sync', chart: 'table', needsStream: false,
+    { key: 'per_pool_pity_rate', name: '每池保底数', shape: 'sync', chart: 'table',
+      needsStream: false,
       fields: [{ k: '池', t: 'sel', v: '角色池 UP', opts: ['角色池 UP', '武器池 UP', '常驻池'] }],
       rows: [['池 A', '0.88'], ['池 B', '0.91']] },
-    { key: 'cumulative_by_banner', name: '截止每 banner 的GDR分布', shape: 'sync', chart: 'bars', needsStream: true,
+    { key: 'cumulative_by_banner', name: '截止每 banner 的 GDR 分布', shape: 'sync',
+      chart: 'bars', needsStream: true,
       fields: [{ k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
                  opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度'] },
                { k: '拆分到', t: 'sel', v: 'banner', opts: ['banner', '池'] }] },
-    { key: 'transition_analysis', name: '转变分析', shape: 'sync', chart: 'table', needsStream: true,
-      needsPoolEnd: true,
+    { key: 'transition_analysis', name: '转变分析', shape: 'sync', chart: 'table',
+      needsStream: true, needsPoolEnd: true,
       fields: [{ k: '事件模式', t: 'sel', v: '池成败', opts: ['池成败', '事件类型', '卡牌获得'] },
                { k: '置信区间', t: 'sel', v: 'Wilson 95%', opts: ['Wilson 95%', 'Wilson 99%'] }],
       rows: [['成功→成功', '0.74'], ['成功→失败', '0.26']] },
   ]},
-  // 第 6 页签：需要派发模拟的统计方法，仿 GUI 的独立面板，发起入口在分析页内而非工具栏
-  { key: 'dispatch', name: '模拟派发',
-    note: '派发型分析在分析页面内发起，工具栏不设入口。与即时分析项并列，但操作形态不同：异步提交、可取消。',
-    items: [
-      { key: 'worst_impact', name: '最差影响分析', shape: 'dispatch', needsStream: false,
-        params: { 阈值: '0.9', 迭代: '3' }, produces: 'worst_01' },
-      { key: 'plan_search', name: '方案搜索', shape: 'dispatch', needsStream: false,
-        params: { 目标: '毕业', 轮数: '50' }, produces: 'search-A 批次（3 份子配置）' },
-      { key: 'sensitivity', name: '敏感性扫描', shape: 'dispatch', needsStream: false,
-        params: { 维度: '模拟次数', 范围: '300–1500' } },
-    ]},
+
+  { key: 'vuln', name: '脆弱性', items: [
+    // 结果块数随池数变，所以它是唯一一种「总览常驻 + 逐项下钻」的排布
+    { key: 'vulnerability', name: '脆弱性分析', main: true, shape: 'sync',
+      chart: 'overview-selector', needsStream: false,
+      fields: [{ k: '显著性 α', t: 'num', v: 0.5, min: 0.01, max: 0.99, step: 0.01 },
+               { k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
+                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度'] },
+               { k: '资源类型', t: 'sel', v: '抽卡资源', opts: ['抽卡资源', '兑换券', '自选券'] }],
+      hint: '结果 = 脆弱性总览 + 各池资源分布总览 + 每池（脆弱区间表 + PAVA 组合图），块数随池数增长。总览常驻，逐池用选择器下钻。' },
+  ]},
+
+  { key: 'process', name: '过程', items: [
+    { key: 'proc_aa', name: '事件统计', main: true, shape: 'sync', chart: 'table',
+      needsStream: true,
+      fields: [{ k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
+                 opts: ['简单目标达成率', '目标卡达成率(可达)'] }],
+      rows: [['抽卡', '1284'], ['保底触发', '96'], ['资源清零', '3']] },
+    { key: 'proc_bb', name: '成败统计', shape: 'sync', chart: 'table', needsStream: true,
+      fields: [{ k: 'GDR 指标', t: 'sel', v: '简单目标达成率',
+                 opts: ['简单目标达成率', '目标卡达成率(可达)'] }],
+      rows: [['成功', '612'], ['失败', '388']] },
+    { key: 'proc_ab', name: '事件→成败', shape: 'sync', chart: 'table', needsStream: true,
+      fields: [{ k: '条件 GDR 指标', t: 'sel', v: '资源剩余',
+                 opts: ['资源剩余', '抽卡数', '未达成目标数'] },
+               { k: '条件阈值', t: 'num', v: 0.5, min: 0, max: 10, step: 0.1 }],
+      rows: [['保底触发 → 成功', '0.81'], ['保底触发 → 失败', '0.19']] },
+    { key: 'proc_ba', name: '成败→事件', shape: 'sync', chart: 'table', needsStream: true,
+      fields: [{ k: '条件 GDR 指标', t: 'sel', v: '资源剩余',
+                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }],
+      rows: [['成功 → 保底触发', '0.34'], ['失败 → 保底触发', '0.88']] },
+    { key: 'proc_trace', name: '轨迹详情', shape: 'sync', chart: 'table', needsStream: true,
+      fields: [{ k: '样本序号', t: 'num', v: 0, min: 0, max: 9999, step: 1 }],
+      rows: [['第 0 抽', '抽卡 · 未出'], ['第 1 抽', '抽卡 · 未出'], ['第 2 抽', '抽卡 · SSR 出']] },
+  ]},
+
+  { key: 'worst', name: '最差', items: [
+    { key: 'risk_worst_case', name: '最差情形分析', main: true, shape: 'sync', chart: 'bars',
+      needsStream: true,
+      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
+                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
+               { k: '条件分布指标', t: 'multi', v: ['资源剩余'],
+                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
+    { key: 'risk_best_case', name: '最好情形分析', shape: 'sync', chart: 'bars',
+      needsStream: true,
+      fields: [{ k: '主指标', t: 'sel', v: '简单目标达成率',
+                 opts: ['简单目标达成率', '目标卡达成率(可达)', '加权满足度', '总卡数价值'] },
+               { k: '条件分布指标', t: 'multi', v: ['抽卡数'],
+                 opts: ['资源剩余', '抽卡数', '未达成目标数'] }] },
+    // 派发型：异步提交、可取消，与上面的即时分析并列但操作形态不同
+    { key: 'worst_impact', name: '最差影响分析', shape: 'dispatch', needsStream: false,
+      fields: [{ k: '阈值', t: 'num', v: 0.9, min: 0, max: 1, step: 0.01 },
+               { k: '迭代', t: 'num', v: 3, min: 1, max: 20, step: 1 }],
+      produces: 'worst_01' },
+  ]},
+
+  // 构思中：尚无分析方法，占位以标出这一格将来归谁
+  { key: 'interval', name: '间隔', pending: true, items: [] },
+
+  { key: 'search', name: '搜索', items: [
+    { key: 'plan_search', name: '方案搜索', main: true, shape: 'dispatch', needsStream: false,
+      fields: [{ k: '目标', t: 'sel', v: '毕业', opts: ['毕业', '满突', '特定卡'] },
+               { k: '轮数', t: 'num', v: 50, min: 1, max: 500, step: 1 }],
+      produces: 'search-A 批次（3 份子配置）' },
+  ]},
+
+  { key: 'sensitivity', name: '敏感性', items: [
+    { key: 'sensitivity', name: '敏感性扫描', main: true, shape: 'dispatch',
+      needsStream: false,
+      fields: [{ k: '维度', t: 'sel', v: '模拟次数',
+                 opts: ['模拟次数', '资源收入', '保底阈值'] },
+               { k: '范围', t: 'txt', v: '300–1500' }] },
+  ]},
 ];
 
 /* 比较分析页签：与一般分析页面同构，但页签只有比较方法。
@@ -1520,7 +1682,14 @@ const app = createApp({
     const analysisDatasetId = ref('ds1');
     const cfgTab = ref('cards');             // 配置详情的 tag，与 GUI 的 11 个标签页同名同序
     const poolSubTab = ref('pool');          // 「卡池管理」下的二级 tag：池 / 生命周期
-    const analysisTab = ref('overall');
+    const analysisTab = ref('gdr');
+    // 每个专题各自记住选中的分析项（不共享一个全局选择，切专题回来还在原处）
+    const selItem = reactive({});
+    function curItem(cat) {
+      if (!cat || !cat.items || !cat.items.length) return null;
+      const k = selItem[cat.key];
+      return cat.items.find(i => i.key === k) || cat.items[0];
+    }
     const taskDrawer = ref(false);
     const notice = ref('');
     // 资源监控与任务耗时：探针里为模拟值（正式版由 js_api 的 psutil 每 2 秒采集）
@@ -1837,7 +2006,7 @@ const app = createApp({
       subject, subjectLabel, subjectSub, anchorLabel, anchorDatasets, curDataset,
       datasetOptions, excludedDatasets, anchorHint,
       canAnalyze, canRun, runDisabledReason, cfgTab, poolSubTab, activeCategories,
-      catName, catCount,
+      catName, catCount, AN_ICONS, selItem, curItem,
       allPools, vulnPool, vulnOnly, vulnShown, vulnCur, vulnCount, vulnOverview,
       ridgeRows, ridgeTicks, RMAX, SUB, vulnHist, vulnPava, vulnNj,
       taskDrawer, openTasks, runningCount, workersActive, workersMax, cpu, mem, now,

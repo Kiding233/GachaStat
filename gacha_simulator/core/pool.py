@@ -234,18 +234,20 @@ class Pool:
 def infer_rarity_from_spec(card_id: str, pity_spec) -> Optional[str]:
     """从 PoolPitySpec 推断卡牌稀有度（大小写归一化）。
 
-    先按 scope_cards 反查——它含全部稀有度，是唯一能认出 SR / R 的来源；
-    未覆盖时回退 ssr_ids / featured_ids（两者在 worst_impact 路径上是重命名后的
-    池内 id，而该路径的 scope_cards 按原始 id 建、覆盖不到，见 ISSUE-006）。
+    `scope_cards` 是**唯一来源**：它含全部稀有度，且按构造与池内 reward id 一致
+    （两个构造点都走 `compute_scope_mappings`，见 ISSUE-006）。查不到即返回 `None`。
+
+    **不再有兜底猜测**（2026-10-09 删除）：原先的两级回退（查 `ssr_ids`、查
+    `featured_ids`，命中即当 SSR）是为绕开 worst_impact 那张**写错名字**的表而加的
+    ——它按原始卡 id 建 `scope_cards`，而池内是重命名的 `_wi_featured_{i}`。表修对
+    后回退再也触发不了；留着它只会让「表被建歪」这件事继续被静默遮住，而正确的
+    报错位置是构造期的不变量断言（守卫见 test_worst_impact 的对齐测试与
+    test_pity_integration.TestRarityInferenceConsistency）。
     """
     cid = card_id.lower()
     for rarity, cards in (pity_spec.scope_cards or {}).items():
         if cid in {c.lower() for c in cards}:
             return rarity.lower()
-    if pity_spec.ssr_ids and cid in {c.lower() for c in pity_spec.ssr_ids}:
-        return 'ssr'
-    if pity_spec.featured_ids and cid in {c.lower() for c in pity_spec.featured_ids}:
-        return 'ssr'
     return None
 
 

@@ -45,12 +45,14 @@ def test_infer_rarity_recognizes_non_ssr_cards():
     assert infer_rarity_from_spec('r_a', spec) == 'r'
 
 
-def test_infer_rarity_falls_back_to_renamed_ssr_ids():
-    """scope_cards 覆盖不到 id 时，仍须经 ssr_ids / featured_ids 认出 SSR。
+def test_infer_rarity_does_not_guess_when_scope_cards_misses():
+    """`scope_cards` 查不到即返回 None——不得回退到 `ssr_ids` / `featured_ids` 猜测。
 
-    worst_impact 路径的 scope_cards / card_to_slot 按**原始** card id 建，而池内
-    是重命名后的 `_wi_featured_{i}`（ISSUE-006），故该路径只能靠这两个集合命中。
-    缺失回退即「最差影响分析的保底缩放被静默跳过」。
+    原实现有那两级回退（命中即当 SSR），是为绕开 worst_impact 那张**写错名字**的表
+    ——它按原始卡 id 建 `scope_cards`，而池内是重命名后的 `_wi_featured_{i}`
+    （ISSUE-006）。2026-10-09 表修对后，回退在两条路径上都不再触发，遂删除：留着
+    它只会让「表被建歪」继续被静默遮住，而正确的报错位置是构造期的不变量断言
+    （见 test_worst_impact 的对齐测试与 test_pity_integration 的一致性守卫）。
     """
     spec = PoolPitySpec(
         pity_names=['p'],
@@ -59,7 +61,10 @@ def test_infer_rarity_falls_back_to_renamed_ssr_ids():
         scope_cards={'ssr': ('ssr_a',)},
         card_to_slot={'ssr_a': 'ssr_featured'},
     )
-    assert infer_rarity_from_spec('_wi_featured_0', spec) == 'ssr'
+    # 表里有 → 正常返回
+    assert infer_rarity_from_spec('ssr_a', spec) == 'ssr'
+    # 表里没有 → None，不猜
+    assert infer_rarity_from_spec('_wi_featured_0', spec) is None
     assert infer_rarity_from_spec('not_in_spec', spec) is None
 
 

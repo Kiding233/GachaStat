@@ -1340,11 +1340,19 @@ class PityEngine:
                     state.set(dep_name, "_active", True)
 
     def _infer_rarity(self, reward_id: str, spec: PoolPitySpec) -> str:
-        """从 reward_id 推断稀有度（大小写归一化）。"""
+        """从 reward_id 推断稀有度（大小写归一化）。
+
+        与 `pool.infer_rarity_from_spec` 是同一条规则的两处实现（本方法喂**状态**
+        路径：`DrawInfo.reward_rarity` → `_should_reset` / `_is_trigger_rarity`；
+        那份喂**概率**路径）。2026-10-09 起两者都退化为「扫 scope_cards」——原先
+        本方法特有的「先查 ssr_ids」那一级与那份特有的两级回退一并删除，它们都是
+        为绕开 worst_impact 那张写错名字的表而存在的。
+
+        **两者必须保持同答**，守卫见
+        `tests/core/test_pity_integration.py::TestRarityInferenceConsistency`；
+        P64 的 S8 会删除 pool.py 那份（其概率路径消费者消失），届时只剩本方法。
+        """
         rid_lower = reward_id.lower()
-        if rid_lower in {c.lower() for c in spec.ssr_ids}:
-            return "ssr"
-        # 通过 scope_cards 遍历所有稀有度
         for rarity, cards in spec.scope_cards.items():
             if rid_lower in {c.lower() for c in cards}:
                 return rarity.lower()

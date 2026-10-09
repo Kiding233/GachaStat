@@ -250,7 +250,7 @@ class WorstImpactAnalyzer:
             end_time=total_end_time,
         )
 
-        pity_engine = self._build_pity_engine(all_featured_ids, all_ssr_ids, pool_targets)
+        pity_engine = self._build_pity_engine(pools)
 
         # P75（阶段 3）：无条件产出完整初始状态快照——engine 构造后立即取，与 A 同源
         # （含 counter / guaranteed / fate_points / selected_card + _active=True，ISSUE-106）
@@ -478,7 +478,22 @@ class WorstImpactAnalyzer:
         self._standard_ssr_ids = self._ssr_ids - self._featured_ids
         self._rewards = rewards
 
-    def _build_pity_engine(self, all_featured_ids=None, all_ssr_ids=None, pool_targets=None):
+    def _build_pity_engine(self, pools):
+        """按合成池逐个构造 `PoolPitySpec`。
+
+        **卡集合必须按池内真实 reward id 生成**（2026-10-09 修复，原 ISSUE-006）。
+        原实现把 `scope_cards` / `featured_cards` / `scope_slots` / `featured_slots` /
+        `card_to_slot` 从 `self._ssr_ids` / `self._featured_ids`（**原始**卡 id）一次性
+        建好、99 个池共用，而池内限定卡已在 `prepare_simulation_config` 里改名为
+        `_wi_featured_{i}`，于是：
+          · `featured_cards` 认不出池内那张 UP 卡 → 它被聚合进槽位 `'ssr'` 而非
+            `'ssr_featured'` → 软保底的目标槽概率为 0 → 每次早退，**保底完全空转**
+          · `featured_ids` / `ssr_ids`（新名）与 `scope_cards`（旧名）描述的是同一张卡
+            的两个名字，同一份 spec 内部自相矛盾
+        现改为按池调 `compute_scope_mappings()`：四个卡集合与 `card_to_slot` 同源生成，
+        `ssr_ids == scope_cards['ssr']` 与 `featured_ids ⊆ scope_cards` 两条不变量
+        由构造保证（守卫测试见 `test_pity_integration.TestRarityInferenceConsistency`）。
+        """
         if not self.store.pity.enabled:
             return None
 
@@ -500,27 +515,6 @@ class WorstImpactAnalyzer:
         from gacha_simulator.core.pity import _build_pity_state_init
         state = _build_pity_state_init(pity_defs_list)
 
-        # P55 ISSUE-032：从参考池或已知 ID 构建 scope 映射
-        ref_pool = getattr(self, '_ref_pool', None)
-        if ref_pool and hasattr(ref_pool, 'rewards'):
-            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(ref_pool)
-        else:
-            scope_cards = {'ssr': tuple(self._ssr_ids)} if self._ssr_ids else {}
-            featured_cards = {'ssr': tuple(self._featured_ids)} if self._featured_ids else {}
-            card_to_slot = {}
-            if self._ssr_ids and self._featured_ids:
-                scope_slots = {'ssr': ('ssr', 'ssr_featured')}
-                featured_slots = {'ssr': ('ssr_featured',)}
-                for cid in self._featured_ids:
-                    card_to_slot[cid] = 'ssr_featured'
-                for cid in (self._ssr_ids - self._featured_ids):
-                    card_to_slot[cid] = 'ssr'
-            else:
-                scope_slots = {'ssr': ('ssr',)} if self._ssr_ids else {}
-                featured_slots = {'ssr': ('ssr',)} if self._featured_ids else {}
-                for cid in self._ssr_ids:
-                    card_to_slot[cid] = 'ssr'
-
         pool_specs = {}
         for pool_idx in range(MAX_POOLS):
             pid = f'_worst_impact_pool_{pool_idx}'
@@ -534,13 +528,14 @@ class WorstImpactAnalyzer:
                 if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
                     matching.append(pdef.name)
 
-            pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
-            pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
+            # 卡集合按池生成——四个映射与 card_to_slot 同源，id 与池内 reward 一致
+            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = (
+                compute_scope_mappings(pools[pool_idx].pools['main']))
 
             pool_specs[qualified_key] = PoolPitySpec(
                 pity_names=matching,
-                featured_ids=pool_featured,
-                ssr_ids=pool_ssr,
+                featured_ids={c for cs in featured_cards.values() for c in cs},
+                ssr_ids={c for c in scope_cards.get('ssr', ())},
                 scope_cards=scope_cards,
                 featured_cards=featured_cards,
                 scope_slots=scope_slots,

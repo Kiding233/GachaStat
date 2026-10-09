@@ -758,8 +758,10 @@ class TestWorstImpactPityEngine:
                             pity_defs=[PityDef(name='soft', btype='soft_interval', scope='ssr',
                                                target_featured=True, pools=('*',))])
         analyzer = WorstImpactAnalyzer([], {'ssr_a': 1}, store)
-        analyzer._prepare_pool_info()
-        engine = analyzer._build_pity_engine()
+        # 2026-10-09：`_build_pity_engine` 改为收「合成好的池列表」（卡集合按池内真实
+        # reward id 生成，原 ISSUE-006），故不再单独调它，改走完整装配
+        cfg = analyzer.prepare_simulation_config(50000)
+        engine = cfg['pity_engine']
         assert engine is not None
         spec_keys = set(engine.pool_specs.keys())
         assert any(k.endswith('.main') for k in spec_keys), \

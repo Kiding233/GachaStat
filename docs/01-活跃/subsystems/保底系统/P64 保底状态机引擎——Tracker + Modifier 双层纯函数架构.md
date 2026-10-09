@@ -184,7 +184,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 |---------|------|---------|--------|
 | `CounterTracker(scope, reset_on, init)` | 每抽 +1；出金重置：`reset_on="scope"`（出触发稀有度即重置）、`"featured"`（仅 featured 重置）、`"never"`（永不重置，G16）。`init` 为计数初值，取值 `pdef.counter_init`（§3.2 取值来源表） | CounterBasedBehavior 计数逻辑 | `counter` |
 | `FlagTracker(judge, hit, miss, flag)` | 出 scope 时，judge 命中取 `hit` / 未命中取 `miss`（`"set"` / `"clear"`），写 `flag` 指定的标记键。**四关键字参**，preset 实例：`FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`（rotating）/ `... hit="set", miss="clear", flag="forced_loss"`（G1 rotating_inverse，§3.3） | RotatingBehavior guaranteed | 由 `flag` 形参指定（`guaranteed` / `forced_loss` 等） |
-| `StreakTracker(judge, threshold, base_rate, state_probs, flag='cr_intercepted', guard_flag='guaranteed')` | 连续未命中计数，未命中 +1、命中清零；**在 `commit`（`after_draw`）尾部掷骰**，判定本抽是否拦截为 100% UP，结果写入 `flag` 指定的标记键。含 `guard_flag` 守卫（抽前该标记已置位时不掷骰、不更新，§3.2 rotating_cr 行）。`threshold` / `base_rate` / `state_probs` 取值 `pdef.cr_counter_threshold` / `cr_base_rate` / `cr_state_probs`。**形参与语义按裁决 6B 扩充**（掷骰自 `InterceptModifier` 移入，见下） | RotatingCRBehavior cr_counter + `before_draw` 掷骰分支 | `cr_counter`, `cr_intercepted` | <!-- REVIEW-R1-FIX: RULING-6B -->
+| `StreakTracker(judge, threshold, base_rate, state_probs, flag='cr_intercepted', guard_flag='guaranteed')` | 连续未命中计数，未命中 +1、命中清零（在 `commit`）；**在 `prepare`（`before_draw`、`advance` 之后、Modifier 链之前）掷骰**，判定本抽是否拦截为 100% UP，结果写入 `flag` 指定的标记键。含 `guard_flag` 守卫（抽前该标记已置位时不掷骰）与 `readonly` 早退（两条都**不掷骰**）。**flag 每抽无条件写**（成功置位、失败清位），否则脏 flag 残留会静默抬高拦截率。**与 `FlagTracker` 的先后是契约**（`StreakTracker` 在前），见 §3.2 的 `_preset_rotating_cr`。`threshold` / `base_rate` / `state_probs` 取值 `pdef.cr_counter_threshold` / `cr_base_rate` / `cr_state_probs`。**形参与语义按裁决 6B 扩充**（掷骰自 `InterceptModifier` 移入，见下） | RotatingCRBehavior cr_counter + `before_draw` 掷骰分支 | `cr_counter`, `cr_intercepted` | <!-- REVIEW-R1-FIX: RULING-6B --><!-- REVIEW-R1-FIX: RULING-6B-PRIME -->
 | `FateTracker(judge, hit, miss, keys)` | 出 scope 时，命中定轨对 `keys` 集清零/未命中累积。`keys` 即多键集：`fate_points` / `losses` / `guaranteed` / `lost_rotating`（§3.2 targeted 行；`hit` / `miss` 由 S1 定稿，形参名同 `FlagTracker` 口径）。另**读**外部注入的 `selected_card`，见 L4 | TargetedBehavior fate/losses | `fate_points`, `losses`, `guaranteed`, `lost_rotating`（另**读** `selected_card`） |
 | `NamespaceTracker(namespace)`（**ISSUE-407 新增**） | **语义为空**：`advance` / `commit` / `did_reset` 全 no-op，不参与计数与概率。唯一作用是**声明一个命名空间**（§3.10.3 的 `X_soft` 载体），使该命名空间在 `PityState` 中存在、可被 `Lifecycle.initialize` 写入 `_active`、可进快照比对 | 旧实现由内层 `SoftStepBehavior(name + '_soft', …)` 经 `CounterBasedBehavior.__init__` 隐式产生（[pity.py:133](gacha_simulator/core/pity.py#L133)） | **无**（不声明任何键） | <!-- REVIEW-R1-FIX: ISSUE-407 --><!-- REVIEW-R1-FIX: ISSUE-002 -->
 
@@ -201,6 +201,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 |------|------|
 | `rebind(state, name)` | **P75 纪律**：把本 Tracker 内部的 `Counter` / `Flag` 遥控器重绑到 per-call `state`（纯重定向，不复制旧值）。`Pity._rebind_state` 对其**无条件**调用，故**方法必须存在**；无自身状态键的零件可写空实现，但不得省略 |
 | `advance(ctx, state, name, readonly)` | 见下方 N1 相位表 |
+| **`prepare(ctx, state, name, readonly)`** | 见下方 N1 相位表。**2026-10-10 新增（第 5 个方法）**，用于「抽前需要读 state 并消费随机源」的零件；与 `advance` / `commit` 同列 |
 | `commit(ctx, state, name, skip_reset=False)` | 见下方 N1 相位表 |
 | `did_reset(ctx, state, name)` | M4 统一语义（「本次抽卡是否让本保底回到初始状态」） |
 | `state_keys() -> tuple[str, ...]` | 见下方「声明键集（ISSUE-501）」段 |
@@ -242,6 +243,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 | 方法 | 调用点 | 计数型 Tracker | 非计数型 Tracker |
 |------|-------|---------------|-----------------|
 | `advance(ctx, state, name, readonly)` | `Pity.before_draw` 首段 | `readonly=True` 只读不写；否则 `counter += 1` | no-op |
+| **`prepare(ctx, state, name, readonly)`** | **`Pity.before_draw`，`advance` 之后、本保底 Modifier 链之前** | no-op | **`StreakTracker` 在此掷骰**（2026-10-10）；其余非计数型 no-op |
 | `commit(ctx, state, name)` | `Pity.after_draw` | 命中时 `counter ← 0` | 置位/清位/累积 |
 
 与旧实现结构同构（旧代码本就是 before 侧 `incr()`、after 侧 `reset()`），故在未触发下述例外时，`state` 中的计数值与旧实现逐位相同，「状态快照逐场一致」这条验收无需适配。
@@ -254,18 +256,22 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 
 **测试断言**：`hard(threshold=90)` 首次 100% 出现在第 90 抽；`soft` 的 boost 起始抽数；`readonly=True` 查询不推进计数。
 
-**CR 掷骰的相位（裁决 6B，2026-10-05，强制）**：`rotating_cr` 的随机拦截**归 `StreakTracker.commit`**，在 `cr_counter` 更新**之后**、同一次 `after_draw` 内执行。等价性依据（三条，逐条对照旧 `RotatingCRBehavior.before_draw`，[pity.py:571-587](gacha_simulator/core/pity.py#L571-L587)）：
-1. **读到的计数同源**：旧码在抽 N 的 `before_draw` 读 `cr_counter`，该值由抽 N−1 的 `after_draw` 写入；新码在抽 N−1 的 `commit` 读同一值。
-2. **`guaranteed` 短路同源**：旧码首行 `if self._guaranteed.is_set(): return super().before_draw(...)` 即不掷骰；新码在 `commit` 尾部以 `guard_flag` 判同一标记，置位时不掷。
-3. **`readonly` 同源**：旧码查询路径不掷；新码查询不调 `after_draw`，天然不掷。
+**CR 掷骰的相位（裁决 6B → 2026-10-10 改判 6B′，强制）**：`rotating_cr` 的随机拦截**归 `StreakTracker.prepare`**（即 `Pity.before_draw`、`advance` 之后、Modifier 链之前），与旧 `RotatingCRBehavior.before_draw` 同相位。**改判理由**：6B 把掷骰放在 `commit` 后，与同一 `commit` 内的 `cr_counter` 更新条件（旧 `was_guaranteed`，取**抽前**的 `guaranteed`）**读点冲突**——一个读点无法同时给出「本抽是否需掷骰」（要抽前的 `g_N`）与「本抽是否被拦截」（要抽后的值）。实测（脚本化 RNG，15 抽对照，非仓库产物）：按 §3.2 的 tracker 顺序 `[FlagTracker, StreakTracker]` 落地时，`cr_counter` 轨迹恒为 `0,0,0,…,0`（旧实为 `1,1,2,2,2,3,3,4,4,4,4,5,5,5,6`），**CR 计数器整体失效**；仅把顺序反转为 `[StreakTracker, FlagTracker]` 能让计数器对上，但守卫仍取错值。回退到抽前相位后，两个判断重新共用同一个 `g_N`，读点冲突消失。
 
-**⚠ 首抽无掷骰落点：「分布等价」的结论须收窄（ISSUE-702）**：上面三条依据只覆盖 N ≥ 1 的抽次，**首抽（N = 0）不成立**。逐条对照：依据 1 说「旧码在抽 N 的 `before_draw` 读 `cr_counter`，该值由抽 N−1 的 `after_draw` 写入」；对 N = 0 而言抽 −1 不存在，旧码此刻读到的是 `Counter` 缺键的默认值 `0`（[pity.py:576](gacha_simulator/core/pity.py#L576) 的 `idx = min(cr_counter.value(), len(cr_state_probs) - 1)` 因此得到 `idx = 0`），**旧码照样掷骰**。新码的掷骰落在 `commit` 内，而「抽 0 的 commit」不存在，故**首抽恒无拦截判定**。两者的差别不止随机流位置：
-> - 旧码首抽有**两次**拦截机会：`cr_base_rate > 0 and random.random() < cr_base_rate`（[pity.py:575](gacha_simulator/core/pity.py#L575)），以及 `idx = 0` 时的 `cr_state_probs[0]` 分支（[pity.py:578-582](gacha_simulator/core/pity.py#L578-L582)）；
-> - 新码首抽的拦截概率**恒为 0**。
->
-> 故 `rotating_cr` / `rotating_cr_soft` 的差异性质是**分布差异**（首抽拦截概率归零）**加上**全局 `random` 流的消费位置改变（固定种子下自首次拦截起样本路径分叉），**不是「分布等价、仅随机流位置改变」**。**登记口径据此收窄**：§六 的差异归因清单 (c) 项按本条改写，不得再写「分布逐场等价」。
->
-> **裁决（保守取法）**：本计划**保留裁决 6B 的相位移动**（掷骰归 `StreakTracker.commit`，不动架构决策），并把「首抽拦截缺失」**显式登记为待消除的缺口**：按 CLAUDE.md §二「精确建模原则」，已登记的近似是债务而非终态。消除方向（**⚠ 待人工裁决，不在本计划内落地**，因它牵动 RNG 相位与快照口径）：让 `StreakTracker` 在**每场模拟的第一个 `before_draw`** 补一次「相位 −1」的掷骰并把结果写入 `flag`；难点是该「首抽已掷」标记必须落在 per-sim 且**不进 `PityState` 快照**的位置（进快照会破坏 §六 S1–S5 的快照逐场一致口径）。在消除之前，S5b / S8-6 的 `rotating_cr` 等价性断言**不得**按「逐场一致」判红，须按本条的收窄口径单独放行。**`rotating_cr` / `rotating_cr_soft` 因此无法通过 §六 的 M1「与旧类逐场一致」，须单独登记进差异归因清单。** <!-- REVIEW-R1-FIX: ISSUE-702 --> <!-- REVIEW-R1-FIX: ISSUE-940 --> Modifier 侧随之退化为无条件依赖 RNG 的普通转移（原写「`share`，其条件为 `Or(FlagCondition('guaranteed'), FlagCondition('cr_intercepted'))`」；`share` / `FlagCondition` / `Or` 均为作废词汇，条件已内联进 `RotatingModifier.compute_delta()`，见 §3.1.2 与 §3.14.2）。<!-- REVIEW-R1-FIX: RULING-6B -->
+**等价性依据（五条，逐条对照旧 `RotatingCRBehavior.before_draw`，[pity.py:569-583](gacha_simulator/core/pity.py#L569-L583)）**：
+1. **读到的计数同源**：旧码在抽 N 的 `before_draw` 读 `cr_counter`；新码在同一抽的 `prepare` 读同一值（`advance` 只动 `CounterTracker` 的 `counter`，不碰 `cr_counter`）。
+2. **`guaranteed` 短路同源**：旧码首行 `if self._guaranteed.is_set(): return super().before_draw(...)` 即不掷骰；新码在 `prepare` 头部以 `guard_flag` 判同一标记（此时 FlagTracker 尚未在本抽的 `commit` 里翻转，读到的正是抽前值）。
+3. **`readonly` 同源**：旧码查询路径不掷；新码 `prepare` 收 `readonly` 并在此分支早退。**这一条 6B 不需要（查询不调 `after_draw`），改判后必须显式实现**——策略层每次概率查询都会经 `StrategyContext.get_pity_probabilities` → `PityEngine.before_draw` 走到 `prepare`，漏掉即每次查询都掷骰。
+4. **四条「不消耗随机数」的路径逐条复刻**（`state_prob >= 1.0` 的确定性触发、空 `state_probs`、下标裁剪、`cr_base_rate == 0`）——见 §3.1.2 的「CR 随机数消耗协议（H4）」。
+5. **flag 每抽无条件写**（成功置位、**失败清位**）。旧码只在命中分支 `return`，照搬会让「上次掷中」的 flag 残留到下一抽，Modifier 因而误拦截、拦截率被静默抬高。
+
+**Tracker 顺序是契约（强制）**：`StreakTracker` **必须**排在 `FlagTracker` **之前**。掷骰移出 `commit` 后，这个顺序不再有「同 commit 内读点竞争」的副作用，而 `state_keys()` 等其余量均顺序无关。§3.2 的 `_preset_rotating_cr` 代码块写死该顺序。
+
+**首抽掷骰落点（ISSUE-702，2026-10-10 由 6B′ 消除）**：6B 形状下掷骰落在 `commit` 内，而「抽 0 的 commit」不存在，故**首抽恒无拦截判定**——旧码首抽读到 `Counter` 缺键的默认值 `0`（`idx = min(cr_counter.value(), len(cr_state_probs) - 1)` 得 `idx = 0`）后**照样掷骰**，两者相差**一枚随机数**，使全程样本路径整体移位。**该缺口已由 6B′（prepare 相位）消除**：抽 1 的 `before_draw` 即走到 `prepare`，与旧码同相位、同条件、同消费次数。
+
+> **量级校正（2026-10-10，实测）**：原稿写「旧码首抽有**两次**拦截机会」（`cr_base_rate > 0 and random.random() < cr_base_rate`，以及 `idx = 0` 时的 `cr_state_probs[0]` 分支）。按真实机制配置（`cr_base_rate = 0.018`、`cr_state_probs = [0.0, 0.0, 0.75, 1.0]`），首抽 `idx = 0`、`state_prob = 0.0`，**第二处机会的概率为 0 且不消耗随机数**。故首抽的**分布差**只有 1.8e-4 量级，真正致命的是那一枚缺失的随机数导致的**样本路径整体移位**。归因据此写准。
+
+**连带处置（6B′ 一并完成）**：① §六 差异归因清单的 (c) 项**删除**；② `rotating_cr` / `rotating_cr_soft` **回归**「与旧类逐场一致」批次（S5b / S8-6 的断言按逐场一致判）；③ §五 风险表「CR 随机数消耗不齐」行**结项**；④ §1.5 敏感类 1 与「自动化审查阻塞项」的待裁决枚举第 ① 组注记同步（该组闭合）。
 
 
 **did_fire 统一语义（M4，强制，2026-09-16 裁决）**：`Pity.did_fire` 供 `PityEngine.after_draw` 的 depends_on 激活传播使用（[pity.py:1340](gacha_simulator/core/pity.py#L1340)）。<!-- REVIEW-R1-FIX: ISSUE-402 --> **P64 起它有两个调用点**：上游那一处，以及**本保底自身的 `Pity.after_draw`**（把 `fired` 传给 `Lifecycle.should_deactivate`，§3.1.4 骨架）——两者共用同一个「本次抽卡是否让本保底回到初始状态」判据，不得各写一套（原稿写「全代码唯一调用点」，已按新增调用点更正）。**统一语义 = 「本次抽卡是否让本保底回到初始状态」**，由各 Tracker 的 `did_reset(ctx, state, name)` 提供，`Pity.did_fire = any(tr.did_reset(...))`。
@@ -393,7 +399,7 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 
 **分布空间归属（D20，2026-09-21 新增）**：Modifier 的输入输出是**卡级**分布（真实分布）。「槽位」是操作内部的临时聚合表示，由操作自行聚合与还原（还原即对单卡概率施加统一缩放，语义为「保持组内当前比例」）。管道不再以槽位级向量作为传输格式，`banner.py` 的 `scale_factors` 还原段随之删除。收益有三：① **单卡定向**成为可能（双 UP 池定轨、G3 的「UP 组排除已拥有」，二者本受同一约束制约）；② 消除聚合与还原的往返；③ 让 §3.1.5 的增量算子形式直接覆盖实现。代价见 §3.1.5.4 的让步声明与 §六 的等价性口径放宽。**实施方案（改哪些函数、接口怎么变、边界怎么处理）见 §3.9**。
 
-**CR 随机数消耗协议（H4，强制；2026-10-05 裁决 6B 后消费点自 Modifier 移至 `StreakTracker.commit`）**：rotating_cr 旧类在 `before_draw` 用模块级 `random.random()`（[pity.py:576](gacha_simulator/core/pity.py#L576)、[pity.py:583](gacha_simulator/core/pity.py#L583)）做条件分支，消耗次数随分支而定。`StreakTracker.commit` 必须在**完全相同的条件与顺序**下消耗相同数量的随机数，否则**分布仍等价**（掷骰结果与顺序无关），但固定种子轨迹即刻分叉。
+**CR 随机数消耗协议（H4，强制；2026-10-10 改判 6B′ 后消费点由 Modifier 移至 `StreakTracker.prepare`）**：rotating_cr 旧类在 `before_draw` 用模块级 `random.random()`（[pity.py:574](gacha_simulator/core/pity.py#L574)、[pity.py:581](gacha_simulator/core/pity.py#L581)）做条件分支，消耗次数随分支而定。`StreakTracker.prepare` 必须在**完全相同的条件与顺序**下消耗相同数量的随机数，否则**分布仍等价**（掷骰结果与顺序无关），但固定种子轨迹即刻分叉。**6B′ 与 6B 的差别**：消费相位由 `after_draw` 回到 `before_draw`，与旧类同相位，故「与旧类逐场一致」重新可判（见下方「等价性口径」段）。
 
 **短路条件（不可省略）**：旧实现两处消费均带前置短路，`self._cr_base_rate > 0 and random.random() < ...` 与 `state_prob > 0 and random.random() < state_prob`。故 `cr_base_rate == 0` 或 `state_prob == 0` 时**不消耗**随机数，`state_prob >= 1.0` 分支同样**不消耗**。若写成 `if random.random() < rate`（省去 `> 0`），配 0 的场合会多消耗一个随机数、随机流整体后移。现状代码在这一点上是正确的，本条仅为实施约束。
 
@@ -401,11 +407,11 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 
 1. **下标裁剪**：`idx = min(cr_counter.value(), len(cr_state_probs) - 1)`（[pity.py:578](gacha_simulator/core/pity.py#L578)）须原样保留，取值下标是裁剪后的 `idx`，不是 `cr_counter` 本身。
 2. **空表分支不消耗**：`cr_state_probs` 为空列表时 `idx = -1`、`if idx >= 0` 为假（[pity.py:579](gacha_simulator/core/pity.py#L579)），整段 state_prob 检查被跳过、**不消耗**随机数。这是第三条不消耗路径，短路枚举须含它。
-3. **`guaranteed` / `readonly` 守卫**：旧实现首行 `if self._guaranteed.is_set(): return super().before_draw(...)` 与 `if readonly: ...`（[pity.py:572-575](gacha_simulator/core/pity.py#L572-L575)）均**不掷骰**；搬迁后对应 `StreakTracker.commit` 的 `guard_flag` 守卫与「查询路径不调 `after_draw`」两条。
+3. **`guaranteed` / `readonly` 守卫**：旧实现首行 `if self._guaranteed.is_set(): return super().before_draw(...)` 与 `if readonly: ...`（[pity.py:572-575](gacha_simulator/core/pity.py#L572-L575)）均**不掷骰**；搬迁后**两条都要在 `StreakTracker.prepare` 里显式实现**——`guard_flag` 守卫，以及 `readonly` 早退（6B 靠「查询不调 `after_draw`」天然满足，6B′ 移到 `before_draw` 后该天然性消失，漏掉即策略层每次概率查询都掷骰）。
 
-> **原第 3 条「链中位置固定」已废止（裁决 6B）**：旧稿要求 `InterceptModifier` 在 Modifier 链中固定在 `BoostModifier` 之后，以保住随机流位置。掷骰移入 Tracker 后该约束对象消失；取而代之的是 §3.1.1 的 CR 掷骰相位段（`commit` 内、`cr_counter` 更新之后）。
+> **原第 3 条「链中位置固定」已废止（裁决 6B，6B′ 沿用）**：旧稿要求 `InterceptModifier` 在 Modifier 链中固定在 `BoostModifier` 之后，以保住随机流位置。掷骰移入 Tracker 后该约束对象消失；取而代之的是 §3.1.1 的 CR 掷骰相位段（6B′ 下为 `prepare`：`before_draw` 内、`advance` 之后、Modifier 链之前），以及**同节的「Tracker 顺序是契约」条**（`StreakTracker` 必须排在 `FlagTracker` 之前）。
 
-> **等价性口径的变化（须登记）**：6B 之前，H4 的验收手段是「Modifier 在相同条件与顺序下消耗同样次数」，可支撑 §六 的 M1「与旧类逐场一致」。6B 之后消费点改变，**该验收手段不再适用**，`rotating_cr` / `rotating_cr_soft` 改为「分布逐场等价 + 随机流分叉已登记」。这是一条**验收口径的净损失**，换取的收益是「Modifier 层无非纯函数零件」与「`ConditionalModifier` 的条件无需 RNG 例外」。<!-- REVIEW-R1-FIX: RULING-6B -->
+> **等价性口径（2026-10-10 改判 6B′ 后恢复）**：H4 的验收手段是「在相同条件与顺序下消耗同样次数」，它支撑 §六 的 M1「与旧类逐场一致」。6B 的形状下该手段失效（消费点移至 `after_draw`，相位与旧类不同），是一处**验收口径的净损失**；6B′ 把消费点放回 `before_draw`（`StreakTracker.prepare`），相位、条件、次数三条重新对齐，**该手段恢复适用**：`rotating_cr` / `rotating_cr_soft` 回归「与旧类逐场一致」批次。6B 想守的收益（「Modifier 层无非纯函数零件」）**在 6B′ 下同样成立**——掷骰落在 Tracker 的 `prepare` 相位，Modifier 只读 `cr_intercepted`。<!-- REVIEW-R1-FIX: RULING-6B -->
 
 #### 3.1.3 Lifecycle（生命周期）—— 正交包装层
 | Lifecycle | 语义 | 激活维 / 退役维 | 配置来源 |
@@ -1200,6 +1206,33 @@ def _preset_rotating(pdef):          # ISSUE-030：形参 pdef，逐条可配值
         flags={"guaranteed": pdef.guaranteed_init},  # 初值走状态声明（H2），不加 Tracker 形参
     )
 
+def _preset_rotating_cr(pdef):
+    """CR（捕获明光）——rotating 之上加「连续未命中 → 随机拦截」。
+
+    **Tracker 顺序是契约（强制，RULING-6B′）**：`StreakTracker` 必须排在 `FlagTracker`
+    **之前**。掷骰在 `StreakTracker.prepare`（`before_draw`、`advance` 之后、Modifier 链之前），
+    其 `guard_flag` 守卫读的是**抽前**的 `guaranteed`；若 `FlagTracker` 排在前面、在同一抽的
+    `commit` 里翻转它，则守卫读点与 `cr_counter` 的更新条件取到同一个（抽后的）值，
+    守卫语义反转、**`cr_counter` 恒为 0**。实测（脚本化 RNG，15 抽）：顺序反转时计数器轨迹
+    恒 `0,0,...,0`，正序时与旧类同为 `1,1,2,2,2,3,3,4,4,4,4,5,5,5,6`。
+    """
+    return dict(
+        lifecycle=build_lifecycle(pdef),
+        trackers=[
+            StreakTracker(judge="featured",
+                          threshold=pdef.cr_counter_threshold,
+                          base_rate=pdef.cr_base_rate,
+                          state_probs=pdef.cr_state_probs,
+                          flag="cr_intercepted",
+                          guard_flag="guaranteed"),   # ← 顺序是契约：必须在 FlagTracker 之前
+            FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed"),
+        ],
+        modifiers=[
+            RotatingModifier(scope, extra_flag="cr_intercepted"),
+        ],
+        flags={"guaranteed": pdef.guaranteed_init},
+    )
+
 def _norm_scope(pdef, default: str = 'ssr') -> str:
     """scope 的**唯一归一化点**（ISSUE-503）——`create_behavior` 与全部 preset 工厂共用。
 
@@ -1296,7 +1329,7 @@ def _preset_soft_step(pdef):
 | soft_step / soft_interval / soft_additive | Tracker: `CounterTracker(scope, reset_on, init)`；Modifier: `SoftModifier(scope, deltas=deltas)`（`deltas` 由工厂经 `_soft_deltas_of(pdef)` 展开，M6 / **ISSUE-001**；**不写 `target=`**，ISSUE-002） | `boost > 0` |
 | rotating | Tracker: `FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`；Modifier: `RotatingModifier(scope)` | `guaranteed` |
 | rotating_soft | rotating 的 Tracker + `CounterTracker`；Modifier: `SoftModifier` + `RotatingModifier` | 各自 |
-| rotating_cr | rotating 的 Tracker + `StreakTracker(judge="featured", …, flag='cr_intercepted', guard_flag='guaranteed')`；Modifier: `RotatingModifier(scope, extra_flag='cr_intercepted')` | `guaranteed ∨ cr_intercepted` |
+| rotating_cr | `[StreakTracker(judge="featured", …, flag='cr_intercepted', guard_flag='guaranteed'), FlagTracker(...)]`（**顺序是契约：`StreakTracker` 必须在前**，见 §3.1.1「Tracker 顺序是契约」条；代码见下方 `_preset_rotating_cr`）；Modifier: `RotatingModifier(scope, extra_flag='cr_intercepted')` | `guaranteed ∨ cr_intercepted` |
 | rotating_cr_soft | rotating_cr 的 Tracker；Modifier: 再加 `SoftModifier` | 各自 |
 | targeted | Tracker: `FateTracker(judge="selected", hit="clear", miss="accumulate", keys=("fate_points","losses","guaranteed","lost_rotating"))`；Modifier: `SelectedModifier(scope)` | `guaranteed ∨ fate_ready` |
 | targeted_soft | targeted 的 Tracker；Modifier: 再加 `SoftModifier` | 各自 |

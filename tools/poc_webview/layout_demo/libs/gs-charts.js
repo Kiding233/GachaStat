@@ -280,6 +280,177 @@
   }
   function pctAxis(spec) { return !!(spec.layout_hints || {}).y_percent; }
 
+  /* ── 表格孪生 ──
+     可达性要求：提示只能增强，不能成为读数的唯一途径。一张 34 箱的直方图，
+     悬停第 17 箱能看到它的频数，不悬停的话这个数字在页面上任何地方都不存在。
+     tableOf 把同一份 spec 派生成表，与 specToOption 并列且共用同一批计算
+     （binCounts / quantile），所以图和表保证是同一份数据。两边各自算的话
+     迟早会不一致，而不一致的图和表比没有表更糟。
+
+     表不进画布：画布里的表是像素，选择、复制、读屏、排序全拿不到，
+     而 HTML 表这些都是白送的。 */
+  function binLabel(center, width) {
+    var lo = center - width / 2, hi = center + width / 2;
+    return comma(Math.round(lo)) + ' ~ ' + comma(Math.round(hi));
+  }
+
+  /* 图上那层标注（均值线、阈值线、着色区间）也是信息，表里没有就等于切表时丢了一半。
+     通用做法：把 spec.annotations / shaded_regions 汇成一句放在表下。 */
+  function noteOf(spec) {
+    var parts = [];
+    (spec.annotations || []).forEach(function (a) {
+      parts.push((a.text || num(a.value)) + (a.type === 'vline' ? ' 竖线' : ' 横线'));
+    });
+    (spec.shaded_regions || []).forEach(function (r) {
+      parts.push('着色区间 ' + num(r.lower) + ' ~ ' + num(r.upper)
+        + (r.label ? '（' + r.label + '）' : ''));
+    });
+    return parts.length ? '图中标注：' + parts.join('；') : '';
+  }
+
+  var TABLES = {
+    histogram: function (spec) {
+      var d = spec.data || {}, samples = arr(d.samples);
+      var nb = (spec.layout_hints || {}).nbins || 30;
+      var b = binCounts(samples, nb);
+      var total = samples.length || 1, w = b.width || 1;
+      return {
+        headers: ['区间', '频数', d.density === false ? '占比' : '密度'],
+        rows: b.centers.map(function (c, i) {
+          var v = d.density === false ? b.counts[i] / total : b.counts[i] / (total * w);
+          return [binLabel(c, w), comma(b.counts[i]), num(v, 5)];
+        }),
+      };
+    },
+    /* CDF 的横轴有很多重复取值（1200 次抽样落在 1..90 的整数格点上），
+       按取值合并只留最后一个累积概率：这不是改数据，是去掉冗余。 */
+    cdf: function (spec) {
+      var samples = arr((spec.data || {}).samples).slice()
+        .sort(function (a, b) { return a - b; });
+      var n = samples.length || 1, acc = {}, keys = [];
+      samples.forEach(function (x, i) {
+        if (!(x in acc)) keys.push(x);
+        acc[x] = (i + 1) / n;
+      });
+      return {
+        headers: ['抽数', '累积概率'],
+        rows: keys.map(function (x) { return [comma(x), num(acc[x], 5)]; }),
+      };
+    },
+    /* 山脊按长表出（池 / 区间 / 相对频次），不做「每池一行」的摘要：
+       摘要那是另一份数据，会破坏「图和表同一份数据」这条。 */
+    ridge: function (spec) {
+      var d = spec.data || {}, keys = Object.keys(d.series || {});
+      var nb = (spec.layout_hints || {}).nbins || 40;
+      var rows = [];
+      keys.forEach(function (k) {
+        var b = binCounts(arr(d.series[k]), nb);
+        var mx = Math.max.apply(null, b.counts.concat([1]));
+        /* 均值与脆弱区间在图上是一条线和一块着色带，是「每池一个值」。
+           表里做成两列（同一池的多行里重复），否则切到表就看不到哪些池脆弱。 */
+        var mean = (d.means && d.means[k] != null) ? comma(Math.round(d.means[k])) : '';
+        var rg = d.vuln_regions && d.vuln_regions[k];
+        var vuln = rg ? (comma(Math.round(rg[0])) + ' ~ ' + comma(Math.round(rg[1]))) : '无';
+        b.centers.forEach(function (c, i) {
+          rows.push([(d.labels && d.labels[k]) || k, binLabel(c, b.width),
+            num(b.counts[i] / mx, 4), comma(b.counts[i]), mean, vuln]);
+        });
+      });
+      return { headers: ['池', '区间', '相对频次', '频数', '均值', '脆弱区间'], rows: rows };
+    },
+    bar: function (spec) {
+      var d = spec.data || {};
+      return {
+        headers: ['分类', spec.ylabel || '值'],
+        rows: (d.labels || []).map(function (l, i) {
+          return [l, comma(arr(d.values)[i])];
+        }),
+      };
+    },
+    boxplot: function (spec) {
+      var d = spec.data || {};
+      return {
+        headers: ['分组', '最小', 'Q1', '中位', 'Q3', '最大'],
+        rows: Object.keys(d.series || {}).map(function (k) {
+          var s = arr(d.series[k]).slice().sort(function (a, b) { return a - b; });
+          return [k, num(quantile(s, 0)), num(quantile(s, 0.25)), num(quantile(s, 0.5)),
+            num(quantile(s, 0.75)), num(quantile(s, 1))];
+        }),
+      };
+    },
+    scatter: function (spec) {
+      var d = spec.data || {};
+      var traces = d.traces;
+      if (traces && traces.length) {
+        var rows = [];
+        traces.forEach(function (t) {
+          arr(t.x).forEach(function (x, i) {
+            rows.push([t.name || '', comma(x), num(arr(t.y)[i], 5)]);
+          });
+        });
+        return { headers: ['序列', spec.xlabel || 'x', spec.ylabel || 'y'], rows: rows };
+      }
+      return {
+        headers: [spec.xlabel || 'x', spec.ylabel || 'y'],
+        rows: arr(d.x).map(function (x, i) { return [comma(x), num(arr(d.y)[i], 5)]; }),
+      };
+    },
+    heatmap: function (spec) {
+      var d = spec.data || {}, rows = [];
+      var rl = d.row_labels || [], cl = d.col_labels || [];
+      arr(d.matrix).forEach(function (row, r) {
+        arr(row).forEach(function (v, c) {
+          rows.push([rl[r] || ('行 ' + (r + 1)), cl[c] || ('列 ' + (c + 1)), num(v, 4)]);
+        });
+      });
+      return { headers: ['行', '列', '值'], rows: rows };
+    },
+    subplot_grid: function (spec) {
+      var d = spec.data || {}, rows = [];
+      var rl = d.row_labels || [], cl = d.col_labels || [], tt = d.titles || [];
+      (d.matrices || []).forEach(function (m, k) {
+        arr(m).forEach(function (row, r) {
+          arr(row).forEach(function (v, c) {
+            rows.push([tt[k] || ('子图 ' + (k + 1)), rl[r] || r, cl[c] || c, num(v, 4)]);
+          });
+        });
+      });
+      return { headers: ['子图', '行', '列', '值'], rows: rows };
+    },
+    waterfall_3d: function (spec) {
+      var d = spec.data || {}, rows = [];
+      arr(d.z).forEach(function (z, i) {
+        rows.push([comma(arr(d.x)[i]), comma(arr(d.y)[i]), num(z, 4)]);
+      });
+      return { headers: ['池序号', '资源档', '值'], rows: rows };
+    },
+    composite: function (spec) {
+      var rows = [];
+      (spec.panels || []).forEach(function (p) {
+        var sub = tableOf({ chart_type: p.chart_type, data: p.data,
+          layout_hints: p.layout_hints || {} });
+        if (!sub) return;
+        sub.rows.forEach(function (r) {
+          rows.push([p.title || ''].concat(r));
+        });
+      });
+      return { headers: ['面板'].concat(
+        ((spec.panels || [])[0] && tableOf({ chart_type: spec.panels[0].chart_type,
+          data: spec.panels[0].data, layout_hints: spec.panels[0].layout_hints || {} })
+          || { headers: [] }).headers), rows: rows };
+    },
+  };
+
+  /* table 不是图：结果本来就是表的方法，由页面直接渲 HTML 表，这里返回 null */
+  function tableOf(spec) {
+    if (!spec || !spec.chart_type) return null;
+    var fn = TABLES[spec.chart_type];
+    if (!fn) return null;
+    var t = fn(spec);
+    if (t) t.note = noteOf(spec);
+    return t;
+  }
+
   function gridOf(o) {
     return Object.assign(
       { left: 6, right: 18, top: 22, bottom: 10, containLabel: true }, o || {});
@@ -1108,13 +1279,68 @@
     template: '<div class="gs-chart" :style="boxStyle"></div>',
   };
 
+  /* ── 图 / 表 互斥容器 ──
+     <gs-figure :spec="obj" :height="140" :table="bool"></gs-figure>
+
+     图与表是同一份 spec 的两种呈现，所以放在一个组件里，由 table 决定挂哪个。
+     互斥用 v-if/v-else 而不是 v-show：v-show 会把 ECharts 实例留在 DOM 里，
+     它继续吃 ResizeObserver，容器一变成 0×0 就重绘成空图；切回来时尺寸已变，
+     还得再 resize 一次。销毁重建更干净，代价只是切回时重画一次。
+
+     表格视图的入口与粒度由页面决定（本项目的决定：入口放结果块标题栏，
+     粒度按结果块，所以一个块只放一个开关，块内所有图一起切换）。 */
+  var GsFigure = {
+    name: 'GsFigure',
+    props: {
+      spec: { type: Object, default: null },
+      height: { type: [Number, String], default: 140 },
+      table: { type: Boolean, default: false },
+      renderer: { type: String, default: '' },
+      caption: { type: String, default: '' },
+    },
+    emits: ['pick', 'ready'],
+    computed: {
+      tbl: function () { return this.table ? tableOf(this.spec) : null; },
+      /* 表的限高夹在 [260, 520] 之间：
+         跟被替换的图等高会让矮图（124px）的表只有五六行、读不了；
+         固定值又会让矮图那块在切换时往下跳一截。折中取这个区间。 */
+      tblMaxH: function () {
+        var h = typeof this.height === 'number' ? this.height : parseInt(this.height, 10);
+        if (!isFinite(h)) h = 240;
+        return Math.min(520, Math.max(260, h)) + 'px';
+      },
+    },
+    template:
+      '<div class="gs-fig">' +
+      '  <div v-if="table" class="gs-tablewrap" :style="{maxHeight: tblMaxH}">' +
+      '    <table v-if="tbl && tbl.rows.length" class="gs-table">' +
+      '      <caption v-if="caption">{{ caption }}' +
+      '        <span class="cnt">{{ tbl.rows.length }} 行</span></caption>' +
+      '      <thead><tr><th v-for="(h,i) in tbl.headers" :key="i">{{ h }}</th></tr></thead>' +
+      '      <tbody><tr v-for="(r,i) in tbl.rows" :key="i">' +
+      '        <td v-for="(c,j) in r" :key="j" :class="{num: j > 0}">{{ c }}</td>' +
+      '      </tr></tbody>' +
+      '    </table>' +
+      '    <div v-else class="gs-empty">该图没有可列出的数据</div>' +
+      '    <p v-if="tbl && tbl.note" class="gs-tnote">{{ tbl.note }}</p>' +
+      '  </div>' +
+      '  <gs-chart v-else :spec="spec" :height="height" :renderer="renderer"' +
+      '            @pick="$emit(\'pick\',$event)" @ready="$emit(\'ready\',$event)"></gs-chart>' +
+      '</div>',
+  };
+
   /* ── 导出 ── */
   var GS = {
     TOK: TOK, CAT: CAT, SEQ: SEQ, DIV: DIV, STATUS: STATUS,
     cat: cat, num: num, comma: comma, quantile: quantile,
     specToOption: specToOption, mount: mount, resizeAll: resizeAll,
-    GsChart: GsChart,
-    install: function (app) { app.component('gs-chart', GsChart); return app; },
+    tableOf: tableOf,
+    GsChart: GsChart, GsFigure: GsFigure,
+    install: function (app) {
+      app.component('gs-chart', GsChart);
+      app.component('gs-figure', GsFigure);
+      return app;
+    },
     /* 供离线验证：探针断言用得到 */
     _stats: function () {
       return {

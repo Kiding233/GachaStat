@@ -338,6 +338,15 @@ body{
   max-height:420px;overflow-y:auto}
 .tg{font:inherit;font-size:10px;cursor:pointer;border:1px solid var(--line);
   border-radius:9px;padding:1px 8px;background:var(--panel);color:var(--ink-2)}
+/* 图形 / 表格 视图开关。刻意不复用 .tg 的橙色激活态：橙色在本项目是「警告」，
+   而视图切换不是语义，借语义色会让读者以为这一块出了什么问题。
+   激活态走中性的 accent-soft。 */
+.vsw{font:inherit;font-size:10px;cursor:pointer;border:1px solid var(--line);
+  border-radius:9px;padding:1px 8px;background:var(--panel);color:var(--ink-2);
+  margin-left:8px;white-space:nowrap}
+.vsw:hover{background:#f2f6fb;color:var(--ink)}
+.vsw.on{background:var(--accent-soft);border-color:#c7ddf5;color:var(--accent);
+  font-weight:600}
 .tg.on{background:var(--warn);border-color:var(--warn);color:#fff;font-weight:600}
 .sub3{border:1px solid var(--line2);border-radius:3px;background:var(--result);padding:7px 9px}
 .sub3 + .sub3{margin-top:8px}
@@ -923,6 +932,10 @@ body{
                     <b>{{ it.name }}</b>
                     <span class="shape" :class="it.shape">
                       {{ it.shape==='sync' ? '即时分析' : '需派发模拟' }}</span>
+                    <button v-if="it.chart==='bars' || it.chart==='line'"
+                            class="vsw" style="margin-left:auto"
+                            :class="{on: tblOf(it.key)}" @click="tblFlip(it.key)">
+                      {{ tblOf(it.key) ? '看图形' : '看表格' }}</button>
                     <span class="tmeta" v-if="it.hint" style="margin-left:auto">{{ it.hint }}</span>
                   </div>
                   <div class="an-res-b">
@@ -979,6 +992,9 @@ body{
                             <b>脆弱性总览</b>
                             <span class="pin">常驻 · 不随下钻切换</span>
                             <span class="hint">点任意一行选池，选中的池在下方展开</span>
+                            <button class="vsw" :class="{on: tblOf('vo')}"
+                                    @click="tblFlip('vo')">
+                              {{ tblOf('vo') ? '看图形' : '看表格' }}</button>
                           </div>
                           <div class="ovs-b">
                             <div class="ovs-stats">
@@ -994,8 +1010,9 @@ body{
                             </div>
 
                             <div class="ridge-wrap">
-                              <gs-chart :spec="vulnRidgeSpec" :height="vulnRidgeH"
-                                        @pick="onRidgePick"></gs-chart>
+                              <gs-figure :spec="vulnRidgeSpec" :height="vulnRidgeH"
+                                        :table="tblOf('vo')" caption="各池资源剩余 · 逐箱频次"
+                                        @pick="onRidgePick"></gs-figure>
                             </div>
                             <p class="tmeta" style="margin:6px 0 0">
                               每行一个池：浅红带＝脆弱区间，红虚线＝均值。行高固定 28px、
@@ -1010,6 +1027,9 @@ body{
                           <div class="ovs-h">
                             <b>逐池下钻</b>
                             <span class="hint">选中：{{ vulnCur.name }}</span>
+                            <button class="vsw" :class="{on: tblOf('vd')}"
+                                    @click="tblFlip('vd')">
+                              {{ tblOf('vd') ? '看图形' : '看表格' }}</button>
                           </div>
                           <div class="ovs-b">
                             <div class="sub3">
@@ -1023,17 +1043,17 @@ body{
 
                             <div class="sub3">
                               <div class="sub3-h">① 资源剩余分布（等距直方图）</div>
-                              <gs-chart :spec="vulnSub1" :height="124"></gs-chart>
+                              <gs-figure :spec="vulnSub1" :height="124" :table="tblOf('vd')" caption="① 资源剩余分布 · 逐箱频次"></gs-figure>
                             </div>
 
                             <div class="sub3">
                               <div class="sub3-h">② PAVA 保序推断（灰点＝分箱观测，红线＝单调拟合）</div>
-                              <gs-chart :spec="vulnSub2" :height="124"></gs-chart>
+                              <gs-figure :spec="vulnSub2" :height="124" :table="tblOf('vd')" caption="② PAVA 保序推断 · 分箱观测与单调拟合"></gs-figure>
                             </div>
 
                             <div class="sub3">
                               <div class="sub3-h">③ 分位数分箱 N_j 分布</div>
-                              <gs-chart :spec="vulnSub3" :height="124"></gs-chart>
+                              <gs-figure :spec="vulnSub3" :height="124" :table="tblOf('vd')" caption="③ 分位数分箱 N_j"></gs-figure>
                             </div>
                             <p class="tmeta" style="margin:7px 0 0">
                               三个子图共用横轴（资源剩余），与 core/vulnerability.py 的
@@ -1044,10 +1064,12 @@ body{
                       </div>
                     </template>
                     <template v-else-if="it.chart==='bars'">
-                      <gs-chart :spec="miniSpec(it.key,'bars')" :height="104"></gs-chart>
+                      <gs-figure :spec="miniSpec(it.key,'bars')" :height="104"
+                                 :table="tblOf(it.key)"></gs-figure>
                     </template>
                     <template v-else-if="it.chart==='line'">
-                      <gs-chart :spec="miniSpec(it.key,'line')" :height="104"></gs-chart>
+                      <gs-figure :spec="miniSpec(it.key,'line')" :height="104"
+                                 :table="tblOf(it.key)"></gs-figure>
                     </template>
                     <template v-else>
                       <table class="kv">
@@ -1938,6 +1960,12 @@ const app = createApp({
       },
     };
 
+    /* 图形 / 表格 视图开关，按结果块记。键取块的身份：
+       脆弱性总览 'vo'、逐池下钻 'vd'、通用块取分析项的 key。 */
+    const tblMode = reactive({});
+    function tblOf(k) { return !!tblMode[k]; }
+    function tblFlip(k) { tblMode[k] = !tblMode[k]; }
+
     /* 通用结果块里的示意图：稳定伪随机，按项 key 生成，切项时跟着换 */
     function miniSpec(key, kind) {
       const a = bars(key);
@@ -2039,6 +2067,7 @@ const app = createApp({
 
     return {
       CHARTS, miniSpec, vulnRidgeSpec, vulnRidgeH, onRidgePick,
+      tblOf, tblFlip,
       vulnSub1, vulnSub2, vulnSub3,
       mode, subjectId, subjectKind, anchorId, analysisDatasetId, analysisTab,
       notice, expandedKeys, draft, nodeState, treeProps, tree, categories, compareTasks, tasks,

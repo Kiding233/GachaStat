@@ -496,7 +496,9 @@ class TestDuplicatedConstants:
 
 _TOML_EXTRA_RARITY = _BASE_TOML.replace('    ["R"],\n',
                                         '    ["R"],\n    ["UR"],\n', 1)
-assert '["UR"]' in _TOML_EXTRA_RARITY, '_BASE_TOML 的 [rarities] 形态变了，本用例随即失效'
+# 形态守卫**不落模块级**：模块级 `assert` 在 import 期失败，会让本文件全部用例
+# 在收集期 ERROR（连带掩盖其余用例的真实信号）。守卫移入其唯一消费者
+# test_reset_whitelist_tracks_rarity_ranks，失败面与该用例一一对应。
 
 
 class TestResetValueWhitelist:
@@ -551,6 +553,8 @@ class TestResetValueWhitelist:
 
     def test_reset_whitelist_tracks_rarity_ranks(self):
         """取值集合随 `[rarities].ranks` 浮动：该表新增 `UR` 后 `reset='ur'` 放行。"""
+        msg = '_BASE_TOML 的 [rarities] 形态变了，本用例随即失效'
+        assert '["UR"]' in _TOML_EXTRA_RARITY, msg
         toml = (_TOML_EXTRA_RARITY +
                 _pity_section('hard', 'h1', threshold=90, reset='ur'))
         store, path = _write_and_load(toml)

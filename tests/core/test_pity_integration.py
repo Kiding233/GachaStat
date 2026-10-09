@@ -356,11 +356,21 @@ class TestRarityInferenceConsistency:
 class TestNeverResetHardPity:
     """幻塔「提前出金不重置 80 抽保底」（G16，手册 §5.3 / 计划 §3.8）。
 
-    判据取 §六 G16 断言行：**hard 保底出金不重置 counter，每 N 抽白送保底金；
-    `reset="featured"` / 默认行为不受影响**。实现面是 `_should_reset` 的 `never`
-    分支（恒 False），故出金不再把 counter 打回 0，第 79 抽出金后第 80 抽照常
-    触发保底（白送）。默认（`reset` 缺省 → 落回 scope）与 `featured` 的语义由
-    本类的对照用例钉住，本块不得改动它们。
+    判据只取 §六 G16 断言行的**已钉住两条**：**hard 保底出金不重置 counter**
+    与 **counter 达阈值当抽被强制为 scope 100%**（外加 `reset="featured"` /
+    默认行为不受影响）。实现面是 `_should_reset` 的 `never` 分支（恒 False），
+    故出金不再把 counter 打回 0，第 79 抽出金后第 80 抽照常触发保底。
+
+    **本类不钉该断言行的另一半「每 N 抽白送保底金」**：`never` 下 counter 从不
+    归零，第 80 抽起**每一抽**都被强制（本机复跑 90 抽，forced = 第 80..90 抽），
+    而「每 N 抽一个白送金」要求**保底触发时归零**——现有 `reset` 取值集合
+    （`scope` / `featured` / `never`）无此项。该半已登记为残余缺口 · 待裁决
+    （手册 §5.4 幻塔缺口表 / §21 G16 行 / 计划 §六 G16 / 模块状态矩阵 P64 行），
+    故第 80 抽之后的 counter 终值也不在此钉住：`never` 下为 80、而「保底触发时
+    归零」这一候选语义下为 0，钉死任一值都会让另一种候选语义的裁决必红。
+
+    默认（`reset` 缺省 → 落回 scope）与 `featured` 的语义由本类的对照用例钉住，
+    本块不得改动它们。
     """
 
     NAME = 'tof_hard'
@@ -406,11 +416,10 @@ class TestNeverResetHardPity:
         # 第 80 抽：counter 未被出金清零 → 保底照常触发，scope 槽位强制 100%
         assert self._draw(bh, state, rarity='ssr') == {
             'ssr_featured': 1.0, 'sr_featured': 0.0}
-        assert self._counter(state) == self.THRESHOLD
-
-        # 本次出金（保底金）之后 counter 同样不归零
-        assert self._counter(state) == self.THRESHOLD, \
-            'reset="never" 下保底金出金不得清零 counter'
+        # 第 80 抽之后的 counter 终值**有意不在此断言**（原为 `== THRESHOLD` 的
+        # 两条重复断言，仅报错文案不同）：`never` 下为 80，而「保底触发时归零」
+        # 这一候选语义（能产生「每 N 抽一个白送金」的周期性）下为 0——两者都是
+        # 待裁决的候选，钉住其一即让另一种候选语义的裁决必红。缺口登记见类 docstring。
 
     def test_never_reset_default_and_featured_unaffected(self):
         """对照：默认（落回 scope）出金即清零、下一抽不再强制；`featured` 语义不变。"""

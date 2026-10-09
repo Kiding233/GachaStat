@@ -259,3 +259,70 @@ class TestDeltasTable:
                       if t == "soft_interval")
         panel.pity_type_combo.setCurrentIndex(si_idx)
         assert panel._pity_deltas_group.isHidden()
+# ══════════════════════════════════════════════════════════════════
+# P64 G16-1 / AUDIT-BREAK-1：无保底段时兜底条目的合法性
+# ══════════════════════════════════════════════════════════════════
+
+# G16-1 的 reset 白名单：空串（回退 scope 兜底分支）/ featured / 稀有度名 / never。
+# 稀有度名取自本模块加载的 config.toml 的 [rarities]（ssr / sr / r）。
+_RESET_WHITELIST = {'', 'featured', 'never', 'ssr', 'sr', 'r'}
+
+
+class TestPityFallbackEntry:
+    """`set_config` 在 `pities` 为空时就地合成的兜底条目须全合法（AUDIT-BREAK-1）。
+
+    原兜底的三个取值恰好都落在 P64 新增的硬拒面上：`type='soft'` 不在
+    BEHAVIOR_REGISTRY（create_behavior 首行 KeyError）、`reset='any_ssr'` 不在
+    G16 的 reset 白名单、嵌套 `params` 使 start/end 读不到（平台默认阈值丢失）。
+    处置取方案 a（2026-10-10 用户裁决）：改写为全合法形态。
+    """
+
+    def test_fallback_entry_type_in_registry_reset_in_whitelist(self, qapp):
+        """type 在 BEHAVIOR_REGISTRY 内、reset 在 G16 白名单内。"""
+        from gacha_simulator.core.pity import BEHAVIOR_REGISTRY
+
+        panel = _make_panel()
+        panel.set_config({'pity': {'pities': []}})
+        entry = panel.get_config()['pity']['pities'][0]
+
+        assert entry['name'] == 'ssr_soft'
+        assert entry['type'] in BEHAVIOR_REGISTRY, (
+            f"兜底条目 type='{entry['type']}' 不在 BEHAVIOR_REGISTRY 内")
+        assert entry['reset'] in _RESET_WHITELIST, (
+            f"兜底条目 reset='{entry['reset']}' 不在 G16 白名单内")
+
+    def test_fallback_entry_start_end_from_pity_section(self, qapp):
+        """soft_start / soft_end 取自 pity.start / pity.end（不再走嵌套 params）。"""
+        panel = _make_panel()
+        panel.set_config({'pity': {'pities': [], 'start': 62, 'end': 88}})
+        entry = panel.get_config()['pity']['pities'][0]
+        assert (entry['start'], entry['end']) == (62, 88)
+
+    def test_fallback_entry_start_end_platform_default(self, qapp):
+        """pity 段未给 start/end 时落平台默认 74 / 90（原嵌套 params 下两者都丢）。"""
+        panel = _make_panel()
+        panel.set_config({'pity': {'pities': []}})
+        entry = panel.get_config()['pity']['pities'][0]
+        assert (entry['start'], entry['end']) == (74, 90)
+
+    def test_fallback_entry_engine_constructs(self, qapp):
+        """兜底条目可进引擎构造（原 type='soft' 在 create_behavior 首行 KeyError）。"""
+        from gacha_simulator.core.pity import PityState, create_behavior
+
+        panel = _make_panel()
+        panel.set_config({'pity': {'pities': []}})
+        pdefs = [p for p in panel._store.pity.pities if p.name == 'ssr_soft']
+        assert len(pdefs) == 1, "兜底条目 name='ssr_soft' 未落进 store.pity.pities"
+        assert create_behavior(pdefs[0], PityState()) is not None
+
+    def test_set_config_get_config_load_toml_no_config_error(self, qapp, tmp_path):
+        """set_config（无保底段）→ get_config → load_toml 全程不抛 ConfigError。"""
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        panel = _make_panel()
+        panel.set_config({'pity': {'pities': []}})
+        panel.get_config()
+        out = tmp_path / "no_pity.toml"
+        save_toml(panel._store, str(out))
+        store2 = load_toml(str(out))
+        assert [p.name for p in store2.pity.pities] == ['ssr_soft']

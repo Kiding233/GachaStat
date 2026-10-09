@@ -205,6 +205,10 @@ class CounterBasedBehavior(PityBehavior, ABC):
     def _should_reset(self, ctx: 'PityContext') -> bool:
         if self._reset == "featured":
             return ctx.draw.is_featured
+        if self._reset == "never":
+            # G16（P64 独立先行）：永不重置，即幻塔「出金不重置」。
+            # P64 主线落地后本分支由 CounterTracker(reset_on="never") 自然承载。
+            return False
         return ctx.draw.reward_rarity == self._reset
 
     def did_fire(self, ctx: 'PityContext') -> bool:

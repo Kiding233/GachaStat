@@ -2030,6 +2030,18 @@ class ConfigPanel(QWidget):
         ('targeted_soft', '定轨+软保底'),
     ]
 
+    # reset 下拉取值（G16-1）：(取值, 显示名)。取值集合与 config_toml._build_pity
+    # 的 reset 白名单同源：空串（回退 scope，即「出 scope 稀有度即重置」）/ featured /
+    # 稀有度名（与上方 scope 下拉同一组硬编码稀有度）/ never（永不重置，G16）。
+    _PITY_RESET_CHOICES = [
+        ('', '跟随稀有度'),
+        ('featured', '仅 Featured 出金'),
+        ('ssr', 'SSR 出金'),
+        ('sr', 'SR 出金'),
+        ('r', 'R 出金'),
+        ('never', '永不重置'),
+    ]
+
     # 动态控件工厂——参数类型 → (widget_class, widget_kwargs)
     _WIDGET_FACTORY = {
         'int': (QSpinBox, {'range': (1, 999), 'value': 80}),
@@ -2089,6 +2101,12 @@ class ConfigPanel(QWidget):
         self.pity_scope_combo = QComboBox()
         self.pity_scope_combo.addItems(["ssr", "sr", "r"])
         detail_form.addRow("稀有度:", self.pity_scope_combo)
+
+        # reset（G16-1 新建：此前无该控件，reset 只能在 TOML 里手写）
+        self.pity_reset_combo = QComboBox()
+        for _rval, _rlabel in self._PITY_RESET_CHOICES:
+            self.pity_reset_combo.addItem(_rlabel, _rval)
+        detail_form.addRow("重置:", self.pity_reset_combo)
 
         # target_featured
         self.pity_target_featured_cb = QCheckBox("仅限Featured卡")
@@ -2223,6 +2241,7 @@ class ConfigPanel(QWidget):
         self.pity_name_edit.textChanged.connect(self._flush_pity_current_detail)
         self.pity_type_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_scope_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_reset_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_target_featured_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_init_spin.valueChanged.connect(self._flush_pity_current_detail)
         self.pity_deactivate_cb.stateChanged.connect(self._flush_pity_current_detail)
@@ -3049,6 +3068,7 @@ class ConfigPanel(QWidget):
         self.pity_name_edit.blockSignals(True)
         self.pity_type_combo.blockSignals(True)
         self.pity_scope_combo.blockSignals(True)
+        self.pity_reset_combo.blockSignals(True)
 
         self.pity_name_edit.setText(pd.get('name', ''))
 
@@ -3062,6 +3082,9 @@ class ConfigPanel(QWidget):
         scope_idx = self.pity_scope_combo.findText(scope)
         if scope_idx >= 0:
             self.pity_scope_combo.setCurrentIndex(scope_idx)
+
+        # reset（G16-1）：未知取值（理论上已被 config_toml 白名单挡住）落回「跟随稀有度」
+        self.pity_reset_combo.setCurrentIndex(self._pity_reset_index(pd.get('reset', '')))
 
         # target_featured
         self.pity_target_featured_cb.setChecked(pd.get('target_featured', False))
@@ -3097,6 +3120,7 @@ class ConfigPanel(QWidget):
         self.pity_name_edit.blockSignals(False)
         self.pity_type_combo.blockSignals(False)
         self.pity_scope_combo.blockSignals(False)
+        self.pity_reset_combo.blockSignals(False)
 
         self._on_pity_type_changed(type_idx)
 
@@ -3241,10 +3265,31 @@ class ConfigPanel(QWidget):
             elif isinstance(w, QLineEdit):
                 w.setText(str(val) if val else '')
 
+    def _pity_reset_index(self, value) -> int:
+        """reset 取值 → 下拉下标（未知取值退回 0＝「跟随稀有度」，G16-1）。"""
+        for i, (v, _) in enumerate(self._PITY_RESET_CHOICES):
+            if v == value:
+                return i
+        return 0
+
+    def _pity_reset_value(self) -> str:
+        """下拉当前项 → reset 取值（G16-1）。"""
+        idx = self.pity_reset_combo.currentIndex()
+        if 0 <= idx < len(self._PITY_RESET_CHOICES):
+            return self._PITY_RESET_CHOICES[idx][0]
+        return ''
+
     def _flush_pity_current_detail(self):
         """从右侧控件读取当前值 → 实时写回 self._pity_defs[idx]"""
         row = self._current_pity_row
         if row < 0 or row >= len(self._pity_defs):
+            return
+        if self._refreshing:
+            # store → GUI 回填期间右侧控件仍是「上一条」的旧值：此时回写会用旧值
+            # 覆盖刚刚重建的 _pity_defs[row]（AUDIT-BREAK-1 实测：set_config 后
+            # 第 0 条的 start/end/reset 等被旧控件的值改写，兜底条目的 74/90 变
+            # 成上一条的 80/featured）。回填期一律不回写，控件值在
+            # _on_pity_selected / _populate_dynamic_values 中按新条目重建。
             return
         pd = self._pity_defs[row]
         pd['name'] = self.pity_name_edit.text().strip() or f"pity_{row+1}"
@@ -3255,6 +3300,9 @@ class ConfigPanel(QWidget):
 
         # scope
         pd['scope'] = self.pity_scope_combo.currentText()
+
+        # reset（G16-1）
+        pd['reset'] = self._pity_reset_value()
 
         # target_featured
         pd['target_featured'] = self.pity_target_featured_cb.isChecked()
@@ -3335,6 +3383,9 @@ class ConfigPanel(QWidget):
 
         # scope
         pd['scope'] = self.pity_scope_combo.currentText()
+
+        # reset（G16-1）
+        pd['reset'] = self._pity_reset_value()
 
         # target_featured
         pd['target_featured'] = self.pity_target_featured_cb.isChecked()
@@ -6541,10 +6592,22 @@ class ConfigPanel(QWidget):
         pity = config.get('pity', {})
         pities_data = pity.get('pities', [])
         if not pities_data:
-            pities_data = [{'name': 'ssr_soft', 'type': 'soft',
-                            'params': {'start': str(pity.get('start', 74)),
-                                       'end': str(pity.get('end', 90))},
-                            'reset': 'any_ssr', 'pools': '*'}]
+            # AUDIT-BREAK-1（2026-10-10 用户裁决取方案 a）：兜底条目须全合法形态：
+            # ① type 换成 BEHAVIOR_REGISTRY 内的真实键（原 'soft' 不在其中，
+            #    create_behavior 首行 BEHAVIOR_REGISTRY[btype] 即 KeyError）；
+            # ② scope 显式写出（_build_pity 的 scope 白名单只放行 [rarities].ranks
+            #    内的小写名，缺省会按 'ssr' 处理但显式写出与写法一致）；
+            # ③ reset='' 落回 _should_reset 的 scope 兜底分支（原 'any_ssr' 既不在
+            #    reset 白名单内、又与任何稀有度名都不相等）；
+            # ④ start/end 走顶层键（原嵌套 params 会被 _build_pity / set_config 的
+            #    顶层 p.get('start') 读空，平台默认阈值 74/90 全丢）。
+            pities_data = [{'name': 'ssr_soft',
+                            'type': 'soft_interval',
+                            'scope': 'ssr',
+                            'start': int(pity.get('start', 74)),
+                            'end': int(pity.get('end', 90)),
+                            'reset': '',
+                            'pools': '*'}]
         pities = []
         self._pity_defs = []
         for pd in pities_data:

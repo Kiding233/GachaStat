@@ -655,6 +655,23 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
                 f"该保底匹配不到任何槽位，概率修正不会生效"
             )
 
+        # reset 取值白名单（G16-1 / ISSUE-928，与上方 scope 校验同层同形态的硬拒）。
+        # 合法取值四类：空串（create_behavior 不外传 → 回退 scope 兜底分支，
+        # 即「出 scope 稀有度即重置」）、'featured'（仅 featured 出金重置）、
+        # 稀有度名（[rarities].ranks 的键）、'never'（永不重置，G16）。
+        # 未知值（含拼写错误如 'nevr'）经 _should_reset 的兜底分支
+        # `reward_rarity == reset` 恒 False，即静默等价于 'never'，两种语义
+        # 不可区分且不报错，故与 scope 同样升级为硬拒。
+        reset = p.get('reset', '')
+        _legal_reset = {'', 'featured', 'never'} | set(rarity_rank_map)
+        if reset not in _legal_reset:
+            _avail = ', '.join(repr(v) for v in sorted(_legal_reset))
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 reset='{reset}' 不是合法取值"
+                f"（可用：{_avail}）。未知值会让该保底永不重置，"
+                f"与 reset='never' 行为不可区分"
+            )
+
         # 解析 deltas / 语法糖参数
         deltas = None
         soft_start = p.get('start')
@@ -715,7 +732,7 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), list) else (p.get('pools', '*'),),
             deactivate_on_early_hit=deactivate_on_early_hit,
             depends_on=depends_on,
-            reset=p.get('reset', ''),
+            reset=reset,
         ))
 
     store.pity = PityConfig(enabled=True, pities=pities)

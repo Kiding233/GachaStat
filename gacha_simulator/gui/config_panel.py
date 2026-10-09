@@ -2030,9 +2030,12 @@ class ConfigPanel(QWidget):
         ('targeted_soft', '定轨+软保底'),
     ]
 
-    # reset 下拉取值（G16-1）：(取值, 显示名)。取值集合与 config_toml._build_pity
-    # 的 reset 白名单同源：空串（回退 scope，即「出 scope 稀有度即重置」）/ featured /
-    # 稀有度名（与上方 scope 下拉同一组硬编码稀有度）/ never（永不重置，G16）。
+    # reset 下拉基础取值（G16-1）：(取值, 显示名)。取值集合是 config_toml 的
+    # reset 白名单（`legal_reset_values()` = 空串 / featured / never /
+    # [rarities].ranks 的键）的**子集**，此处只保留前四类中能给出有意义中文名的
+    # 那几项；`[rarities]` 里的其它稀有度名由 `_pity_reset_choices()` 在
+    # `store` 就位后补入（与白名单同源），未列出的取值另有「原样保留」兜底
+    # （见 `_populate_reset_combo()`）——三者都不发生静默改写。
     _PITY_RESET_CHOICES = [
         ('', '跟随稀有度'),
         ('featured', '仅 Featured 出金'),
@@ -2102,7 +2105,9 @@ class ConfigPanel(QWidget):
         self.pity_scope_combo.addItems(["ssr", "sr", "r"])
         detail_form.addRow("稀有度:", self.pity_scope_combo)
 
-        # reset（G16-1 新建：此前无该控件，reset 只能在 TOML 里手写）
+        # reset（G16-1 新建：此前无该控件，reset 只能在 TOML 里手写）。
+        # 先按静态基础表填充；`store` 就位后每次选中条目都经
+        # `_populate_reset_combo()` 按 `store.rarity_rank` 重建为超集。
         self.pity_reset_combo = QComboBox()
         for _rval, _rlabel in self._PITY_RESET_CHOICES:
             self.pity_reset_combo.addItem(_rlabel, _rval)
@@ -3083,8 +3088,8 @@ class ConfigPanel(QWidget):
         if scope_idx >= 0:
             self.pity_scope_combo.setCurrentIndex(scope_idx)
 
-        # reset（G16-1）：未知取值（理论上已被 config_toml 白名单挡住）落回「跟随稀有度」
-        self.pity_reset_combo.setCurrentIndex(self._pity_reset_index(pd.get('reset', '')))
+        # reset（G16-1）：按本条目的取值重建下拉——未列出的取值原样保留（不退回下标 0）
+        self._populate_reset_combo(pd.get('reset', '') or '')
 
         # target_featured
         self.pity_target_featured_cb.setChecked(pd.get('target_featured', False))
@@ -3265,19 +3270,47 @@ class ConfigPanel(QWidget):
             elif isinstance(w, QLineEdit):
                 w.setText(str(val) if val else '')
 
-    def _pity_reset_index(self, value) -> int:
-        """reset 取值 → 下拉下标（未知取值退回 0＝「跟随稀有度」，G16-1）。"""
-        for i, (v, _) in enumerate(self._PITY_RESET_CHOICES):
-            if v == value:
-                return i
-        return 0
+    def _pity_reset_choices(self) -> list:
+        """reset 下拉的 (取值, 显示名) 表：基础表 + `store.rarity_rank` 的额外稀有度。
+
+        基础六项给出「跟随稀有度 / 仅 Featured 出金 / 永不重置」这类有意义的中文
+        显示名，故不从白名单集合直接生成；`[rarities].ranks` 里未列出的稀有度名
+        （如 ranks 含 `ur` 时白名单放行的 `reset='ur'`）在此以 `{名} 出金` 补入，
+        取值与 `config_toml.legal_reset_values()` 同源。
+        """
+        choices = list(self._PITY_RESET_CHOICES)
+        known = {v for v, _ in choices}
+        store = getattr(self, '_store', None)
+        for name in sorted(getattr(store, 'rarity_rank', None) or {}):
+            low = str(name).lower()
+            if low not in known:
+                choices.append((low, f'{low} 出金'))
+                known.add(low)
+        return choices
+
+    def _populate_reset_combo(self, value: str) -> None:
+        """按当前条目的 reset 取值重建下拉并选中（G16-1）。
+
+        取值表外的取值（TOML 逐项合法、但 GUI 基础表与 `[rarities]` 都未列出）
+        补一项**原样保留**，不退回落回「跟随稀有度」：原实现把未知取值一律落成
+        下标 0，此后该行任一次编辑触发的 flush（`_flush_pity_current_detail` /
+        `_apply_pity_edit`）都会把它静默改写成空串——无提示的数据丢失。
+        调用点已 `blockSignals(True)`，重建不触发 flush。
+        """
+        combo = self.pity_reset_combo
+        combo.clear()
+        for v, label in self._pity_reset_choices():
+            combo.addItem(label, v)
+        idx = combo.findData(value)
+        if idx < 0:
+            combo.addItem(f'{value}（未列出的取值，原样保留）', value)
+            idx = combo.count() - 1
+        combo.setCurrentIndex(idx)
 
     def _pity_reset_value(self) -> str:
         """下拉当前项 → reset 取值（G16-1）。"""
-        idx = self.pity_reset_combo.currentIndex()
-        if 0 <= idx < len(self._PITY_RESET_CHOICES):
-            return self._PITY_RESET_CHOICES[idx][0]
-        return ''
+        val = self.pity_reset_combo.currentData()
+        return val if isinstance(val, str) else ''
 
     def _flush_pity_current_detail(self):
         """从右侧控件读取当前值 → 实时写回 self._pity_defs[idx]"""

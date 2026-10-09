@@ -26,16 +26,18 @@ def qapp():
     # 不调用 quit()——后续模块可能还需要 QApplication
 
 
+_CONFIG_TOML = os.path.join(
+    os.path.dirname(__file__), "..", "..",
+    "gacha_simulator", "config", "config.toml",
+)
+
+
 def _make_panel():
     """构造含真实 TOML 的 ConfigPanel 并刷新。"""
     from gacha_simulator.core.config_toml import load_toml
     from gacha_simulator.gui.config_panel import ConfigPanel
 
-    toml_path = os.path.join(
-        os.path.dirname(__file__), "..", "..",
-        "gacha_simulator", "config", "config.toml",
-    )
-    store = load_toml(toml_path)
+    store = load_toml(_CONFIG_TOML)
     p = ConfigPanel()
     p._store = store
     p._refresh_from_store_impl()
@@ -263,9 +265,39 @@ class TestDeltasTable:
 # P64 G16-1 / AUDIT-BREAK-1：无保底段时兜底条目的合法性
 # ══════════════════════════════════════════════════════════════════
 
-# G16-1 的 reset 白名单：空串（回退 scope 兜底分支）/ featured / 稀有度名 / never。
-# 稀有度名取自本模块加载的 config.toml 的 [rarities]（ssr / sr / r）。
-_RESET_WHITELIST = {'', 'featured', 'never', 'ssr', 'sr', 'r'}
+def _reset_whitelist() -> set:
+    """G16-1 的 reset 白名单——取自 config_toml 的**同一份**实现。
+
+    原实现把常量复制了一份（``{'', 'featured', 'never', 'ssr', 'sr', 'r'}``），
+    而 config_toml 不导出该白名单，白名单改动只能靠第 5 条用例（load_toml
+    往返）间接兜住，故改为直接调用 ``legal_reset_values()``。
+
+    `[rarities]` 从磁盘上的 config.toml **现读**（不取 `panel._store`）：
+    `set_config` 会先 `store.clear()` 清掉 `rarity_rank`（config_store.py 的
+    清空清单含它），取面板的 store 会得到收缩后的白名单、丢掉稀有度名一项。
+    `config_store._parse_rarities()` 产的键是大写，故按 `_build_pity` 的形态
+    小写归一后传入。
+    """
+    from gacha_simulator.core.config_toml import legal_reset_values, load_toml
+
+    store = load_toml(_CONFIG_TOML)
+    return legal_reset_values({k.lower(): v for k, v in store.rarity_rank.items()})
+
+
+def _engine_from_store(store):
+    """按 GUI 的构造口径把 store 的保底定义喂给 PityEngine（pool_specs 留空）。
+
+    `PityEngine.__init__` 的构造兜底是 `logger.warning` 后**跳过**该 behavior，
+    故「构造成功」必须断言到 `engine.behaviors` 有该条目，而不是「没抛异常」。
+    """
+    from gacha_simulator.core.pity import PityEngine, PityState
+
+    return PityEngine(
+        pool_specs={},
+        pity_defs=list(store.pity.pities),
+        rarity_rank={k.lower(): v for k, v in store.rarity_rank.items()},
+        state=PityState(),
+    )
 
 
 class TestPityFallbackEntry:
@@ -288,7 +320,7 @@ class TestPityFallbackEntry:
         assert entry['name'] == 'ssr_soft'
         assert entry['type'] in BEHAVIOR_REGISTRY, (
             f"兜底条目 type='{entry['type']}' 不在 BEHAVIOR_REGISTRY 内")
-        assert entry['reset'] in _RESET_WHITELIST, (
+        assert entry['reset'] in _reset_whitelist(), (
             f"兜底条目 reset='{entry['reset']}' 不在 G16 白名单内")
 
     def test_fallback_entry_start_end_from_pity_section(self, qapp):
@@ -306,17 +338,34 @@ class TestPityFallbackEntry:
         assert (entry['start'], entry['end']) == (74, 90)
 
     def test_fallback_entry_engine_constructs(self, qapp):
-        """兜底条目可进引擎构造（原 type='soft' 在 create_behavior 首行 KeyError）。"""
-        from gacha_simulator.core.pity import PityState, create_behavior
+        """兜底条目可进 **PityEngine** 构造（原 type='soft' 在 create_behavior 首行 KeyError）。
 
+        断言对象按 §3.8「方案 a 下再断言 `PityEngine` 构造成功」取引擎而非
+        `create_behavior`：后者只覆盖单 behavior 工厂，而 GUI 路径的实际消费点是
+        `PityEngine.__init__`，它的构造兜底是**吞异常后跳过**（`pity.py` 的
+        `try / except Exception → logger.warning`），故「不抛异常」不构成证据，
+        必须断言该条目真的进了 `engine.behaviors`。
+        """
         panel = _make_panel()
         panel.set_config({'pity': {'pities': []}})
         pdefs = [p for p in panel._store.pity.pities if p.name == 'ssr_soft']
         assert len(pdefs) == 1, "兜底条目 name='ssr_soft' 未落进 store.pity.pities"
-        assert create_behavior(pdefs[0], PityState()) is not None
+
+        engine = _engine_from_store(panel._store)
+        assert 'ssr_soft' in engine.behaviors, (
+            "兜底条目未构造出 behavior——被 PityEngine 的构造兜底静默跳过")
 
     def test_set_config_get_config_load_toml_no_config_error(self, qapp, tmp_path):
-        """set_config（无保底段）→ get_config → load_toml 全程不抛 ConfigError。"""
+        """set_config（无保底段）→ get_config → load_toml 全程不抛 ConfigError。
+
+        **载入侧断言不可省**（2026-10-10 独立审查）：只断言「名字还在」不足以证明
+        条目可用。`_pitydef_to_toml` 曾对 `deltas is None` 的 soft_interval 不写
+        start/end（GUI 内部态的 `deltas` 恒为 None），往返后阈值全丢、
+        `_build_pity` 展开不出 deltas、`create_behavior` 抛 TypeError，而
+        `PityEngine` 把它静默跳过（`behaviors` 为空表）——`load_toml` 本身却
+        不报错，测试照样绿。故此处补齐两条载入侧断言：阈值活过往返 +
+        引擎确实构造出该 behavior。
+        """
         from gacha_simulator.core.config_toml import load_toml, save_toml
 
         panel = _make_panel()
@@ -325,4 +374,10 @@ class TestPityFallbackEntry:
         out = tmp_path / "no_pity.toml"
         save_toml(panel._store, str(out))
         store2 = load_toml(str(out))
+
         assert [p.name for p in store2.pity.pities] == ['ssr_soft']
+        reloaded = store2.pity.pities[0]
+        assert (reloaded.soft_start, reloaded.soft_end) == (74, 90), (
+            "兜底条目的阈值未活过 TOML 往返（写回侧漏写 start/end）")
+        assert 'ssr_soft' in _engine_from_store(store2).behaviors, (
+            "载入后的 ssr_soft 未构造出 behavior——被 PityEngine 的构造兜底静默跳过")

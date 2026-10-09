@@ -609,6 +609,37 @@ def _build_day_overrides(data: dict, store: ConfigStore) -> None:
         ))
 
 
+def legal_reset_values(rarity_rank_map: dict) -> set:
+    """`[[pity]].reset` 的合法取值集合（G16-1 / ISSUE-928）。
+
+    四类：空串（不透传给 `create_behavior` → `_should_reset` 落回
+    `reward_rarity == scope` 的兜底分支，即「出 scope 稀有度即重置」）/
+    `'featured'`（仅 featured 出金重置）/ `'never'`（永不重置，G16）/
+    **稀有度名**（即 `[rarities].ranks` 的键）。
+
+    参数 `rarity_rank_map` 须为**小写归一**后的 `{稀有度名: rank}`（与
+    `_build_pity` 内的同名局部变量一致；`store.rarity_rank` 的键是大写，
+    调用点统一 `.lower()` 后传入）。
+
+    **取值集合随 map 浮动**，且该 map 在上方 `scope` 校验与 `reset` 校验中
+    **形态不完全对称**（2026-10-10 实测界定）：
+
+    - `scope` 校验带 `if rarity_rank_map and ...` 守卫——map 为空时整条跳过；
+    - `reset` 无此守卫——map 为空时集合收缩为前三类，`reset='ssr'` 亦被拒。
+
+    不对称的**可达性有限**：TOML 路径下 `ConfigStore._parse_rarities()` 在
+    缺 `[rarities]` 段时补默认三级（`[["SSR"], ["SR"], ["R"]]`），故 map
+    不可能为空；空 map 只手构 `ConfigStore()`（字段默认 `{}`）或
+    `ConfigStore.clear()` 之后可达，而这两条路径都不经过 `_build_pity`。
+    保留不对称是有意的：scope 缺 map 时无从校验、只能跳过；reset 即使缺 map
+    也仍能校验前三类，收紧一侧不致放行拼写错误（`'nevr'` 在任何配置下都被拒）。
+
+    **调用点与测试共用本函数**，避免白名单在两处各写一份（曾在
+    `tests/gui/test_config_panel_pity.py` 复制过一份常量）。
+    """
+    return {'', 'featured', 'never'} | set(rarity_rank_map)
+
+
 def _build_pity(data: dict, store: ConfigStore) -> None:
     """[[pity]] → store.pity（P55 扁平化 PityDef 格式）。"""
     pity_list = data.get('pity', [])
@@ -662,8 +693,12 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
         # 未知值（含拼写错误如 'nevr'）经 _should_reset 的兜底分支
         # `reward_rarity == reset` 恒 False，即静默等价于 'never'，两种语义
         # 不可区分且不报错，故与 scope 同样升级为硬拒。
-        reset = p.get('reset', '')
-        _legal_reset = {'', 'featured', 'never'} | set(rarity_rank_map)
+        # 大小写归一（与上方 scope 的 `.lower()` 同形态）：`reward_rarity` 由
+        # `PityEngine._infer_rarity` 统一小写返回，`reset` 侧不做归一则同一份
+        # TOML 里 `scope='SSR'` 合法、`reset='SSR'` 被拒——两处白名单形态不一致。
+        reset_raw = p.get('reset', '')
+        reset = reset_raw.lower() if isinstance(reset_raw, str) else reset_raw
+        _legal_reset = legal_reset_values(rarity_rank_map)
         if reset not in _legal_reset:
             _avail = ', '.join(repr(v) for v in sorted(_legal_reset))
             raise ConfigError(
@@ -1723,6 +1758,30 @@ def _sugar_matches_deltas(p, btype: str) -> bool:
     return expanded == p.deltas
 
 
+def _write_sugar_form(p, btype: str) -> bool:
+    """写回侧用语法糖（start / end / increment）表达 p 的爬升是否无损。
+
+    两种情形成立（其余情形写回 `deltas` 本体）：
+
+    ① **`p.deltas is None`**——此时语法糖是**唯一**可写的形态。读取侧的
+       `_build_pity` 只在 `deltas` 键缺席时才用语法糖展开，故写回语法糖后
+       重载得到同一份 deltas。GUI 内部构造的 `PityDef` 恒属此类（`deltas`
+       由 TOML 解析期的 `_expand_soft_to_deltas()` 产生，GUI 只填
+       `soft_start` / `soft_end` / `soft_increment`，见 `apply_to_store`）。
+       不写回则 start / end 双双丢失：重载后 `_build_pity` 展开不出 deltas，
+       `create_behavior()` 不给 `SoftStepBehavior` 传 deltas 实参 → TypeError
+       → `PityEngine` 静默丢弃该保底（2026-10-10 实测：GUI 新建的保底保存
+       一次再打开，`engine._behavior_list == []`）。
+    ② **`_sugar_matches_deltas(p, btype)`**——已有 deltas 且与语法糖展开逐段
+       相同，形式可无损换写。
+
+    `soft_start` 缺失时一律 False（无语法糖可写，且 `entry['start']` 会写 None）。
+    """
+    if p.soft_start is None:
+        return False
+    return p.deltas is None or _sugar_matches_deltas(p, btype)
+
+
 def _pitydef_to_toml(p) -> dict:
     """P55：PityDef → TOML dict（round-trip 可逆）。"""
     entry = {'name': p.name, 'type': p.btype, 'scope': p.scope}
@@ -1754,11 +1813,11 @@ def _pitydef_to_toml(p) -> dict:
             entry['end'] = p.soft_end
         if p.soft_increment is not None:
             entry['increment'] = p.soft_increment
-    elif p.btype == 'soft_interval' and _sugar_matches_deltas(p, 'soft_interval'):
+    elif p.btype == 'soft_interval' and _write_sugar_form(p, 'soft_interval'):
         entry['start'] = p.soft_start
         if p.soft_end is not None:
             entry['end'] = p.soft_end
-    elif p.btype == 'soft_additive' and _sugar_matches_deltas(p, 'soft_additive'):
+    elif p.btype == 'soft_additive' and _write_sugar_form(p, 'soft_additive'):
         entry['start'] = p.soft_start
         if p.soft_increment is not None:
             entry['increment'] = p.soft_increment

@@ -349,3 +349,107 @@ class TestRarityInferenceConsistency:
                     assert a == real, f'{rwd.id} @ {banner.id}.{pid}: A={a!r} 真实={real!r}'
                     checked += 1
         assert checked > 0, '未扫到任何卡——本测试无验收面'
+# ══════════════════════════════════════════════════════════════════
+# G16（P64 独立先行）：reset="never"：hard 出金不重置 counter
+# ══════════════════════════════════════════════════════════════════
+
+class TestNeverResetHardPity:
+    """幻塔「提前出金不重置 80 抽保底」（G16，手册 §5.3 / 计划 §3.8）。
+
+    判据取 §六 G16 断言行：**hard 保底出金不重置 counter，每 N 抽白送保底金；
+    `reset="featured"` / 默认行为不受影响**。实现面是 `_should_reset` 的 `never`
+    分支（恒 False），故出金不再把 counter 打回 0，第 79 抽出金后第 80 抽照常
+    触发保底（白送）。默认（`reset` 缺省 → 落回 scope）与 `featured` 的语义由
+    本类的对照用例钉住，本块不得改动它们。
+    """
+
+    NAME = 'tof_hard'
+    THRESHOLD = 80
+    CUR = {'ssr_featured': 0.6, 'sr_featured': 0.4}
+
+    @classmethod
+    def _ctx(cls, state, rarity='r', featured=False):
+        """一次抽卡的上下文：current 含两个槽位，便于断言「被强制为 100%」。"""
+        return PityContext(
+            draw=_mk_draw('f1' if featured else 's1', rarity, featured),
+            current=dict(cls.CUR),
+            state=state,
+        )
+
+    @classmethod
+    def _draw(cls, bh, state, rarity='r', featured=False):
+        """一次「取概率 → 结算」往返，返回 before_draw 的概率分布。"""
+        ctx = cls._ctx(state, rarity=rarity, featured=featured)
+        probs = bh.before_draw(ctx)
+        bh.after_draw(ctx)
+        return probs
+
+    @classmethod
+    def _counter(cls, state):
+        return state.get(cls.NAME, 'counter', 0)
+
+    def test_never_reset_gold_at_79_keeps_80th_guaranteed(self):
+        """第 79 抽提前出金不清零 counter → 第 80 抽仍必出（白送保底金）。"""
+        state = PityState()
+        bh = HardPityBehavior(self.NAME, state, scope='ssr',
+                              threshold=self.THRESHOLD, reset='never')
+
+        for _ in range(self.THRESHOLD - 2):          # 抽 1..78：不出金
+            assert self._draw(bh, state, rarity='r') == self.CUR
+        assert self._counter(state) == self.THRESHOLD - 2
+
+        # 第 79 抽：提前出金（SSR，且为 featured）；未达阈值，概率未被改动
+        assert self._draw(bh, state, rarity='ssr', featured=True) == self.CUR
+        assert self._counter(state) == self.THRESHOLD - 1, \
+            'reset="never" 下出金不得清零 counter'
+
+        # 第 80 抽：counter 未被出金清零 → 保底照常触发，scope 槽位强制 100%
+        assert self._draw(bh, state, rarity='ssr') == {
+            'ssr_featured': 1.0, 'sr_featured': 0.0}
+        assert self._counter(state) == self.THRESHOLD
+
+        # 本次出金（保底金）之后 counter 同样不归零
+        assert self._counter(state) == self.THRESHOLD, \
+            'reset="never" 下保底金出金不得清零 counter'
+
+    def test_never_reset_default_and_featured_unaffected(self):
+        """对照：默认（落回 scope）出金即清零、下一抽不再强制；`featured` 语义不变。"""
+        # ── 默认：reset 缺省 → CounterBasedBehavior 落回 scope('ssr') ──
+        s_scope = PityState()
+        default = HardPityBehavior(self.NAME, s_scope, scope='ssr',
+                                   threshold=self.THRESHOLD)
+        for _ in range(self.THRESHOLD - 2):
+            self._draw(default, s_scope, rarity='r')
+        self._draw(default, s_scope, rarity='ssr', featured=True)   # 第 79 抽出金
+        assert self._counter(s_scope) == 0, '默认语义：出 SSR 即清零'
+        assert self._draw(default, s_scope, rarity='r') == self.CUR, \
+            '默认语义：清零后第 80 抽不应再被强制'
+
+        # ── featured：仅 featured 出金清零 ──
+        s_feat = PityState()
+        feat = HardPityBehavior(self.NAME, s_feat, scope='ssr',
+                                threshold=self.THRESHOLD, reset='featured')
+        for _ in range(self.THRESHOLD - 2):
+            self._draw(feat, s_feat, rarity='r')
+        self._draw(feat, s_feat, rarity='ssr', featured=False)      # 非 featured 出金
+        assert self._counter(s_feat) == self.THRESHOLD - 1, \
+            'featured 语义：非 featured 出金不清零'
+        assert self._draw(feat, s_feat, rarity='r') == {
+            'ssr_featured': 1.0, 'sr_featured': 0.0}
+
+    def test_never_reset_reaches_behavior_via_create_behavior(self):
+        """`reset='never'` 经 `create_behavior(PityDef(...))` 透传（配置 → 行为接线面）。"""
+        from gacha_simulator.core.pity import create_behavior
+
+        state = PityState()
+        pdef = PityDef(name=self.NAME, btype='hard', scope='ssr',
+                       threshold=self.THRESHOLD, reset='never')
+        bh = create_behavior(pdef, state)
+        assert isinstance(bh, HardPityBehavior)
+
+        for _ in range(self.THRESHOLD - 2):
+            self._draw(bh, state, rarity='r')
+        self._draw(bh, state, rarity='ssr', featured=True)
+        assert self._counter(state) == self.THRESHOLD - 1
+        assert self._draw(bh, state, rarity='ssr') == {
+            'ssr_featured': 1.0, 'sr_featured': 0.0}

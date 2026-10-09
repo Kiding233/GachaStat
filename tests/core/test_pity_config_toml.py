@@ -485,3 +485,83 @@ class TestDuplicatedConstants:
         from gacha_simulator.core import config_toml
         assert (config_toml._EVENT_DRIVEN_TYPES
                 == CounterBasedBehavior._EVENT_DRIVEN_TYPES)
+# ══════════════════════════════════════════════════════════════════
+# P64 G16-1 / ISSUE-928：`[[pity]].reset` 取值白名单
+# ══════════════════════════════════════════════════════════════════
+# 白名单 = 空串 / `featured` / 稀有度名（`[rarities].ranks` 的键）/ `never`，
+# 其余取值一律抛 `ConfigError`。被测面是 `_build_pity` 的校验分支与其取值来源
+# `legal_reset_values()`；未知值（含拼写错误如 `'nevr'`）在旧实现里经
+# `_should_reset` 的兜底分支（`reward_rarity == reset`）恒为 False，即**静默
+# 等价于 `never`**，两种语义不可区分、也不报错。
+
+_TOML_EXTRA_RARITY = _BASE_TOML.replace('    ["R"],\n',
+                                        '    ["R"],\n    ["UR"],\n', 1)
+assert '["UR"]' in _TOML_EXTRA_RARITY, '_BASE_TOML 的 [rarities] 形态变了，本用例随即失效'
+
+
+class TestResetValueWhitelist:
+    """`reset` 取值白名单（G16-1 的硬拒面）。"""
+
+    @staticmethod
+    def _load(reset_value):
+        toml = _BASE_TOML + _pity_section('hard', 'h1', threshold=90,
+                                          reset=reset_value)
+        return _write_and_load(toml)
+
+    @pytest.mark.parametrize('reset_value',
+                             ['', 'featured', 'never', 'ssr', 'sr', 'r'],
+                             ids=['empty', 'featured', 'never', 'ssr', 'sr', 'r'])
+    def test_reset_whitelist_accepts_legal_values(self, reset_value):
+        """四类合法取值（空串 / featured / 稀有度名 / never）均可载入。"""
+        store, path = self._load(reset_value)
+        try:
+            assert store.pity.pities[0].reset == reset_value
+        finally:
+            os.unlink(path)
+
+    @pytest.mark.parametrize('reset_value',
+                             ['nevr', 'any_ssr', 'featured_ssr', 'ur'])
+    def test_reset_whitelist_rejects_unknown_value(self, reset_value):
+        """未知值一律抛 `ConfigError`。
+
+        四个样本各有出处：`'nevr'` 是拼写错误（与 `never` 一字之差）、
+        `'any_ssr'` 是 G16-1 前 GUI 兜底条目用的旧取值、`'featured_ssr'` 是
+        legacy TOML 的 reset 值、`'ur'` 是本配置 `[rarities].ranks` 未注册的
+        稀有度名（白名单随 ranks 浮动）。
+        """
+        with pytest.raises(ConfigError, match='reset'):
+            self._load(reset_value)
+
+    def test_reset_whitelist_normalizes_case(self):
+        """大小写归一（与上方 `scope` 白名单同形态）：`reset='SSR'` 落为 `'ssr'`。"""
+        store, path = self._load('SSR')
+        try:
+            assert store.pity.pities[0].reset == 'ssr'
+        finally:
+            os.unlink(path)
+
+    def test_reset_whitelist_error_names_value_and_available(self):
+        """异常信息同时含出错取值与可用取值（与 `scope` 白名单同层同形态）。"""
+        with pytest.raises(ConfigError) as ei:
+            self._load('nevr')
+        msg = str(ei.value)
+        assert "'nevr'" in msg, msg
+        assert "'never'" in msg, msg          # 可用取值列表须能看出「永不重置」
+        assert "'featured'" in msg, msg
+
+    def test_reset_whitelist_tracks_rarity_ranks(self):
+        """取值集合随 `[rarities].ranks` 浮动：该表新增 `UR` 后 `reset='ur'` 放行。"""
+        toml = (_TOML_EXTRA_RARITY +
+                _pity_section('hard', 'h1', threshold=90, reset='ur'))
+        store, path = _write_and_load(toml)
+        try:
+            assert store.pity.pities[0].reset == 'ur'
+        finally:
+            os.unlink(path)
+
+    def test_reset_whitelist_shared_with_legal_reset_values(self):
+        """取值集合与 `legal_reset_values()` 同源（白名单不在两处各写一份）。"""
+        from gacha_simulator.core.config_toml import legal_reset_values
+
+        assert legal_reset_values({'ssr': 0, 'sr': 1, 'r': 2}) == {
+            '', 'featured', 'never', 'ssr', 'sr', 'r'}

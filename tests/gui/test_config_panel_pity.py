@@ -381,3 +381,68 @@ class TestPityFallbackEntry:
             "兜底条目的阈值未活过 TOML 往返（写回侧漏写 start/end）")
         assert 'ssr_soft' in _engine_from_store(store2).behaviors, (
             "载入后的 ssr_soft 未构造出 behavior——被 PityEngine 的构造兜底静默跳过")
+# ══════════════════════════════════════════════════════════════════
+# P64 G16-2：reset 控件的 round-trip（含「永不重置」与未列出取值）
+# ══════════════════════════════════════════════════════════════════
+# 与上方 TestPityFallbackEntry 分节不重叠：那一段的被测对象是 set_config 合成
+# 的兜底条目，本段的被测对象是 reset 下拉自身的取值表与写回路径。
+
+class TestPityResetCombo:
+    """reset 下拉（G16-1 新建控件）的取值面与 round-trip。"""
+
+    def test_reset_combo_lists_never_option(self, qapp):
+        """下拉含「永不重置」项，取值为 `never`。"""
+        panel = _make_panel()
+        combo = panel.pity_reset_combo
+        idx = combo.findData('never')
+        assert idx >= 0, 'reset 下拉缺「永不重置」项'
+        assert combo.itemText(idx) == '永不重置'
+
+    def test_reset_combo_never_roundtrip(self, qapp, tmp_path):
+        """选中「永不重置」→ 应用 → store → TOML 往返，`reset='never'` 保值。"""
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        panel = _make_panel()
+        panel.pity_list.setCurrentRow(0)
+        idx = panel.pity_reset_combo.findData('never')
+        assert idx >= 0
+        panel.pity_reset_combo.setCurrentIndex(idx)
+        panel._apply_pity_edit()
+        panel.apply_to_store()
+
+        assert panel._store.pity.pities[0].reset == 'never'
+        out = tmp_path / "reset_never.toml"
+        save_toml(panel._store, str(out))
+        assert load_toml(str(out)).pity.pities[0].reset == 'never'
+
+    def test_reset_combo_adds_store_rarity_names(self, qapp):
+        """`[rarities].ranks` 里基础表未列出的稀有度按白名单同源补入下拉。"""
+        panel = _make_panel()
+        panel.pity_list.setCurrentRow(0)
+        panel._store.rarity_rank['UR'] = 3
+        panel._populate_reset_combo('ur')
+
+        combo = panel.pity_reset_combo
+        assert combo.currentData() == 'ur'
+        assert combo.currentText() == 'ur 出金'
+        assert panel._pity_defs[0]['reset'] == 'ur'
+
+    def test_reset_combo_preserves_unlisted_value(self, qapp):
+        """取值表外的取值补「原样保留」项，不被静默改写为空串。
+
+        旧实现把未知取值一律落成下标 0（「跟随稀有度」），此后任一次编辑触发的
+        flush（`_flush_pity_current_detail` / `_apply_pity_edit`）都会把它静默
+        改写为空串，是无提示的数据丢失。样本取 `set_config` 的 `store.clear()`
+        之后的形态（`rarity_rank` 已清空），此时取值表收缩为六项基础表。
+        """
+        panel = _make_panel()
+        panel.pity_list.setCurrentRow(0)
+        panel._store.rarity_rank.clear()
+        panel._populate_reset_combo('ur')
+
+        combo = panel.pity_reset_combo
+        assert combo.currentData() == 'ur'
+        assert '原样保留' in combo.currentText()
+        panel._flush_pity_current_detail()
+        assert panel._pity_defs[0]['reset'] == 'ur', \
+            '取值表外的 reset 被静默改写（旧实现落回下标 0 即空串）'

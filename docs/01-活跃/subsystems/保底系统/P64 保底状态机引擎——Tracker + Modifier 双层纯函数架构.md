@@ -380,7 +380,7 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 | `ForceNonFeaturedModifier`（G1） | `NonFeaturedModifier` | |
 | `ForceSelectedModifier` | `SelectedModifier` | |
 | `ForceNotOwnedModifier`（G3） | `NotOwnedModifier` | |
-| ~~`InterceptModifier`~~ | **取消** | 掷骰移入 `StreakTracker.commit`（裁决 6B，§3.1.1） |
+| ~~`InterceptModifier`~~ | **取消** | 掷骰移入 `StreakTracker.prepare`（裁决 6B → 2026-10-10 改判 6B′，§3.1.1） |
 | ~~`BaseRatioModifier`~~ | **删除** | 其转移量为 0（恒等），预设里不写该零件即可 |
 
 **用户可见的变化为零**：TOML 字段、GUI 控件、关于页文本均不变。`target_featured` 的消费者是 `HardModifier` 自己的 `compute_delta()`（§3.2 取值来源表）。
@@ -905,7 +905,7 @@ Q 内每卡  − amount · p_c / p(Q)
 | 类型 | 例子 | 性质 |
 |------|------|------|
 | **约束冲突（语义）** | 两个算子对同一组给出互相矛盾的要求。**M1 实例**：`assign` 与「在 `assign` 输出上非恒等」的算子共存（如 `hard` 与 guaranteed 分支的 `rotating`）；**M2 实例**见 §3.1.5.5 的适用范围注 | **这是语义正确的表现**，不是缺陷。**M1 口径**：`assign` 是**写入**且输出与输入分布无关，故 `[X, hard] ≡ hard 的输出`，而 `[hard, X] ≡ X 作用于 hard 的输出`；两者相等**当且仅当 X 在 hard 的输出上恒等**（该判据在 M2 的夺取型 `hard` 下不成立，见 §3.1.5.5 的适用范围注）。**不是「同 U 才行」**：`soft(tf=False)` 与 `hard` 同 U 且可交换，`rotating`（非 guaranteed）与 `hard` 异 U 也可交换，而 `rotating`（guaranteed）与 `hard` 异 U **不可**交换。完整判据与逐条验算见 §3.1.5.5 |
-| **随机数消费（实现）** | 含 `rotating_cr` 的配置 | 增量本身可交换，但掷骰消费全局 `random`，换序导致随机流错位。数学上若随机源独立则无影响，它只影响固定种子下的可复现性与样本路径。**这是实现绑定的副作用**。裁决 6B 把掷骰从 Modifier 移入 Tracker 后，本条**保留但降级**：Tracker 的 `commit` 同样按行为顺序逐个调用，换序仍会移动消费位置，**B 方案只把它从 Modifier 层搬到 Tracker 层，并未消除** |
+| **随机数消费（实现）** | 含 `rotating_cr` 的配置 | 增量本身可交换，但掷骰消费全局 `random`，换序导致随机流错位。数学上若随机源独立则无影响，它只影响固定种子下的可复现性与样本路径。**这是实现绑定的副作用**。裁决 6B 把掷骰从 Modifier 移入 Tracker 后，本条**保留但降级**：Tracker 的 `prepare` 同样按行为顺序逐个调用（6B′ 把消费点定在 `before_draw` 的 `prepare`），换序仍会移动消费位置，**该方案只把它从 Modifier 层搬到 Tracker 层，并未消除**——消除它需要随机源独立，而那与「与旧类逐场一致」互斥（旧类消费的是全局 `random`），见 §3.1.1 的 CR 相位段 |
 
 > **原「`soft(target_featured=True)` + `hard`」这一反例已不可构造（裁决 7B）**：`soft_*` 类型出现 `target_featured = true` 时按 §3.2 的取值来源表抛 `ConfigError`。其位置由「同 U 的 `share` 与 `assign` 共存」取代。P82 的修正结论「含 `rotating_cr`，或 `target_featured=True` 的 soft 与 hard 共存的配置会变」随之收窄为「**含 `rotating_cr` 的配置会变**」。<!-- REVIEW-R1-FIX: RULING-7B -->
 
@@ -968,7 +968,7 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 | **soft(tf=False) + hard（同 scope）** | **是（2026-10-05 实测）** | 见下方「判据」专段。实测：`soft(start=2) + hard(threshold=6)` 逐抽 1..15 无反例 |
 | **hard + rotating（rotating 处于非 guaranteed 分支）** | **是（2026-10-05 实测）** | 该分支的 r = `p(S_f)/p(S_c)` 即当前份额，`share` 退化为恒等，**在任何分布上都是恒等**，故与 `hard` 可交换 |
 | **hard + rotating / targeted（guaranteed 分支）** | **否（2026-10-05 实测）** | r = 1，非恒等。实测 `hard(threshold=5)` + `rotating`（第 1 抽中非 UP 的 SSR 置 guaranteed）：**抽 6 起分歧**，`[hard, rot]` = `{ssr: 0, ssr_featured: 1.0}`、`[rot, hard]` = `{ssr: 0.5556, ssr_featured: 0.4444}`。**`targeted` 的同名分支与 `rotating` 逐位相同**（直接对照三组输入，含 `hard` 的输出，差 0），故本行同时覆盖它。**裁决 7B 未消除本条**，它是 7B 之后唯一剩下的代数型反例 |
-| 含 `rotating_cr` 的组合 | 否 | 非代数问题：增量本身可交换，但掷骰消费全局 `random`，换序导致 ω 消费位置改变、样本路径分叉。裁决 6B 后掷骰移入 Tracker，Tracker 的 `commit` 同样按行为顺序调用，**本条结论不变** |
+| 含 `rotating_cr` 的组合 | 否 | 非代数问题：增量本身可交换，但掷骰消费全局 `random`，换序导致 ω 消费位置改变、样本路径分叉。裁决 6B′ 后掷骰在 Tracker 的 `prepare`（`before_draw` 相位），同样按行为顺序调用，**本条结论不变** |
 
 **判据（2026-10-05 实测归纳，取代原「逐类猜测」）**：
 
@@ -1949,6 +1949,18 @@ class SelectedModifier(Modifier):                      # targeted：A 侧取 dec
 
 `PityEngine.get_probabilities(pool_id, state, base)` 与 `before_draw` 走同一路径，S8 后同样改为卡级进出。**S8 起 Modifier 是 pure 函数（§3.1.2），`readonly` 形参随 2026-10-08 的签名裁决一并废除**：查询与抽卡前天然无副作用差异，增量照算，两者给出的分布必然相同（P16 的查询/修改分离由「pure」这一性质直接保证，不再需要一个开关）。**M1 期间仍用 `readonly`**（那时的 Modifier 会推进自己的计数器，见 §3.9.2 的两期分工）。
 
+**`rotating_cr` 的例外（2026-10-10 补，RULING-6B′）**：上段的「查询与抽卡前必然给出相同分布」在 `rotating_cr` 上**不成立**，且这是 6B′ 相对 6B 的**新增回归**，须显式处置：
+
+| 实现 | 只读查询读到的 `cr_intercepted` | 与第 N 抽实际分布的关系 |
+|---|---|---|
+| 旧 `RotatingCRBehavior` | 不读（`readonly` 早退，永不体现拦截） | 无关 |
+| 6B | `commit(N−1)` 写的 | **恰好等于**（故上段性质成立） |
+| **6B′（本方案）** | `prepare(N−1)` 写的（即上一抽的判定） | **不等于**（差一抽） |
+
+**成因**：6B 的掷骰在 `after_draw`，查询不调 `after_draw`，读到的自然是「最近一次已发生的判定」＝第 N 抽的判定；6B′ 的掷骰回到 `before_draw` 的 `prepare`，查询会走到 `prepare` 的 `readonly` 早退分支，于是读到的是**上一次非只读调用**留下的 flag。
+
+**处置（两期）**：① **M1 期**由 Modifier 依 `readonly` 抑制 `extra_flag`（复刻旧查询语义：查询不体现拦截）；② **M2 期** `readonly` 从 Modifier 签名废除后，按 §3.1.2「新机制若需要新的静态事实，加字段、不改签名」的规则给 `ctx` 加一个查询标记字段。影响面限于用 `get_pity_probabilities` 的策略（`strategies/builtin/pity_reserve.py` 等），当前配置里没有 `rotating_cr` 落在这些池上，但性质须说清而非留白。
+
 **接线（§1.5）与 S8 的交互**：接线引入的 `_pool_order` 独立排序视图作用于「按哪个顺序遍历保底」，与本节改造的「单个保底内部如何算概率」是正交的两层，互不影响。
 
 ---
@@ -2447,7 +2459,7 @@ class RotatingModifier(Modifier):
 | P75 `_rebind_state` 纪律在 Pity 中退化 | Pity 统一实现 Trackers/Modifiers/Lifecycle 的 rebind 委托；独立测试断言跨模拟状态隔离。**ISSUE-029**：委托是**无守卫**调用，故**三族（Tracker / Modifier / Lifecycle）的 `rebind` 必须逐个实现**（骨架不做守卫调用，缺一个即每次抽卡入口 `AttributeError`；协议表见 §3.1.1 / §3.9.2 / §3.1.3 / §3.14.3 与 §六 断言）。**2026-10-09 订正（GATE-4）**：原文此处写「`ConditionalModifier` 必须转发」，而该类已随 S12 于 2026-10-06 整块取消（§3.14.2 改判为「取消后的形态」，其「随之删除的符号」段已明列该类），§六 的对应断言亦已删除（ISSUE-004）——原缓解同时指向不存在的类与已改判的小节、不可操作，故删去；<!-- REVIEW-R1-FIX: GATE-4-风险缓解 -->**ISSUE-917**：Lifecycle 的 `rebind` 为三实参（`namespaces`），漏传即 `X_soft` 的 `_active` Flag 跨场不重绑（写错账本且不报错）<!-- REVIEW-R1-FIX: ISSUE-917 --> |
 | 增量能力（事件驱动 deactivate）误入等价性范围 | 明确标注「旧类无此能力，不在等价性范围」，单独验收用例 |
 | G16 与 P64 并行改 `_should_reset` 冲突 | G16 独立先行（单 commit 先落地），P64 重构时 CounterTracker 自然承载，无交叉 |
-| CR 随机数消耗不齐（等价性 RNG 分叉） | `StreakTracker.commit` 的随机数消耗协议（原 §3.1.2 H4，消费点自 Modifier 移至 Tracker，裁决 6B）；等价性测试含 `cr_state_probs` (0,1) 中间值用例。**该风险在 6B 后不再能通过「与旧类逐场一致」验收**，改为登记差异 + 分布等价断言 |
+| ~~CR 随机数消耗不齐（等价性 RNG 分叉）~~ **已结项（2026-10-10，RULING-6B′）** | `StreakTracker.prepare` 的随机数消耗协议（原 §3.1.2 H4）；消费相位回到 `before_draw` 后与旧类同相位，**「与旧类逐场一致」重新可判**。等价性测试含 `cr_state_probs` (0,1) 中间值用例，并新增两条负例：只读查询不消耗随机数、掷骰失败后 flag 必须为假 |
 | 全量 10 类 preset 化改动面扩大 | 不分阶段（软保底不再分阶段二），一次完成；等价性测试全量守门 |
 | **生命周期字段到 Lifecycle 对象的转换点缺失（ISSUE-301）** | preset 工厂返回 dict 不写 `lifecycle=` 键、而旧 `create_behavior` 的 `lifecycle_kwargs` 段（:893-900）又已删除，两端各留一半：**全部 `deactivate_on_early_hit` 与全部 `depends_on` 配置静默失效**（§六 的 N1 例外断言、事件驱动型退役断言双双不可达；`depends_on` 的激活传播与「引用不存在名」的 `ConfigError` 一并消失），且旧类已退役、无对照物可发现。缓解：§3.1.3 定唯一转换点 `build_lifecycle(pdef)` + §3.2 取值来源表与代码块的 `lifecycle=` 键 + `create_behavior` 的 `ConfigError` 防线 + §六 断言 | <!-- REVIEW-FIX-PREV: ISSUE-301 -->
 | **S8 卡级管道引入的浮点差异与零概率退化** | 浮点差异量级 1e-16，等价性口径已在 §六 放宽为 1e-12 并单独设 S8 验收；零概率退化（无货可取，`p(Q) = 0`）由 §3.1.5.6 约定「返回 `None`」处理，与现行早退路径一致 |
@@ -2464,7 +2476,7 @@ class RotatingModifier(Modifier):
 
 ### 主线（Tracker + Modifier 统一骨架 + G1 + G5）
 
-- [ ] **S1–S5 口径**：全部 10 个类型同配置下，新引擎输出概率分布 + 状态快照与旧类**逐场完全一致**（固定种子，含 hard/soft_step/rotating/targeted/soft 组合各基准；**`rotating_cr` / `rotating_cr_soft` 不在此列**：ISSUE-702 实测其首抽拦截概率归零、与旧类**分布不同**，按下方差异归因清单 (c) 单独放行，不参与本行的「逐场完全一致」口径）。此阶段 Modifier 内部沿用槽位法，故要求位级一致 <!-- REVIEW-R1-FIX: ISSUE-702 --> <!-- REVIEW-R1-FIX: ISSUE-940 -->
+- [ ] **S1–S5 口径**：全部 10 个类型同配置下，新引擎输出概率分布 + 状态快照与旧类**逐场完全一致**（固定种子，含 hard/soft_step/rotating/targeted/soft 组合各基准；**`rotating_cr` / `rotating_cr_soft` 已于 2026-10-10 回归本行**——RULING-6B′ 把掷骰相位移回 `before_draw` 的 `StreakTracker.prepare`，首抽缺口与随机流位置差同时消除，与旧类逐场一致；原「不在此列」的排除与下方差异归因清单 (c) 项一并作废）。此阶段 Modifier 内部沿用槽位法，故要求位级一致 <!-- REVIEW-R1-FIX: ISSUE-702 --> <!-- REVIEW-R1-FIX: ISSUE-940 -->
 <!-- REVIEW-FIX-PREV: ISSUE-023 -->
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order -->
 - [ ] **view 命名空间分配（ISSUE-GATE-dependency-order；接口由 ISSUE-407 补实）**：三个 `_soft` 类型的 preset 中，soft 族的**软计数落在默认 view（`X` 命名空间）**（对齐旧 mixin 的 `X.counter`），`X_soft` 命名空间只含 `_active`——**产出者是 preset 里显式的 `NamespaceTracker(namespace=f'{pdef.name}_soft')`**（§3.1.1 签名表新增条目，§3.2 的 `_preset_rotating_soft` 示例），`_active` 由 **`Lifecycle.initialize(state, name, namespaces)`** 的推广作用域写入（`namespaces` = `Pity` 收集的零件命名空间集合）；声明了 `namespace` 的零件收到的是 `StateView(state, part.namespace)` 而非默认 view（`Pity` 经 `self._ns_views` 取值，遍历 `trackers` / `modifiers` 时不得写死 `self._view`）；`_rebind_state` 重建默认 view 时**同批重建 `self._ns_views`**（否则 worker 内连跑 N 场模拟时第 2..N 场的零件 view 指向旧账本，与 ISSUE-004 同一失效模式）<!-- REVIEW-R1-FIX: ISSUE-407 -->
@@ -2490,10 +2502,10 @@ class RotatingModifier(Modifier):
 - [ ] **S8 口径 3 的回归断言（M2 施工，未完成）**：上两条测的是**旧类对照**。S8 落地后须把 §3.14.3 的六场景固化为测试（`tests/core/test_pity_primitives.py`），断言对象为**卡级逐卡**结果而非目标组总量（只断言总量 = 1.0 对本轮修的两处错误恒通过）
 - [ ] **S8 可交换性复测（M2 口径，未完成）**：上条测的是**旧类**。S8 落地后须对**新骨架 + 卡级管道**复测同样四组，确认判据在卡级下同样成立。**关键差异面**：旧类的 `hard` 在槽位级取 `base_probabilities`，卡级下若取自 `DrawInfo.base_probabilities` 而该字段语义已由槽位级改为卡级（§3.9.3 的 `DrawInfo.base_probabilities` 行），须确认归一化后仍与旧产物一致
 - [x] **`targeted` 的有效分支补测（2026-10-05 完成）**：**已改为直接对照两个 behavior 在同输入上的输出**（不经引擎，避开 `TargetedBehavior` 不走 `_active` 门控、探针无法可靠注入状态的问题）：`targeted` 的 guaranteed / fate-ready 分支与 `rotating` 的 guaranteed 分支**逐位相同**（三组输入，含 `hard` 的输出，最大差 0.00e+00），故按判据 `hard + targeted` **不可交换**。原「可交换」结论作废，原因是探针覆盖不足（详见 §3.1.5.5 判据表的注）
-- [ ] **S8 差异归因清单（ISSUE-012 / ISSUE-006）**：S8 与 S5 产物的对比口径为**归一化后分布**；下列两处的差异**允许存在**并须逐一登记，不得当作回归——
+- [ ] **S8 差异归因清单（ISSUE-012 / ISSUE-006）**：S8 与 S5 产物的对比口径为**归一化后分布**；下列各项的差异**允许存在**并须逐一登记，不得当作回归——
   （a）`⟨m,p⟩ ≠ 1` 的配置（`hard` 的 scope 低于最高稀有度）：S5 输出 Σ = 1.009、S8 输出 Σ = 1，管道内可见绝对值改变（抽样分布因 `pool.draw` 的 `_adjusted_total_weight` 隐含归一化可能不变，见 §3.9.5）；**连带的观测面变更（ISSUE-903）**：`core/invariants.py` 的分布层归一性判据须同批从 scope 感知式改为恒等断言 `Σp = 1`，`tests/core/test_pity_invariant_checker.py` 的正例期望值随之更新（S8-6 ⑤）；<!-- REVIEW-R1-FIX: ISSUE-903 -->
   （b）`worst_impact` 的卡集合对齐改造（§3.9.3 专项）会改变最差影响分析数值
-  （c）**`rotating_cr` / `rotating_cr_soft` 的分布差异 + 随机流分叉（裁决 6B 立项，2026-10-05；2026-10-09 按 ISSUE-702 收窄口径）**：掷骰自 `before_draw`（Modifier 侧）移至 `after_draw`（`StreakTracker.commit`），全局 `random` 消费位置随之改变，固定种子下自首次拦截起样本路径分叉；**更关键的是首抽（N = 0）的拦截判定缺失**：旧码首抽即掷骰（读 `cr_counter` 缺键的默认值 0，故 `cr_base_rate` 与 `cr_state_probs[0]` 两次拦截机会都在），新码的掷骰只落在 `commit`、而「抽 0 的 commit」不存在，**故新形态首抽的拦截概率恒为 0**。**本项性质因此是「分布差异」，不是「分布逐场等价、仅随机流位置改变」**（本处原写的「**分布逐场等价**但全局 `random` 消费位置改变」已按 §3.1.1 的收窄裁决作废，不得再照抄）。**这两个类型无法通过 M1「与旧类逐场一致」**，验收口径改为「**分布差异已登记（首抽拦截归零 + 随机流分叉）+ 本项登记**」；S5b / S8-6 的 `rotating_cr` 等价性断言**不得**按「逐场一致」判红（§3.1.1 的裁决段已定稿）。H4 协议的三条短路条件与下标裁剪仍须逐位复刻（§3.1.2 的 CR 随机数消耗协议段）。**消除方向**（让 `StreakTracker` 在每个 sim 的首个 `before_draw` 补一次相位 −1 的掷骰）见 §3.1.1 的「⚠ 首抽无掷骰落点」段，**⚠ 待人工裁决、不在本计划内落地**。 <!-- REVIEW-R1-FIX: ISSUE-702 --> <!-- REVIEW-R1-FIX: ISSUE-940 -->
+  （c）~~**`rotating_cr` / `rotating_cr_soft` 的分布差异 + 随机流分叉**~~ **已作废（2026-10-10，RULING-6B′）**：本项原由裁决 6B（掷骰移至 `after_draw`）立项，性质为「分布差异 + 随机流分叉」（首抽拦截概率归零 + 全局 `random` 消费位置改变）。6B′ 把掷骰相位移回 `before_draw` 的 `StreakTracker.prepare`，与旧类同相位、同条件、同消费次数，**两项差异同时消失**，故本项不再登记；`rotating_cr` / `rotating_cr_soft` 回归上方「S1–S5 口径」的逐场完全一致批次。原文本见本文件 git 历史（2026-10-09 版）。
   （d）**`boost` 的 U 由 scope 改回全池（§3.1.5.2.4 错误 ②）**：原稿把 soft 的 U 写成 scope，该形态下 soft 整体不生效（SSR 总率不变）。这是**修复**不是差异，须由 S5b 的等价性测试覆盖「soft 与旧类逐场一致」来确认——若该测试此前通过而按旧稿实现，说明测试本身有缺口，一并修
   （e）**`assign` 的目标值除以当前值（§3.1.5.2.4 错误 ①）**：同上，属修复。须新增专项断言「`hard` 的目标组内比例与旧实现一致」（不能只断言目标组总量 = 1.0，那对两处错误都通过）
   （f）**卡级还原段跳过 SR / R 的缩放（缺陷 12）——已于 2026-10-09 提前修复，本项差异随之消失**。原状：S5 的管道是「卡级 → 槽位级 → `before_draw` → **还原回卡级**」，而还原段用 `infer_rarity_from_spec` 反查槽位——该函数只认 SSR，SR / R 卡得到 `None`，缩放被跳过（[banner.py:240-247](gacha_simulator/core/banner.py#L240-L247) + [pool.py:234](gacha_simulator/core/pool.py#L234)），故喂给 `pool.draw()` 的卡级字典 **Σ > 1**（真实 `config.toml` 的 `ssr_soft` 在爬升末端实测 Σ = 1.996），采样按 `1/Σ` 稀释。**修复后 S5 与 S8 的输出一致**（同一抽次实测：修前有效 SSR = 0.5010，修后 = 1.0000 = 槽位级意图），故**本项不再是一条差异**，S8 的「对 S5 产物容差 1e-12」验收**无需为它网开一面**。**保留本条记录的目的**：若有人拿**修复之前**固化的 S5 快照作对照（例如旧 P79 golden 的父提交），会看到上述差异，那是修复而非回归。完整实测与修法见 [04-问题.md](docs/01-活跃/subsystems/保底系统/04-问题.md) 缺陷 12

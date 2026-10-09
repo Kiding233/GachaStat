@@ -462,3 +462,67 @@ class TestNeverResetHardPity:
         assert self._counter(state) == self.THRESHOLD - 1
         assert self._draw(bh, state, rarity='ssr') == {
             'ssr_featured': 1.0, 'sr_featured': 0.0}
+
+
+# ══════════════════════════════════════════════════════════════════
+# P82-1：池内保底执行顺序——独立排序视图
+# ══════════════════════════════════════════════════════════════════
+
+class TestPoolOrderView:
+    """`get_behaviors_for_pool` 消费 `PityEngine._pool_order`（独立排序视图）。
+
+    接线口径（§1.5 裁决 1）：池内保底的**执行顺序**由排序键
+    `(稀有度 rank, _BTYPE_ORDER, name)` 决定，与 `PoolPitySpec.pity_names` 的 TOML
+    书写顺序解耦；后者保持 TOML 顺序不动（`banner.draw_pity_names`
+    的输出串依赖它）。本组用例直接钉住接线本身——若排序视图
+    被回退为不生效（空集合 / 未被消费），此处即红，而基线快照对照
+    只会全绿。
+    """
+
+    @staticmethod
+    def _make_engine(pity_names, pity_defs, rarity_rank):
+        spec = PoolPitySpec(pity_names=list(pity_names))
+        return PityEngine(
+            pool_specs={'p': spec}, pity_defs=list(pity_defs),
+            state=PityState(), rarity_rank=rarity_rank,
+        )
+
+    def test_type_order_overrides_toml_order(self):
+        """同 scope：hard（_BTYPE_ORDER=1）先于 rotating（=3），与 TOML 书写顺序相反。"""
+        defs = [
+            PityDef(name='zz_rot', btype='rotating', scope='ssr'),
+            PityDef(name='aa_hard', btype='hard', scope='ssr', threshold=90),
+        ]
+        engine = self._make_engine(['zz_rot', 'aa_hard'], defs, {'ssr': 0, 'sr': 1})
+
+        assert [n for n, _ in engine.get_behaviors_for_pool('p')] == ['aa_hard', 'zz_rot']
+        # 同一池的 pity_names 保持 TOML 顺序不动
+        assert engine.pool_specs['p'].pity_names == ['zz_rot', 'aa_hard']
+
+    def test_rarity_rank_is_first_sort_key(self):
+        """跨 scope：稀有度 rank 小者先执行，与 TOML 书写顺序相反。"""
+        defs = [
+            PityDef(name='aa_sr', btype='hard', scope='sr', threshold=10),
+            PityDef(name='zz_ssr', btype='hard', scope='ssr', threshold=90),
+        ]
+        engine = self._make_engine(['aa_sr', 'zz_ssr'], defs, {'ssr': 0, 'sr': 1})
+
+        assert [n for n, _ in engine.get_behaviors_for_pool('p')] == ['zz_ssr', 'aa_sr']
+
+    def test_order_view_covers_specs_and_unknown_pool_returns_empty(self):
+        """视图覆盖全部池；未知池 id 仍返回空（与旧「spec 为 None」早退同义）。"""
+        defs = [PityDef(name='aa_hard', btype='hard', scope='ssr', threshold=90)]
+        engine = self._make_engine(['aa_hard'], defs, {'ssr': 0})
+
+        assert set(engine._pool_order) == set(engine.pool_specs)
+        assert engine._pool_order['p'] == ['aa_hard']
+        assert engine.get_behaviors_for_pool('no_such_pool') == []
+
+    def test_behavior_not_in_specs_is_excluded(self):
+        """`pity_names` 里的未知名不进视图、也不进调度列表。"""
+        defs = [PityDef(name='aa_hard', btype='hard', scope='ssr', threshold=90)]
+        engine = self._make_engine(['aa_hard', 'ghost'], defs, {'ssr': 0})
+
+        assert engine._pool_order['p'] == ['aa_hard']
+        assert [n for n, _ in engine.get_behaviors_for_pool('p')] == ['aa_hard']
+

@@ -1179,6 +1179,28 @@ class PityEngine:
         self._pity_defs_list = pity_defs  # P56
         self._behavior_list: List[PityBehavior] = ordered
 
+        # ── P82-1：独立排序视图（§1.5「接线实施方案」）──
+        # 让 `_resolve_order()` 的排序结果成为池内保底的实际执行顺序：三个调度入口
+        # （get_probabilities / before_draw / after_draw）共用 `get_behaviors_for_pool()`，
+        # 排序生效即概率管道生效。
+        # 视图与 `PoolPitySpec.pity_names` 分离：后者保留 TOML 定义顺序，
+        # 兼有第二职责（`banner.draw_pity_names` 用 `','.join(pity_names)` 生成
+        # 输出串，字面顺序会进 golden 快照），故不动它；本视图只承载「谁先执行」。
+        # 池内序 = 全局排序（ordered）在池成员上的子序：排序键（稀有度 rank
+        # → _BTYPE_ORDER → name）只依赖 behavior 自身属性、与池无关，
+        # 故子序即该池按同一排序键的结果。
+        _order_index: Dict[str, int] = {
+            getattr(bh, '_name', ''): _i for _i, bh in enumerate(ordered)
+        }
+        self._pool_order: Dict[str, List[str]] = {}
+        for _pool_id, _spec in self.pool_specs.items():
+            # 构造失败的 behavior 已在上方跳过、不进 self.behaviors，
+            # 此处同样剔除（与 get_behaviors_for_pool 的 `bh is None` 守卫等价）。
+            self._pool_order[_pool_id] = sorted(
+                (_n for _n in _spec.pity_names if _n in self.behaviors),
+                key=lambda _n: _order_index.get(_n, len(ordered)),
+            )
+
         # ── P56：构建 depends_on 激活传播图 ──
         self._activation_graph: Dict[str, List[str]] = self._build_activation_graph(
             list(self.behaviors.values()))
@@ -1189,15 +1211,20 @@ class PityEngine:
         return self.get_behaviors_for_pool(pool_id)
 
     def get_behaviors_for_pool(self, pool_id: str):
-        """公开方法——返回当前池关联的 behavior 实例列表。"""
-        spec = self.pool_specs.get(pool_id)
-        if spec is None:
-                return []
+        """公开方法——返回当前池关联的 behavior 实例列表。
+
+        P82-1：顺序取自 `self._pool_order`（`__init__` 预计算的独立排序视图）——
+        池内保底的执行顺序由排序键决定而非 TOML 书写顺序；
+        `PoolPitySpec.pity_names` 保持 TOML 顺序不动（`banner.draw_pity_names` 依赖它）。
+        """
+        order = self._pool_order.get(pool_id)
+        if order is None:
+            return []
         result = []
-        for pname in spec.pity_names:
+        for pname in order:
             bh = self.behaviors.get(pname)
             if bh is not None:
-                    result.append((pname, bh))
+                result.append((pname, bh))
         return result
 
     def get_pity_def(self, name: str):

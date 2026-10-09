@@ -305,12 +305,6 @@ body{
   border-bottom:1px solid var(--line);background:#fafbfd}
 .an-res-h b{font-size:13px}
 .an-res-b{padding:12px}
-.an-pending{border:1px dashed var(--line-strong);border-radius:var(--radius);
-  background:#fcfdfe;padding:22px;text-align:center;color:var(--ink-3)}
-.an-pending b{font-size:14px;color:var(--ink-2);display:block;margin-bottom:6px}
-.an-pending p{margin:0;font-size:12px}
-.an-tab.pending{font-style:italic}
-.an-tab .cnt.pend{background:#fdf7ec;color:var(--warn)}
 
 /* ---------- 「总览常驻 + 逐项下钻」结果区 ----------
    用于结果块数随数据变的方法（脆弱性分析 = 1 总览 + 逐池 2 块/池）。
@@ -871,7 +865,7 @@ body{
 
           <div class="an-tabrow">
             <button class="an-tab" v-for="c in activeCategories" :key="c.key"
-                    :class="{on: analysisTab===c.key, pending: c.pending}"
+                    :class="{on: analysisTab===c.key}"
                     @click="analysisTab=c.key">
               <!-- viewBox 必须走对象语法。in-DOM 模板里 :viewBox 会被 HTML 解析器
                    小写成 :viewbox（静态 viewBox 有 SVG 大小写修正表兜住，绑定式没有），
@@ -882,20 +876,12 @@ body{
               <span>{{ c.name }}</span>
               <!-- 不再挂条目数角标：全名之后 11 个专题一行需要 1329px，可用只有 1108px，
                    去掉角标降到 1064px 正好一行。计数本来就写在左栏标题（「… N 项」），
-                   角标是重复信息。只留「构思中」：它不是计数，是状态。 -->
-              <span class="cnt pend" v-if="c.pending">构思中</span>
+                   角标是重复信息。 -->
             </button>
           </div>
 
           <div class="an-pane" v-show="analysisTab===cat.key" v-for="cat in activeCategories" :key="cat.key">
-            <!-- 构思中的专题：占位，标出这一格将来归谁 -->
-            <div v-if="cat.pending" class="an-pending">
-              <b>{{ cat.name }}</b>
-              <p>{{ cat.pendingDesc || '这一格是构思中的分析方法。' }}</p>
-              <p class="tmeta" style="margin-top:8px">尚无实现，先占位。</p>
-            </div>
-
-            <div v-else class="an-split">
+            <div class="an-split">
               <!-- 左：本专题的方法都聚在这里，勾选框决定哪些出结果，●/○ 标出主次。
                    原来所有方法是一堆等权卡片，看不出谁主谁次、谁和谁相关；
                    收进一个专题的左栏之后，关联由「在一起」表达，主次由 ●/○ 表达。
@@ -932,7 +918,7 @@ body{
                     <b>{{ it.name }}</b>
                     <span class="shape" :class="it.shape">
                       {{ it.shape==='sync' ? '即时分析' : '需派发模拟' }}</span>
-                    <button v-if="it.chart==='bars' || it.chart==='line'"
+                    <button v-if="it.chart==='bars' || it.chart==='line' || it.spec"
                             class="vsw" style="margin-left:auto"
                             :class="{on: tblOf(it.key)}" @click="tblFlip(it.key)">
                       {{ tblOf(it.key) ? '看图形' : '看表格' }}</button>
@@ -1062,6 +1048,13 @@ body{
                           </div>
                         </div>
                       </div>
+                    </template>
+                    <template v-else-if="it.spec">
+                      <!-- 项自带 ChartSpec 时走这条：图与表格孪生都从这一份 spec 派生，
+                           所以同一块里切图形/表格看到的一定是同一份数据。 -->
+                      <gs-figure :spec="it.spec" :height="it.h || 150"
+                                 :table="tblOf(it.key)" :caption="it.name"></gs-figure>
+                      <p class="tmeta" v-if="it.note" style="margin:7px 0 0">{{ it.note }}</p>
                     </template>
                     <template v-else-if="it.chart==='bars'">
                       <gs-figure :spec="miniSpec(it.key,'bars')" :height="104"
@@ -1270,6 +1263,175 @@ const AN_ICONS = {
   sensitivity: { vb: '0 0 32 32', inner: '<path d="M20,16a5,5,0,0,0,10,0,1,1,0,0,0-.1055-.4473L25.896,7.5562a.8913.8913,0,0,0-.0454-.0816A1,1,0,0,0,25,7H18.8218A3.0155,3.0155,0,0,0,17,5.1841V2H15V5.1841A3.0155,3.0155,0,0,0,13.1782,7H7a1,1,0,0,0-.8945.5527l-4,8A1,1,0,0,0,2,16a5,5,0,0,0,10,0,1,1,0,0,0-.1055-.4473L8.6182,9h4.56A3.0147,3.0147,0,0,0,15,10.8154V28H6v2H26V28H17V10.8159A3.0155,3.0155,0,0,0,18.8218,9h4.56l-3.2763,6.5527A1,1,0,0,0,20,16ZM7,19a2.9958,2.9958,0,0,1-2.8152-2h5.63A2.9956,2.9956,0,0,1,7,19Zm2.3821-4H4.6179L7,10.2363ZM16,9a1,1,0,1,1,1-1A1.0009,1.0009,0,0,1,16,9Zm9,10a2.9958,2.9958,0,0,1-2.8152-2h5.63A2.9956,2.9956,0,0,1,25,19Zm0-8.7637L27.3821,15H22.6179Z"/>' },
 };
 
+/* ── 出卡间隔（P80） ──
+   P80 的两条前提决定了这七张图长什么样：
+
+   1. **池化口径**。P80 §2.3 实测：单条轨道平均只有 3.6~4.3 个间隔点，按轨道自身
+      统计量分组排出来的「极端轨道」几乎全是噪声（交叉验证后中位数之差 −1.0 抽，
+      零模型 0.0 ± 0.4）。所以七张图没有一张按轨道分组，全部是同一份池化样本的不同切面。
+   2. **命中集按保底语义切分**（P80 §3.3 结案）：同一命中集内，所有卡对保底计数器的
+      作用必须一致；限定卡与普通 SSR 混池得到的「间隔分布」不良定义。所以每一项
+      都带「命中集」参数，而不是把两者并成一个池。
+
+   样本是设计样品：形状按 P80 实测分位（5% / 50% / 95% ≈ 23 / 81 / 86 抽）重建，
+   不是模拟产出。探针里的数据一律如此，见文件头的「假数据」节。 */
+const IV_PMF = (function () {
+  const p = new Array(92).fill(0);
+  let a = 0.0055;                                    // 1~22 抽：基础段
+  for (let n = 1; n <= 22; n++) { p[n] = a; a *= 0.90; }
+  for (let n = 23; n <= 59; n++) p[n] = 0.04 / 37;   // 平台段
+  for (let n = 60; n <= 79; n++) p[n] = 0.26 / 20;   // 软保底抬升段
+  [[80, .05], [81, .105], [82, .13], [83, .12], [84, .10], [85, .07],
+   [86, .04], [87, .015], [88, .008], [89, .004], [90, .003]]
+    .forEach(function (r) { p[r[0]] = r[1]; });
+  const t = p.reduce(function (x, y) { return x + y; }, 0);
+  return p.map(function (v) { return v / t; });
+})();
+
+/* 终止于普通 SSR 的那一类（P80 §3.4 ⑦）：它比终止于限定卡的那一类短得多，
+   两类混在一起算时被池化中位数藏起来。 */
+const IV_PMF_SSR = (function () {
+  const p = new Array(92).fill(0);
+  let a = 0.019;
+  for (let n = 1; n <= 79; n++) { p[n] = a; a *= 0.981; }
+  for (let n = 80; n <= 90; n++) p[n] = 0.0015;
+  const t = p.reduce(function (x, y) { return x + y; }, 0);
+  return p.map(function (v) { return v / t; });
+})();
+
+/* 逆变换抽样。renderer 与表格孪生都只认样本数组、不认 pmf，所以 pmf 要先变成样本，
+   这样图与表走的是与后端完全一致的分箱路径，不是两条各算各的路。
+   PRNG 用 mulberry32：全程 Math.imul + >>>0，double 下不丢精度
+   （同文件 poolSamples 的那条 LCG 乘完会超过 2^53，只是恰好够用）。 */
+function ivRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function ivSample(pmf, n, seed) {
+  const cum = []; let c = 0;
+  for (let k = 0; k < pmf.length; k++) { c += pmf[k]; cum.push(c); }
+  const rnd = ivRng(seed), out = [];
+  for (let i = 0; i < n; i++) {
+    const u = rnd();
+    let k = 1;
+    while (k < cum.length - 1 && cum[k] < u) k++;
+    out.push(k);
+  }
+  return out;
+}
+/* 每 5 抽一格的密度，与 P80 示例图的分箱一致（EDGES = 0..100 步长 5）。
+   叠加两条曲线时用密度而不是频数，否则样本量不同的两条线没法比。 */
+function ivDensity(samples, w) {
+  const centers = [], dens = [];
+  for (let lo = 0; lo + w <= 90; lo += w) {
+    centers.push(lo + w / 2);
+    let c = 0;
+    for (let i = 0; i < samples.length; i++) {
+      if (samples[i] > lo && samples[i] <= lo + w) c++;
+    }
+    dens.push(+(c / (samples.length * w)).toFixed(5));
+  }
+  return { x: centers, y: dens };
+}
+
+/* 种子是挑过的：让样本分位数落在 P80 实测的 23 / 81 / 86 上（首次命中 22 / 82 / 86）。
+   示意样本要长得像被示意的对象，否则读者对不上号；这是选一组不误导人的抽样，
+   不是把数据往结论上调。 */
+const IV_GAPS = ivSample(IV_PMF, 3569, 355);        // 池化：P80 实测 3569 个间隔
+const IV_FIRST = ivSample(IV_PMF, 1000, 19);        // 首次命中：每轨道恰好 1 个
+const IV_SSR = ivSample(IV_PMF_SSR, 1500, 11);
+const IV_HITSETS = ['限定卡（6 张）', '全部 SSR（12 张）', '目标卡'];
+
+const IV_SPECS = (function () {
+  const pooled = ivDensity(IV_GAPS, 5);
+  const first = ivDensity(IV_FIRST, 5);
+  const ssr = ivDensity(IV_SSR, 5);
+  const sx = [], sy = [], hx = [], hy = [];
+  for (let n = 0; n <= 90; n++) {
+    let rest = 0;
+    for (let k = n + 1; k <= 90; k++) rest += IV_PMF[k];
+    sx.push(n); sy.push(+rest.toFixed(5));
+  }
+  for (let n = 1; n <= 90; n++) {
+    let risk = 0;
+    for (let k = n; k <= 90; k++) risk += IV_PMF[k];
+    hx.push(n); hy.push(+(IV_PMF[n] / risk).toFixed(4));
+  }
+  return {
+    iv_hist: {
+      chart_type: 'histogram', title: '池化间隔分布',
+      xlabel: '间隔（抽）', ylabel: '密度',
+      data: { samples: IV_GAPS, quantile_lines: [0.05, 0.5, 0.95], density: true },
+      layout_hints: { nbins: 18 },
+    },
+    iv_cdf: {
+      chart_type: 'cdf', title: '累积分布 F(n)',
+      xlabel: '间隔（抽）', ylabel: '累积概率',
+      data: { samples: IV_GAPS },
+    },
+    iv_survival: {
+      chart_type: 'scatter', title: '生存函数 S(n)',
+      xlabel: '间隔（抽）', ylabel: 'P(间隔 > n)',
+      data: { traces: [{ name: 'S(n)', mode: 'lines', marker_symbol: 'none',
+        marker_color: GS.CAT[0], x: sx, y: sy }] },
+      shaded_regions: [{ lower: 80, upper: 90, color: 'rgba(25,118,210,.08)',
+        label: '软保底区间' }],
+      layout_hints: { y_range: [0, 1.02] },
+    },
+    iv_hazard: {
+      chart_type: 'scatter', title: '风险函数 h(n)',
+      xlabel: '已抽抽数 n', ylabel: 'P(第 n 抽出货 | 已抽 n−1 未出)',
+      data: { traces: [{ name: 'h(n)', mode: 'lines', marker_symbol: 'none',
+        marker_color: GS.CAT[0], x: hx, y: hy }] },
+      layout_hints: { y_range: [0, 1.08], mark_points: [
+        { x: 80, y: hy[79], text: 'h(80) = ' + hy[79], pos: 'top' },
+        { x: 90, y: 1, text: '硬保底 h(90) = 1', pos: 'left' }] },
+    },
+    iv_first: {
+      chart_type: 'scatter', title: '首次命中间隔 对 池化间隔',
+      xlabel: '间隔（抽）', ylabel: '密度',
+      /* 一条画线、一条只画点：两条都画线的话，后画的把先画的整条盖住，
+         读者只看得见一条，会以为另一条没出来。点压在线上的读法正好是
+         「两条重合」这件事本身。 */
+      data: { traces: [
+        { name: '池化全部间隔', mode: 'lines', marker_symbol: 'none',
+          marker_color: GS.CAT[1], x: pooled.x, y: pooled.y },
+        { name: '首次命中间隔（每轨道 1 个）', mode: 'markers', marker_size: 7,
+          marker_color: GS.CAT[0], x: first.x, y: first.y }] },
+      layout_hints: {},
+    },
+    iv_kth: {
+      chart_type: 'scatter', title: '第 k 次间隔的均值',
+      xlabel: '第 k 次间隔', ylabel: '间隔（抽）',
+      data: { x: [1, 2, 3, 4, 5], y: [76.4, 76.3, 77.7, 70.2, 60.7] },
+      annotations: [
+        { type: 'hline', value: 75.5, color: '#8b93a3', dash: 'dot',
+          text: '池化均值 75.5' },
+        { type: 'vline', value: 3.5, color: GS.STATUS.warn, dash: 'dash',
+          text: 'k ≥ 4 起有长度偏差' }],
+      /* 轴取整数端点：留 0.4 那种边界值，ECharts 会把轴端标成 0.4 / 5.6，
+         两个刻度都是「凑出来的数」，读者还以为是数据点。 */
+      layout_hints: { x_range: [0, 6], y_range: [50, 90] },
+    },
+    iv_mix: {
+      chart_type: 'scatter', title: '间隔 × 终止卡类型',
+      xlabel: '间隔（抽）', ylabel: '密度',
+      data: { traces: [
+        { name: '终止于限定卡', mode: 'lines', marker_symbol: 'none',
+          marker_color: GS.CAT[0], x: pooled.x, y: pooled.y },
+        { name: '终止于普通 SSR', mode: 'lines', marker_symbol: 'none',
+          marker_color: GS.CAT[1], x: ssr.x, y: ssr.y }] },
+      layout_hints: {},
+    },
+  };
+})();
+
 const categories = [
   { key: 'gdr', name: '全局GDR分析', items: [
     { key: 'gdr_dist', name: 'GDR 分布', main: true, shape: 'sync', chart: 'bars',
@@ -1425,9 +1587,56 @@ const categories = [
       produces: 'worst_01' },
   ]},
 
-  // 构思中：出卡间隔分析（两次出卡之间的间隔分布）。尚无实现，占位标出归属
-  { key: 'interval', name: '间隔分析', pending: true, items: [],
-    pendingDesc: '出卡间隔分析：两次出货之间间隔了多少抽 / 多少天。' },
+  // 间隔分析：P80 的出卡间隔分布，2026-10-09 定稿为只做这七个图表。
+  // 七项全部池化口径（P80 §2.3：单轨道的间隔分布不可辨识），每项带「命中集」参数
+  // （P80 §3.3：命中集必须按保底语义切分，限定卡与普通 SSR 不能混池）。
+  { key: 'interval', name: '间隔分析', items: [
+    { key: 'iv_hist', name: '池化间隔分布', main: true, shape: 'sync', needsStream: true,
+      spec: IV_SPECS.iv_hist, h: 170,
+      fields: [{ k: '命中集', t: 'sel', v: '限定卡（6 张）', opts: IV_HITSETS },
+               { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 20, step: 1 },
+               { k: '叠加', t: 'multi', v: ['分位线'],
+                 opts: ['分位线', '均值线', '累积分布'] }],
+      note: '横轴＝间隔抽数，纵轴＝密度。三条竖线是 5% / 50% / 95% 分位，'
+          + '直接读「典型要等多久、极端要等多久」。全部间隔合在一起算，不按轨道分组。' },
+    { key: 'iv_cdf', name: '累积分布 F(n)', shape: 'sync', needsStream: true,
+      spec: IV_SPECS.iv_cdf, h: 150,
+      fields: [{ k: '命中集', t: 'sel', v: '限定卡（6 张）', opts: IV_HITSETS }],
+      note: '同一份样本的累积视角：直接读「多少比例的卡在 n 抽内出」，'
+          + '不必把密度再心算一遍。' },
+    { key: 'iv_survival', name: '生存函数 S(n)', shape: 'sync', needsStream: true,
+      spec: IV_SPECS.iv_survival, h: 155,
+      fields: [{ k: '命中集', t: 'sel', v: '限定卡（6 张）', opts: IV_HITSETS },
+               { k: '标注软保底区', t: 'sel', v: '是', opts: ['是', '否'] }],
+      note: 'S(n) = P(间隔 > n)，单调下降。右尾在稀疏样本下比密度稳健，'
+          + '直接回答「还要抽多少」。' },
+    { key: 'iv_hazard', name: '风险函数 h(n)', shape: 'sync', needsStream: true,
+      spec: IV_SPECS.iv_hazard, h: 155,
+      fields: [{ k: '命中集', t: 'sel', v: '限定卡（6 张）', opts: IV_HITSETS },
+               { k: '风险集下限', t: 'num', v: 30, min: 1, max: 500, step: 1 }],
+      note: 'h(n) = P(第 n 抽出货 | 已抽 n−1 未出)，是保底机制的逐抽作用本体，'
+          + '可与配置意图逐抽对照（基础平台与软保底拐点都在这条线上）。' },
+    { key: 'iv_first', name: '首次命中间隔', shape: 'sync', needsStream: true,
+      spec: IV_SPECS.iv_first, h: 160,
+      fields: [{ k: '命中集', t: 'sel', v: '限定卡（6 张）', opts: IV_HITSETS }],
+      note: '每轨道恰好一个观测，是唯一一个「逐轨道、由间隔派生、零选择偏差」的量。'
+          + '两条曲线重合，即首次命中与后续间隔同分布。' },
+    { key: 'iv_kth', name: '第 k 次间隔', shape: 'sync', needsStream: true,
+      spec: IV_SPECS.iv_kth, h: 160,
+      fields: [{ k: '命中集', t: 'sel', v: '限定卡（6 张）', opts: IV_HITSETS },
+               { k: 'k 范围', t: 'txt', v: '1–5' }],
+      note: '数值取 P80 §3.4 的实测均值：76.4 / 76.3 / 77.7 / 70.2 / 60.7 抽。'
+          + 'k ≤ 3 与池化一致，k ≥ 4 只有运气好的轨道走得到，有长度偏差，'
+          + '只作诊断不作证据。' },
+    { key: 'iv_mix', name: '间隔 × 终止卡类型', shape: 'sync', needsStream: true,
+      spec: IV_SPECS.iv_mix, h: 165,
+      fields: [{ k: '命中集', t: 'sel', v: '全部 SSR（12 张）', opts: IV_HITSETS },
+               { k: '拆分维度', t: 'sel', v: '终止卡类型',
+                 opts: ['终止卡类型', '池子', '保底规则'] }],
+      note: '全部 SSR 是两个总体的混合：一类终止于限定卡（间隔长），一类终止于普通 SSR'
+          + '（短得多）。混在一起算，短的那一类被池化中位数藏起来，'
+          + '所以命中集必须按保底语义切分。' },
+  ]},
 
   { key: 'search', name: '方案搜索', items: [
     { key: 'plan_search', name: '方案搜索', main: true, shape: 'dispatch', needsStream: false,

@@ -382,13 +382,21 @@
       var d = spec.data || {};
       var traces = d.traces;
       if (traces && traces.length) {
+        /* 只有一条序列时不列「序列」列：一列九十行全同一个名字，
+           既占宽度又没有任何信息，而表的宽度是要跟别的块对齐的。 */
+        var single = traces.length === 1;
         var rows = [];
         traces.forEach(function (t) {
           arr(t.x).forEach(function (x, i) {
-            rows.push([t.name || '', comma(x), num(arr(t.y)[i], 5)]);
+            var v = [comma(x), num(arr(t.y)[i], 5)];
+            rows.push(single ? v : [(t.name || '')].concat(v));
           });
         });
-        return { headers: ['序列', spec.xlabel || 'x', spec.ylabel || 'y'], rows: rows };
+        return {
+          headers: single ? [spec.xlabel || 'x', spec.ylabel || 'y']
+            : ['序列', spec.xlabel || 'x', spec.ylabel || 'y'],
+          rows: rows,
+        };
       }
       return {
         headers: [spec.xlabel || 'x', spec.ylabel || 'y'],
@@ -491,8 +499,11 @@
       if (axis === 'y' && isV) return;
       /* 两条竖直标注线靠得近时（P50 与 P90 本来就近），标签会叠在一起。
          错开靠垂直 offset，不靠换位置：标注线标签一律贴顶，
-         往下的位置是柱子的地盘，标签压上去就没法读了。 */
-      var pos = a.label_pos || (isV ? 'insideEndTop' : 'insideEndRight');
+         往下的位置是柱子的地盘，标签压上去就没法读了。
+         横线的默认位置早先写的是 'insideEndRight'：那不是 markLine 的合法取值
+         （那是 markPoint 的），ECharts 收下后按缺省摆，标签被甩到画布外的块头里，
+         等于没有。横线也用 'insideEndTop'。 */
+      var pos = a.label_pos || 'insideEndTop';
       var dy = isV ? (vi % 2) * 15 : 0;
       if (isV) vi++;
       out.push({
@@ -543,9 +554,12 @@
     });
   }
 
-  /* 把标注层挂到主序列上；没有主序列时由调用方自行处理 */
+  /* 把标注层挂到主序列上；没有主序列时由调用方自行处理。
+     两个轴的标注线都要挂：早先只挂了 axis 参数给的那一个轴（默认 'x'），
+     于是 hline 型标注在任何图型里都被静默丢掉，而 IR（chart_spec.ChartAnnotation.type）
+     里 vline/hline 是并列的两种。分两趟取再拼起来，竖线的错开计数才不受影响。 */
   function withMarks(series, spec, axis) {
-    var ml = markLineOf(spec, axis || 'x');
+    var ml = markLineOf(spec, 'x').concat(markLineOf(spec, 'y'));
     var ma = markAreaOf(spec, axis || 'x');
     var mp = markPointOf(spec);
     if (ml.length) series.markLine = { data: ml };
@@ -620,7 +634,15 @@
     var samples = arr((spec.data || {}).samples);
     var sorted = samples.slice().sort(function (a, b) { return a - b; });
     var n = sorted.length || 1;
-    var pts = sorted.map(function (x, i) { return [x, +((i + 1) / n).toFixed(5)]; });
+    /* 重复取值只留最后一个：间隔这类量落在整数格点上，三千多个样本只有不到九十个
+       不同取值，逐样本连线是在同一列上反复画同一段。与 TABLES.cdf 用同一条归并，
+       图与表才是同一份读数；顺带把点数控回 3000 以内，不至于为一条 CDF
+       把渲染器顶到 canvas（canvas 下轴线上的 tabular-nums 会丢掉）。 */
+    var pts = [];
+    for (var i = 0; i < sorted.length; i++) {
+      if (i + 1 < sorted.length && sorted[i + 1] === sorted[i]) continue;
+      pts.push([sorted[i], +((i + 1) / n).toFixed(5)]);
+    }
     return {
       tooltip: { trigger: 'axis', axisPointer: { type: 'line' },
         valueFormatter: function (v) { return num(v, 4); } },
@@ -635,7 +657,9 @@
       series: [withMarks({
         type: 'line', data: pts, showSymbol: false, sampling: 'lttb',
         lineStyle: { width: 2, cap: 'round', join: 'round', color: cat(0) },
-        areaStyle: { color: cat(0), opacity: 0.10 },   // 一层薄雾，不是实块
+        /* 不填面积。CDF 曲线下的面积没有任何含义（它不是密度），而曲线一旦爬到
+           100%，那一侧就变成一大块实心方块：读者会把它当成一个对象，其实只是
+           「这里已经饱和」。密度图填面积是对的，CDF 不填。 */
         step: (spec.layout_hints || {}).step || false,
         name: spec.ylabel || '累积概率',
       }, spec)],
@@ -775,7 +799,10 @@
           emphasis: { focus: 'series' },
         };
       });
-      if (series.length && (spec.annotations || []).length) {
+      /* 无条件挂标注层。原来的守卫只看 annotations，于是「只有着色区间」
+         （生存函数标软保底区）与「只有数据点标注」的 spec 什么都没挂上，
+         图上静默缺一层。withMarks 在三个来源都为空时本来就不动 series。 */
+      if (series.length) {
         series[0] = withMarks(series[0], spec);
       }
     } else {

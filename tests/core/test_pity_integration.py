@@ -331,10 +331,11 @@ class TestRarityInferenceConsistency:
                 spec = env.pity_engine.get_spec(f'{banner.id}.{pid}')
                 if spec is None:
                     continue
-                # 不变量①：ssr_ids 与 scope_cards['ssr'] 是同一集合
+                # 不变量①：ssr_ids ⊆ scope_cards['ssr']（需要的是「查得到」，不是「相等」
+                #   ——`batch_simulator` 建 ssr_ids 时排除 `_no_card`，等号会在合法配置上误红）
                 sc_ssr = {c.lower() for c in spec.scope_cards.get('ssr', ())}
-                assert {c.lower() for c in spec.ssr_ids} == sc_ssr, \
-                    f'{banner.id}.{pid}: ssr_ids != scope_cards["ssr"]'
+                assert {c.lower() for c in spec.ssr_ids} <= sc_ssr, \
+                    f'{banner.id}.{pid}: ssr_ids 未被 scope_cards["ssr"] 覆盖'
                 # 不变量②：featured_ids ⊆ scope_cards
                 all_sc = {c.lower() for cs in spec.scope_cards.values() for c in cs}
                 assert {c.lower() for c in spec.featured_ids} <= all_sc, \

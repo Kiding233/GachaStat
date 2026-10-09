@@ -269,10 +269,14 @@ def test_synthetic_pool_specs_satisfy_alignment_invariants():
     for banner in cfg['pools']:
         spec = engine.get_spec(f'{banner.id}.main')
         assert spec is not None
-        # ① ssr_ids 与 scope_cards['ssr'] 是同一集合（大小写归一后）
+        # ① ssr_ids ⊆ scope_cards['ssr']（大小写归一后）
+        #    用包含而非相等：`batch_simulator` 建 ssr_ids 时排除 `_no_card`
+        #    （:1091 的 `cid != '_no_card'`），而 `compute_scope_mappings` 会把它计入
+        #    scope_cards，故 SSR 稀有度的 `_no_card` 会让等号在**合法配置**上误红。
+        #    这里需要的是「查得到」，即包含。
         sc_ssr = {c.lower() for c in spec.scope_cards.get('ssr', ())}
-        assert {c.lower() for c in spec.ssr_ids} == sc_ssr, \
-            f'{banner.id}: ssr_ids != scope_cards["ssr"]'
+        assert {c.lower() for c in spec.ssr_ids} <= sc_ssr, \
+            f'{banner.id}: ssr_ids 未被 scope_cards["ssr"] 覆盖'
         # ② featured_ids ⊆ scope_cards
         all_sc = {c.lower() for cs in spec.scope_cards.values() for c in cs}
         assert {c.lower() for c in spec.featured_ids} <= all_sc, \

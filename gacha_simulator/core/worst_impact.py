@@ -83,7 +83,6 @@ class WorstImpactAnalyzer:
         self._ref_pool_entry = None
         self._featured_ids: Set[str] = set()
         self._ssr_ids: Set[str] = set()
-        self._standard_ssr_ids: Set[str] = set()
         self._featured_prob: float = 0.0
         self._pool_duration = 21 * DAY
         self._parsed_cost = [{'draw_resource': 160}]
@@ -417,7 +416,6 @@ class WorstImpactAnalyzer:
                 if r.id in self._ssr_ids
             )
 
-        self._standard_ssr_ids = self._ssr_ids - self._featured_ids
 
         # P61（ISSUE-333）：end_day=None（永久 Banner）时展平视图回填 None——
         # 减法 TypeError；按永久池语义兜底 21 天
@@ -475,7 +473,6 @@ class WorstImpactAnalyzer:
                 if r.id in self._ssr_ids
             )
 
-        self._standard_ssr_ids = self._ssr_ids - self._featured_ids
         self._rewards = rewards
 
     def _build_pity_engine(self, pools):
@@ -529,8 +526,19 @@ class WorstImpactAnalyzer:
                     matching.append(pdef.name)
 
             # 卡集合按池生成——四个映射与 card_to_slot 同源，id 与池内 reward 一致
+            wi_pool = pools[pool_idx].pools['main']
             scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = (
-                compute_scope_mappings(pools[pool_idx].pools['main']))
+                compute_scope_mappings(wi_pool))
+
+            # 构造期不变量（强制）：卡集合必须覆盖池内每一张卡。两者一旦错开，保底不会
+            # 报错，只会静默不生效（聚合把卡算进别的槽位 / 卡级稀有度推断落空），故在此
+            # 拦下。见 §3.9.3 ISSUE-006 与 tests/core/test_worst_impact.py 的对齐测试。
+            _covered = set(card_to_slot)
+            _missing = {r.id for r, _ in wi_pool.rewards} - _covered
+            if _missing:
+                raise ValueError(
+                    f'{qualified_key}: 卡集合未覆盖池内 reward {sorted(_missing)}——'
+                    'scope_cards 必须与池内 id 一致，否则保底静默失效（ISSUE-006）')
 
             pool_specs[qualified_key] = PoolPitySpec(
                 pity_names=matching,

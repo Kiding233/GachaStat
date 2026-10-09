@@ -271,6 +271,13 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
             ssr = (pool_ssr_map.get(qualified_key) or pool_ssr_map.get(pool_key, set())
                    if pool_ssr_map else set())
             scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(p)
+            # 构造期不变量（强制）：同 worst_impact._build_pity_engine——卡集合与池内 id
+            # 一旦错开，保底静默失效而不报错
+            _missing = {r.id for r, _ in p.rewards} - set(card_to_slot)
+            if _missing:
+                raise ValueError(
+                    f'{qualified_key}: 卡集合未覆盖池内 reward {sorted(_missing)}——'
+                    'scope_cards 必须与池内 id 一致，否则保底静默失效（ISSUE-006）')
             pool_specs[qualified_key] = PoolPitySpec(
                 pity_names=spec_pity_names,
                 featured_ids=featured,

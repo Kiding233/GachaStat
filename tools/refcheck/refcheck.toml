@@ -26,7 +26,8 @@ external = [
 # 因此只在逐条看过引用上下文之后再填，必要时用 [[resolve.scoped]] 按源文件分别裁决。
 [resolve.alias]
 # 三条都经实据核对后填入：候选里只有目标那个容得下被引行号。
-# batch_simulator.py: 候选中 gui/batch_simulator.py 是 0 行空文件（歧义噪声），
+# batch_simulator.py: 候选中 gui/batch_simulator.py 是 0 行空文件（歧义噪声；
+#   2026-10-10 该空文件已移除，见 commit 8e0de08——本条理由成为历史，alias 裁决不变），
 #   service/batch_simulator.py 937 行，被引的 173-177 / 250-253 / 627 / 776-781 只有它容得下。
 "batch_simulator.py" = "gacha_simulator/service/batch_simulator.py"
 # analysis_service.py: 另一候选在 .recycle_bin 内且仅 78 行，被引的 470-509 只有 webui 版容得下。

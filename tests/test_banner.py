@@ -944,3 +944,83 @@ def test_p72_mixed_draws_cross_banner_key_integrity():
         {'t1': 1, 't2': 1}, gdr_key='all_targets', gdr_threshold=1.0, alpha=0.5)
     for pr in analysis.pool_results:
         assert '.' not in pr.pool_id, f'脆弱性 pool_id 应为 banner 级，got {pr.pool_id}'
+
+
+# ════════════════════════════════════════════════════════
+# 保底调整的卡级还原（缺陷 12）
+# ════════════════════════════════════════════════════════
+
+class TestPityAdjustmentReachesCardLevel:
+    """保底调整必须逐槽位落到卡级：Σ 恒为 1，且每槽位的卡级合计 == 槽位级调整值。
+
+    缺陷 12：`banner.draw` 的 scale_factors 还原段用 `infer_rarity_from_spec` 反查
+    每张卡的槽位，而该函数原先只认 SSR，SR / R 得到 None、缩放被跳过——保底从
+    SR / R 取走的质量从未在卡级字典里扣除，Σ 涨到 1.5+，`pool.draw` 按 `random()*Σ`
+    采样时把全部卡等比稀释，保底效果被打折（真实 config 的 ssr_soft 第 90 抽：
+    意图 100%、实际 50.1%）。
+    """
+
+    SLOT_OF = {'ssr_up': 'ssr_featured', 'ssr_std': 'ssr', 'sr_a': 'sr', 'r_a': 'r'}
+
+    def _run_one_draw(self, monkeypatch):
+        from gacha_simulator.core import pool as pool_mod
+        from gacha_simulator.core.pity import PityState
+        from gacha_simulator.core.state import GachaState
+
+        rewards = [
+            _reward('ssr_up', 0.6, 'SSR', featured=True),
+            _reward('ssr_std', 0.3, 'SSR'),
+            _reward('sr_a', 5.1, 'SR'),
+            _reward('r_a', 94.0, 'R'),
+        ]
+        b = _ssr_only_banner('b1', pools=[_pool(rewards=rewards)])
+        # counter_init=0 时首个 before_draw 即 counter=1 → boost 50%，保底必触发
+        store = _make_store([b], pity_enabled=True, pity_defs=[
+            PityDef(name='ssr_soft', btype='soft_step', scope='ssr', target_featured=True,
+                    deltas=((0, 0.0), (1, 50.0)), pools=('*',)),
+        ])
+        env = SimulationEnvBuilder.from_config_store(store)
+        banner = env.pools[0]
+        pool = banner.active_pool
+
+        captured = {}
+        orig_apply = pool_mod.Pool._apply_probabilities
+
+        def spy_apply(self, probs):
+            captured['card'] = dict(probs)
+            return orig_apply(self, probs)
+
+        monkeypatch.setattr(pool_mod.Pool, '_apply_probabilities', spy_apply)
+
+        orig_bd = env.pity_engine.before_draw
+
+        def spy_bd(key, st, dist):
+            captured['slot_before'] = dict(dist)
+            out = orig_bd(key, st, dist)
+            captured['slot_after'] = dict(out)
+            return out
+
+        monkeypatch.setattr(env.pity_engine, 'before_draw', spy_bd)
+
+        banner.draw(GachaState(), env.pity_engine,
+                    PityState.from_dict(env.pity_state_init), pool)
+        return captured
+
+    def test_card_level_sum_is_one_and_matches_slot_totals(self, monkeypatch):
+        cap = self._run_one_draw(monkeypatch)
+        card, before, after = cap['card'], cap['slot_before'], cap['slot_after']
+
+        # 验收面守门：保底必须真的改了分布，否则本测试恒真
+        assert after != before, '保底未生效——本测试无验收面'
+        assert after['sr'] < before['sr'], '软保底应从 SR 取质量'
+
+        # ① 卡级字典是归一化的（这正是缺陷 12 破坏的那条）
+        assert abs(sum(card.values()) - 1.0) < 1e-12, f'Σ = {sum(card.values())}'
+
+        # ② 每个槽位的卡级合计 == 槽位级调整值（逐槽位精确相等）
+        by_slot: dict = {}
+        for cid, v in card.items():
+            by_slot[self.SLOT_OF[cid]] = by_slot.get(self.SLOT_OF[cid], 0.0) + v
+        assert set(by_slot) == set(after), f'槽位集合不符：{set(by_slot)} vs {set(after)}'
+        for slot, total in after.items():
+            assert abs(by_slot[slot] - total) < 1e-12, f'{slot}: {by_slot[slot]} != {total}'

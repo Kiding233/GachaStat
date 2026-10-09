@@ -232,8 +232,16 @@ class Pool:
 # Banner.draw 与 gacha_service 共用，只依赖 pool.rewards + PoolPitySpec 结构。
 
 def infer_rarity_from_spec(card_id: str, pity_spec) -> Optional[str]:
-    """从 PoolPitySpec 推断卡牌稀有度（大小写归一化）。"""
+    """从 PoolPitySpec 推断卡牌稀有度（大小写归一化）。
+
+    先按 scope_cards 反查——它含全部稀有度，是唯一能认出 SR / R 的来源；
+    未覆盖时回退 ssr_ids / featured_ids（两者在 worst_impact 路径上是重命名后的
+    池内 id，而该路径的 scope_cards 按原始 id 建、覆盖不到，见 ISSUE-006）。
+    """
     cid = card_id.lower()
+    for rarity, cards in (pity_spec.scope_cards or {}).items():
+        if cid in {c.lower() for c in cards}:
+            return rarity.lower()
     if pity_spec.ssr_ids and cid in {c.lower() for c in pity_spec.ssr_ids}:
         return 'ssr'
     if pity_spec.featured_ids and cid in {c.lower() for c in pity_spec.featured_ids}:

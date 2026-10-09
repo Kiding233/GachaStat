@@ -270,3 +270,81 @@ class TestDidFireUnified:
         other_rarity = PityContext(draw=_mk_draw('sf1', 'sr', True),
                                    current={}, state=state)
         assert bh.did_fire(other_rarity) is False
+
+
+# ════════════════════════════════════════════════════════
+# 两份「卡 id → 稀有度」实现的一致性（缺陷 12 的守卫）
+# ════════════════════════════════════════════════════════
+
+class TestRarityInferenceConsistency:
+    """A 与 B 必须对同一 spec 给出同一答案。
+
+    - **A** = `pool.infer_rarity_from_spec`——喂**概率**路径（`scale_factors` 还原段、
+      `aggregate_probs_by_rarity`）
+    - **B** = `PityEngine._infer_rarity`——喂**状态**路径（`DrawInfo.reward_rarity`
+      → `_should_reset` / `_is_trigger_rarity` / `did_fire`）
+
+    两者是同一条规则的两处实现，**已经漂移过一次**：缺陷 12 只存在于 A（SR / R 返回
+    `None`），B 从来没有（它一直遍历 `scope_cards`）。分歧的后果是「同一张卡在概率里
+    是 SR、在状态里是 SSR」，不报错、不崩溃。本测试把这种静默漂移变成响亮失败。
+
+    `None`（A 的「不属于任何槽位」）与 `''`（B 的「无稀有度」）是两种哨兵，语义等价，
+    比较时归一。
+    """
+
+    @staticmethod
+    def _both(cid, spec, engine):
+        from gacha_simulator.core.pool import infer_rarity_from_spec
+        return ((infer_rarity_from_spec(cid, spec) or None),
+                (engine._infer_rarity(cid, spec) or None))
+
+    def test_agree_on_multi_rarity_spec(self):
+        """不依赖真配置的最小构造：三种稀有度各给一张卡。"""
+        spec = PoolPitySpec(
+            pity_names=['p'],
+            scope_cards={'ssr': ('ssr_a',), 'sr': ('sr_a',), 'r': ('r_a',)},
+            featured_cards={'ssr': ('ssr_a',)},
+            ssr_ids={'ssr_a'},
+            featured_ids={'ssr_a'},
+        )
+        engine = PityEngine({'k': spec}, [])
+        for cid in ('ssr_a', 'sr_a', 'r_a', 'not_in_spec'):
+            a, b = self._both(cid, spec, engine)
+            assert a == b, f'{cid}: A={a!r} B={b!r}（两份实现分歧）'
+
+    def test_agree_on_real_config_and_invariants_hold(self):
+        """真实配置全量扫一遍，并断言两条支撑「必然一致」的不变量。
+
+        不变量成立时 A 与 B 必然给出同一答案，故同时断言它们——任一条破掉，
+        本测试即红（这是比「逐卡比对」更早的预警）。
+        """
+        from pathlib import Path
+        from gacha_simulator.core.config_toml import load_toml
+        from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
+
+        cfg = Path(__file__).resolve().parents[2] / 'gacha_simulator' / 'config' / 'config.toml'
+        env = SimulationEnvBuilder.from_config_store(load_toml(str(cfg)))
+
+        checked = 0
+        for banner in env.pools:
+            for pid, pool in banner.pools.items():
+                spec = env.pity_engine.get_spec(f'{banner.id}.{pid}')
+                if spec is None:
+                    continue
+                # 不变量①：ssr_ids 与 scope_cards['ssr'] 是同一集合
+                sc_ssr = {c.lower() for c in spec.scope_cards.get('ssr', ())}
+                assert {c.lower() for c in spec.ssr_ids} == sc_ssr, \
+                    f'{banner.id}.{pid}: ssr_ids != scope_cards["ssr"]'
+                # 不变量②：featured_ids ⊆ scope_cards
+                all_sc = {c.lower() for cs in spec.scope_cards.values() for c in cs}
+                assert {c.lower() for c in spec.featured_ids} <= all_sc, \
+                    f'{banner.id}.{pid}: featured_ids 不在 scope_cards 内'
+
+                for rwd, _ in pool.rewards:
+                    a, b = self._both(rwd.id, spec, env.pity_engine)
+                    assert a == b, f'{rwd.id} @ {banner.id}.{pid}: A={a!r} B={b!r}'
+                    # A 的答案还必须与该卡在池里的真实稀有度一致
+                    real = (rwd.extra_info.get('rarity') or '').lower() or None
+                    assert a == real, f'{rwd.id} @ {banner.id}.{pid}: A={a!r} 真实={real!r}'
+                    checked += 1
+        assert checked > 0, '未扫到任何卡——本测试无验收面'

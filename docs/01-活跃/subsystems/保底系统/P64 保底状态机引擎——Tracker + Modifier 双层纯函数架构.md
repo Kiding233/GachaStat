@@ -1583,6 +1583,8 @@ if rarity_probs != adjusted:
 pool._apply_probabilities(probabilities)
 ```
 
+> **⚠ 现状路径有一处缺陷（2026-10-09 实测确认，缺陷 12）**：上段伪代码的「槽位 → 卡级（还原）」一步**对 SR / R 卡静默跳过缩放**——它用 `infer_rarity_from_spec` 反查槽位，而该函数只认 SSR（[pool.py:234](gacha_simulator/core/pool.py#L234)），SR / R 得到 `None` → `if slot in scale_factors` 为假。后果是喂给 `pool.draw()` 的卡级字典 Σ > 1，采样时按 `1/Σ` 稀释，**软保底效果被打折**（真实 `config.toml` 的 `ssr_soft` 第 90 抽：意图 100%、实际 50.1%）。S8 的卡级管道会顺带消除它（往返段整体删除），但**在那之前模拟结果持续受影响**；完整实测与处置选项见 [04-问题.md](docs/01-活跃/subsystems/保底系统/04-问题.md) 缺陷 12，与 S8 验收口径的关系见 §六 的差异归因清单第 (f) 条。
+
 **目标**（S8 后，往返全部消失）：
 
 ```
@@ -2380,6 +2382,7 @@ class RotatingModifier(Modifier):
   （c）**`rotating_cr` / `rotating_cr_soft` 的随机流分叉（裁决 6B，2026-10-05）**：掷骰自 `before_draw`（Modifier 侧）移至 `after_draw`（`StreakTracker.commit`），**分布逐场等价但全局 `random` 消费位置改变**，固定种子下自首次拦截起样本路径分叉。**这两个类型无法通过 M1「与旧类逐场一致」**，验收改为「分布逐场等价 + 本项登记」。H4 协议的三条短路条件与下标裁剪仍须逐位复刻（§3.1.2 的 CR 随机数消耗协议段）
   （d）**`boost` 的 U 由 scope 改回全池（§3.1.5.2.4 错误 ②）**：原稿把 soft 的 U 写成 scope，该形态下 soft 整体不生效（SSR 总率不变）。这是**修复**不是差异，须由 S5b 的等价性测试覆盖「soft 与旧类逐场一致」来确认——若该测试此前通过而按旧稿实现，说明测试本身有缺口，一并修
   （e）**`assign` 的目标值除以当前值（§3.1.5.2.4 错误 ①）**：同上，属修复。须新增专项断言「`hard` 的目标组内比例与旧实现一致」（不能只断言目标组总量 = 1.0，那对两处错误都通过）
+  （f）**卡级还原段跳过 SR / R 的缩放（缺陷 12，2026-10-09 实测确认）**：S5 的管道是「卡级 → 槽位级 → `before_draw` → **还原回卡级**」，而还原段用 `infer_rarity_from_spec` 反查槽位——**该函数只认 SSR，SR / R 卡得到 `None`，缩放被跳过**（[banner.py:240-247](gacha_simulator/core/banner.py#L240-L247) + [pool.py:234](gacha_simulator/core/pool.py#L234)），故喂给 `pool.draw()` 的卡级字典 **Σ > 1**（真实 `config.toml` 的 `ssr_soft` 在爬升末端实测 Σ = 1.996）。**S8 的卡级管道没有这个往返，输出即正确分布**，两者**必然不同**；且此处 `_adjusted_total_weight` 的隐含归一化**抹不平**（它同时改变 SR / R 与 SSR 的相对比例）：同一抽次实测 S5 的有效 SSR = 0.5010，S8 应为 1.0000。**这是修复不是差异**，但必须登记，否则 S8 的「对 S5 产物容差 1e-12」验收会被误判为回归。完整实测与处置选项见 [04-问题.md](docs/01-活跃/subsystems/保底系统/04-问题.md) 缺陷 12
 <!-- REVIEW-FIX-PREV: AUDIT-BREAK-5 -->
 <!-- REVIEW-FIX-PREV: AUDIT-BREAK-6 -->
 <!-- REVIEW-FIX-PREV: AUDIT-BREAK-8 -->

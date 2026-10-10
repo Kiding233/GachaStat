@@ -15,8 +15,9 @@
 
 from gacha_simulator.core.pity_primitives import DrawInfo, PityContext, PityState
 from gacha_simulator.core.pity_tracker import (
-    CounterTracker, FateTracker, FlagTracker, NamespaceTracker, StreakTracker,
-    Tracker,
+    AlwaysActive, CounterTracker, DependentActive, DependentFiniteActive,
+    FateTracker, FiniteActive, FlagTracker, Lifecycle, NamespaceTracker,
+    StreakTracker, Tracker,
 )
 
 NAME = 'ssr_hard'
@@ -853,3 +854,226 @@ class TestNamespaceTracker:
         except ValueError:
             return
         raise AssertionError('未拒绝空 namespace')
+
+
+# ══════════════════════════════════════════════════════════════════
+# S1d：Lifecycle 五方法族 + build_lifecycle
+# ══════════════════════════════════════════════════════════════════
+
+from gacha_simulator.core.pity_primitives import LifecycleConfig  # noqa: E402
+from gacha_simulator.core.pity import build_lifecycle  # noqa: E402
+from gacha_simulator.core.config_store import PityDef  # noqa: E402
+
+LC_NAME = 'ssr_hard'
+
+
+def _pdef(**kw):
+    pd = PityDef(name='x', btype='hard')
+    for k, v in kw.items():
+        setattr(pd, k, v)
+    return pd
+
+
+class TestBuildLifecycle:
+    """`build_lifecycle` 按 §3.1.3 的四组合取值表逐行。"""
+
+    def test_build_lifecycle_four_combinations(self):
+        """`depends_on` 空/非空 × `max_triggers` 0/正——四组合各自产出对应类。
+
+        两维**独立**取值（2026-09-28 修正）：`depends_on` 非空**不**吞掉
+        `max_triggers`，两维同时配置时产出 `DependentFiniteActive`。
+        """
+        for kw, want, keys in [
+            ({}, 'AlwaysActive', ()),
+            ({'max_triggers': 2}, 'FiniteActive', ('triggers',)),
+            ({'depends_on': 'src'}, 'DependentActive', ()),
+            ({'depends_on': 'src', 'max_triggers': 3}, 'DependentFiniteActive',
+             ('triggers',)),
+        ]:
+            lc = build_lifecycle(_pdef(**kw))
+            assert type(lc).__name__ == want, f'{kw} → {type(lc).__name__}'
+            assert lc.state_keys() == keys, f'{kw} 的 state_keys 不符'
+
+    def test_build_lifecycle_carries_both_cfg_fields(self):
+        """`cfg` 的两个字段四个组合都带入，且两个属性在**全部四类**上都可读
+        （ISSUE-406：`_build_activation_graph` 对每条 behavior 读 `lc.depends_on`）。"""
+        for kw in ({}, {'max_triggers': 2}, {'depends_on': 'src'},
+                   {'depends_on': 'src', 'max_triggers': 3}):
+            lc = build_lifecycle(_pdef(deactivate_on_early_hit=True, **kw))
+            assert lc.deactivate_on_early_hit is True
+            assert lc.depends_on == kw.get('depends_on')
+            assert lc.namespace is None
+
+    def test_build_lifecycle_retirement_axis_is_max_triggers(self):
+        """退役维取 `max_triggers`，**不是** `deactivate_on_early_hit`。
+
+        后者是与两维正交的第三个开关——只配它时仍产出 `AlwaysActive`，
+        退役由 `should_deactivate` 单独判定。
+        """
+        lc = build_lifecycle(_pdef(deactivate_on_early_hit=True))
+        assert isinstance(lc, AlwaysActive)
+        assert lc.state_keys() == ()
+
+
+class TestLifecycleInitialize:
+    """`initialize` 的写入面：`Always` 维写 `name` + 每个命名空间；`Dependent` 维空实现。"""
+
+    def test_always_active_writes_name_and_namespaces(self):
+        lc = build_lifecycle(_pdef())
+        st = PityState()
+        lc.initialize(st, LC_NAME, ('ssr_soft',))
+        assert st.get(LC_NAME, '_active') is True
+        assert st.get('ssr_soft', '_active') is True, '命名空间须一并写入（ISSUE-407）'
+
+    def test_finite_active_writes_active_too(self):
+        """`FiniteActive` 首触发前生效，与 `AlwaysActive` 同。"""
+        lc = build_lifecycle(_pdef(max_triggers=2))
+        st = PityState()
+        lc.initialize(st, LC_NAME, ())
+        assert st.get(LC_NAME, '_active') is True
+
+    def test_dependent_active_initialize_is_noop(self):
+        """`Dependent*` 不写 `_active`——由引擎的 `depends_on` 传播置位。"""
+        for kw in ({'depends_on': 'src'}, {'depends_on': 'src', 'max_triggers': 2}):
+            lc = build_lifecycle(_pdef(**kw))
+            st = PityState()
+            lc.initialize(st, LC_NAME, ('ssr_soft',))
+            assert st.get(LC_NAME, '_active') is None, f'{kw} 不得写 _active'
+            assert st.get('ssr_soft', '_active') is None
+
+    def test_initialize_dedupes_name_in_namespaces(self):
+        """`name` 也在 `namespaces` 里时不重复（并集语义）。"""
+        lc = build_lifecycle(_pdef())
+        st = PityState()
+        lc.initialize(st, LC_NAME, (LC_NAME, 'ssr_soft'))
+        assert set(lc._ns_active) == {LC_NAME, 'ssr_soft'}
+
+
+class TestLifecycleRetirement:
+    """`should_deactivate` 的四实参语义 + `Finite*` 的触发计数。"""
+
+    def test_should_deactivate_explicit_fired_both_states(self):
+        """四实参形态：`fired` 真 / 假两态各一条（未配退役条件时恒 False）。"""
+        lc = build_lifecycle(_pdef())
+        st = PityState()
+        ctx = _ctx(state=st)
+        assert lc.should_deactivate(ctx, st, LC_NAME, False) is False
+        assert lc.should_deactivate(ctx, st, LC_NAME, True) is False
+
+    def test_deactivate_on_early_hit_retires_on_fired(self):
+        """配 `deactivate_on_early_hit` 时：`fired=True` → 退役；`False` → 不退役。"""
+        lc = build_lifecycle(_pdef(deactivate_on_early_hit=True))
+        st = PityState()
+        ctx = _ctx(state=st)
+        assert lc.should_deactivate(ctx, st, LC_NAME, False) is False
+        assert lc.should_deactivate(ctx, st, LC_NAME, True) is True
+
+    def test_finite_active_counts_only_on_fired(self):
+        """`triggers` **只在 `fired` 时累加**——无条件累加会退化为「抽数」。
+
+        `max_triggers=2` 若按抽数计会在第 2 抽退役，与「触发 N 次后退役」相反。
+        """
+        lc = build_lifecycle(_pdef(max_triggers=2))
+        st = PityState()
+        ctx = _ctx(state=st)
+        for _ in range(5):
+            assert lc.should_deactivate(ctx, st, LC_NAME, False) is False
+        assert st.get(LC_NAME, 'triggers', 0) == 0, '未触发不得累加'
+
+        assert lc.should_deactivate(ctx, st, LC_NAME, True) is False
+        assert st.get(LC_NAME, 'triggers', 0) == 1
+        assert lc.should_deactivate(ctx, st, LC_NAME, True) is True
+        assert st.get(LC_NAME, 'triggers', 0) == 2
+
+    def test_dependent_finite_counts_after_activation(self):
+        """`DependentFiniteActive` 同样按 `fired` 计数（自激活后起算由骨架的
+        `is_active` 早退保证，本层只验计数）。"""
+        lc = build_lifecycle(_pdef(depends_on='src', max_triggers=1))
+        st = PityState()
+        ctx = _ctx(state=st)
+        assert lc.should_deactivate(ctx, st, LC_NAME, True) is True
+        assert st.get(LC_NAME, 'triggers', 0) == 1
+
+    def test_triggers_not_stored_on_lifecycle_object(self):
+        """计数落在 state 而非 Lifecycle 对象上——对象在同一 worker 内跨模拟复用，
+        对象内计数会跨模拟泄漏（破坏「固定种子可复现」）。"""
+        lc = build_lifecycle(_pdef(max_triggers=2))
+        a, b = PityState(), PityState()
+        ctx_a, ctx_b = _ctx(state=a), _ctx(state=b)
+        lc.should_deactivate(ctx_a, a, LC_NAME, True)
+        assert lc.should_deactivate(ctx_b, b, LC_NAME, True) is False, \
+            '第二个 state 的计数须从 0 起算'
+        assert a.get(LC_NAME, 'triggers', 0) == 1
+        assert b.get(LC_NAME, 'triggers', 0) == 1
+
+
+class TestLifecycleProtocol:
+    """`is_active` / `deactivate` / `rebind` 对称性 / `state_keys` / `namespace`。"""
+
+    def test_is_active_reads_default_false(self):
+        lc = build_lifecycle(_pdef())
+        st = PityState()
+        assert lc.is_active(st, LC_NAME) is False, '缺键时默认 False（对齐旧引擎）'
+        lc.initialize(st, LC_NAME, ())
+        assert lc.is_active(st, LC_NAME) is True
+
+    def test_deactivate_clears_only_name(self):
+        """`deactivate` 只清 `name` 的 `_active`，命名空间的与旧实现同形（不被触碰）。"""
+        lc = build_lifecycle(_pdef())
+        st = PityState()
+        lc.initialize(st, LC_NAME, ('ssr_soft',))
+        lc.deactivate(st, LC_NAME)
+        assert st.get(LC_NAME, '_active') is False
+        assert st.get('ssr_soft', '_active') is True, '命名空间的 _active 不被 deactivate 触碰'
+
+    def test_rebind_is_symmetric_with_initialize(self):
+        """`rebind(state, name, namespaces)` 与 `initialize` 实参面对称——对**并集中
+        每个** Flag 重定向（ISSUE-917）：只重绑 `name` 会让 `X_soft` 的 Flag 在
+        worker 内连跑第 2..N 场时仍指上一场 state。"""
+        lc = build_lifecycle(_pdef())
+        old = PityState()
+        lc.initialize(old, LC_NAME, ('ssr_soft',))
+        assert old.get(LC_NAME, '_active') is True
+
+        new = PityState()
+        lc.rebind(new, LC_NAME, ('ssr_soft',))
+        assert lc._ns_active[LC_NAME]._state is new
+        assert lc._ns_active['ssr_soft']._state is new, '命名空间的 Flag 须同批重定向'
+
+        lc.deactivate(new, LC_NAME)
+        assert new.get(LC_NAME, '_active') is False
+        assert old.get(LC_NAME, '_active') is True, '旧 state 不得再被触碰'
+
+    def test_state_keys_all_four(self):
+        """`state_keys()`：`Finite*` 且 `max_triggers > 0` 时为 `('triggers',)`，其余 `()`。"""
+        assert build_lifecycle(_pdef()).state_keys() == ()
+        assert build_lifecycle(_pdef(max_triggers=1)).state_keys() == ('triggers',)
+        assert build_lifecycle(_pdef(depends_on='s')).state_keys() == ()
+        assert build_lifecycle(_pdef(depends_on='s', max_triggers=1)).state_keys() == \
+            ('triggers',)
+
+    def test_namespace_default_none(self):
+        assert build_lifecycle(_pdef()).namespace is None
+
+    def test_base_lifecycle_defaults(self):
+        """基类默认形态即「无退役条件的 Always 维」——五方法均可直接调用。"""
+        lc = Lifecycle()
+        st = PityState()
+        ctx = _ctx(state=st)
+        lc.initialize(st, LC_NAME, ())
+        assert lc.is_active(st, LC_NAME) is True
+        assert lc.should_deactivate(ctx, st, LC_NAME, True) is False
+        lc.rebind(st, LC_NAME, ())
+        lc.deactivate(st, LC_NAME)
+        assert lc.state_keys() == ()
+        assert lc.depends_on is None
+        assert lc.deactivate_on_early_hit is False
+
+    def test_lifecycle_config_default_bag(self):
+        """未传 `cfg` 时构造默认参数袋（骨架的兜底默认 `AlwaysActive()` 走这条）。"""
+        lc = AlwaysActive()
+        assert isinstance(lc._cfg, LifecycleConfig)
+        assert FiniteActive(max_triggers=2)._max_triggers == 2
+        assert isinstance(DependentActive(LifecycleConfig(depends_on='s')), Lifecycle)
+        assert isinstance(DependentFiniteActive(LifecycleConfig(depends_on='s'),
+                                                max_triggers=1), FiniteActive)

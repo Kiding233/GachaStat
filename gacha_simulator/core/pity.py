@@ -11,8 +11,43 @@ from .pity_primitives import (  # noqa: F401
     Counter, Flag, DrawInfo, PityContext, LifecycleConfig, PityState,
     _SOFT_TYPES, _HARD_TYPES, _EVENT_DRIVEN_TYPES,
 )
+from .pity_tracker import (  # noqa: F401
+    AlwaysActive, DependentActive, DependentFiniteActive, FiniteActive, Lifecycle,
+)
 
 logger = logging.getLogger(__name__)
+
+
+
+# ── P64 S1d：生命周期字段 → Lifecycle 对象的唯一转换点（ISSUE-301）──
+
+def build_lifecycle(pdef) -> Lifecycle:
+    """把 `PityDef` 的两个生命周期字段转成 Lifecycle 对象——全库唯一转换点。
+
+    两个维度**独立取值**（2026-09-28 修正：非「`depends_on` 优先」）：
+    激活维 = `depends_on` 非空 ? `Dependent` : `Always`；退役维 =
+    `max_triggers > 0` ? `AfterN(n)` : `Never`。四组合全部合法（§3.1.3 的四行表）。
+
+    **注意退役维取 `max_triggers`，不是 `deactivate_on_early_hit`**——后者是与两维
+    正交的**第三个开关**（布尔，命中即退役），四组合下均由 `should_deactivate`
+    一并判定；`cfg` 里两个字段都带入。
+
+    旧 `create_behavior` 的 `lifecycle_kwargs` 段（`LifecycleConfig(**kwargs)`）
+    是这两个字段此前的唯一转换点，随 S4-4 删除——同一转换不得留两处。
+    """
+    cfg = LifecycleConfig(
+        deactivate_on_early_hit=bool(getattr(pdef, 'deactivate_on_early_hit', False)),
+        depends_on=getattr(pdef, 'depends_on', None),
+    )
+    _dep = cfg.depends_on
+    _n = getattr(pdef, 'max_triggers', 0) or 0
+    if _dep and _n > 0:
+        return DependentFiniteActive(cfg, max_triggers=_n)
+    if _dep:
+        return DependentActive(cfg)
+    if _n > 0:
+        return FiniteActive(cfg, max_triggers=_n)
+    return AlwaysActive(cfg)
 
 
 class PityBehavior(ABC):

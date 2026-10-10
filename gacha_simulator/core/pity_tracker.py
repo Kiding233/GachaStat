@@ -18,10 +18,14 @@ M4 语义调用，故**方法必须存在、不得省略**（无状态零件写�
 import random
 from typing import Optional
 
-from .pity_primitives import Counter, Flag, PityContext, PityState
+from .pity_primitives import (
+    Counter, Flag, LifecycleConfig, PityContext, PityState,
+)
 
 __all__ = ['Tracker', 'CounterTracker', 'FlagTracker', 'StreakTracker',
-           'FateTracker', 'NamespaceTracker']
+           'FateTracker', 'NamespaceTracker',
+           'Lifecycle', 'AlwaysActive', 'FiniteActive', 'DependentActive',
+           'DependentFiniteActive']
 
 
 def _is_trigger_rarity(scope: str, ctx: PityContext) -> bool:
@@ -520,3 +524,149 @@ class NamespaceTracker(Tracker):
         if not namespace:
             raise ValueError('NamespaceTracker: namespace 不得为空')
         self.namespace = namespace
+
+
+# ══════════════════════════════════════════════════════════════════
+# Lifecycle 族（§3.1.3）——正交包装层
+# ══════════════════════════════════════════════════════════════════
+
+class Lifecycle:
+    """Lifecycle 基类——五方法协议 + 两个只读属性代理 + `state_keys()` + `namespace`。
+
+    | 方法 | 语义 |
+    |------|------|
+    | `initialize(state, name, namespaces=())` | **构造期**写入初始 `_active`（`Always` 维对 `name` 与每个 `namespaces` 成员各写 `True`；`Dependent` 维空实现） |
+    | `is_active(state, name)` | `before_draw` / `after_draw` 首行早退的判据 |
+    | `should_deactivate(ctx, state, name, fired)` | 退役判定，**先于** `commit`（§3.1.4 的 ISSUE-018）。第四实参 `fired` 由 `Pity` 用 `any(tr.did_reset(...))` 算好后传入——Lifecycle 自身拿不到该判据 |
+    | `deactivate(state, name)` | 清 `_active`（**只清 `name` 的**，退役只作用于本保底） |
+    | `rebind(state, name, namespaces=())` | 把本生命周期为 `name` 与 `namespaces` 中**每个**命名空间持有的 `_active` Flag 重绑到 per-call `state`（纯重定向）。**实参面与 `initialize` 严格对称**（ISSUE-917） |
+
+    两个只读属性 `deactivate_on_early_hit` 与 `depends_on` **一律由基类对 `self._cfg`
+    统一代理**（ISSUE-406）——`PityEngine._build_activation_graph` 对**每一条**
+    behavior 无条件读 `lc.depends_on`，未代理即每次 `PityEngine(...)` 构造
+    `AttributeError`；「`depends_on` 由 `DependentActive` 从同一 `cfg` 读出」的写法
+    已废止。
+
+    **`_ns_active`（ISSUE-917 取形态 ①）**：每个命名空间各持一个 `_active` Flag
+    （键 = `name` 与 `namespaces` 的并集），`rebind` 对**并集中每个** Flag 重定向。
+    形态 ②（只持 `name` 的 Flag、`namespaces` 的 `_active` 在 `initialize` 里
+    `state.set` 一次）已否决：该键成为 write-once，worker 内连跑第 2..N 场时仍指
+    上一场的 state 且无从重绑。形态 ① 与旧实现同构（内层 `SoftStepBehavior` 持
+    `X_soft` 的 `_active`，经 `SoftPityMixin._rebind_state` 委托重绑）。
+
+    **`state_keys()`**：基类返回 `()`；`FiniteActive` / `DependentFiniteActive` 在
+    `max_triggers > 0` 时返回 `('triggers',)`——「已触发次数」落在 state 的保底
+    命名空间下，**不得放在 Lifecycle 对象内**（对象在同一 worker 内跨模拟复用，
+    对象内计数会跨模拟泄漏，破坏「固定种子可复现」）。
+    """
+
+    namespace: Optional[str] = None
+
+    def __init__(self, cfg: LifecycleConfig = None):
+        self._cfg = cfg if cfg is not None else LifecycleConfig()
+        self._ns_active: dict = {}
+
+    # ── 两个只读属性（ISSUE-406：统一代理，不得只代理前者）──
+
+    @property
+    def deactivate_on_early_hit(self) -> bool:
+        return bool(self._cfg.deactivate_on_early_hit)
+
+    @property
+    def depends_on(self) -> Optional[str]:
+        return self._cfg.depends_on
+
+    # ── 五方法协议 ──
+
+    def initialize(self, state: PityState, name: str, namespaces=()) -> None:
+        """构造期写入初始 `_active`——具体写入面由 `_writes_active` 决定。"""
+        self._bind_active(state, name, namespaces)
+        if self._writes_active:
+            for flag in self._ns_active.values():
+                flag.set()
+
+    def is_active(self, state: PityState, name: str) -> bool:
+        return bool(state.get(name, '_active', False))
+
+    def should_deactivate(self, ctx: PityContext, state: PityState, name: str,
+                          fired: bool) -> bool:
+        """退役判定——触发次数用尽（`_count_triggers`）或 `deactivate_on_early_hit`。"""
+        if self._count_triggers(state, name, fired):
+            return True
+        return bool(fired and self.deactivate_on_early_hit)
+
+    def deactivate(self, state: PityState, name: str) -> None:
+        """清 `_active`——**只清 `name` 的**（命名空间的 `_active` 与旧实现内层
+        `SoftStepBehavior._active` 同形：构造期写一次、此后不再被触碰）。"""
+        flag = self._ns_active.get(name) or Flag(state, name, '_active')
+        flag.clear()
+
+    def rebind(self, state: PityState, name: str, namespaces=()) -> None:
+        """纯重定向——实参面与 `initialize` 严格对称（ISSUE-917）。"""
+        self._bind_active(state, name, namespaces)
+
+    def state_keys(self) -> tuple:
+        return ()
+
+    # ── 内部 ──
+
+    #: 激活维：True = 构造期写 `_active`（`Always` 维）；False = 空实现（`Dependent` 维）
+    _writes_active: bool = True
+
+    def _bind_active(self, state: PityState, name: str, namespaces) -> None:
+        self._ns_active = {
+            ns: Flag(state, ns, '_active')
+            for ns in (name,) + tuple(ns for ns in (namespaces or ()) if ns != name)
+        }
+
+    def _count_triggers(self, state: PityState, name: str, fired: bool) -> bool:
+        """触发次数累计与上限判定——基类不计数，由 `Finite*` 覆写。"""
+        return False
+
+
+class AlwaysActive(Lifecycle):
+    """永远生效（激活维 Always / 退役维 Never）——两者都未配置时的默认。"""
+
+
+class FiniteActive(Lifecycle):
+    """触发 N 次后退役（福利保底）——激活维 Always / 退役维 AfterN(N)。
+
+    计数载体是 state 的保底命名空间下的 `triggers` 键（见基类 docstring），
+    **只在 `fired` 时累加**：无条件累加会让 `triggers` 变成「激活后的**抽数**」
+    而非「**触发次数**」，`max_triggers=2` 会在第 2 抽就退役，与「触发 N 次后
+    退役」相反。
+    """
+
+    def __init__(self, cfg: LifecycleConfig = None, max_triggers: int = 0):
+        super().__init__(cfg)
+        self._max_triggers = max_triggers or 0
+
+    def state_keys(self) -> tuple:
+        return ('triggers',) if self._max_triggers > 0 else ()
+
+    def _count_triggers(self, state: PityState, name: str, fired: bool) -> bool:
+        if not fired or self._max_triggers <= 0:
+            return False
+        n = state.get(name, 'triggers', 0) + 1
+        state.set(name, 'triggers', n)
+        return n >= self._max_triggers
+
+
+class DependentActive(Lifecycle):
+    """依赖另一个 Pity 激活（激活维 Dependent / 退役维 Never）。
+
+    `initialize` 为**空实现**——`_active` 由引擎的 `depends_on` 传播写入
+    （旧 `PityEngine.after_draw` 的激活传播同源）。
+    """
+
+    _writes_active = False
+
+
+class DependentFiniteActive(FiniteActive):
+    """被激活后触发 N 次退役（激活维 Dependent / 退役维 AfterN(N)）。
+
+    退役计数**自激活后起算**——`after_draw` 首行的 `is_active` 早退在
+    `should_deactivate` 之前（§3.1.4 骨架），故由调用位置天然保证。
+    """
+
+    _writes_active = False

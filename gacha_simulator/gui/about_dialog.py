@@ -208,11 +208,12 @@ type = "soft_interval"   # soft_interval | soft_additive | soft_step | hard | ro
 scope = "ssr"
 start = 80
 end = 90
-target_featured = true
+# target_featured = true  # 仅 hard 族可用（裁决 7B）；soft_* 配它会在加载期报错
 reset = "featured"        # featured | ssr | (scope 值)
 pools = ["pool_0.main"]   # 全限定键 {banner_id}.{pool_id}，支持 fnmatch 通配符
 counter_init = 0</pre>
         <p>绑定池用全限定键 <code>{banner_id}.{pool_id}</code>（如 <code>pool_0.main</code>），GUI 中经「绑定池」勾选表格生成。</p>
+        <p><code>target_featured</code> 只对 <code>hard</code> 族生效（裁决 7B，2026-10-05）：<code>soft_*</code> 配它会在加载期报 <code>ConfigError</code>，故示例中该行按注释给出。</p>
 
         <h4>[[targets]] — 目标卡</h4>
         <pre>[[targets]]

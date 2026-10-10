@@ -3536,10 +3536,19 @@ class ConfigPanel(QWidget):
             if is_cr:
                 self._populate_cr_probs_table(self._pity_defs[row].get('cr_state_probs'))
 
-        # 联动校验：hard+非ssr 禁用 target_featured
+        # 联动校验：`target_featured` **只对 hard 族有效**（裁决 7B，2026-10-05）。
+        # 旧式 `not (is_hard and not is_ssr_scope)` 等于「对全部非 hard 类型启用」，
+        # 而 S4-2 落 7B 类型级硬拒后，soft 侧带该字段的配置在 `create_behavior` 即抛
+        # `ConfigError`（S4-5 起不再被构造兜底吞掉）。故 GUI 可就地造出「保存能过、
+        # 运行报错」的配置（S4-5 审查 important）：勾选它、或先在 hard 上勾选再把类型
+        # 切到 soft，都能触达。此处收为「仅 hard 且 ssr scope 启用」，非启用态一律清勾
+        # （`stateChanged` 已连 `_flush_pity_current_detail`，清勾即落盘，不留残留值）。
         is_hard = (btype == 'hard')
         is_ssr_scope = self.pity_scope_combo.currentText() == 'ssr'
-        self.pity_target_featured_cb.setEnabled(not (is_hard and not is_ssr_scope))
+        tf_enabled = is_hard and is_ssr_scope
+        self.pity_target_featured_cb.setEnabled(tf_enabled)
+        if not tf_enabled:
+            self.pity_target_featured_cb.setChecked(False)
 
         # deactivate_on_early_hit 对 counter 驱动型均可用（soft/hard 均可）
         self.pity_deactivate_cb.setEnabled(is_counter)

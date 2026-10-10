@@ -260,7 +260,8 @@ def _pity_dict_to_pitydef(p: dict):
     low：实测 `func` 与嵌套 `lifecycle` 会被静默丢掉），放行任一未知键都是「静默
     丢字段」，传 TOML 口径 dict 的调用方会拿到 `btype` 落回字段默认 `'soft'`、软保底
     三段参数全 None 的 `PityDef`，**且不报错**（该 `btype` 不在 `BEHAVIOR_REGISTRY`，
-    连带的 `KeyError` 被 `PityEngine.__init__` 吞成 `logger.warning`，保底静默消失）。
+    连带的 `KeyError` 在 S4-5 之前被 `PityEngine.__init__` 吞成 `logger.warning`、
+    保底静默消失；S4-5 起构造失败一律抛 `ConfigError`，故该失效形态已收口）。
     这正是 AUDIT-BREAK-1 要消除的失效形态，故由静默错值改为显式报错。
     """
     from gacha_simulator.core.config_store import PityDef

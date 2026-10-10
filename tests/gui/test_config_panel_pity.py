@@ -287,8 +287,9 @@ def _reset_whitelist() -> set:
 def _engine_from_store(store):
     """按 GUI 的构造口径把 store 的保底定义喂给 PityEngine（pool_specs 留空）。
 
-    `PityEngine.__init__` 的构造兜底是 `logger.warning` 后**跳过**该 behavior，
-    故「构造成功」必须断言到 `engine.behaviors` 有该条目，而不是「没抛异常」。
+    S4-5 起 `PityEngine.__init__` 的构造失败一律抛 `ConfigError`，故「不抛异常」
+    已构成证据；此处仍断言到 `engine.behaviors` 有该条目，钉的是「该条目确实被
+    构造出来」，而不是「恰好没踩到失败」。
     """
     from gacha_simulator.core.pity import PityEngine, PityState
 
@@ -342,9 +343,10 @@ class TestPityFallbackEntry:
 
         断言对象按 §3.8「方案 a 下再断言 `PityEngine` 构造成功」取引擎而非
         `create_behavior`：后者只覆盖单 behavior 工厂，而 GUI 路径的实际消费点是
-        `PityEngine.__init__`，它的构造兜底是**吞异常后跳过**（`pity.py` 的
-        `try / except Exception → logger.warning`），故「不抛异常」不构成证据，
-        必须断言该条目真的进了 `engine.behaviors`。
+        `PityEngine.__init__`。S4-5 之前它的构造兜底是**吞异常后跳过**（`pity.py`
+        的 `try / except Exception → logger.warning`），那时「不抛异常」不构成证据；
+        S4-5 起改为抛 `ConfigError`，但断言仍落在「该条目真的进了
+        `engine.behaviors`」上，因为它钉的是构造成功本身而非未抛错。
         """
         panel = _make_panel()
         panel.set_config({'pity': {'pities': []}})
@@ -362,8 +364,8 @@ class TestPityFallbackEntry:
         条目可用。`_pitydef_to_toml` 曾对 `deltas is None` 的 soft_interval 不写
         start/end（GUI 内部态的 `deltas` 恒为 None），往返后阈值全丢、
         `_build_pity` 展开不出 deltas、`create_behavior` 抛 TypeError，而
-        `PityEngine` 把它静默跳过（`behaviors` 为空表）——`load_toml` 本身却
-        不报错，测试照样绿。故此处补齐两条载入侧断言：阈值活过往返 +
+        `PityEngine` 把它静默跳过（`behaviors` 为空表；S4-5 起改为抛
+        `ConfigError`）——`load_toml` 本身却不报错，测试照样绿。故此处补齐两条载入侧断言：阈值活过往返 +
         引擎确实构造出该 behavior。
         """
         from gacha_simulator.core.config_toml import load_toml, save_toml
@@ -380,7 +382,7 @@ class TestPityFallbackEntry:
         assert (reloaded.soft_start, reloaded.soft_end) == (74, 90), (
             "兜底条目的阈值未活过 TOML 往返（写回侧漏写 start/end）")
         assert 'ssr_soft' in _engine_from_store(store2).behaviors, (
-            "载入后的 ssr_soft 未构造出 behavior——被 PityEngine 的构造兜底静默跳过")
+            "载入后的 ssr_soft 未构造出 behavior（构造失败被跳过或抛错）")
 # ══════════════════════════════════════════════════════════════════
 # P64 G16-2：reset 控件的 round-trip（含「永不重置」与未列出取值）
 # ══════════════════════════════════════════════════════════════════
@@ -480,3 +482,49 @@ class TestPityResetCombo:
             save_toml(panel._store, str(out))
             reloaded = load_toml(str(out))
             assert reloaded.pity.pities[0].reset == val
+
+
+# ═══════════════════════════════════════════════════════════════════
+# P64 S4-5 审查：`target_featured` 勾选框只对 hard 族可用
+# ═══════════════════════════════════════════════════════════════════
+# 裁决 7B（2026-10-05）把 `soft_*` + `target_featured = true` 定为类型级硬拒，而
+# GUI 的联动式原为 `not (is_hard and not is_ssr_scope)`，等价于「对全部非 hard 类型
+# 启用」：勾选它、或先在 hard 上勾选再把类型切到 soft，都能就地造出「保存能过、
+# 运行抛 ConfigError」的配置（S4-5 之前该失败被构造兜底吞掉，故长期不可见）。
+
+
+class TestTargetFeaturedCheckboxScope:
+    """`target_featured` 控件的作用域与残留清除。"""
+
+    def _set_type(self, panel, key):
+        for i in range(panel.pity_type_combo.count()):
+            if panel._PITY_TYPES[i][0] == key:
+                panel.pity_type_combo.setCurrentIndex(i)
+                return
+        raise AssertionError(f'类型 {key} 不在下拉')
+
+    def test_enabled_only_for_hard_family(self, qapp):
+        """`hard` 且 ssr scope 才启用；其余九类一律禁用。"""
+        panel = _make_panel()
+        for key, _label in panel._PITY_TYPES:
+            self._set_type(panel, key)
+            want = (key == 'hard')
+            assert panel.pity_target_featured_cb.isEnabled() is want, (
+                f'{key} 的「仅限Featured卡」启用态应为 {want}')
+
+    def test_switching_off_hard_clears_the_check(self, qapp):
+        """先在 hard 上勾选、再切到 soft 时，勾选被清除且落盘为 False。
+
+        这是审查实测的触达路径：切换类型不清勾选，等于把违规状态顺带带过去。
+        """
+        panel = _make_panel()
+        self._set_type(panel, 'hard')
+        panel.pity_target_featured_cb.setChecked(True)
+        assert panel._pity_defs[0].get('target_featured') is True
+
+        self._set_type(panel, 'soft_interval')
+        assert panel.pity_target_featured_cb.isChecked() is False, '切到 soft 后勾选未清除'
+        assert not panel._pity_defs[0].get('target_featured'), (
+            '勾选残留被写进 _pity_defs，保存即产出 7B 违规配置')
+        pity0 = panel.get_config()['pity']['pities'][0]
+        assert not pity0.get('target_featured'), 'get_config 仍带 target_featured'

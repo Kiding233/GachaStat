@@ -549,6 +549,23 @@ class SideTrace:
         """
         return any(p != self.base_probabilities for p in self.probs)
 
+    @property
+    def changed_beyond_ulp(self) -> bool:
+        """是否有至少一抽的分布变化**超出浮点噪声**（4 ULP）。
+
+        `changed_from_base` 取严格不等，而六个事件驱动型的旧类在**非触发分支**
+        也走一遍 `_redistribute_scope()`（数学等值、位模式不同），故旧侧与该基础
+        分布恒有 1 ULP 量级差、`changed_from_base` 恒真，挡不住「机制从未触发」
+        的空转（S5b 审查 important 1：全 R 序列下 `rotating` 的 guaranteed 分支
+        永不触发，而闸门放过）。空转闸门取本属性。
+        """
+        eps = 4 * math.ulp(1.0)
+        for p in self.probs:
+            for k, v in p.items():
+                if abs(v - self.base_probabilities.get(k, 0.0)) > eps:
+                    return True
+        return False
+
 
 def _ctx(shape: PoolShape, state: PityState, step: Optional[DrawStep] = None) -> PityContext:
     """构造一次抽卡的 `PityContext`。
@@ -861,12 +878,14 @@ def compare_runs(
     # 超出序列长度、`soft` 的保底起点够不着、`targeted` 的定子不可达等都会落到
     # 这一格）。S5b 要在此装置上叠十个批次，任一批次的 fixture 写错即「零覆盖
     # 全绿」，故把它前移到装置属性而非靠个别用例手写自检。
-    if not old.changed_from_base and not allow_vacuous:
+    if not old.changed_beyond_ulp and not allow_vacuous:
         raise AssertionError(
-            f'装置空转（S5a 审查 important 1）：{pdef.name}（{pdef.btype}）的旧侧轨迹'
-            f'与基础分布逐抽相同，即该 config 下机制从未触发，「两侧一致」不构成'
+            f'装置空转（S5a 审查 important 1；判据按 S5b 审查 important 1 收严为'
+            f'「超出 4 ULP 噪声」）：{pdef.name}（{pdef.btype}）的旧侧轨迹与基础分布'
+            f'没有超出浮点噪声的差别，即该 config 下机制从未触发，「两侧一致」不构成'
             f'等价性证据。请让 fixture 真的触发机制（阈值/起点落在序列内等）；'
-            f'若确要比一个不触发的形态，传 allow_vacuous=True 并自述理由。')
+            f'若确要比一个不触发的形态，传 allow_vacuous=True 并自述理由。'
+            f'（注：事件驱动型的旧类在非触发分支也重算一遍，故严格不等判据对它恒真）')
     return compare_traces(old, new, tolerance=tolerance, snapshot_policy=policy)
 
 
@@ -1013,6 +1032,32 @@ class TestDeviceSelfCheck:
             seen_rng = max(seen_rng, direct.rng_calls)
         assert seen_rng > 0, '两条路径的随机数消费断言均无判别力（rng_calls 恒 0）'
 
+
+    def test_gate_rejects_semantically_inert_event_driven_fixture(self):
+        """负控：事件驱动型的 fixture 未触发机制时，空转闸门必须拒绝。
+
+        S5b 审查 important 1：旧类在非触发分支也走 `_redistribute_scope()` 重算，
+        与基础分布恒有 1 ULP 量级差，故旧的严格不等判据对它恒真、挡不住空转。
+        本条用「全 R 序列」（无任何 SSR，`rotating` 的 guaranteed 分支永不触发）
+        钉住收严后的语义判据。
+        """
+        steps = tuple(R_DRAW for _ in range(40))
+        pdef = counter_fixture(name='vac_rot', btype='rotating', scope='ssr')
+        with pytest.raises(AssertionError, match='装置空转'):
+            compare_runs(pdef, steps, shape=_default_shape(), tolerance=FLOAT_ORDER)
+
+    def test_length_guard_rejects_mismatched_traces(self):
+        """负控：两侧轨迹长度不等时 `compare_traces` 必须拒绝（S5a 审查 minor 2）。
+
+        无此守卫时 `zip` 会把比对静默截断到较短一侧、「等价」就此成立。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='len_guard', btype='hard', scope='ssr', threshold=6)
+        old = run_old(pdef, DRAW_SEQUENCE, shape=shape)
+        new = run_new(pdef, DRAW_SEQUENCE[:5], shape=shape)
+        with pytest.raises(AssertionError, match='长度不等'):
+            compare_traces(old, new, tolerance=EXACT,
+                           snapshot_policy=registered_snapshot_policy(pdef))
 
     def test_device_shape_makes_soft_transfer_live(self):
         """装置形状自检：软保底的转移**必须真的发生**，否则装置在空转。
@@ -1486,6 +1531,33 @@ class TestS5bEventDrivenBatch:
         else:
             assert report.did_fire_divergent_draws == []
 
+    @pytest.mark.parametrize('bid', ['rotating_soft', 'rotating_cr_soft',
+                                     'targeted_soft'])
+    def test_soft_suffix_order_contract_is_unobservable_in_m1(self, bid):
+        """三个 `_soft` 型的 Modifier 顺序契约在 **M1 形态下不可观测**（登记项）。
+
+        契约（该族 preset 的纪律 ③）：`SoftModifier` 在前、母类型 Modifier 在后。
+        S5b 审查 important 2 称「把两者逆序在 400 抽长序列下三个种子都能分辨」，
+        **该测量未能复现**：三个 `_soft` 型 × 序列长度 {400, 1200} × 种子 1..24
+        共 144 组，逆序与正序的分布差异恒为 0（`compare_runs` 全部 `is_equivalent`）。
+
+        原因是 M1 的这两个 Modifier 都是**绝对赋值**而非增量（`RotatingModifier`
+        令 featured := scope 总量、`SelectedModifier` 令 selected := scope 总量），
+        故「先 Soft 后母类型」与「先母类型后 Soft」塌到同一末态：Soft 的增量最终
+        同样只落在 featured（或 selected）上。顺序要到 S8 的**增量形态**
+        （`compute_delta` 的 `Σδ = 0` 逐步应用）才成为可观测项。
+
+        本用例因此**不构成该契约的守卫**，只作为「长序列下三个 `_soft` 型仍等价」
+        的覆盖；顺序契约的守卫须在 S8 落地时随增量形态一并补。逆序不报错的现状是
+        登记在案的形态，不是漏测（写错的代价为零，因为不可观测）。
+        """
+        make = dict(EVENT_BATCH)[bid]
+        pdef = make()
+        report = assert_equivalent(pdef, make_draw_sequence(400),
+                                   shape=_default_shape(), tolerance=FLOAT_ORDER)
+        assert report.old.changed_beyond_ulp and report.new.changed_beyond_ulp
+        assert report.max_prob_diff <= 1e-12, report.max_prob_diff
+
     @pytest.mark.parametrize('make', [c[1] for c in EVENT_BATCH],
                              ids=[c[0] for c in EVENT_BATCH])
     def test_registered_one_ulp_in_non_conditional_branch(self, make):
@@ -1609,11 +1681,12 @@ class TestS5bEventDrivenBatch:
 
     def test_f2_registered_no_featured_pool_with_forced_interception(self):
         """§六 F2（2026-10-10 补登记，强制）：无 featured 卡的池 + **必然拦截**时，
-        旧 `RotatingCRBehavior._force_featured` 把整个 scope 的概率清零（Σ = 0），
+        旧 `RotatingCRBehavior._force_featured` 把整个 scope 的概率清零（Σ_scope = 0；
+         scope 外槽位不受影响），
         新 `RotatingModifier` 在空目标集上 `return None`（恒等）。两者**不等价**。
 
         本用例把它**显形**并按缺口登记，**不断言等价**。判为「旧实现的行为本身是
-        缺陷」的两条依据：① 旧侧输出 Σ = 0 的分布（`_redistribute_scope` 在
+        缺陷」的两条依据：① 旧侧输出 scope 小计为 0 的分布（`_redistribute_scope` 在
         `featured_slots` 为空时既无 A 侧可写、又把 Q 侧整体乘 0），任何配置都不以
         「整池不可出」为目的；② 新侧的恒等是 §六「S8 空目标集断言」的**显式裁定**
         （`A` 为空 → 恒等，不得把空集传给 `transfer_linear`），且与旧实现**非强制

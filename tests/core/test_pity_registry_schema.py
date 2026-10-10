@@ -23,7 +23,7 @@ import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
 from gacha_simulator.core.pity import (
-    BEHAVIOR_REGISTRY, Pity, _validate_registry, create_behavior,
+    BEHAVIOR_REGISTRY, HardPityBehavior, Pity, _validate_registry, create_behavior,
 )
 from gacha_simulator.core.pity_primitives import PityState
 from gacha_simulator.core.pity_tracker import AlwaysActive, CounterTracker
@@ -103,7 +103,10 @@ class TestValidateRegistryTransition:
 
     def test_current_entries_pass_validate_registry(self):
         """现有 10 条目（S4-1 时全为旧形态）经判据通过（**显式重跑**，不只靠导入）。"""
-        assert len(BEHAVIOR_REGISTRY) == 10
+        # 条目数用 `>=` 而非 `== 10`（S4-1 审查 minor）：S6a 注册 `rotating_inverse`、
+        # S9-3 再增两条后，写死的等值断言必红，而那不是本用例要守的东西。此处只守
+        # 「既有条目未被误删」这一下限。
+        assert len(BEHAVIOR_REGISTRY) >= 10
         _validate_registry()  # 不抛即通过
 
     def test_unmigrated_entry_with_class_none_raises(self):
@@ -209,13 +212,36 @@ class TestCreateBehaviorPresetBranch:
         with pytest.raises(ValueError, match='尚未实现'):
             create_behavior(PityDef(name='s41n', btype=_FAKE_LEGACY_NONE), PityState())
 
-    def test_legacy_branch_still_works(self):
-        """旧类兼容分支未被 preset 分支改坏（保留到发布前，见 GATE-5）。"""
-        bh = create_behavior(
-            PityDef(name='s41l', btype='hard', reset='never', threshold=90),
-            PityState())
-        assert not isinstance(bh, Pity)
-        assert bh._btype == 'hard'
+    def test_legacy_branch_still_works(self, registry_entries):
+        """旧类兼容分支未被 preset 分支改坏（保留到发布前，见 GATE-5）。
+
+        **用注入的合成旧条目，不写死真实条目**（S4-1 审查 minor）：写死 `hard` 的版本
+        在 S4-2 把 `hard` preset 化后必红，而那时旧分支本身仍应可用。S4-3 收口删除
+        旧分支时，本用例随旧分支一并删除。
+        """
+        registry_entries(_FAKE_LEGACY_NONE, _entry(**{'class': HardPityBehavior}))
+        bh = create_behavior(PityDef(name='s41l', btype=_FAKE_LEGACY_NONE),
+                             PityState())
+        assert not isinstance(bh, Pity), '旧分支不得返回骨架 Pity'
+        assert isinstance(bh, HardPityBehavior)
+        assert bh._btype == _FAKE_LEGACY_NONE
+
+    def test_preset_branch_passes_priority_and_pools(self, registry_entries):
+        """preset 分支透传 `priority` / `pools`（S4-1 审查 low：原无断言覆盖）。
+
+        `PityDef.pools` 已存在；`priority` 字段属 S4b，此处以 `setattr` 注入验透传
+        本身，`getattr(pdef, 'priority', 0)` 的回退面由下行缺省情形覆盖。
+        """
+        registry_entries(_FAKE_VALID, _entry(preset=_preset_valid))
+
+        pd = PityDef(name='s41p', btype=_FAKE_VALID)
+        pd.pools = ('pool_a', 'pool_b')
+        bh = create_behavior(pd, PityState())
+        assert bh._pools == ('pool_a', 'pool_b')
+
+        default = create_behavior(PityDef(name='s41q', btype=_FAKE_VALID), PityState())
+        assert default._pools == ('*',)
+        assert default._priority == 0
 
 
 # ══════════════════════════════════════════════════════════════════

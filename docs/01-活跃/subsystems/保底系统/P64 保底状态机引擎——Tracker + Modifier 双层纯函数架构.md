@@ -2753,7 +2753,7 @@ class RotatingModifier(Modifier):
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order -->
 <!-- REVIEW-FIX-PREV: ISSUE-015 -->
 - [ ] **S4-1 registry schema 改造（只改 validator 与 `create_behavior` 分支；条目改写随 S4-2 / S4-3 逐条原子落地，GATE-3 定稿）**（~0.5 人时）｜目标文件 `core/pity.py`
-  - `class` 字段一律置 `None`（ISSUE-015）；`_validate_registry()`（:815-829，模块级调用 :832；2026-10-09 实测订正）<!-- REVIEW-R1-FIX: GATE-2-文件清单 -->**改判 `preset` 可调用性**（`callable` / `inspect`——**不调用 preset、不校验返回键集**，ISSUE-405）；返回 dict 的键集校验（缺 `lifecycle` 查漏 + 未知键查多）落在 `create_behavior` 运行期；`create_behavior` 的 `cls is None` 分支同步改写
+  - `class` 字段一律置 `None`（ISSUE-015）<!-- S4-1-REVIEW-FIX: 与 §3.2 / GATE-3 对齐 -->**但本步不一次性置空**：`class` 置 None 与 `preset` 赋值按条目**原子地**随 S4-2 / S4-3 落地（§3.2 与 GATE-3 定稿；S4-1 审查 low，2026-10-10 补：本步若真去置空，10 条目在导入期即 `TypeError`，与下行实测的结论一致）；`_validate_registry()`（:815-829，模块级调用 :832；2026-10-09 实测订正）<!-- REVIEW-R1-FIX: GATE-2-文件清单 -->**改判 `preset` 可调用性**（`callable` / `inspect`——**不调用 preset、不校验返回键集**，ISSUE-405）；返回 dict 的键集校验（缺 `lifecycle` 查漏 + 未知键查多）落在 `create_behavior` 运行期；`create_behavior` 的 `cls is None` 分支同步改写
   - **过渡判据（S4-1 写入、S4-3 收口时整段删除；GATE-3 定稿）**：`_validate_registry()` 的判据改为「条目**含 `preset` 键则判其可调用**（`callable` / `inspect`，**不调用 preset、不校验返回键集**，ISSUE-405）；**无 `preset` 键（尚未迁移）则沿用旧判据**（`class` 非 None 且为 `PityBehavior` 子类）」。该式使 S4-1 单独落地时导入期仍通过（此时 10 条目全为旧形态），且 S4-2 / S4-3 的任一中间态都自洽
   - `create_behavior` 双路径（preset / 旧类兼容）保留到等价性测试通过为止
   <!-- REVIEW-FIX-PREV: AUDIT-BREAK-2 -->

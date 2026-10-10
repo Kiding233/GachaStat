@@ -1086,6 +1086,10 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     # ══ 旧类兼容分支（**仅旧类分支**；保留到发布前，见 GATE-5）══
     # 下面 `cls(**params)` 的 `params` 组装段随「发布前一次性移除旧类」一并删除，
     # 勿按此形态复制到 preset 分支（GATE-5 末条）。
+    # `entry["class"]` 改取 `entry.get("class")`（S4-1 审查 low）：仅影响「运行期注入
+    # 无 `class` 键的畸形条目」这一不可达场景（该类条目在导入期已被
+    # `_validate_registry()` 以 `TypeError` 拦下），报错由 `KeyError` 变为下面的
+    # `ValueError`；60 组真实类型的探针输出逐字段未变，故「零运行时行为变更」成立。
     cls = entry.get("class")
     if cls is None:
         raise ValueError(
@@ -1112,6 +1116,8 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
         )
     if getattr(pdef, 'threshold', None) is not None:
         params['threshold'] = pdef.threshold
+    # 以下两处注入是**旧类分支专属**（AUDIT-BREAK-2）：骨架 `Pity.__init__` 无这两个
+    # 形参，接回 preset 分支即 `TypeError: unexpected keyword argument`。勿复制。
     if getattr(pdef, 'target_featured', False):
         params['target_featured'] = True
     if getattr(pdef, 'reset', None):
@@ -1469,19 +1475,29 @@ class PityEngine:
         阶段 3 完整快照（env.pity_state_init）承载。
         """
         if state is self._state:
-            # ⚠ 已登记缺陷（S3-1 独立审查 → S4-1 登记，2026-10-10）：本早退对**旧类**
-            # 成立（旧类在构造期即 `Counter(state, ...)` 绑定），对统一骨架 `Pity`
-            # **不成立**：`Pity.__init__` 照 §3.1.4 骨架**不绑定**零件 Counter/Flag，
-            # 绑定只发生在 `Pity._rebind_state`。故本早退路径下零件永不绑定，
-            # `Tracker.advance` 读 `self._counter.incr()` 即抛 `AttributeError`。
-            # 今日不可达：三条派发路径（`before_draw` / `after_draw` /
-            # `get_probabilities`）传入的都是**新建对象**（引擎构造态由
-            # `_build_pity_state_init` 产出，派发态由 `PityState.from_dict` 另建），
-            # 故 `state is self._state` 首次必为假、首调完成绑定。
-            # **S4-2 / S4-3 接线后，任何传 `engine._state`（或其派生同一对象）的调用
-            # 即触发**。落点：**S4-2 处置**（候选：删本早退，`_rebind_state` 全是纯
-            # 重定向、重跑幂等；或在 `Pity.__init__` 绑定零件）。S4-1 不改，以守住
-            # 本块「零运行时行为变更」的约束。
+            # ⚠ 已登记缺陷（S3-1 独立审查 → S4-1 登记 → S4-1 审查订正，2026-10-10）：
+            # 本早退对**旧类**成立（旧类在构造期即 `Counter(state, ...)` 绑定），对统一
+            # 骨架 `Pity` **不成立**：`Pity.__init__` 照 §3.1.4 骨架**不绑定**零件
+            # Counter/Flag，绑定只发生在 `Pity._rebind_state`。故本早退路径下零件永不
+            # 绑定，`Tracker.advance` 读 `self._counter.incr()` 即抛 `AttributeError`。
+            #
+            # **触发条件是「派发的 state 恰为构造期那个对象」，不是「早退本身」**
+            # （S4-1 审查实测订正：原登记称「今日不可达，三条派发路径传入的都是新建
+            # 对象、首调完成绑定」，与实测相反）。实测 `python -m gacha_simulator.cli
+            # -n 3 -w 1 -s 42` 在本早退处插桩得 hits=2379 / misses=3：一场模拟的
+            # `pity_state` 对象在整场循环内复用，首调绑定后**其余每次派发都走本早退**，
+            # 即早退是常态路径而非死分支。「传入的是新建对象」只对**每场第一次**派发
+            # 成立。
+            #
+            # 由此，构造态 `self._state` 是唯一未绑定的那一格：`PityEngine.__init__`
+            # 把 `self._state` 设为构造态却不 rebind，骨架又不在构造期绑零件，故**传
+            # `engine._state` 的调用必抛 `AttributeError`**（审查用注入 preset 的实验
+            # 复现：传 `engine._state` 抛 `'NoneType' object has no attribute 'incr'`，
+            # 传新建克隆正常）。
+            # 落点：**S4-2 处置**（候选：删本早退，`_rebind_state` 全是纯重定向、重跑
+            # 幂等；或在 `Pity.__init__` 绑定零件）。**删早退不是「顺手清死代码」**：
+            # 它恰好修掉构造态那一格，须按修复而非清理对待。S4-1 不改，以守住本块
+            # 「零运行时行为变更」的约束。
             return  # 同一对象——无需重绑定
         self._state = state
         for bh in self._behavior_list:

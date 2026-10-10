@@ -62,19 +62,33 @@ S5b 分两批接入（§七 S5b 的分批纪律）：批次一 = counter 驱动 
 
 S5c 的验收命令是 `pytest -q tests/core/test_pity_equivalence.py -k "n1 or m4 or h4"`。
 本文件为 S5a 新建，过滤词零命中时 pytest 以 exit code 5（no tests ran）结束、
-会被误读为通过。**当前命中情况**：`h4` 命中 `TestH4RandomConsumption`（S5a 的
-装置用例，只覆盖「`cr_state_probs` 中间值」与随机数消费），`m4` 命中
-`TestRegisteredDifferences` 的差异登记用例（只登记 `_soft` 族的放宽，不含
-S5c 要求的六类逐类断言），**`n1` 零命中**。S5c 须补齐三类各自的完整断言，
-不得以本文件的既有命中充当覆盖。
+会被误读为通过。**S5c 落地后的命中情况（2026-10-11 实测）**：`n1` 4 条 /
+`m4` 19 条 / `h4` 10 条，合计 **33 条**（三类各自 ≥1 条，exit code 0）。其中
+**S5c 新增 29 条**（`TestS5cN1Phase` 4 + `TestS5cM4DidFire` 16 +
+`TestS5cH4RandomConsumption` 9），余 4 条为既有命中（`TestRegisteredDifferences`
+的 `_soft` 放宽登记 3 条 + `TestH4RandomConsumption` 的中间值用例 1 条）。
+`n1` / `m4` / `h4` 三个过滤词均落在新增用例名内。
 
 ## 本装置测不出来的形态（S5a 已知边界，如实列出）
 
-**S5b 落地后的边界（2026-10-11）**：10 个类型的逐类型等价性已按两批接入
-（`TestS5bCounterDrivenBatch` / `TestS5bEventDrivenBatch`），装置的自检面之外
-仍**未覆盖**下列形态：多保底叠加（`hard` + `rotating` 同 scope）、`depends_on`
-激活传播、池过滤与池内排序、跨场 `rebind`（worker 内连跑第 2..N 场）、退役维
-（`max_triggers`）。这批分归 S5c / S6 / S7d / S10，不属 S5b 的验收面。
+**S5c 落地后的边界（2026-10-11）**：10 个类型的逐类型等价性已按两批接入
+（`TestS5bCounterDrivenBatch` / `TestS5bEventDrivenBatch`），N1 / M4 / H4 三条
+强制约束已由 `TestS5cN1Phase` / `TestS5cM4DidFire` / `TestS5cH4RandomConsumption`
+三节覆盖。装置的自检面之外仍**未覆盖**下列形态：多保底叠加（`hard` + `rotating`
+同 scope）、`depends_on` 激活传播、池过滤与池内排序、跨场 `rebind`（worker 内
+连跑第 2..N 场）、退役维（`max_triggers`）。这批分归 S6 / S7d / S10，不属
+S5b / S5c 的验收面。
+
+**S5c 实测出的一条覆盖边界（2026-10-11，牙齿验证产物）**：三个 `_soft` 复合
+类型的 `FlagTracker.did_reset` 若退化（例如恒返回 False），**在 `did_fire` 层面
+不可观测**——该族 preset 的 CounterTracker 恰在「出 scope」的那些抽上给出 True，
+`any(...)` 被它占满，故 `did_fire` 列逐位不变（实测：把 `FlagTracker.did_reset`
+改成恒 False 后，三个 `_soft` 型的 M4 两列断言与 S5b 批次**全绿**，而只由
+`FlagTracker` 提供 `did_reset` 的 `rotating` / `rotating_cr` /
+`rotating_guaranteed_init` 在 S5b 批次与该型的两列断言上同时变红）。这是
+ISSUE-102 的放宽本身带来的语义冗余，不是本装置的漏测：要覆盖它须下沉到「逐个
+Tracker 的 `did_reset`」断言，超出等价性装置的对拍面，登记给 S10 / S11（保障层
+的组合判据与状态层校验）。
 
 1. **不走 `PityEngine` 的池过滤 / 池内排序 / 激活传播**。旧类在 registry 上已无
    入口（10 条 `registry` 条目全部 preset 化、`class` 置 None），旧侧无法经引擎
@@ -1736,3 +1750,721 @@ class TestS5bEventDrivenBatch:
         assert report.rng_calls_equal, (
             f'拦截掷骰的消费次数在两侧应当一致：'
             f'old={report.old.rng_calls} new={report.new.rng_calls}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# 十二、S5c 三条强制约束专项断言（N1 触发抽数 / M4 did_fire 六类语义 / H4 随机数消费）
+# ══════════════════════════════════════════════════════════════════
+#
+# §七 S5c 的三族断言各自钉住一条**实施约束**（三条都在 §3.1 列为强制）：
+#
+# - **N1（触发抽数相位）**：计数型 Tracker 在 `Pity.before_draw` 的 `advance` 段先
+#   自增、Modifier 再读自增后的值，故 `hard(threshold=90)` 的首次 100% 落在**第 90
+#   抽**、软保底的 boost 起始抽数同源（§3.1.1 的 N1 相位表）。把递增挪到
+#   `after_draw` 时两者各晚一抽（总次数不变，差的是读相位）。
+# - **M4（`did_fire` 六类语义）**：`Pity.did_fire = any(tr.did_reset(...))` 必须与
+#   各 Tracker `commit` 的重置分支**严格同条件**（§3.1.1 M4 表六行）。
+# - **H4（短路条件下的随机数消费）**：`StreakTracker.prepare` 的六条不消耗路径
+#   （`readonly` / `guard_flag` / `state_prob >= 1.0` / `state_prob <= 0` / 空表 /
+#   `base_rate == 0`）与旧实现同相位、同次数（§3.1.2 的 CR 随机数消耗协议）。
+#
+# **M4 为何取两类断言**（S5a 审查结论）：三个 `_soft` 复合类型的 preset 同时含
+# 「事件驱动 Tracker（命中才翻转）」与「触发稀有度 counter Tracker（出 scope 即重置）」，
+# 而 `did_fire` 取 `any(...)`，故那个 CounterTracker 会在 featured SSR 抽上同样报
+# `did_reset`，把同型 FlagTracker 的回归**完全掩盖**：S5b 的十个批次对 `did_fire`
+# 的覆盖贡献为零，本节是该语义在本文件里的**唯一防线**。两类断言的分工：
+# ① 与**状态转移**自洽（flag 翻转 / counter 归零是独立观测面，能抓到
+# `FlagTracker.did_reset` 恒 False 一类变异）；② 与**统一语义表**逐抽相等
+# （钉住不可由状态转移分辨的那些抽）。只做 ① 会在三个 `_soft` 型上漏掉命中抽，
+# 只做 ② 则等于把 `did_reset` 的判据重抄一遍、抓不到「两个方法各写一套」。
+
+#: M4 每个类型的**重置可观测量**表：`btype -> ((键名, 键类别, 初值), ...)`。
+#:
+#: 只列**参与 `did_fire` 的 Tracker 所写的键**。`StreakTracker.did_reset` 恒 False
+#: （§3.1.1：`cr_counter` 的归零是 rotating 族的内部子状态，不构成「本保底回到初始
+#: 状态」），故 `rotating_cr` / `rotating_cr_soft` 都不列 `cr_counter`。
+#: `rotating` / `targeted` 族的相关键初值均为 False / 0（`guaranteed_init` 与
+#: `fate_points_init` 不写时即此值），表内的 `0` 是「旗标未置位」的等价写法。
+M4_OBSERVABLES: Dict[str, Tuple[Tuple[str, str, int], ...]] = {
+    'hard': (('counter', 'counter', 0),),
+    'soft_step': (('counter', 'counter', 0),),
+    'rotating': (('guaranteed', 'flag', 0),),
+    'rotating_cr': (('guaranteed', 'flag', 0),),
+    'targeted': (('fate_points', 'counter', 0),),
+    'rotating_soft': (('guaranteed', 'flag', 0), ('counter', 'counter', 0)),
+    'rotating_cr_soft': (('guaranteed', 'flag', 0), ('counter', 'counter', 0)),
+    'targeted_soft': (('fate_points', 'counter', 0), ('counter', 'counter', 0)),
+}
+
+
+def _pity_scope(pdef: PityDef) -> str:
+    """`PityDef.scope` 的归一化取值（缺省回退 `'ssr'`，与 `_norm_scope` 同形）。"""
+    return (pdef.scope or 'ssr').lower()
+
+
+def _key_reset_observation(kind: str, key: str, init: int, pre: dict, post: dict):
+    """单个状态键的三值观测：该键所属 Tracker 的 `did_reset` 必然真 / 必然假 / 不可分辨。
+
+    三值而非二值的原因：「状态回到初值」与「重置分支真的跑了」只在部分转移上可分辨。
+
+    - **计数型**（单调 +1 直到重置回初值）：`post != 初值` 蕴含重置未发生（判 False）；
+      `post == 初值` 且 `pre != 初值` 蕴含重置发生（判 True）；两侧都在初值则不可分辨
+      （整段没动与重置到初值同形）。
+    - **标记型**（两支分别写 False / True，初值 False）：`pre is True` 时转移已定
+      （`post` 非 True 即 clear 跑过，判 True；`post is True` 即 clear 没跑，判 False）；
+      `pre` 非 True 时 `post is True` 说明 set 跑过（判 False），否则不可分辨。
+    """
+    pre_v, post_v = pre.get(key), post.get(key)
+    if kind == 'flag':
+        if pre_v is True:
+            return post_v is not True
+        if post_v is True:
+            return False
+        return None
+    if post_v not in (None, init):
+        return False
+    if pre_v not in (None, init):
+        return True
+    return None
+
+
+def _reset_observations(pdef: PityDef, snaps: Sequence[dict], init_snapshot: dict):
+    """逐抽给出「重置分支是否发生」的三值观测（`True` / `False` / `None`）。
+
+    聚合口径与 `Pity.did_fire` 的 `any(...)` 同构：任一键判 True 则整体 True；全部键
+    都判 False 才整体 False；含 `None` 且无 True 时整体 `None`。
+    """
+    name = pdef.name
+    out = []
+    for index in range(len(snaps)):
+        pre_all = snaps[index - 1] if index else init_snapshot
+        pre = pre_all.get(name, {})
+        post = snaps[index].get(name, {})
+        per_key = [_key_reset_observation(kind, key, init, pre, post)
+                   for key, kind, init in M4_OBSERVABLES[pdef.btype]]
+        if any(x is True for x in per_key):
+            out.append(True)
+        elif all(x is False for x in per_key):
+            out.append(False)
+        else:
+            out.append(None)
+    return out
+
+
+def _unified_did_fire(pdef: PityDef, step: DrawStep,
+                      selected_card: str = TARGETED_CARD) -> bool:
+    """§3.1.1 M4 表六行的**统一语义**：本次抽卡是否让本保底回到初始状态。
+
+    逐行转录自该表（不读任何运行时状态，只看本次抽卡的静态事实与配置）：
+
+    - counter 驱动四型：`_should_reset` 按 `reset` 配置（`scope` 出该稀有度 /
+      `featured` 仅 featured（**无 scope 门控**，该不对称是既有语义）/ `never` 恒假）；
+    - `rotating` / `rotating_cr`：出 scope ∧ is_featured（scope 门控是 2026-09-16 的收严）；
+    - `targeted`：出 scope ∧ `reward_id == selected_card`；
+    - 三个 `_soft` 复合类型：**出 scope**（ISSUE-102 的放宽，方向与上一行相反）。
+    """
+    scope = _pity_scope(pdef)
+    if pdef.btype in ('hard', 'soft_step', 'soft_interval', 'soft_additive'):
+        reset_on = pdef.reset or scope
+        if reset_on == 'featured':
+            return bool(step.is_featured)
+        if reset_on == 'never':
+            return False
+        return step.rarity == reset_on
+    if pdef.btype in ('rotating', 'rotating_cr'):
+        return step.rarity == scope and step.is_featured
+    if pdef.btype == 'targeted':
+        return step.rarity == scope and step.reward_id == selected_card
+    return step.rarity == scope
+
+
+#: M4 批量表（§七 S5c 的「counter 驱动 ×1 + rotating + targeted + 三个 `_soft`
+#: 复合类型」六类，另加 `rotating_cr` 一条横向邻接）。逐条取**非默认**形态：
+#: `hard` 走小阈值（默认 90 在 28 抽序列内够不着，机制不触发即被非空转闸门拦下），
+#: `rotating_cr` 把 `cr_base_rate` 置 0 使掷骰路径不干扰状态观测。
+M4_BATCH: Tuple[Tuple[str, Callable[[], PityDef]], ...] = (
+    ('hard', lambda: counter_fixture(
+        name='m4_hard', btype='hard', scope='ssr', threshold=6, counter_init=0)),
+    ('rotating', lambda: counter_fixture(
+        name='m4_rotating', btype='rotating', scope='ssr')),
+    ('rotating_cr', lambda: counter_fixture(
+        name='m4_rotating_cr', btype='rotating_cr', scope='ssr',
+        cr_counter_threshold=3, cr_base_rate=0.0,
+        cr_state_probs=(0.0, 0.0, 1.0))),
+    ('targeted', lambda: counter_fixture(
+        name='m4_targeted', btype='targeted', scope='ssr',
+        fate_threshold=2, fate_points_init=0)),
+    ('rotating_soft', lambda: soft_fixture(
+        name='m4_rotating_soft', btype='rotating_soft', scope='ssr')),
+    ('rotating_cr_soft', lambda: soft_fixture(
+        name='m4_rotating_cr_soft', btype='rotating_cr_soft', scope='ssr',
+        cr_counter_threshold=3, cr_base_rate=0.0,
+        cr_state_probs=(0.0, 0.0, 1.0))),
+    ('targeted_soft', lambda: soft_fixture(
+        name='m4_targeted_soft', btype='targeted_soft', scope='ssr',
+        fate_threshold=2, fate_points_init=0)),
+)
+
+
+def _family_tolerance(pdef: PityDef) -> Tolerance:
+    """按机制族取容差（口径同 S5b 两批次，理由不重述）。"""
+    return FLOAT_ORDER if pdef.btype in _EVENT_DRIVEN_BTYPES else EXACT
+
+
+def _m4_report(pdef: PityDef, steps: Sequence[DrawStep], shape: PoolShape):
+    """跑一次 S5c 的 M4 对拍（复用装置的一步式入口与按类型登记的容差）。"""
+    return compare_runs(pdef, steps, shape=shape,
+                        tolerance=_family_tolerance(pdef))
+
+
+def _drive_selected(pdef: PityDef, steps: Sequence[DrawStep], *, shape: PoolShape,
+                    selected_card: Optional[str], builder) -> Tuple[List[bool], List[dict]]:
+    """S5c 增量门控用例的局部驱动：可指定 `selected_card`。
+
+    装置自带的 `run_trace` 把 `selected_card` 固定为 `TARGETED_CARD`（featured SSR），
+    而增量门控要测的正是「命中定轨卡但**出非 scope 稀有度**」，需要 selected 落在
+    非 scope 卡上（见 `test_m4_increment_scope_gate_targeted`）。步骤顺序与
+    `run_trace` 逐条相同（只省去只读探针，本节不消费该观测面），**两侧都必须先
+    `_rebind_state` 再驱动**的纪律同 `run_trace`。
+    """
+    state = _build_pity_state_init([pdef])
+    if selected_card is not None:
+        state.set(pdef.name, 'selected_card', selected_card)
+    layer = builder(pdef, state)
+    layer._rebind_state(state)
+    did_fire: List[bool] = []
+    snaps: List[dict] = []
+    for step in steps:
+        layer.before_draw(_ctx(shape, state))
+        after_ctx = _ctx(shape, state, step)
+        layer.after_draw(after_ctx)
+        did_fire.append(bool(layer.did_fire(after_ctx)))
+        snaps.append(state.to_dict()['data'])
+    return did_fire, snaps
+
+
+class TestS5cN1Phase:
+    """N1（§3.1.1 计数器相位表）：计数型先自增、Modifier 再读自增后的值。"""
+
+    @staticmethod
+    def _full_scope(probs: Dict[str, float], shape: PoolShape) -> bool:
+        """该抽是否「scope 概率 100%」（硬保底触发的判别式）。"""
+        keys = shape.scope_slots[shape.scope]
+        others = [k for k in probs if k not in keys]
+        return (abs(sum(probs.get(k, 0.0) for k in keys) - 1.0) <= 1e-12
+                and all(probs.get(k, 0.0) == 0.0 for k in others))
+
+    def test_n1_hard_first_hundred_percent_at_draw_90(self):
+        """`hard(threshold=90)` 的首次 100% 落在**第 90 抽**（下标 89），两侧同答。
+
+        判据分两层，把「相位」而非「总次数」钉住：
+
+        1. **两侧**的 100% 抽次集合都恰为 `[89, 100)`：第 90 抽是首次，此前抽抽不是
+           （序列全为 R 抽，出非 scope 不重置计数，故此后抽抽都是）；
+        2. 第 90 抽的**抽前** `counter` 为 89，即 Modifier 读到的值是 `pre + 1 = 90`
+           （这正是 N1 的读相位：`advance` 在 `before_draw` 的 Modifier 链之前）。
+
+        若递增挪到 `after_draw`（旧稿的近似写法），该抽读到 89、首次 100% 落到第 91 抽，
+        两条同时变红，而总触发次数不变。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='n1_hard90', btype='hard', scope='ssr',
+                               threshold=90, counter_init=0)
+        steps = tuple(R_DRAW for _ in range(100))
+        report = compare_runs(pdef, steps, shape=shape, tolerance=EXACT)
+        for side in (report.old, report.new):
+            firsts = [i for i, p in enumerate(side.probs) if self._full_scope(p, shape)]
+            assert firsts == list(range(89, len(steps))), (
+                f'{side.name}: 100% 的抽次集合为 {firsts}，'
+                f'期望 {list(range(89, len(steps)))}。'
+                f'序列全为 R 抽（出非 scope 不重置计数），故第 90 抽起应当抽抽 100%；'
+                f'首个下标落在 90 即计数型 Tracker 的递增相位被挪到了 after_draw')
+        pre_counter = report.new.snapshots[88][pdef.name]['counter']
+        assert pre_counter == 89, (
+            f'第 90 抽的抽前 counter 为 {pre_counter}，期望 89'
+            f'（Modifier 读自增后的值 90 == threshold）')
+        assert report.is_equivalent(), report.failure_messages()
+
+    @pytest.mark.parametrize('counter_init, expected_index', [(0, 3), (2, 1)])
+    def test_n1_soft_boost_start_draw_matches_old(self, counter_init, expected_index):
+        """软保底的 boost **起始抽数**与旧实现相同，且随 `counter_init` 整体平移。
+
+        `SOFT_DELTAS = ((3, 0.0), (4, 6.0))` 的累计 boost 在 counter ≥ 4 时为 6 个
+        百分点、counter ≤ 3 时恒 0；配合 N1 相位（第 N 抽读到 counter = N）得起始抽数
+        为第 4 抽（下标 3）。`counter_init=2` 时同一段表整体前移两抽（下标 1），
+        该变体把「起始抽数由 counter 的**读值**决定」与「由抽次序号决定」区分开，
+        后者在两种初值下都会答 3。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='n1_soft', btype='soft_step', scope='ssr',
+                               deltas=SOFT_DELTAS, counter_init=counter_init)
+        report = compare_runs(pdef, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+        base = shape.base_probabilities
+        for side in (report.old, report.new):
+            changed = [i for i, p in enumerate(side.probs) if p != base]
+            assert changed and changed[0] == expected_index, (
+                f'{side.name}: boost 起始下标为 '
+                f'{changed[0] if changed else None}，期望 {expected_index}'
+                f'（counter_init={counter_init}）')
+        assert report.is_equivalent(), report.failure_messages()
+
+    def test_n1_readonly_query_does_not_advance_counter(self):
+        """§3.1.1 的 N1 测试断言第三条：`readonly=True` 的查询**不推进计数**。
+
+        判据取「带只读探针与不带探针的两次驱动逐抽全等」（分布列 + 快照列）。
+        `CounterTracker.advance` 的 `readonly` 早退若失效，计数会每抽多推一次，
+        `hard` 的阈值边界随之整体前移，两列同时不等；这是该早退分支在本文件里的
+        显形面（`readonly_mutations` 只能证明「没写状态」，证不了「没推进」）。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='n1_ro', btype='hard', scope='ssr',
+                               threshold=6, counter_init=0)
+        probe = run_new(pdef, DRAW_SEQUENCE, shape=shape, probe_readonly=True)
+        plain = run_new(pdef, DRAW_SEQUENCE, shape=shape, probe_readonly=False)
+        assert probe.readonly_mutations == [], (
+            f'只读查询改动了状态：{probe.readonly_mutations}')
+        assert probe.snapshots == plain.snapshots, (
+            '带只读探针的轨迹与不带探针的轨迹在快照列上不同：'
+            '`advance` 的 readonly 早退失效（计数被每抽多推一次）')
+        assert probe.probs == plain.probs, (
+            '带只读探针的轨迹与不带探针的轨迹在分布列上不同：只读查询产生了副作用')
+
+
+
+class TestS5cM4DidFire:
+    """M4（§3.1.1 M4 表）：`did_fire` 的六类统一语义。
+
+    两类断言分工见本节的模块级说明。逐类一条「语义断言」会被三个 `_soft` 复合类型的
+    CounterTracker 掩盖（S5a 审查实测：`FlagTracker.did_reset` 恒返回 False 的变异下
+    全文件曾经 14 passed 全绿），故本节按「状态转移自洽 + 统一语义表」两列落。
+    """
+
+    @pytest.mark.parametrize('make', [entry[1] for entry in M4_BATCH],
+                             ids=[entry[0] for entry in M4_BATCH])
+    def test_m4_self_consistency_with_state_reset_transition(self, make):
+        """`did_fire` 与**状态转移**自洽：重置分支真的跑过当且仅当 `did_fire` 为真。
+
+        观测面取该族「回到初始状态」的键（`M4_OBSERVABLES`），逐抽判三值：
+
+        - `True`（必然发生重置）：例如 `rotating` 的 `guaranteed` 由 True 转 False
+          （`clear` 支跑过）、`hard` 的 `counter` 由非初值回到初值；
+        - `False`（必然未发生重置）：例如 `guaranteed` 由 False 转 True（`set` 支跑过）、
+          `counter` 未回到初值；
+        - `None`（不可分辨）：两侧都在初值，整段没动与重置到初值同形。
+
+        断言只压在 `True` / `False` 两格上（`None` 格交第二条用例的统一语义表覆盖）。
+        这是本文件里**唯一**能抓到「`did_reset` 与 `commit` 各写一套判据」的断言：
+        三个 `_soft` 型在「出 scope 未命中」当抽会掩盖同型 FlagTracker 的回归，
+        而状态转移列不看 `did_fire` 自己、只看状态。
+        """
+        shape = _default_shape()
+        pdef = make()
+        report = _m4_report(pdef, DRAW_SEQUENCE, shape)
+        assert report.is_equivalent(), report.failure_messages()
+
+        observations = _reset_observations(
+            pdef, report.new.snapshots, report.new.init_snapshot)
+        reset_draws = [i for i, o in enumerate(observations) if o is True]
+        quiet_draws = [i for i, o in enumerate(observations) if o is False]
+        assert reset_draws, (
+            f'{pdef.name}（{pdef.btype}）：默认序列下观测不到任何一次「重置分支确实跑过」，'
+            f'本用例失去判别力，须换 fixture 或换序列')
+        assert quiet_draws, (
+            f'{pdef.name}（{pdef.btype}）：默认序列下观测不到任何一次「重置分支确实没跑」，'
+            f'本用例的否证面是空的')
+
+        for index in reset_draws:
+            assert report.new.did_fire[index] is True, (
+                f'{pdef.name}（{pdef.btype}）第 {index} 抽：状态转移显示重置分支跑过'
+                f'（{M4_OBSERVABLES[pdef.btype]}），而 did_fire 为假。'
+                f'`did_reset` 与 `commit` 的重置判据不同源')
+        for index in quiet_draws:
+            assert report.new.did_fire[index] is False, (
+                f'{pdef.name}（{pdef.btype}）第 {index} 抽：状态转移显示重置分支没跑'
+                f'（{M4_OBSERVABLES[pdef.btype]}），而 did_fire 为真。'
+                f'`did_reset` 比 `commit` 的重置条件更宽')
+
+    @pytest.mark.parametrize('make', [entry[1] for entry in M4_BATCH],
+                             ids=[entry[0] for entry in M4_BATCH])
+    def test_m4_unified_spec_semantics(self, make):
+        """`did_fire` 与 §3.1.1 M4 表的**统一语义**逐抽相等（六类全覆盖）。
+
+        期望值由 `_unified_did_fire()` 从**配置与本次抽卡事实**独立算出，不读
+        `did_reset`。三个 `_soft` 复合类型按 ISSUE-102 的放宽取「出 scope」，
+        其余四类按表内各自的收严口径；两个方向相反的语义在同一参数化里并列，
+        任一侧写反都会变红。
+
+        `did_fire` 的**差异面**同时被钉住：非 `_soft` 型两侧必须与统一语义表全等
+        （差异列为空）；`_soft` 型的差异面恰为「出 scope 但未命中」的那些抽。
+        """
+        shape = _default_shape()
+        pdef = make()
+        report = _m4_report(pdef, DRAW_SEQUENCE, shape)
+        assert report.is_equivalent(), report.failure_messages()
+
+        expected = [_unified_did_fire(pdef, step) for step in DRAW_SEQUENCE]
+        assert report.new.did_fire == expected, (
+            f'{pdef.name}（{pdef.btype}）的 did_fire 与 §3.1.1 M4 表不符：\n'
+            f'  实际 {[int(x) for x in report.new.did_fire]}\n'
+            f'  期望 {[int(x) for x in expected]}')
+
+        relaxed = {i for i, step in enumerate(DRAW_SEQUENCE)
+                   if step.rarity == shape.scope and not step.is_featured}
+        if pdef.btype in _SOFT_SUFFIX_BTYPES:
+            assert set(report.did_fire_divergent_draws) == relaxed, (
+                f'{pdef.name}: ISSUE-102 的放宽差异面不再等于「出 scope 但未命中」')
+        else:
+            assert report.old.did_fire == expected, (
+                f'{pdef.name}: 本类型的旧类 did_fire 与统一语义表不符'
+                f'（该四类的收严已于 2026-09-16 在旧类落地）')
+            assert report.did_fire_divergent_draws == [], (
+                f'{pdef.name}: 本类型两侧的 did_fire 不应有差异')
+
+    def test_m4_increment_scope_gate_rotating(self):
+        """`rotating` 的 scope 门控（M4 表第二行的收严，属增量能力）：
+
+        「出**非 scope 稀有度**的 UP」不得清 `guaranteed`、不得报 `did_fire`。
+
+        构造：池里加一张 featured 的 SR 卡，序列为「无 → 出金未中（置位）→ 出 featured
+        SR（**非 scope**）→ 出 scope 的 featured（清位）」。收严前的判据只看
+        `is_featured`，第 3 抽会清位并报 `did_fire`；收严后 `guaranteed` 在这一抽
+        **必须保持置位**（这是本用例的判别式，`did_fire` 列只是它的伴生观测）。
+
+        该门控已于 2026-09-16 在旧类一并落地，故两侧同答，`compare_runs` 的两列
+        可同时断言。
+        """
+        gate_shape = make_pool_shape(DEFAULT_CARDS + (('sr_feat', 'sr', True, 0.05),))
+        featured_sr = DrawStep('sr_feat', 'sr', True)
+        steps = (R_DRAW, STANDARD_SSR, featured_sr, FEATURED_SSR)
+        assert featured_sr.is_featured and featured_sr.rarity != gate_shape.scope, (
+            '本用例的判别力来自「第 3 抽是 featured 且非 scope」，该前提不成立即用例空转')
+
+        pdef = counter_fixture(name='m4_gate_rotating', btype='rotating', scope='ssr')
+        report = compare_runs(pdef, steps, shape=gate_shape, tolerance=FLOAT_ORDER)
+        assert report.is_equivalent(), report.failure_messages()
+        for side in (report.old, report.new):
+            assert side.did_fire == [False, False, False, True], (
+                f'{side.name}: did_fire 列应为 [F, F, F, T]（出金未中 / 出 featured SR / '
+                f'出 scope featured），实际 {side.did_fire}。第 3 抽为真即 scope 门控缺失')
+            flags = [snap.get(pdef.name, {}).get('guaranteed')
+                     for snap in side.snapshots]
+            assert flags == [None, True, True, False], (
+                f'{side.name}: guaranteed 列应为 [未写, True, True, False]，实际 {flags}。'
+                f'第 3 抽之后不再是 True 即「出非 scope 的 UP」被误当成门控内命中')
+
+    def test_m4_increment_scope_gate_targeted(self):
+        """`targeted` 的 scope 门控（M4 表第三行的收严，属增量能力）：
+
+        **命中定轨卡但出非 scope 稀有度**不得清零 `fate_points`、不得报 `did_fire`。
+
+        构造：`selected_card` 取池内一张 SR 卡（`sr1`），序列为「出金未中（fate_points
+        1 + guaranteed 置位）→ 出 `sr1`」。`selected_card` 通常由策略层写入 featured
+        SSR，装置自带的 `run_trace` 把它写死为 `TARGETED_CARD`，故本用例用局部驱动
+        `_drive_selected()` 覆写它。门控缺失时第 2 抽 `reward_id == selected` 成立，
+        `fate_points` 归零、`guaranteed` 清位、`did_fire` 为真，三条断言同时变红。
+        """
+        shape = _default_shape()
+        sr_card = 'sr1'
+        steps = (STANDARD_SSR, SR_DRAW)
+        assert steps[1].reward_id == sr_card and steps[1].rarity != shape.scope, (
+            '本用例的判别力来自「命中 selected 且非 scope」，该前提不成立即用例空转')
+
+        pdef = counter_fixture(name='m4_gate_targeted', btype='targeted', scope='ssr',
+                               fate_threshold=2, fate_points_init=0)
+        for label, builder in (('old', build_old), ('new', build_new)):
+            did_fire, snaps = _drive_selected(
+                pdef, steps, shape=shape, selected_card=sr_card, builder=builder)
+            assert did_fire == [False, False], (
+                f'{label}: did_fire 列应为 [F, F]，实际 {did_fire}。'
+                f'第 2 抽为真即「命中定轨卡」未受 scope 门控约束')
+            fate = [snap[pdef.name].get('fate_points') for snap in snaps]
+            assert fate == [1, 1], (
+                f'{label}: fate_points 列应为 [1, 1]，实际 {fate}。'
+                f'第 2 抽归零即定轨命中把非 scope 抽也算作命中')
+            flags = [snap[pdef.name].get('guaranteed') for snap in snaps]
+            assert flags == [True, True], (
+                f'{label}: guaranteed 列应为 [True, True]，实际 {flags}。'
+                f'第 2 抽被清位即门控缺失')
+
+
+#: CR 族的消费模型批量表：`(id, 配置, 总消费是否应为 0)`。
+#: 逐条对应 §3.1.2 协议的一条（或一组）路径：「中间值」与「含 0」两档验掷骰，
+#: 「空表」「恒 0 档」与「确定性档」验三条不消耗路径，`base_rate` 两值验 `> 0` 前置。
+H4_MODEL_BATCH: Tuple[Tuple[str, Dict[str, Any], bool], ...] = (
+    ('base_rate0+mid', dict(cr_counter_threshold=3, cr_base_rate=0.0,
+                            cr_state_probs=(0.0, 0.4, 0.75, 1.0)), False),
+    ('base_rate0+zeroed', dict(cr_counter_threshold=3, cr_base_rate=0.0,
+                               cr_state_probs=(0.0, 0.0, 0.0, 1.0)), True),
+    ('base_rate0+empty', dict(cr_counter_threshold=3, cr_base_rate=0.0,
+                              cr_state_probs=()), True),
+    ('base_rate0+deterministic', dict(cr_counter_threshold=1, cr_base_rate=0.0,
+                                      cr_state_probs=(0.0, 1.0)), True),
+    ('base_rate0.018+mid', dict(cr_counter_threshold=3, cr_base_rate=0.018,
+                                cr_state_probs=(0.0, 0.4, 0.75, 1.0)), False),
+    ('base_rate0.018+empty', dict(cr_counter_threshold=3, cr_base_rate=0.018,
+                                  cr_state_probs=()), False),
+)
+
+
+@contextmanager
+def _scripted_rng(values: Sequence[float]):
+    """把模块级 `random.random` 换成**脚本化序列**（H4 负例的确定性掷骰面）。
+
+    与 `_counting_rng` 同法替换模块属性，故新旧两侧消费的是**同一条脚本**（两侧的
+    掷骰都走 `random.random` 的属性查找，与 `_counting_rng` 的替换可叠加：
+    `run_trace` 内的计数器包住本函数装的脚本函数）。序列耗尽即抛 `AssertionError`，
+    比静默回退到真实随机源更能暴露「多消费了一次」。退出时无条件还原。
+    """
+    pending = list(values)
+    consumed: List[float] = []
+    original = random.random
+
+    def _scripted() -> float:
+        if not pending:
+            raise AssertionError(
+                '脚本化随机数序列已耗尽：本次运行的消费次数超出用例预期')
+        value = pending.pop(0)
+        consumed.append(value)
+        return value
+
+    random.random = _scripted
+    try:
+        yield consumed
+    finally:
+        random.random = original
+
+
+def _expected_cr_rolls(pdef: PityDef, steps: Sequence[DrawStep],
+                       init_snapshot: dict, snaps: Sequence[dict]) -> List[int]:
+    """H4 的**独立消费模型**：逐抽期望掷骰枚数（§3.1.2 协议的六条路径逐条写出）。
+
+    只看**配置**与**该侧自己的状态快照**（抽前的 `guaranteed` / `cr_counter`），
+    不读 `StreakTracker` 内部的任何东西：
+
+    1. `readonly=True`：本模型只描述主路径（只读路径由
+       `test_h4_readonly_query_consumes_no_random` 单独覆盖）；
+    2. `guard_flag`（`guaranteed`）已置位：`prepare` 首段早退，**不掷骰**；
+    3. `self._cr_base_rate > 0 and random.random() < ...`：`> 0` 是 `and` 的左操作数，
+       配 0 时右侧整个不求值。写成 `if random.random() < rate`（省去 `> 0`）会在
+       `base_rate == 0` 的每抽多消费一枚，本模型的 `1 if base_rate > 0 else 0` 即该守卫；
+    4. 下标裁剪 `idx = min(cr_counter, len(cr_state_probs) - 1)`；
+    5. `state_prob >= 1.0`：确定性触发，**不掷骰**；
+    6. `state_prob > 0` 才掷骰（`state_prob == 0` 与**空表**（`idx == -1`）都不掷）。
+    """
+    threshold = (pdef.cr_counter_threshold
+                 if pdef.cr_counter_threshold is not None else 3)
+    base_rate = pdef.cr_base_rate if pdef.cr_base_rate is not None else 0.0
+    state_probs = (list(pdef.cr_state_probs) if pdef.cr_state_probs is not None
+                   else [0.0] * threshold + [1.0])
+
+    out: List[int] = []
+    for index in range(len(steps)):
+        pre_all = snaps[index - 1] if index else init_snapshot
+        pre = pre_all.get(pdef.name, {})
+        if pre.get('guaranteed') is True:
+            out.append(0)
+            continue
+        rolls = 1 if base_rate > 0 else 0
+        idx = min(pre.get('cr_counter') or 0, len(state_probs) - 1)
+        if idx >= 0:
+            state_prob = state_probs[idx]
+            if state_prob >= 1.0:
+                pass
+            elif state_prob > 0:
+                rolls += 1
+        out.append(rolls)
+    return out
+
+
+def _drive_cr_per_draw(pdef: PityDef, steps: Sequence[DrawStep], *, shape: PoolShape,
+                       builder, seed: int = 20261011,
+                       probe_readonly: bool = False) -> Tuple[List[int], List[dict], dict]:
+    """H4 的局部驱动：逐抽记录**该抽消耗的随机数枚数**（`run_trace` 只给总数）。
+
+    返回 `(逐抽消费数, 逐抽快照, 初始快照)`。步骤顺序与 `run_trace` 同形
+    （`probe_readonly=True` 时在每抽的正式调用前补一次只读查询），rebind 纪律同
+    `run_trace`（两侧都必须补一次）。
+    """
+    state = initial_state(pdef)
+    layer = builder(pdef, state)
+    layer._rebind_state(state)
+    init_snapshot = state.to_dict()['data']
+    consumed: List[int] = []
+    snaps: List[dict] = []
+    with _counting_rng(seed) as calls:
+        for step in steps:
+            if probe_readonly:
+                layer.before_draw(_ctx(shape, state), readonly=True)
+            before = calls['n']
+            layer.before_draw(_ctx(shape, state))
+            layer.after_draw(_ctx(shape, state, step))
+            consumed.append(calls['n'] - before)
+            snaps.append(state.to_dict()['data'])
+    return consumed, snaps, init_snapshot
+
+
+class TestS5cH4RandomConsumption:
+    """H4（§3.1.2 的 CR 随机数消耗协议）：短路条件下的消费次数。
+
+    本节把消费从「两侧总数相等」推进到**逐抽、逐侧、对独立模型**三层相等：
+    `run_trace` 的 `rng_calls` 只有一个总数，够不着「消费相位错了但总数凑巧相同」
+    的形态（例如把 `base_rate == 0` 那次多消费与某次少消费对消）。
+    """
+
+    @pytest.mark.parametrize('cfg, expect_zero', [(e[1], e[2]) for e in H4_MODEL_BATCH],
+                             ids=[e[0] for e in H4_MODEL_BATCH])
+    def test_h4_consumption_matches_short_circuit_model(self, cfg, expect_zero):
+        """逐抽消费枚数同时等于：独立模型 / 旧类 / 新骨架。
+
+        模型（`_expected_cr_rolls`）把六条路径逐条写出，只吃配置与各侧自己的状态
+        快照；任一条守卫写错都会让某一抽的期望与实际相差一枚：
+
+        - 省去 `base_rate > 0`：`base_rate == 0` 的每抽各多一枚（第 2/3/4 行配置）；
+        - 省去 `state_prob > 0`：`state_prob == 0` 的档位每抽各多一枚；
+        - 省去 `state_prob >= 1.0` 的确定性早退：确定性档每抽各多一枚；
+        - 省去空表早退（`idx == -1`）：空表配置每抽各多一枚；
+        - 省去 `guard_flag` 早退：守卫抽各多一枚。
+
+        「逐抽」而非「总数」是关键：总数相等可能由多消费与少消费对消，逐抽列不会。
+        `expect_zero` 一条则钉住「三条不消耗路径之和为 0」这一字面主张。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='s5c_h4_model', btype='rotating_cr',
+                               scope='ssr', **cfg)
+        report = compare_runs(pdef, DRAW_SEQUENCE, shape=shape, tolerance=FLOAT_ORDER)
+        assert report.is_equivalent(), report.failure_messages()
+
+        profiles = {}
+        for label, builder in (('old', build_old), ('new', build_new)):
+            consumed, snaps, init_snapshot = _drive_cr_per_draw(
+                pdef, DRAW_SEQUENCE, shape=shape, builder=builder)
+            expected = _expected_cr_rolls(
+                pdef, DRAW_SEQUENCE, init_snapshot, snaps)
+            assert consumed == expected, (
+                f'{label} 侧逐抽消费枚数与协议模型不符：\n'
+                f'  实际 {consumed}\n  期望 {expected}')
+            profiles[label] = consumed
+        assert profiles['old'] == profiles['new'], (
+            f'两侧逐抽消费枚数不同：\n  old={profiles["old"]}\n  new={profiles["new"]}')
+
+        total = sum(profiles['new'])
+        assert (total == 0) is expect_zero, (
+            f'本配置的总消费为 {total}，与用例登记的期望'
+            f'（{"0" if expect_zero else "> 0"}）不符')
+        # 局部驱动与装置的一步式入口同源（同一序列、同一种子、同一 rebind 纪律）
+        assert total == report.new.rng_calls, (
+            f'局部驱动的消费总数 {total} 与装置记录的 {report.new.rng_calls} 不同，'
+            f'说明两者驱动出的不是同一条轨迹')
+
+    def test_h4_short_circuit_paths_consume_no_random(self):
+        """三条「不消耗」路径的**正面控制**：同一 fixture 把 `base_rate` 抬到 1.0 后
+        每抽恰多消费一枚，证明「0 不消耗」不是模型把消费数算漏了。
+
+        第 1 段的配置（`base_rate == 0` + 空表）总消费恒为 0；第 2 段只改
+        `cr_base_rate`（1.0），于是每一张**非守卫抽**都在 `base_rate` 处掷骰一次
+        （`random.random() < 1.0` 恒真，仍不触发 state 档），逐抽消费列恰为
+        「非守卫抽 1 枚、守卫抽 0 枚」。两段之差即 base_rate 那一处的真实贡献。
+        """
+        shape = _default_shape()
+        quiet = counter_fixture(name='s5c_h4_quiet', btype='rotating_cr', scope='ssr',
+                               cr_counter_threshold=3, cr_base_rate=0.0,
+                               cr_state_probs=())
+        loud = counter_fixture(name='s5c_h4_loud', btype='rotating_cr', scope='ssr',
+                              cr_counter_threshold=3, cr_base_rate=1.0,
+                              cr_state_probs=())
+
+        quiet_consumed, quiet_snaps, quiet_init = _drive_cr_per_draw(
+            quiet, DRAW_SEQUENCE, shape=shape, builder=build_new)
+        loud_consumed, loud_snaps, loud_init = _drive_cr_per_draw(
+            loud, DRAW_SEQUENCE, shape=shape, builder=build_new)
+
+        assert set(quiet_consumed) == {0}, (
+            f'空表 + base_rate=0 时应当一枚都不消费，实际逐抽消费 {quiet_consumed}')
+        assert quiet_consumed == _expected_cr_rolls(
+            quiet, DRAW_SEQUENCE, quiet_init, quiet_snaps)
+
+        # 守卫抽由状态列给出（`guaranteed` 在抽前为真即 `prepare` 首段早退）
+        guarded = [(quiet_snaps[index - 1] if index else quiet_init)
+                   .get(quiet.name, {}).get('guaranteed') is True
+                   for index in range(len(DRAW_SEQUENCE))]
+        assert any(guarded) and not all(guarded), (
+            f'本配置下「有守卫抽也有非守卫抽」才使下面的逐抽对照有判别力：{guarded}')
+        assert loud_consumed == [0 if g else 1 for g in guarded], (
+            f'base_rate=1.0 时每张非守卫抽应在 base_rate 处掷骰恰好一枚'
+            f'（守卫抽早退不掷），实际逐抽消费 {loud_consumed}')
+        assert loud_consumed == _expected_cr_rolls(
+            loud, DRAW_SEQUENCE, loud_init, loud_snaps)
+
+    def test_h4_readonly_query_consumes_no_random(self):
+        """H4 负例一（2026-10-10 上调）：**只读查询不消耗随机数**。
+
+        §3.1.2 协议第 3 条：`StreakTracker.prepare` 必须在 `readonly=True` 时早退，
+        「漏掉即策略层每次概率查询都掷骰、全局随机流整体错位」。判据取同一序列、
+        同一种子下「带只读探针」与「不带探针」的**逐抽消费列全等**：`prepare` 若
+        忽略 `readonly`，带探针的每一抽会多消费一枚，逐抽列立刻不等（总数也会翻倍，
+        但逐抽列能把「只多一次」的形态也照出来）。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='s5c_h4_ro', btype='rotating_cr', scope='ssr',
+                               cr_counter_threshold=3, cr_base_rate=0.018,
+                               cr_state_probs=(0.0, 0.4, 0.75, 1.0))
+        probe_consumed, probe_snaps, probe_init = _drive_cr_per_draw(
+            pdef, DRAW_SEQUENCE, shape=shape, builder=build_new, probe_readonly=True)
+        plain_consumed, plain_snaps, plain_init = _drive_cr_per_draw(
+            pdef, DRAW_SEQUENCE, shape=shape, builder=build_new, probe_readonly=False)
+
+        assert probe_snaps == plain_snaps, (
+            '带只读探针的轨迹与不带探针的轨迹在快照列上不同：只读查询产生了副作用')
+        assert probe_consumed == plain_consumed, (
+            f'只读查询消耗了随机数：\n  带探针 {probe_consumed}\n  不带 {plain_consumed}')
+        assert probe_consumed == _expected_cr_rolls(
+            pdef, DRAW_SEQUENCE, probe_init, probe_snaps)
+        assert sum(plain_consumed) > 0, (
+            '本配置一次都没掷骰，本用例失去判别力（改配置使 state 档落在 (0,1) 内）')
+
+    def test_h4_failed_roll_leaves_flag_false(self):
+        """H4 负例二（2026-10-10 上调）：**掷骰失败后 `cr_intercepted` 必须为假**。
+
+        §3.1.1 等价性依据第 5 条：旧 `RotatingCRBehavior.before_draw` 只在命中分支
+        `return`，照搬会让「上次掷中」的标记残留到下一抽，`RotatingModifier` 因而误
+        拦截、拦截率被静默抬高。新实现在掷骰路径上**成功置位、失败清位**。
+
+        构造：`cr_base_rate = 0.5` 配 `cr_state_probs = (0.0,)`（唯一档位概率为 0，
+        故只有 `base_rate` 一处掷骰点，每抽恰消费一枚），用**脚本化随机源**把首抽压成
+        命中（0.1 < 0.5）、其后全部压成失败（0.9 >= 0.5）。判别面三条：
+        ① 逐抽标记列 `[True, False, False, False, False, False]`，即失败抽清位；
+        ② 首抽命中把它逼成 featured 全量分布、第二抽失败即回到基础分布（拦截的
+           **当抽**效果与标记同源，不留到下一抽）；
+        ③ 脚本的消费序列与预期逐项相等（每抽恰一枚，序列耗尽即报错）。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='s5c_h4_flag', btype='rotating_cr', scope='ssr',
+                               cr_counter_threshold=3, cr_base_rate=0.5,
+                               cr_state_probs=(0.0,))
+        steps = tuple(R_DRAW for _ in range(6))
+        script = [0.1] + [0.9] * (len(steps) - 1)
+        with _scripted_rng(script) as consumed:
+            trace = run_new(pdef, steps, shape=shape)
+
+        assert consumed == script, (
+            f'脚本化随机源的消费序列与预期不符：{consumed}，期望 {script}'
+            f'（每抽恰一枚；多消费一枚即某条守卫缺失）')
+        marked = [snap[pdef.name].get('cr_intercepted') for snap in trace.snapshots]
+        assert marked == [True] + [False] * (len(steps) - 1), (
+            f'掷骰失败后 cr_intercepted 未清位（脏残留）：{marked}')
+
+        base = shape.base_probabilities
+        featured_slot = shape.card_to_slot[TARGETED_CARD]
+        non_featured = [k for k in shape.scope_slots[shape.scope]
+                        if k != featured_slot]
+        assert trace.probs[0] != base and trace.probs[1] == base, (
+            '命中抽的分布应当被拦截改写、失败抽应当恒等；'
+            f'实际 首抽={trace.probs[0]} 次抽={trace.probs[1]}')
+        scope_total = sum(base[k] for k in shape.scope_slots[shape.scope])
+        assert FLOAT_ORDER.holds(trace.probs[0][featured_slot], scope_total), (
+            f'命中抽未把 scope 全量搬给 featured 槽：'
+            f'{trace.probs[0][featured_slot]!r} vs {scope_total!r}'
+            f'（容差取 FLOAT_ORDER：该值是 `total * w / sw` 的除再乘往返，'
+            f'与 §六 登记的 1 ULP 同源）')
+        assert all(trace.probs[0][k] == 0.0 for k in non_featured), (
+            f'命中抽的 scope 非 featured 槽未清零：{trace.probs[0]}')

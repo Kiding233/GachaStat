@@ -7,9 +7,10 @@
     "sim_start_date": "2026-09-12",
     "end_time": 14515200.0,
     "num_pools": 8,
-    "generated_at": 1791603927.3484046,
+    "generated_at": 1791642816.4114711,
     "wiring": "pre",
-    "note": "P82 接线前基线（`_resolve_order` 的排序结果尚未接入概率管道）。对照口径见 scripts/p82_baseline.py 的 --verify 模式与 P64 §1.5。"
+    "note": "P82 基线（2026-10-10 重固化）：P64 S4-2 按裁决 7B 删去样例配置 `config.toml` 的 `ssr_soft.target_featured = true`（soft 的目标集自 featured 槽放宽为 scope 全集），本组因此变化。原值为**接线前**（`a41de1b^`）固化，当时「接线不改变管道输出」已由 `--verify` 逐字段核过（PASS）；本组改用**接线后**代码重新固化，取代原快照，对照口径不变（同种子逐字段 + `draw_pity_names` 不变）。旧值见 git 历史（重固化提交的父提交）。",
+    "refrozen": "2026-10-10"
   },
   "compact": {
     "draw_card_ids": [
@@ -94,11 +95,11 @@
       "r_2",
       "r_1",
       "r_3",
-      "limited_ssr_1",
-      "r_4",
-      "r_6",
-      "r_3",
+      "standard_ssr_6",
       "r_2",
+      "r_5",
+      "standard_ssr_3",
+      "limited_ssr_1",
       "r_6",
       "r_3",
       "r_1",
@@ -400,11 +401,11 @@
       false,
       false,
       false,
+      false,
+      false,
+      false,
+      false,
       true,
-      false,
-      false,
-      false,
-      false,
       false,
       false,
       false,
@@ -502,11 +503,11 @@
       null,
       null,
       null,
+      null,
+      null,
+      null,
+      null,
       "ssr_soft",
-      null,
-      null,
-      null,
-      null,
       null,
       null,
       null,
@@ -605,6 +606,10 @@
       80,
       81,
       82,
+      83,
+      84,
+      85,
+      86,
       1,
       2,
       3,
@@ -618,11 +623,7 @@
       11,
       12,
       13,
-      14,
-      15,
-      16,
-      17,
-      18
+      14
     ],
     "draw_resources_consumed": [
       {
@@ -1226,16 +1227,18 @@
       "exchange_currency": 260.0
     },
     "card_counts": {
-      "r_4": 20,
+      "r_4": 19,
       "sr_3": 2,
       "r_2": 18,
-      "r_5": 11,
-      "r_6": 16,
+      "r_5": 12,
+      "r_6": 15,
       "r_1": 15,
-      "r_3": 12,
+      "r_3": 11,
       "sr_4": 2,
       "sr_1": 1,
       "sr_5": 1,
+      "standard_ssr_6": 1,
+      "standard_ssr_3": 1,
       "limited_ssr_1": 1,
       "sr_6": 1
     },
@@ -1244,16 +1247,18 @@
     },
     "pool_card_counts": {
       "pool_c1.main": {
-        "r_4": 20,
+        "r_4": 19,
         "sr_3": 2,
         "r_2": 18,
-        "r_5": 11,
-        "r_6": 16,
+        "r_5": 12,
+        "r_6": 15,
         "r_1": 15,
-        "r_3": 12,
+        "r_3": 11,
         "sr_4": 2,
         "sr_1": 1,
         "sr_5": 1,
+        "standard_ssr_6": 1,
+        "standard_ssr_3": 1,
         "limited_ssr_1": 1,
         "sr_6": 1
       }
@@ -1311,7 +1316,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       },
@@ -1319,7 +1324,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       },
@@ -1327,7 +1332,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       },
@@ -1335,7 +1340,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       },
@@ -1343,7 +1348,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       },
@@ -1351,7 +1356,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       },
@@ -1359,7 +1364,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       },
@@ -1367,7 +1372,7 @@
         "data": {
           "ssr_soft": {
             "_active": true,
-            "counter": 18
+            "counter": 14
           }
         }
       }
@@ -1487,6 +1492,6 @@
     "strategy_name": "FixedCountStrategy",
     "strategy_key": "fixed_count",
     "result_version": 3,
-    "generated_at": 1791603927.3484046
+    "generated_at": 1791642816.4114711
   }
 }

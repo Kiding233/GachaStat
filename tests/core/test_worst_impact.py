@@ -292,7 +292,17 @@ def test_synthetic_pool_specs_satisfy_alignment_invariants():
 
 
 def test_synthetic_pool_pity_moves_mass_into_featured_slot():
-    """保底生效后，质量必须是从普通槽搬进限定槽（证明方向，不只是「有变化」）。"""
+    """保底生效后，质量必须是从低稀有度槽搬进 scope 槽（证明方向，不只是「有变化」）。
+
+    **目标集口径（2026-10-10，S4-2 随裁决 7B 改写）**：本用例原断言「搬进
+    `ssr_featured`（限定槽）、从 `ssr`（普通槽）取」——那是样例配置
+    `config.toml` 的 `ssr_soft` 带 `target_featured = true` 时的形态。裁决 7B
+    （2026-10-05）把 `soft_*` + `target_featured = true` 定为 `ConfigError`
+    （soft 的目标集恒为 scope 全集，该形态可等价分解为「稀有度级 + 卡级」两步
+    转移），样例配置随之删去该行，故本用例改断言**方向**：质量自低稀有度槽搬入
+    **SSR 槽的并集**（`ssr` + `ssr_featured`），低稀有度侧一律下降。
+    断言目的（「方向而非仅『有变化』」）不变，变的只是目标集口径。
+    """
     from gacha_simulator.core.pity import PityState
     from gacha_simulator.core.state import GachaState
 
@@ -300,7 +310,7 @@ def test_synthetic_pool_pity_moves_mass_into_featured_slot():
     banner, engine = cfg['pools'][0], cfg['pity_engine']
     pool = banner.pools['main']
     spec = engine.get_spec(f'{banner.id}.main')
-    featured_slot = spec.featured_slots['ssr'][0]      # 'ssr_featured'
+    ssr_slots = tuple(spec.scope_slots['ssr'])         # ('ssr', 'ssr_featured')
 
     seen = []
     orig = engine.before_draw
@@ -323,7 +333,10 @@ def test_synthetic_pool_pity_moves_mass_into_featured_slot():
 
     assert seen, '保底未生效——无验收面'
     before, after = seen[0]
-    assert after[featured_slot] > before.get(featured_slot, 0.0), \
-        f'保底未把质量搬进 {featured_slot}：{before} → {after}'
-    assert after['ssr'] < before['ssr'], \
-        f'保底未从普通槽取质量：{before} → {after}'
+    lower = [s for s in before if s not in ssr_slots]
+    assert lower, '本用例需要 scope 之外的低稀有度槽作取源面'
+    assert sum(after[s] for s in ssr_slots) > sum(before[s] for s in ssr_slots), \
+        f'保底未把质量搬进 SSR 槽并集：{before} → {after}'
+    for s in lower:
+        assert after[s] < before[s], \
+            f'保底未从低稀有度槽 {s} 取质量：{before} → {after}'

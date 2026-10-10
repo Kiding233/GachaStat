@@ -476,14 +476,26 @@ class TestNeverResetHardPity:
             'ssr_featured': 1.0, 'sr_featured': 0.0}
 
     def test_never_reset_reaches_behavior_via_create_behavior(self):
-        """`reset='never'` 经 `create_behavior(PityDef(...))` 透传（配置 → 行为接线面）。"""
-        from gacha_simulator.core.pity import create_behavior
+        """`reset='never'` 经 `create_behavior(PityDef(...))` 透传（配置 → 行为接线面）。
+
+        S4-2 起 `hard` 已 preset 化：本用例断言的对象由旧类 `HardPityBehavior`
+        改为统一骨架 `Pity` + 「`reset` 落进 `CounterTracker.reset_on`」这一接线点
+        （旧类的 `_reset` 属性在骨架上不存在）。
+        """
+        from gacha_simulator.core.pity import create_behavior, Pity
 
         state = PityState()
         pdef = PityDef(name=self.NAME, btype='hard', scope='ssr',
                        threshold=self.THRESHOLD, reset='never')
         bh = create_behavior(pdef, state)
-        assert isinstance(bh, HardPityBehavior)
+        assert isinstance(bh, Pity), 'hard 已 preset 化，须返回统一骨架'
+        assert bh._trackers[0]._reset_on == 'never', \
+            'reset="never" 未透传到 CounterTracker.reset_on'
+        # 骨架**不在构造期绑定**零件 Counter/Flag（§3.1.4；绑定只发生在
+        # `Pity._rebind_state`），本用例不经引擎直驱，故须自行完成一次重绑
+        # ——引擎的三条派发入口（before_draw / after_draw / get_probabilities）
+        # 首行都会做这件事。
+        bh._rebind_state(state)
 
         for _ in range(self.THRESHOLD - 2):
             self._draw(bh, state, rarity='r')

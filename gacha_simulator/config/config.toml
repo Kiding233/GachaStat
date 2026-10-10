@@ -1101,7 +1101,6 @@ featured = false
 name = "ssr_soft"
 type = "soft_interval"
 scope = "ssr"
-target_featured = true
 reset = "featured"
 start = 80
 end = 90

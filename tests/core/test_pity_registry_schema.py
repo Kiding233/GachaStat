@@ -12,6 +12,11 @@
   `ConfigError`（查多未知键 / 查漏 `lifecycle`）、无 preset 且 `class` 为 `None` 时报未实现；
 - `Pity.__init__` 签名不含旧类分支的两个注入点（`target_featured` / `reset`）。
 
+**P64 S4-2 追加（本文件下半的 `TestCounterPresetsS42`）**：counter 驱动四类
+（`soft_interval` / `soft_additive` / `soft_step` / `hard`）的 preset 工厂本体——
+条目原子形态、五键全集、`flags` / `counters` 的**消费者断言**、`priority` 走构造形参、
+`_target_of` 的 `target=` 选择子、裁决 7B 的类型级硬拒、以及「工厂不是模块级常量实例」。
+
 **S4-3 收口时的删除面**：`TestValidateRegistryTransition` 里「无 `preset` 键」形态的
 三条用例（旧形态通过 / 未迁移条目 class 置 None 必抛 / 无 preset 且 class None 报未实现）
 随过渡分支一并删除；`TestValidateRegistryPresetForm` 与 `TestCreateBehaviorPresetBranch`
@@ -23,8 +28,10 @@ import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
 from gacha_simulator.core.pity import (
-    BEHAVIOR_REGISTRY, HardPityBehavior, Pity, _validate_registry, create_behavior,
+    BEHAVIOR_REGISTRY, HardPityBehavior, Pity, _preset_hard, _preset_soft_step,
+    _target_of, _validate_registry, create_behavior,
 )
+from gacha_simulator.core.pity_modifier import HardModifier, SoftModifier
 from gacha_simulator.core.pity_primitives import PityState
 from gacha_simulator.core.pity_tracker import AlwaysActive, CounterTracker
 
@@ -257,3 +264,181 @@ def test_pity_init_signature_excludes_legacy_injection_params():
     params = set(inspect.signature(Pity.__init__).parameters)
     assert 'target_featured' not in params
     assert 'reset' not in params
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4-2：counter 驱动 preset（4 类）
+# ══════════════════════════════════════════════════════════════════
+
+_C42_TYPES = ('soft_interval', 'soft_additive', 'soft_step', 'hard')
+_KEY_UNIVERSE = {'trackers', 'modifiers', 'lifecycle', 'flags', 'counters'}
+_REQUIRED_KEYS = {'trackers', 'modifiers', 'lifecycle'}
+
+
+class TestCounterPresetsS42:
+    """四类 preset 工厂本体（§3.2 / §七 S4-2 的验收面）。"""
+
+    def test_registry_entries_atomic_preset_form(self):
+        """① 四条 registry 条目已原子地 `class: None` + 可调用 `preset`。
+
+        「原子」的含义：`class` 置空与 `preset` 赋值必须在同一条目上同时成立——
+        条目既无 `preset` 又无 `class` 时，导入期的 `_validate_registry()` 即
+        `TypeError`。故 `python -c "import gacha_simulator.core.pity"` 通过本身就是
+        本断言的另一半（导入期已跑过判据）。
+        """
+        for t in _C42_TYPES:
+            entry = BEHAVIOR_REGISTRY[t]
+            assert entry['class'] is None, f'{t}: class 未置 None'
+            assert callable(entry['preset']), f'{t}: preset 不可调用'
+
+    def test_preset_key_sets_within_five_key_universe(self):
+        """② 四类 preset 均可构造，返回 dict ⊆ 五键全集且含三必需键。
+
+        上界取五键全集而非子集判断的补集——子集式（`<= set(x)`）不拒绝多余键，
+        「`flags` / `counters` 成了死键」在其下不可见（AUDIT-BREAK-3）。
+        """
+        for t in _C42_TYPES:
+            built = BEHAVIOR_REGISTRY[t]['preset'](PityDef(name=t, btype=t))
+            assert isinstance(built, dict), t
+            assert _REQUIRED_KEYS <= set(built) <= _KEY_UNIVERSE, (t, sorted(built))
+
+    def test_preset_is_factory_not_module_level_instance(self):
+        """③ 工厂不是模块级常量实例（ISSUE-005）：两次调用返回互不相同的零件。
+
+        模块级赋值会让同一 preset 的所有保底共享同一批 Counter/Flag 遥控器，
+        `_rebind_state` 把它们重绑到最后调度的保底——串扰既跨保底又跨模拟。
+        """
+        for factory, t in ((_preset_soft_step, 'soft_step'), (_preset_hard, 'hard')):
+            pd = PityDef(name=t, btype=t)
+            a, b = factory(pd), factory(pd)
+            assert a['trackers'][0] is not b['trackers'][0], t
+            assert a['modifiers'][0] is not b['modifiers'][0], t
+            assert a['lifecycle'] is not b['lifecycle'], t
+
+    def test_counter_preset_is_named_hard(self):
+        """`_preset_hard` 的 Tracker 是 `CounterTracker`，`counters` 取 `pdef.counter_init`。"""
+        built = _preset_hard(PityDef(name='h', btype='hard', counter_init=5))
+        assert isinstance(built['trackers'][0], CounterTracker)
+        assert built['counters'] == {'counter': 5}
+
+    def test_consumer_counters_written_into_state(self):
+        """消费者断言（AUDIT-BREAK-3 强制）：`counters` 被 `Pity.__init__` 真写进 state。
+
+        判据取「声明了初值但没人读」这一失效模式的反面：`counter_init=5` 经
+        preset → `create_behavior` 后必须是 `state.get(name, 'counter') == 5`。
+        本批四类均不含 flag（无 `flags` 键），flag 侧的消费者由
+        `TestCreateBehaviorPresetBranch::test_flags_and_counters_are_consumed` 覆盖。
+        """
+        state = PityState()
+        bh = create_behavior(
+            PityDef(name='h', btype='hard', counter_init=5, guaranteed_init=True), state)
+        assert isinstance(bh, Pity)
+        assert state.get('h', 'counter') == 5
+        # 本批四类不声明 flag：`guaranteed_init=True` 不该写出 `guaranteed` 键
+        assert state.get('h', 'guaranteed') is None, 'counter 驱动型不得声明 flag'
+
+    def test_consumer_counters_truthy_rule(self):
+        """`counters` 走 L4 truthy 规则：`counter_init=0` 不预建键（对齐 `_build_pity_state_init`）。"""
+        state = PityState()
+        create_behavior(PityDef(name='h', btype='hard', counter_init=0), state)
+        assert state.get('h', 'counter') is None
+
+    def test_priority_passed_as_constructor_param(self):
+        """④ `priority` 经**构造形参**传入（§3.6 M3 / ISSUE-203），非构造后设属性。"""
+        bh = create_behavior(PityDef(name='p', btype='hard', priority=7), PityState())
+        assert bh._priority == 7
+        assert create_behavior(PityDef(name='p0', btype='hard'), PityState())._priority == 0
+
+    def test_hard_reset_never_no_typeerror(self):
+        """⑤ `hard` + `reset='never'` 返回 `Pity` 且不抛 `TypeError`（AUDIT-BREAK-2）。
+
+        `reset` 在旧类分支是注入的 `params` 键，骨架无该形参；preset 分支走
+        `CounterTracker.reset_on`，故不得有注入路径。
+        """
+        bh = create_behavior(PityDef(name='x', btype='hard', reset='never'), PityState())
+        assert isinstance(bh, Pity)
+        assert bh._trackers[0]._reset_on == 'never'
+
+    def test_real_entry_rejects_unknown_key_and_missing_lifecycle(self, monkeypatch):
+        """⑥ 两道互补校验对**真实条目**同样生效（不只对注入的合成 preset）。
+
+        改造真实 `hard` 条目的 preset 返回体：多一键 → 查多；缺 `lifecycle` → 查漏。
+        两者消息可区分，合并成一道时至少一条必红。
+        """
+        real = BEHAVIOR_REGISTRY['hard']['preset']
+
+        monkeypatch.setitem(BEHAVIOR_REGISTRY['hard'], 'preset',
+                            lambda pdef: {**real(pdef), 'foo': 1})
+        with pytest.raises(ConfigError, match='未声明键'):
+            create_behavior(PityDef(name='h', btype='hard'), PityState())
+
+        monkeypatch.setitem(
+            BEHAVIOR_REGISTRY['hard'], 'preset',
+            lambda pdef: {k: v for k, v in real(pdef).items() if k != 'lifecycle'})
+        with pytest.raises(ConfigError, match="缺少必需键 'lifecycle'"):
+            create_behavior(PityDef(name='h', btype='hard'), PityState())
+
+
+class TestTargetFeaturedS42:
+    """`_target_of(pdef)` + `hard` 的 `target=` 键（ISSUE-403）+ 裁决 7B 的类型级硬拒。"""
+
+    def test_target_of_selector(self):
+        """`target_featured=True → 'featured'`，否则 `'scope'`；缺省同 False。"""
+        assert _target_of(PityDef(name='h', btype='hard', target_featured=True)) == 'featured'
+        assert _target_of(PityDef(name='h', btype='hard', target_featured=False)) == 'scope'
+        assert _target_of(PityDef(name='h', btype='hard')) == 'scope'
+
+    def test_preset_hard_writes_target_key(self):
+        """`_preset_hard` 的 `HardModifier` 带 `target=_target_of(pdef)`。
+
+        漏写不报错（`HardModifier` 的 `target` 默认 `'scope'`）：`target_featured=True`
+        的配置会把目标集由 featured 卡集静默放宽为 scope 全集，故本断言是唯一捕获面。
+        """
+        mod = _preset_hard(PityDef(name='h', btype='hard', target_featured=True))['modifiers'][0]
+        assert isinstance(mod, HardModifier)
+        assert mod._target == 'featured'
+        assert _preset_hard(PityDef(name='h', btype='hard'))['modifiers'][0]._target == 'scope'
+
+    def test_preset_soft_does_not_write_target_key(self):
+        """`_preset_soft_step` **不写** `target=`（裁决 7B：soft 无该消费路径）。
+
+        `SoftModifier` 的构造形参只有 `(scope, deltas)`——若有人给它加 `target=`
+        即与 7B 的硬拒面互斥（照计划验收必红、按 7B 施工则验收不可执行）。
+        """
+        for t in ('soft_interval', 'soft_additive', 'soft_step'):
+            mod = _preset_soft_step(PityDef(name='s', btype=t))['modifiers'][0]
+            assert isinstance(mod, SoftModifier)
+            assert set(inspect.signature(SoftModifier.__init__).parameters) == {
+                'self', 'scope', 'deltas'}
+            assert not hasattr(mod, '_target')
+
+    @pytest.mark.parametrize('btype', ['soft_interval', 'soft_additive', 'soft_step'])
+    def test_ruling_7b_soft_target_featured_rejected(self, btype):
+        """裁决 7B 类型级硬拒：`soft_*` + `target_featured=true` 经 `create_behavior` 抛 `ConfigError`。
+
+        校验点在 `create_behavior`（preset 构造前）而非 `_build_pity`：等价性 harness
+        与直构 `PityDef` 的路径绕过 TOML 层，防线须盖住构造入口。
+        """
+        with pytest.raises(ConfigError, match='不支持 target_featured=true'):
+            create_behavior(PityDef(name='s', btype=btype, target_featured=True), PityState())
+
+    def test_ruling_7b_hard_still_accepts_target_featured(self):
+        """`hard` 族不受 7B 影响：手册 10 处 `target_featured = true` 全在 `type = "hard"`。"""
+        bh = create_behavior(PityDef(name='h', btype='hard', target_featured=True), PityState())
+        assert isinstance(bh, Pity)
+        assert bh._modifiers[0]._target == 'featured'
+
+    def test_norm_scope_normalizes_preset_scope(self):
+        """`_norm_scope` 是 scope 的唯一归一化点（ISSUE-503）：preset 与骨架同源。
+
+        不归一化会让 `Pity._scope`（小写）与零件 `_scope`（原值）分叉，
+        `scope_cards.get('SSR', ())` 取空 → 该保底静默恒等、不报错。
+        """
+        from gacha_simulator.core.pity import _norm_scope
+
+        assert _norm_scope(PityDef(name='h', btype='hard', scope='SSR')) == 'ssr'
+        assert _norm_scope(PityDef(name='h', btype='hard', scope='')) == 'ssr'
+        bh = create_behavior(PityDef(name='h', btype='hard', scope='SSR'), PityState())
+        assert bh._scope == 'ssr'
+        assert bh._trackers[0]._scope == 'ssr'
+        assert bh._modifiers[0]._scope == 'ssr'

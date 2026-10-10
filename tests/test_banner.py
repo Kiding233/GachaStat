@@ -976,11 +976,21 @@ class TestPityAdjustmentReachesCardLevel:
             _reward('r_a', 94.0, 'R'),
         ]
         b = _ssr_only_banner('b1', pools=[_pool(rewards=rewards)])
-        # counter_init=0 时首个 before_draw 即 counter=1 → boost 50%，保底必触发
+        # counter_init=0 时首个 before_draw 即 counter=1 → boost 50%，保底必触发。
+        # `target_featured` 已按裁决 7B（2026-10-05）从 soft 配置面移除——该形态现于
+        # `create_behavior` 抛 `ConfigError`（soft 的目标集恒为 scope 全集）；本用例
+        # 的三条断言（Σ = 1 / 槽位集合相符 / 逐槽位相等）与目标集取哪个槽无关。
         store = _make_store([b], pity_enabled=True, pity_defs=[
-            PityDef(name='ssr_soft', btype='soft_step', scope='ssr', target_featured=True,
+            PityDef(name='ssr_soft', btype='soft_step', scope='ssr',
                     deltas=((0, 0.0), (1, 50.0)), pools=('*',)),
         ])
+        # S4-2：软保底的取源面（Q = 更低稀有度）由 `rarity_rank` 定义
+        # （`SoftModifier.apply` 经 `_lower_rarities` 取），而手搓的
+        # `ConfigStore()` 不带该表（`SimulationEnvBuilder` 直取
+        # `store.rarity_rank`，TOML 路径才由 `_parse_rarities` 补默认三级）。
+        # 缺表时 Q 为空 → 无源可搬 → 增量恒等（**新形态下的静默退化**，见 §四
+        # `core/pity.py` 的 S4-2 备注）；此处按真实配置同值补齐。
+        store.rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
         env = SimulationEnvBuilder.from_config_store(store)
         banner = env.pools[0]
         pool = banner.active_pool

@@ -7,9 +7,10 @@
     "sim_start_date": "2026-09-12",
     "end_time": 14515200.0,
     "num_pools": 8,
-    "generated_at": 1791603927.3405204,
+    "generated_at": 1791642816.3989396,
     "wiring": "pre",
-    "note": "P82 接线前基线（`_resolve_order` 的排序结果尚未接入概率管道）。对照口径见 scripts/p82_baseline.py 的 --verify 模式与 P64 §1.5。"
+    "note": "P82 基线（2026-10-10 重固化）：P64 S4-2 按裁决 7B 删去样例配置 `config.toml` 的 `ssr_soft.target_featured = true`（soft 的目标集自 featured 槽放宽为 scope 全集），本组因此变化。原值为**接线前**（`a41de1b^`）固化，当时「接线不改变管道输出」已由 `--verify` 逐字段核过（PASS）；本组改用**接线后**代码重新固化，取代原快照，对照口径不变（同种子逐字段 + `draw_pity_names` 不变）。旧值见 git 历史（重固化提交的父提交）。",
+    "refrozen": "2026-10-10"
   },
   "compact": {
     "draw_card_ids": [
@@ -94,9 +95,17 @@
       "r_2",
       "r_1",
       "r_3",
+      "standard_ssr_6",
+      "r_2",
+      "r_5",
+      "standard_ssr_3",
       "limited_ssr_1"
     ],
     "draw_pool_ids": [
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
+      "pool_c1.main",
       "pool_c1.main",
       "pool_c1.main",
       "pool_c1.main",
@@ -262,9 +271,17 @@
       0.0,
       0.0,
       0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
       0.0
     ],
     "draw_pity": [
+      false,
+      false,
+      false,
+      false,
       false,
       false,
       false,
@@ -430,6 +447,10 @@
       null,
       null,
       null,
+      null,
+      null,
+      null,
+      null,
       "ssr_soft"
     ],
     "draw_pity_counter_max": [
@@ -514,9 +535,25 @@
       79,
       80,
       81,
-      82
+      82,
+      83,
+      84,
+      85,
+      86
     ],
     "draw_resources_consumed": [
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
+      {
+        "draw_resource": 160.0
+      },
       {
         "draw_resource": 160.0
       },
@@ -862,6 +899,10 @@
         "exchange_currency": 1
       },
       {},
+      {},
+      {},
+      {},
+      {},
       {}
     ],
     "wait_durations": [
@@ -1035,7 +1076,7 @@
       86400.0
     ],
     "total_consumed": {
-      "draw_resource": 13120.0
+      "draw_resource": 13760.0
     },
     "total_gained": {
       "draw_resource": 11420.0,
@@ -1044,79 +1085,83 @@
     "card_counts": {
       "r_4": 17,
       "sr_3": 2,
-      "r_2": 17,
-      "r_5": 10,
+      "r_2": 18,
+      "r_5": 11,
       "r_6": 11,
       "r_1": 12,
       "r_3": 8,
       "sr_4": 2,
       "sr_1": 1,
       "sr_5": 1,
+      "standard_ssr_6": 1,
+      "standard_ssr_3": 1,
       "limited_ssr_1": 1
     },
     "pool_draw_counts": {
-      "pool_c1.main": 82
+      "pool_c1.main": 86
     },
     "pool_card_counts": {
       "pool_c1.main": {
         "r_4": 17,
         "sr_3": 2,
-        "r_2": 17,
-        "r_5": 10,
+        "r_2": 18,
+        "r_5": 11,
         "r_6": 11,
         "r_1": 12,
         "r_3": 8,
         "sr_4": 2,
         "sr_1": 1,
         "sr_5": 1,
+        "standard_ssr_6": 1,
+        "standard_ssr_3": 1,
         "limited_ssr_1": 1
       }
     },
     "pool_pity_counts": {
       "pool_c1.main": 1
     },
-    "total_draws": 82,
+    "total_draws": 86,
     "total_waits": 168,
     "pity_triggers": 1,
-    "iterations": 250,
+    "iterations": 254,
     "warnings": [],
     "final_resources": {
-      "draw_resource": 53300.0,
+      "draw_resource": 52660.0,
       "exchange_currency": 258.0
     },
     "final_time": 14515200.0,
     "final_pity_state": {},
     "banner_end_resources": {
       "pool_c1": {
-        "draw_resource": 43340.0,
+        "draw_resource": 42700.0,
         "exchange_currency": 58.0
       },
       "pool_c2": {
-        "draw_resource": 44800.0,
+        "draw_resource": 44160.0,
         "exchange_currency": 58.0
       },
       "pool_c3": {
-        "draw_resource": 46260.0,
+        "draw_resource": 45620.0,
         "exchange_currency": 108.0
       },
       "pool_c4": {
-        "draw_resource": 47720.0,
+        "draw_resource": 47080.0,
         "exchange_currency": 158.0
       },
       "pool_c5": {
-        "draw_resource": 49180.0,
+        "draw_resource": 48540.0,
         "exchange_currency": 158.0
       },
       "pool_c6": {
-        "draw_resource": 50640.0,
+        "draw_resource": 50000.0,
         "exchange_currency": 208.0
       },
       "pool_c7": {
-        "draw_resource": 52100.0,
+        "draw_resource": 51460.0,
         "exchange_currency": 258.0
       },
       "pool_c8": {
-        "draw_resource": 53300.0,
+        "draw_resource": 52660.0,
         "exchange_currency": 258.0
       }
     },
@@ -1281,6 +1326,6 @@
     "strategy_name": "StopOnTargetStrategy",
     "strategy_key": "stop_on_target",
     "result_version": 3,
-    "generated_at": 1791603927.3405204
+    "generated_at": 1791642816.3989396
   }
 }

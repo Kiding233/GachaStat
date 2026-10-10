@@ -90,10 +90,18 @@ class TestEngineRebind:
         engine = PityEngine(pool_specs={}, pity_defs=[], state=PityState(), rarity_rank={})
         assert engine.is_active('nonexistent') is False
 
-    def test_rebind_same_state_short_circuit(self):
-        """同 state 短路：rebind(same) 跳过 behaviors 重绑（Flag 实例不重建）。
+    def test_rebind_same_state_still_rebinds(self):
+        """同 state 也重绑——`state is self._state` 早退已删除（S4-2 处置，2026-10-10）。
 
-        若删除短路逻辑，behaviors 的 Counter/Flag 会被重建（新实例），此断言失败。
+        早退对统一骨架 `Pity` **不成立**：`Pity` 照 §3.1.4 骨架**不在构造期绑定**
+        零件 Counter/Flag，绑定只发生在 `Pity._rebind_state`。而一场模拟的
+        `pity_state` 对象整场复用（首调绑定后其余每次派发都命中早退，实测
+        hits=2379 / misses=3），故构造态 `self._state` 是唯一未绑定的那一格——
+        早退在时，**传构造态的派发必抛 `AttributeError`**（零件永不绑定）。
+
+        本用例钉住该修复：`tracker._counter is None`（构造期不绑定）+ 同对象
+        rebind 后 `_counter._state is a`。若早退被重新加回，第二段即红
+        （`_counter` 仍为 `None`，下一行 `.incr()` 抛 `AttributeError`）。
         """
         a = PityState()
         engine = PityEngine(pool_specs={}, pity_defs=[
@@ -101,10 +109,13 @@ class TestEngineRebind:
                     soft_start=73, soft_end=90),
         ], state=a, rarity_rank={'ssr': 0})
         bh = engine._behavior_list[0]
-        active_before = bh._active
-        engine._rebind_state(a)  # 同一对象——短路
-        assert engine._state is a
-        assert bh._active is active_before  # 短路后 Flag 未被重建
+        tracker = bh._trackers[0]        # soft_interval 已 preset 化（S4-2）
+        assert tracker._counter is None, '骨架不在构造期绑定零件（§3.1.4）'
+        engine._rebind_state(a)          # 同一对象——旧早退在此返回、零件永不绑定
+        assert tracker._counter is not None, '早退已删：同对象也须重定向'
+        assert tracker._counter._state is a
+        tracker._counter.incr()
+        assert a.get('t', 'counter') == 1
 
 
 class TestPitySnapshot:
@@ -258,8 +269,11 @@ class TestCrossSimulationIsolation:
         bh = engine._behavior_list[0]
         b1, b2 = PityState(), PityState()
         engine._rebind_state(b1)          # sim1 开始
-        bh._counter().incr()
-        bh._counter().incr()
+        # S4-2：soft_interval 已 preset 化，计数遥控器在 CounterTracker 上
+        # （旧类路径的 `bh._counter()` 在骨架 `Pity` 上不存在）。
+        counter = bh._trackers[0]._counter
+        counter.incr()
+        counter.incr()
         assert b1.get('t', 'counter') == 2
         engine._rebind_state(b2)          # sim2 开始——从初始态
         assert b2.get('t', 'counter', 0) == 0

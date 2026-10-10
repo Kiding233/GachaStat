@@ -191,6 +191,7 @@ class TestPityEngineReset:
             scope_cards={'ssr': ('ssr_card', 'featured_card')},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
+            card_to_slot={'ssr_card': 'ssr', 'featured_card': 'ssr'},
         )
         engine = PityEngine(
             pool_specs={'test_pool': spec},
@@ -250,6 +251,11 @@ class TestPityEngineReset:
             scope_cards={'ssr': ('ssr_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
+            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
+            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
+            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            card_to_slot={'ssr_card': 'ssr'},
         )
         eng2 = PityEngine(
             pool_specs={'test_pool': spec2},
@@ -283,9 +289,14 @@ class TestPityEngineBeforeDraw:
         spec = PoolPitySpec(
             pity_names=['test_pity'],
             ssr_ids={'ssr_card'},
-            scope_cards={'ssr': ('ssr_card',)},
+            scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
+            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
+            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
+            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         engine = PityEngine(
             pool_specs={'pool': spec},
@@ -340,9 +351,14 @@ class TestMultiPityStacking:
         spec = PoolPitySpec(
             pity_names=['soft', 'hard'],
             ssr_ids={'ssr_card'},
-            scope_cards={'ssr': ('ssr_card',)},
+            scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
+            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
+            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
+            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         engine = PityEngine(
             pool_specs={'pool': spec},
@@ -382,9 +398,14 @@ class TestMultiPityStacking:
         spec3 = PoolPitySpec(
             pity_names=['s', 'h'],
             ssr_ids={'ssr_card'},
-            scope_cards={'ssr': ('ssr_card',)},
+            scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
+            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
+            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
+            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         eng3 = PityEngine(
             pool_specs={'pool': spec3}, pity_defs=[spdef, hpdef],

@@ -26,7 +26,10 @@ from typing import Dict, Optional
 
 from .pity_primitives import PityContext, PityState
 
-__all__ = ['Modifier', 'HardModifier', 'SoftModifier']
+__all__ = [
+    'Modifier', 'HardModifier', 'SoftModifier',
+    'RotatingModifier', 'NonFeaturedModifier', 'SelectedModifier', 'NotOwnedModifier',
+]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -50,6 +53,26 @@ def _lower_rarities(ctx: PityContext, scope: str) -> tuple:
         if rank > scope_rank:
             out.extend(ctx.draw.scope_cards.get(rarity, ()))
     return tuple(out)
+
+
+def _higher_rarity_keys(ctx: PityContext, scope: str) -> tuple:
+    """`_lower_rarities` 的**对偶**——`rank < rank(scope)` 的稀有度下的全部卡，投影后返回。
+
+    M1 期「更高稀有度**豁免**」（原值保留）的实现面：`HardModifier`（S2a-1）与
+    `NotOwnedModifier`（S2a-2）共用，**定义只此一处**（与 `_lower_rarities` 同址、同理由）。
+    S2a-1 曾把它写成 `HardModifier` 的私有方法；S2a-2 交付第二个消费方时下沉到模块级
+    （`NotOwnedModifier` 的 M1 形态同为「绝对赋值 + 更高稀有度豁免」，见 §3.1.2 边界二），
+    `HardModifier` 的调用点与行为不变。
+
+    `scope` 缺键时取 `rarity_rank.get(scope, 99)`（对齐旧实现的兜底）——此时无 rank
+    更小的稀有度，返回空元组。卡集合一律经 `scope_cards.get(rarity, ())` 取、**禁止下标**。
+    """
+    scope_rank = ctx.draw.rarity_rank.get(scope, 99)
+    out = []
+    for rarity, rank in ctx.draw.rarity_rank.items():
+        if rank < scope_rank:
+            out.extend(ctx.draw.scope_cards.get(rarity, ()))
+    return _to_dist_keys(ctx, out)
 
 
 def _to_dist_keys(ctx: PityContext, cards) -> tuple:
@@ -187,7 +210,7 @@ class HardModifier(Modifier):
             for k in A:
                 result[k] = per
         # 更高稀有度豁免——原值保留（M1 形态，S8 改为「不写增量」）
-        for k in self._higher_rarity_keys(ctx):
+        for k in _higher_rarity_keys(ctx, self._scope):
             result[k] = dist.get(k, 0.0)
         # Q 侧整组搬空（夺取型 amount = p(Q)；更高稀有度不在此列，故不与之冲突）
         for k in Q:
@@ -208,16 +231,6 @@ class HardModifier(Modifier):
             raise ValueError(
                 f"未知的 target={self._target!r}（可用：('scope', 'featured')）")
         return _to_dist_keys(ctx, cards)
-
-    def _higher_rarity_keys(self, ctx: PityContext) -> tuple:
-        """`_lower_rarities` 的对偶——`rank < rank(scope)` 的稀有度下的全部卡，投影后返回。"""
-        scope_rank = ctx.draw.rarity_rank.get(self._scope, 99)
-        out = []
-        for rarity, rank in ctx.draw.rarity_rank.items():
-            if rank < scope_rank:
-                out.extend(ctx.draw.scope_cards.get(rarity, ()))
-        return _to_dist_keys(ctx, out)
-
 
 class SoftModifier(Modifier):
     """软保底（B 语义）——`boost > 0` 时把源组的 `boost` 个百分点搬给 scope。
@@ -304,3 +317,334 @@ class SoftModifier(Modifier):
         if self._deltas:
             boost += remaining * self._deltas[-1][1]
         return min(boost, 100.0)
+
+# ══════════════════════════════════════════════════════════════════
+# 目标集语义族（§3.1.2 机制表第 4/5/6/7 行）
+# ══════════════════════════════════════════════════════════════════
+
+def _scope_keys(ctx: PityContext, scope: str) -> tuple:
+    """`scope` 的**槽位键集**（`scope_slots[scope]`）——M1 期 A ∪ Q 的边界。
+
+    与 `_to_dist_keys` 的分工：本助手给的是「scope 的分布键全集」，即旧
+    `_redistribute_scope` 的写入面与旧 `_scope_total_prob` 的求和面；A 侧（目标集）
+    仍按 §3.1.2 由**卡集合**投影得出（`_to_dist_keys`）。两者在
+    `compute_scope_mappings` 的产出上同集合（`(rarity, f'{rarity}_featured')`），
+    顺序不同、对「按值写入」的绝对赋值无影响。
+
+    一律 `.get(scope, ())`、**禁止下标**：未在池中出现的稀有度没有键（§3.9.5 的
+    scope 键缺失行）。
+    """
+    return tuple(ctx.draw.scope_slots.get(scope, ()))
+
+
+def _scope_total(dist: Dict[str, float], scope_keys: tuple) -> float:
+    """scope 的总概率——逐行同源于旧 `_scope_total_prob`（`ctx.current` → `dist`）。
+
+    M1 期 `dist` 与 `ctx.current` 同值（§3.9 过渡期纪律：Modifier 自实现 `apply`，
+    在管道内的输入即当前分布）。
+    """
+    return sum(dist.get(k, 0.0) for k in scope_keys)
+
+
+def _redistribute_in_scope(dist: Dict[str, float], A: tuple, Q: tuple,
+                           total: float, weights) -> Dict[str, float]:
+    r"""M1 期 `_redistribute_scope` 的**等价复刻**——scope 内按声明权重的绝对赋值。
+
+    `RotatingModifier` / `NonFeaturedModifier` / `SelectedModifier` 三者共用：都是
+    「scope 总量 `total` 在 A / Q 之间重分配」的同一算子，差别只在 A/Q 怎么取。
+    本模块**不得 import `pity.py`**（§3.1.6 的单向依赖），故就地复刻而非调用旧函数；
+    复刻面只有**构造**（A 侧按 `weights` 分配、Q 侧归零），**目标集解析仍在各类方法体内**。
+
+    与旧 `_redistribute_scope(ctx, ratio, total, featured_slots, scope)` 的对应：
+    `featured_slots` ↔ A、`scope_slots\featured_slots` ↔ Q；`ratio = 1.0`（A 收下
+    全部 `total`）与 `ratio = 0.0`（A 收下全部 `total`、Q 归零）在旧函数里是同一段
+    代码的两支，故本助手只表达「A 收下 `total`」这一支。
+
+    `Σw(A) == 0`（池子未声明该组权重）时退化为**均分**——对齐旧实现的兜底分支
+    （`elif featured_slots: per_target = featured_total / len(featured_slots)`）。
+    """
+    result = dist.copy()
+    ws = [weights.get(k, 0.0) for k in A]
+    sw = sum(ws)
+    if sw > 0:
+        for k, w in zip(A, ws):
+            result[k] = total * w / sw
+    else:
+        per = total / len(A)
+        for k in A:
+            result[k] = per
+    for k in Q:
+        result[k] = 0.0
+    return result
+
+
+class RotatingModifier(Modifier):
+    r"""轮换保底（rotating）——`guaranteed` 时把 scope 内**非** featured 的概率整组搬给 featured。
+
+    | 项 | 取值（§3.1.2 机制表第 4 行） |
+    |----|------------------------------|
+    | 条件 | `guaranteed` ∨（`extra_flag` ∧ `view.get(extra_flag)`） |
+    | A（加组） | `featured_cards[scope]` |
+    | Q（减组） | `scope\featured` |
+    | 转移量 | `p(Q)` |
+    | A 侧形状 | `current`（M1 期一律按声明权重，见下） |
+
+    语义即「大小保底」：歪过一次后，出金必是 UP。
+
+    **`extra_flag` 形参（§3.2 的 `rotating_cr` 行，2026-10-06 补）**：`rotating_cr` 与
+    `rotating` 的效果完全相同（「出金必是 UP」），差别只在条件多一个 `cr_intercepted`
+    （由 `StreakTracker.prepare` 掷骰后写入，裁决 6B′）。这是「条件内联」的代价之一：
+    **条件若有变体，用构造形参表达，而不是新写一个类**（§3.2 同条）；该形参**只影响
+    条件**，不影响 A/Q/转移量/形状。
+
+    **`readonly` 抑制 `extra_flag`（§3.9.6 的 M1 期专项，强制）**：6B′ 把 CR 掷骰移回
+    `before_draw` 的 `prepare` 相位，只读查询会走到 `prepare` 的 `readonly` 早退分支，
+    于是 `cr_intercepted` 读到的是**上一次非只读调用**留下的 flag（差一抽）。M1 期由本类
+    依 `readonly` 抑制该标志，**复刻旧查询语义**（查询不体现拦截）；M2 期 `readonly` 从
+    Modifier 签名废除后，改按 §3.1.2「新机制需要新静态事实时加字段、不改签名」给 `ctx`
+    加查询标记字段。`guaranteed` 不受 `readonly` 影响（旧类同样无条件读它）。
+
+    **M1 形态（§3.9 过渡期纪律）**：scope 内**绝对赋值** + scope 外**原值保留**，
+    逐行复刻旧 `RotatingBehavior.before_draw` 的 guaranteed 分支
+    `_redistribute_scope(ctx, 1.0, total, featured_slots, scope)`。故 scope 总量不变
+    （`Σ` 仍为 1），A 侧按**声明权重**分配（`current` 形状是 S8 的目标形态）。
+    """
+
+    def __init__(self, scope: str, extra_flag: Optional[str] = None):
+        self._scope = scope
+        self._extra_flag = extra_flag
+
+    def state_keys(self) -> tuple:
+        if self._extra_flag:
+            return ('guaranteed', self._extra_flag)
+        return ('guaranteed',)
+
+    def apply(self, ctx: PityContext, view, dist: Dict[str, float], readonly: bool):
+        # ── 条件内联：guaranteed ∨（extra_flag ∧ ¬readonly）（§3.1.2 / §3.9.6）──
+        if not (view.get('guaranteed')
+                or (self._extra_flag and not readonly
+                    and view.get(self._extra_flag))):
+            return None
+
+        # ── A / Q 就地解析（原 S2b 的解析器族已并入本族）──
+        A = _to_dist_keys(ctx, ctx.draw.featured_cards.get(self._scope, ()))
+        if not A:
+            # 空目标集 → 恒等（§3.9.5；旧实现同为空集早退：`if not featured_slots: return copy`）
+            return None
+        scope_keys = _scope_keys(ctx, self._scope)
+        Q = tuple(k for k in scope_keys if k not in A)
+        total = _scope_total(dist, scope_keys)
+        if total <= 0:
+            return None
+        return _redistribute_in_scope(dist, A, Q, total, ctx.draw.base_probabilities)
+
+
+class NonFeaturedModifier(Modifier):
+    r"""反向轮换保底（G1，`rotating_inverse`）——`forced_loss` 时把 featured 的概率整组搬给非 featured。
+
+    | 项 | 取值（§3.1.2 机制表第 5 行） |
+    |----|------------------------------|
+    | 条件 | `forced_loss`（由 `FlagTracker(judge="featured", hit="set", miss="clear")` 写） |
+    | A（加组） | `scope\featured` |
+    | Q（减组） | `featured_cards[scope]` |
+    | 转移量 | `p(Q)` |
+    | A 侧形状 | `declared` |
+
+    与 `RotatingModifier` 是**同一算子的反向调用**（§3.3 定稿语：「`NonFeaturedModifier`
+    复用 `_redistribute_scope` 反向调用」）：A / Q 互换，其余（scope 总量不变、scope 外
+    不动）完全相同。手册场景为幻塔「连中必歪」——出 UP 后下一次 SSR 必非 UP。
+
+    **无 `flag` 形参**：条件内联后触发标志恒为 `forced_loss`（§3.3 末段明写
+    「`NonFeaturedModifier` 本身**无 `flag` 形参**」）。`forced_loss` 是 preset 内部标志，
+    `PityDef` 无对应初始值字段，初值恒 `False`（§3.3 的 preset 代码注释）。
+
+    **M1 形态（§3.9 过渡期纪律）**：同 `RotatingModifier`——scope 内绝对赋值、scope 外
+    原值保留，逐行复刻 `_redistribute_scope(ctx, 0.0, total, featured_slots, scope)`。
+    """
+
+    def __init__(self, scope: str):
+        self._scope = scope
+
+    def state_keys(self) -> tuple:
+        return ('forced_loss',)
+
+    def apply(self, ctx: PityContext, view, dist: Dict[str, float], readonly: bool):
+        # ── 条件内联：forced_loss（§3.1.2 机制表第 5 行）──
+        if not view.get('forced_loss'):
+            return None
+
+        # ── A / Q 就地解析：A = scope\featured，Q = featured（与 rotating 互换）──
+        scope_keys = _scope_keys(ctx, self._scope)
+        featured = _to_dist_keys(ctx, ctx.draw.featured_cards.get(self._scope, ()))
+        A = tuple(k for k in scope_keys if k not in featured)
+        if not A:
+            return None
+        total = _scope_total(dist, scope_keys)
+        if total <= 0:
+            return None
+        return _redistribute_in_scope(dist, A, featured, total,
+                                      ctx.draw.base_probabilities)
+
+
+class SelectedModifier(Modifier):
+    r"""定轨保底（targeted）——`guaranteed` 或定轨就绪时把 scope 的概率整组搬给**定轨选中卡**。
+
+    | 项 | 取值（§3.1.2 机制表第 6 行 / §3.9.2 的 `SelectedModifier` 示例） |
+    |----|-------------------------------------------------------------|
+    | 条件 | `guaranteed` ∨（已定轨 ∧ `fate_points >= tau`） |
+    | A（加组） | `(selected,)` |
+    | Q（减组） | `scope\selected` |
+    | 转移量 | `p(Q)` |
+    | A 侧形状 | `declared` |
+
+    **`tau` 是构造形参**（§3.9.2 的 `self._tau`）：机制表的条件列写 `fate_ready`，其定义
+    即 `fate_points >= tau`（对齐旧 `TargetedBehavior` 的
+    `self._fate_points.value() >= self._fate_threshold`）。缺省 **1**，与旧类的
+    `fate_threshold if fate_threshold is not None else 1` 同源；`tau = 0` 即「定轨后必出」
+    （G19 尘白禁区不歪池的 `targeted(fate_threshold=0)` 形态）。
+
+    **`selected_card` 经 `view` 读**：它不由 `FateTracker` 声明（写入者是策略层
+    `NonDrawAction`，§3.1.1 L4 例外 2），本类仍把它写进 `state_keys()`——**读键就申报**
+    是 §3.12.2 判据 2 的唯一输入，该键的白名单由 §3.1.1 同条要求提供（否则合法配置会被
+    误判为「引用不存在的键」）。
+
+    **两处 M1 沿用旧实现的形态（逐字对齐旧 `TargetedBehavior.before_draw`，非 §3.9.2
+    示例的 S8 形态）**：
+
+    1. **「已定轨」是 fate 分支的合取项**：旧实现的第二析取项是
+       `(selected and self._fate_points.value() >= self._fate_threshold)`，`selected`
+       为假时整个析取项为假。故 `tau = 0` 且未定轨时**不触发**（若省掉该合取项，
+       `fate_points >= 0` 恒真，会把「未定轨」当成「定轨就绪」）。
+    2. **未定轨时目标集退化为全部 featured 槽**：旧 `_resolve_selected_slots(None, …)`
+       首行即 `if selected is None: return featured_slots`。**这不是死分支**：手册明写
+       「不填卡 ID 时可改用 `guaranteed_init = true` 等效」，该组合（`guaranteed_init=True`
+       且未配 `selected_card_init`）正是「出金必是 UP、UP 内按声明权重分配」的既定配置
+       形态。§3.1.2 机制表的 `A = (selected,)` 描述的是**定轨已设置**的常规分支；旧
+       `_resolve_selected_slots` 中「按槽位名反查 featured 槽」的那一段回退则是
+       `card_to_slot` 缺失时的历史兜底，新形态以 `card_to_slot` 为唯一投影通道
+       （`_to_dist_keys`），不再复刻。
+
+    **M1 形态（§3.9 过渡期纪律）**：同 `RotatingModifier`——scope 内绝对赋值、scope 外
+    原值保留，逐行复刻 `_redistribute_scope(ctx, 1.0, total, targeted_slots, scope)`。
+    """
+
+    def __init__(self, scope: str, tau: int = 1):
+        self._scope = scope
+        self._tau = tau
+
+    def state_keys(self) -> tuple:
+        return ('guaranteed', 'fate_points', 'selected_card')
+
+    def apply(self, ctx: PityContext, view, dist: Dict[str, float], readonly: bool):
+        sel = view.get('selected_card')
+        # ── 条件内联：guaranteed ∨（已定轨 ∧ fate_points >= tau）（§3.1.2 第 6 行）──
+        if not (view.get('guaranteed')
+                or (sel is not None and view.get('fate_points', 0) >= self._tau)):
+            return None
+
+        # ── A / Q 就地解析：A = 定轨选中卡（投影到槽位）；未定轨时退化为全部 featured ──
+        featured = _to_dist_keys(ctx, ctx.draw.featured_cards.get(self._scope, ()))
+        if sel is None:
+            selected_keys = ()
+        else:
+            selected_keys = tuple(k for k in _to_dist_keys(ctx, (sel,))
+                                  if k in featured)
+        A = selected_keys or featured
+        if not A:
+            return None
+        scope_keys = _scope_keys(ctx, self._scope)
+        Q = tuple(k for k in scope_keys if k not in A)
+        total = _scope_total(dist, scope_keys)
+        if total <= 0:
+            return None
+        return _redistribute_in_scope(dist, A, Q, total, ctx.draw.base_probabilities)
+
+
+class NotOwnedModifier(Modifier):
+    r"""G3 硬保底·排除已获得（崩坏3 精准补给）——`counter >= tau` 时把「未拥有」的 featured 卡
+    之外的概率整组搬给它们。
+
+    | 项 | 取值（§3.1.2 机制表第 7 行 / §3.10.4） |
+    |----|--------------------------------------|
+    | 条件 | `counter >= tau` |
+    | A（加组） | `featured_cards[scope]` 中**未拥有**者（**动态目标**） |
+    | Q（减组） | 更低稀有度 ∪ `scope\A` |
+    | 转移量 | `p(Q)` |
+    | A 侧形状 | `current` |
+
+    **Q 含已拥有的 UP（§3.10.4 的 2026-10-07 用户裁决）**：A = featured 中未拥有者，故
+    `scope\A` = (featured 中已拥有者) ∪ `scope\featured`。**已拥有的 UP 落在 Q 内、本抽
+    被搬空**，从而「τ 抽必出**未获得的** UP」成立；若按 `scope\featured` 取 Q，已拥有的
+    UP 保留原概率、本抽仍可被抽到，与手册「已获得的装备从 UP 组中排除」冲突。
+
+    **`ctx.sim` 是唯一的状态来源（§3.10.2）**：`ctx.sim.owns(card_id)` 返回该卡持有张数
+    （`total_holding` 口径、**含初始持有**），0 即未拥有。该节明令**直接读、无 `None`
+    兜底**（`sim` 非 Optional、永远填充；ISSUE-013 的兜底要求已随该节改判取消）。
+    **时序说明**：`PityContext.sim` 字段由 **S9-2（M2）** 落在 `pity_primitives.py`，
+    本类（S2a-2，M1）先交付读取方；M1 期本类**无消费者**（G3 的两个 type 与 preset 工厂
+    归 S9-3），其单测自行提供 `sim` 替身（先例：S2a-1 对尚未存在的 `StateView` 用 `_View`
+    替身）。
+
+    **「全部已拥有」的退化分支取形态 a**（§3.10.4）：A 为空 → `return None`（该次保底
+    不触发、恒等）。形态 b（目标集退化为全部 featured、仍给出一件）由 **S9-3** 以
+    `on_all_owned` 构造形参承载（该形参列在 §七 S9-3 的目标文件清单内，本步不提前落）。
+    该分支是 §3.10.4 登记的**待确认项**（零直接信源、两形态并列，谁也不是已确认等价），
+    本步只交付形态 a 的行为。
+
+    **M1 形态取 hard 家族的绝对赋值**（§3.9 过渡期纪律）：本类注册在 `_HARD_TYPES`
+    （§3.10.4 配套第 1 条的四类集合分类），机制语义是「τ 抽**必出**未获得的 UP」，故 A 侧
+    取**绝对 1.0**（同 `HardModifier`），Q 整组搬空、更高稀有度豁免。**与其余三类的差别
+    有据**：那三类的 `Q ⊆ scope`，A 收下 scope 总量即可守恒；本类的 Q **含更低稀有度**，
+    若同样只收 scope 总量则 `Σ` 会塌到 `p(scope)`，故必须收下 `1.0`（等价于
+    「scope 总量 + 更低稀有度总量」，即 scope 为最高稀有度时的 `1 - p(更高稀有度)`）。
+    **边界**：scope 非最高稀有度时本形态输出 `Σ > 1`（同 §3.1.2 边界二的已登记差异类）；
+    真实配置的 G3 scope 为 `ssr`（rank 0），此时 `Σ = 1`。
+    """
+
+    def __init__(self, scope: str, threshold: int = 50):
+        self._scope = scope
+        # 缺省 50：§3.10.4 配套第 1 条的 `tau = pdef.threshold if pdef.threshold is not
+        # None else 50`（`hard` 为 90，本机制为 50 抽）
+        self._threshold = threshold
+
+    def state_keys(self) -> tuple:
+        return ('counter',)
+
+    def apply(self, ctx: PityContext, view, dist: Dict[str, float], readonly: bool):
+        # ── 条件内联：counter >= τ（§3.1.2 第 7 行；条件极性见 §3.10.4 的修正段——
+        #    必须是「τ 抽触发」而**不是**恒真，恒真即退化为本节开头否定的 pool 层近似）──
+        if view.get('counter', 0) < self._threshold:
+            return None
+
+        # ── A / Q 就地解析 ──
+        featured = ctx.draw.featured_cards.get(self._scope, ())
+        A = _to_dist_keys(ctx, tuple(c for c in featured if ctx.sim.owns(c) == 0))
+        if not A:
+            # 空目标集（含「全部已拥有」形态 a）→ 恒等（§3.9.5 / §3.10.4）
+            return None
+        scope_keys = _scope_keys(ctx, self._scope)
+        Q = []
+        for k in scope_keys:
+            if k not in A:
+                Q.append(k)
+        for k in _to_dist_keys(ctx, _lower_rarities(ctx, self._scope)):
+            if k not in A and k not in Q:
+                Q.append(k)
+
+        # ── M1 形态：目标集绝对赋值（按声明权重）+ 更高稀有度豁免（同 HardModifier）──
+        result = {k: 0.0 for k in dist}
+        weights = [ctx.draw.base_probabilities.get(k, 0.0) for k in A]
+        total_w = sum(weights)
+        if total_w > 0:
+            for k, w in zip(A, weights):
+                result[k] = w / total_w
+        else:
+            # 兜底：目标集声明权重全为 0 → 均分（对齐旧实现的兜底分支）
+            per = 1.0 / len(A)
+            for k in A:
+                result[k] = per
+        for k in _higher_rarity_keys(ctx, self._scope):
+            result[k] = dist.get(k, 0.0)
+        for k in Q:
+            result[k] = 0.0
+        return result

@@ -446,3 +446,37 @@ class TestPityResetCombo:
         panel._flush_pity_current_detail()
         assert panel._pity_defs[0]['reset'] == 'ur', \
             '取值表外的 reset 被静默改写（旧实现落回下标 0 即空串）'
+
+    def test_reset_combo_excludes_values_rejected_by_loader(self, qapp, tmp_path):
+        """`[rarities].ranks` 不含 sr / r 时，下拉不得提供被 loader 硬拒的取值。
+
+        基础表把 ssr / sr / r 硬编码在内；不按白名单过滤时它是白名单的**超集**。
+        实测（2026-10-10 独立审查端到端复现）：ranks 改为 {SSR, UR} 后下拉仍给出
+        「SR 出金」，选中即写出 `reset = "sr"`，重载抛 `ConfigError: reset='sr'
+        不是合法取值`——配置保存后无法再打开，与 AUDIT-BREAK-1 同一失效形态。
+        """
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        panel = _make_panel()
+        panel.pity_list.setCurrentRow(0)
+        panel._store.rarity_rank = {'SSR': 0, 'UR': 1}
+        panel._populate_reset_combo('')
+
+        combo = panel.pity_reset_combo
+        offered = {combo.itemData(i) for i in range(combo.count())}
+        assert 'sr' not in offered and 'r' not in offered, (
+            f'ranks 不含 sr / r 时下拉仍提供被 loader 硬拒的取值：{sorted(offered)}'
+        )
+        assert {'', 'featured', 'never', 'ssr', 'ur'} <= offered, (
+            f'白名单放行的取值被漏掉：{sorted(offered)}'
+        )
+
+        # 端到端：下拉里任一取值写回并保存后，都必须能重新载入
+        for val in sorted(offered):
+            combo.setCurrentIndex(combo.findData(val))
+            panel._apply_pity_edit()
+            panel.apply_to_store()
+            out = tmp_path / f"reset_{val or 'empty'}.toml"
+            save_toml(panel._store, str(out))
+            reloaded = load_toml(str(out))
+            assert reloaded.pity.pities[0].reset == val

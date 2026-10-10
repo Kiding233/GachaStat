@@ -2030,12 +2030,13 @@ class ConfigPanel(QWidget):
         ('targeted_soft', '定轨+软保底'),
     ]
 
-    # reset 下拉基础取值（G16-1）：(取值, 显示名)。取值集合是 config_toml 的
-    # reset 白名单（`legal_reset_values()` = 空串 / featured / never /
-    # [rarities].ranks 的键）的**子集**，此处只保留前四类中能给出有意义中文名的
-    # 那几项；`[rarities]` 里的其它稀有度名由 `_pity_reset_choices()` 在
-    # `store` 就位后补入（与白名单同源），未列出的取值另有「原样保留」兜底
-    # （见 `_populate_reset_combo()`）——三者都不发生静默改写。
+    # reset 下拉基础取值（G16-1）：(取值, 显示名)。只保留能给出有意义中文名的
+    # 那几项，**不是**白名单本身；`_pity_reset_choices()` 会把它按
+    # `legal_reset_values()` 过滤后才交给下拉（故最终取值面是白名单的子集），
+    # 再补入 `[rarities].ranks` 里基础表未列出的稀有度名；未列出的取值另有
+    # 「原样保留」兜底（见 `_populate_reset_combo()`）——三者都不发生静默改写。
+    # 构造期的静态填充（下方 `pity_reset_combo` 初始化）在 store 就位前执行，
+    # 直接用本表；store 就位后每次选中条目都由 `_populate_reset_combo()` 重建。
     _PITY_RESET_CHOICES = [
         ('', '跟随稀有度'),
         ('featured', '仅 Featured 出金'),
@@ -2106,8 +2107,10 @@ class ConfigPanel(QWidget):
         detail_form.addRow("稀有度:", self.pity_scope_combo)
 
         # reset（G16-1 新建：此前无该控件，reset 只能在 TOML 里手写）。
-        # 先按静态基础表填充；`store` 就位后每次选中条目都经
-        # `_populate_reset_combo()` 按 `store.rarity_rank` 重建为超集。
+        # 先按静态基础表填充（此时 store 未就位）；`store` 就位后每次选中条目
+        # 都经 `_populate_reset_combo()` 重建——基础表按白名单过滤 + 补入
+        # `store.rarity_rank` 的额外稀有度，故重建后的取值面不会超出 loader 的
+        # 合法集（旧实现未过滤，ranks 不含 sr/r 时下拉会给出被硬拒的取值）。
         self.pity_reset_combo = QComboBox()
         for _rval, _rlabel in self._PITY_RESET_CHOICES:
             self.pity_reset_combo.addItem(_rlabel, _rval)
@@ -3271,21 +3274,41 @@ class ConfigPanel(QWidget):
                 w.setText(str(val) if val else '')
 
     def _pity_reset_choices(self) -> list:
-        """reset 下拉的 (取值, 显示名) 表：基础表 + `store.rarity_rank` 的额外稀有度。
+        """reset 下拉的 (取值, 显示名) 表：基础表 ∩ 白名单 + `store.rarity_rank` 的额外稀有度。
 
-        基础六项给出「跟随稀有度 / 仅 Featured 出金 / 永不重置」这类有意义的中文
-        显示名，故不从白名单集合直接生成；`[rarities].ranks` 里未列出的稀有度名
-        （如 ranks 含 `ur` 时白名单放行的 `reset='ur'`）在此以 `{名} 出金` 补入，
-        取值与 `config_toml.legal_reset_values()` 同源。
+        基础表给出「跟随稀有度 / 仅 Featured 出金 / 永不重置」这类有意义的中文
+        显示名，故不从白名单集合直接生成；但**必须先按 `legal_reset_values()`
+        过滤**：`store.rarity_rank` 不含 sr / r 时（如只配 SSR / UR），基础表里
+        的 `sr` / `r` 是 loader 硬拒的取值，不过滤即「下拉可选、选中即写出、
+        重载抛 ConfigError」，与 AUDIT-BREAK-1 属同一失效形态（2026-10-10 审查
+        端到端复现：ranks 改为 {SSR, UR} 后选「SR 出金」，保存出的配置重载即
+        `reset='sr' 不是合法取值`）。
+
+        `store.rarity_rank` 为空时回退默认三级 SSR/SR/R（与
+        `_populate_card_rarity_combos()` 同型；`set_config` 的 `clear()` 之后
+        可达）——该形态下 loader 的 `_parse_rarities()` 同样补默认三级，故回退
+        集仍是白名单的子集。`[rarities].ranks` 里未列出的稀有度名（如 ranks 含
+        `ur` 时白名单放行的 `reset='ur'`）以 `{名} 出金` 补入。
+
+        取值面与 `config_toml.legal_reset_values()` 同源，本函数不自持第二份
+        白名单。
         """
-        choices = list(self._PITY_RESET_CHOICES)
-        known = {v for v, _ in choices}
+        from ..core.config_toml import legal_reset_values
+
         store = getattr(self, '_store', None)
-        for name in sorted(getattr(store, 'rarity_rank', None) or {}):
-            low = str(name).lower()
-            if low not in known:
-                choices.append((low, f'{low} 出金'))
-                known.add(low)
+        rank_map = {
+            str(name).lower(): rank
+            for name, rank in (getattr(store, 'rarity_rank', None) or {}).items()
+        }
+        if not rank_map:
+            rank_map = {'ssr': 0, 'sr': 1, 'r': 2}
+        legal = legal_reset_values(rank_map)
+        choices = [(v, n) for v, n in self._PITY_RESET_CHOICES if v in legal]
+        known = {v for v, _ in choices}
+        for name in sorted(rank_map):
+            if name not in known:
+                choices.append((name, f'{name} 出金'))
+                known.add(name)
         return choices
 
     def _populate_reset_combo(self, value: str) -> None:

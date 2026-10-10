@@ -13,9 +13,12 @@ from .pity_primitives import (  # noqa: F401
 )
 from .pity_tracker import (  # noqa: F401
     AlwaysActive, CounterTracker, DependentActive, DependentFiniteActive,
-    FiniteActive, Lifecycle, Tracker,
+    FateTracker, FiniteActive, FlagTracker, Lifecycle, NamespaceTracker,
+    StreakTracker, Tracker,
 )
-from .pity_modifier import HardModifier, Modifier, SoftModifier  # noqa: F401
+from .pity_modifier import (  # noqa: F401
+    HardModifier, Modifier, RotatingModifier, SelectedModifier, SoftModifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -761,7 +764,7 @@ class TargetedSoftBehavior(SoftPityMixin, TargetedBehavior):
 
 
 # ══════════════════════════════════════════════════════════════════
-# P64 S4-2：counter 驱动 preset 工厂（§3.2）
+# P64 S4-2 / S4-3：preset 工厂（§3.2）
 #   `preset(pdef) -> dict`（ISSUE-030 签名定稿），键集恰为
 #   `trackers` / `modifiers` / `lifecycle`（必需）+ `flags` / `counters`（可选），
 #   消费者是 `create_behavior` 的 preset 分支与 `Pity.__init__` 的
@@ -774,7 +777,12 @@ class TargetedSoftBehavior(SoftPityMixin, TargetedBehavior):
 #
 #   逐条可配字段一律取自 `pdef`（取值来源表见 §3.2），**不得写成常量**：
 #   否则 M1 的「与旧类逐场一致」只在默认配置下成立，任何非默认
-#   `threshold` / `scope` / `counter_init` / `deltas` 都会静默退回常量值。
+#   `threshold` / `scope` / `counter_init` / `guaranteed_init` / `deltas`
+#   都会静默退回常量值。
+#
+#   四个取值 helper（`build_lifecycle` / `_norm_scope` / `_target_of` /
+#   `_soft_deltas_of`）已随 S1d / S4-2 定义于本模块上方，**10 个工厂共用**，
+#   不得另起第二份取值逻辑。
 # ══════════════════════════════════════════════════════════════════
 
 def _preset_soft_step(pdef):
@@ -816,6 +824,191 @@ def _preset_hard(pdef):
             HardModifier(_scope, threshold=tau, target=_target_of(pdef)),
         ],
         counters={"counter": pdef.counter_init},
+    )
+
+
+# ── P64 S4-3：事件驱动 preset 工厂（6 类，§3.2 映射表 / §3.10.3 配套 1）──
+#
+# 六类共用三条纪律，缺一则语义漂移或静默失效：
+#
+# ① **一律不写 `target=`**（ISSUE-403 / 裁决 7B）：旧实现忽略本族的
+#    `target_featured`（`RotatingBehavior.__init__` 收进 `**kwargs` 后丢弃；
+#    三个 `_soft` 变体内层也未传该值），故把 `_preset_hard` 的 `_target_of(pdef)`
+#    照抄到本族即为语义漂移。
+# ② **三个 `_soft` 类型的命名空间载体（ISSUE-407，强制）**：`rotating_soft` /
+#    `rotating_cr_soft` / `targeted_soft` 的 preset **必须**含
+#    `NamespaceTracker(namespace=f'{pdef.name}_soft')`。缺它则 `X_soft` 命名空间
+#    不存在、`Lifecycle.initialize` 的推广写入无处落，且 `PityState.to_dict()`
+#    与旧实现的快照口径不再一致（旧内层 `SoftStepBehavior(name + '_soft', …)`
+#    在该空间留下 `{_active: True}`，ISSUE-023）。
+# ③ **Modifier 顺序 = 旧 mixin 的相位顺序**：`SoftPityMixin.before_draw` 先把
+#    soft 结果算成 `modified` 再交给父类，故三个 `_soft` 类型的 `modifiers` 一律
+#    `SoftModifier` 在前、母类型 Modifier 在后。
+
+def _preset_rotating(pdef):
+    """轮换保底（大小保底）preset——`guaranteed` 时把 scope 内非 featured 的概率整组搬给 featured。
+
+    对齐旧 `RotatingBehavior`：出 scope 稀有度且 featured → 清 `guaranteed`（大保底
+    已用掉），未命中 → 置位（下一次必出 UP）。标记初值走状态声明（H2），不加
+    Tracker 形参（同 `_preset_hard` 的 `counters` 口径）。
+    """
+    _scope = _norm_scope(pdef)
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[FlagTracker(scope=_scope, judge="featured",
+                              hit="clear", miss="set", flag="guaranteed")],
+        modifiers=[RotatingModifier(_scope)],
+        flags={"guaranteed": pdef.guaranteed_init},
+    )
+
+
+def _preset_rotating_cr(pdef):
+    """轮换保底 + 捕获明光——`rotating` 之上加「连续未命中 → 抽前随机拦截」。
+
+    **Tracker 顺序是契约（强制，RULING-6B′）**：`StreakTracker` 必须排在
+    `FlagTracker` **之前**，`commit` 列表顺序即语义的一部分。`StreakTracker.commit`
+    的归零条件含「抽前 `guaranteed` 未置位」一项，而该值由同抽 `FlagTracker.commit`
+    尚未翻转的状态给出；顺序对调则两处读点取到同一个（抽后的）值，守卫语义反转、
+    **`cr_counter` 恒为 0**（§3.1.1「Tracker 顺序是契约」条，`_preset_rotating_cr`
+    的 docstring 记有实测轨迹）。
+    """
+    _scope = _norm_scope(pdef)
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[
+            # ← 顺序是契约：必须在 FlagTracker 之前（RULING-6B′ / §3.2 该行）
+            StreakTracker(scope=_scope, judge="featured",
+                          threshold=pdef.cr_counter_threshold,
+                          base_rate=pdef.cr_base_rate,
+                          state_probs=pdef.cr_state_probs,
+                          flag="cr_intercepted",
+                          guard_flag="guaranteed"),
+            FlagTracker(scope=_scope, judge="featured",
+                        hit="clear", miss="set", flag="guaranteed"),
+        ],
+        # `extra_flag` 表达「条件多一个 `cr_intercepted`」（§3.2 的构造形参口径）：
+        # `rotating_cr` 与 `rotating` 的效果相同，差别只在触发条件。
+        modifiers=[RotatingModifier(_scope, extra_flag="cr_intercepted")],
+        flags={"guaranteed": pdef.guaranteed_init},
+    )
+
+
+def _preset_rotating_soft(pdef):
+    """轮换保底 + 软保底——`rotating` 的 Tracker 加软计数与 `X_soft` 命名空间载体。
+
+    | 项 | 依 §3.10.3 配套 1 的定稿 |
+    |----|--------------------------|
+    | 软计数落点 | **默认 view（`X` 命名空间）**，对齐旧 mixin 的 `X.counter` |
+    | `X_soft` 命名空间 | 只含 `_active`，产出者是 `NamespaceTracker`；`_active` 由 `Lifecycle.initialize` 的推广作用域写入 |
+    | Tracker 顺序 | `FlagTracker` → `CounterTracker` → `NamespaceTracker`（三者写不同键，无顺序契约） |
+    """
+    _scope = _norm_scope(pdef)
+    deltas = _soft_deltas_of(pdef)                                     # M6（ISSUE-001）
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[
+            FlagTracker(scope=_scope, judge="featured",
+                        hit="clear", miss="set", flag="guaranteed"),
+            CounterTracker(scope=_scope, reset_on=_scope,
+                           init=pdef.counter_init),
+            # ISSUE-407：`X_soft` 命名空间的**唯一产出者**（缺它则 `Lifecycle.
+            # initialize` 的推广写入无处落）
+            NamespaceTracker(namespace=f'{pdef.name}_soft'),
+        ],
+        # 顺序同旧 mixin：soft 先算，母类型 Modifier 接收 soft 后的分布
+        modifiers=[SoftModifier(_scope, deltas=deltas),                # deltas 经 _soft_deltas_of(pdef)
+                   RotatingModifier(_scope)],
+        flags={"guaranteed": pdef.guaranteed_init},
+        counters={"counter": pdef.counter_init},
+    )
+
+
+def _preset_rotating_cr_soft(pdef):
+    """轮换保底 + 捕获明光 + 软保底——`_preset_rotating_cr` 的 Tracker 加软计数与载体。
+
+    `StreakTracker` 仍排在 `FlagTracker` 之前（顺序契约同 `_preset_rotating_cr`）；
+    软计数与命名空间载体写的是另一批键（`counter` / `X_soft._active`），排在两者
+    之后不影响该契约。`modifiers` 顺序同 `_preset_rotating_soft`。
+    """
+    _scope = _norm_scope(pdef)
+    deltas = _soft_deltas_of(pdef)                                     # M6（ISSUE-001）
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[
+            # ← 顺序是契约：必须在 FlagTracker 之前（RULING-6B′ / §3.2 该行）
+            StreakTracker(scope=_scope, judge="featured",
+                          threshold=pdef.cr_counter_threshold,
+                          base_rate=pdef.cr_base_rate,
+                          state_probs=pdef.cr_state_probs,
+                          flag="cr_intercepted",
+                          guard_flag="guaranteed"),
+            FlagTracker(scope=_scope, judge="featured",
+                        hit="clear", miss="set", flag="guaranteed"),
+            CounterTracker(scope=_scope, reset_on=_scope,
+                           init=pdef.counter_init),
+            NamespaceTracker(namespace=f'{pdef.name}_soft'),           # ISSUE-407
+        ],
+        modifiers=[SoftModifier(_scope, deltas=deltas),
+                   RotatingModifier(_scope, extra_flag="cr_intercepted")],
+        flags={"guaranteed": pdef.guaranteed_init},
+        counters={"counter": pdef.counter_init},
+    )
+
+
+def _preset_targeted(pdef):
+    """定向保底（定轨）preset——`guaranteed` 或「已定轨 ∧ 命定值达阈值」时必出定轨卡。
+
+    | 形参 | 取值来源（§3.2 取值来源表） |
+    |------|------------------------------|
+    | `FateTracker` 的 `keys` | 机制语义固定（四个键的写面：`fate_points` / `losses` / `guaranteed` / `lost_rotating`） |
+    | `SelectedModifier` 的 `tau` | `pdef.fate_threshold`，`None` 回退 **1**（对齐旧 `TargetedBehavior.__init__` 的 `fate_threshold if fate_threshold is not None else 1`，S2a-2 补登行） |
+
+    `switch_allowed` / `switch_resets_progress` **不进本 preset**：它们是 GachaService
+    策略层（`NonDrawAction`）的判定输入，由 `pity_engine.get_pity_def()` 直读
+    `PityDef`，旧类只是把它们存下后从未消费（§3.7 范围边界条）。
+    """
+    _scope = _norm_scope(pdef)
+    tau = pdef.fate_threshold if pdef.fate_threshold is not None else 1
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[FateTracker(scope=_scope, judge="selected",
+                              hit="clear", miss="accumulate",
+                              keys=("fate_points", "losses",
+                                    "guaranteed", "lost_rotating"))],
+        modifiers=[SelectedModifier(_scope, tau=tau)],
+        # 两个初值各按 truthy 规则写（对齐 `_build_pity_state_init` 的 `if v:`）：
+        # `guaranteed_init` 走 flags、`fate_points_init` 走 counters，与旧
+        # `TargetedBehavior.__init__` 的两处条件写入同源。
+        flags={"guaranteed": pdef.guaranteed_init},
+        counters={"fate_points": pdef.fate_points_init},
+    )
+
+
+def _preset_targeted_soft(pdef):
+    """定向保底（定轨）+ 软保底——`_preset_targeted` 的 Tracker 加软计数与载体。
+
+    两个计数同命名空间但不同键：软计数是 `counter`（旧 mixin 的 `X.counter`），
+    命定值是 `fate_points`。`modifiers` 顺序同其余两个 `_soft` 类型。
+    """
+    _scope = _norm_scope(pdef)
+    tau = pdef.fate_threshold if pdef.fate_threshold is not None else 1
+    deltas = _soft_deltas_of(pdef)                                     # M6（ISSUE-001）
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[
+            FateTracker(scope=_scope, judge="selected",
+                        hit="clear", miss="accumulate",
+                        keys=("fate_points", "losses",
+                              "guaranteed", "lost_rotating")),
+            CounterTracker(scope=_scope, reset_on=_scope,
+                           init=pdef.counter_init),
+            NamespaceTracker(namespace=f'{pdef.name}_soft'),           # ISSUE-407
+        ],
+        modifiers=[SoftModifier(_scope, deltas=deltas),
+                   SelectedModifier(_scope, tau=tau)],
+        flags={"guaranteed": pdef.guaranteed_init},
+        counters={"counter": pdef.counter_init,
+                  "fate_points": pdef.fate_points_init},
     )
 
 
@@ -874,14 +1067,18 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         "ui_params": ["threshold"],
     },
     # ══ P56：事件驱动型（6 种——已实现） ══
+    # ── P64 S4-3：本组六条已 preset 化（与 S4-2 的四条同形态、同原子性纪律：
+    #    `class` 置 `None` 与 `preset` 赋值必须同一条目内同时成立）──
     "rotating": {
-        "class": RotatingBehavior,
+        "class": None,
+        "preset": _preset_rotating,
         "display_name": "轮换保底",
         "default_scope": "ssr",
         "params": {},
     },
     "rotating_soft": {
-        "class": RotatingSoftBehavior,
+        "class": None,
+        "preset": _preset_rotating_soft,
         "display_name": "轮换保底（带软保底）",
         "default_scope": "ssr",
         "params": {
@@ -890,7 +1087,8 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         },
     },
     "targeted": {
-        "class": TargetedBehavior,
+        "class": None,
+        "preset": _preset_targeted,
         "display_name": "定向保底（定轨）",
         "default_scope": "ssr",
         "params": {
@@ -900,7 +1098,8 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         },
     },
     "rotating_cr": {
-        "class": RotatingCRBehavior,
+        "class": None,
+        "preset": _preset_rotating_cr,
         "display_name": "轮换保底（递增概率）",
         "default_scope": "ssr",
         "params": {
@@ -909,7 +1108,8 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         },
     },
     "rotating_cr_soft": {
-        "class": RotatingCRSoftBehavior,
+        "class": None,
+        "preset": _preset_rotating_cr_soft,
         "display_name": "轮换保底·递增概率（带软保底）",
         "default_scope": "ssr",
         "params": {
@@ -920,7 +1120,8 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         },
     },
     "targeted_soft": {
-        "class": TargetedSoftBehavior,
+        "class": None,
+        "preset": _preset_targeted_soft,
         "display_name": "定向保底·定轨（带软保底）",
         "default_scope": "ssr",
         "params": {
@@ -935,39 +1136,33 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
 
 
 def _validate_registry():
-    """BEHAVIOR_REGISTRY 自检：条目「可构造性」的两形态判定。
+    """BEHAVIOR_REGISTRY 自检：**每条目一律判 `preset` 可调用**（GATE-3 收口定稿）。
 
-    **P64 S4-1 过渡判据（GATE-3 定稿）**：条目**含 `preset` 键则判其可调用**
-    （导入期只做 `callable()` 判定，**既不调用 preset、也不校验其返回键集**）。
-    两条理由（ISSUE-405）：① 本函数形参表为空，手上**没有 `PityDef` 实例**可传给
-    `preset(pdef)`；② 导入期真调用会把 preset 体内的运行期错误（类型集合常量未
-    随叶子层落地致 `NameError`、Modifier 构造签名不符致 `TypeError`）从
-    「`PityEngine` 构造期可见」升级为**整包 `import gacha_simulator.core` 失败**。
-    preset 返回 dict 的键集校验（未知键查多 / `lifecycle` 必需键查漏）一律在
-    **运行期**由 `create_behavior` 承担（§3.2 AUDIT-BREAK-3）。
+    **P64 S4-3 收口（GATE-3）**：S4-1 的过渡判据（「条目含 `preset` 键则判其可调用；
+    无 `preset` 键则沿用旧判据 `PityBehavior` 子类」）已删除——S4-2 / S4-3 落地后
+    10 条目一律为 `class: None` + 可调用 `preset`，旧判据的对象已不存在。
+    `ISSUE-015` 的「`class` 一律置 `None`」在本步终局达成（其断言在
+    `tests/core/test_pity_registry_schema.py` 的 S4-3 段）。
 
-    **无 `preset` 键（尚未迁移）则沿用旧判据**：`class` 非 None 且为
-    `PityBehavior` 子类。该分支使 S4-1 单独落地时导入期仍通过（此时 10 条目
-    全为旧形态），且 S4-2 / S4-3 的任一中间态都自洽；**随 S4-3 收口删除**
-    （届时 10 条目一律 `class: None` + 可调用 `preset`）。
+    导入期仍**只做 `callable()` 判定**，**既不调用 preset、也不校验其返回键集**
+    （ISSUE-405）：① 本函数形参表为空，手上**没有 `PityDef` 实例**可传给
+    `preset(pdef)`；② 导入期真调用会把 preset 体内的运行期错误（Modifier 构造签名
+    不符致 `TypeError`）从「`PityEngine` 构造期可见」升级为**整包
+    `import gacha_simulator.core` 失败**。preset 返回 dict 的键集校验（未知键查多 /
+    `lifecycle` 必需键查漏）一律在**运行期**由 `create_behavior` 承担
+    （§3.2 AUDIT-BREAK-3）。
+
+    **缺 `preset` 键**（或值不可调用）即抛——`.get()` 而非 `[]`：手工构造的畸形条目
+    （无该键）与显式置 `None` 的条目在本判据下等价，报错形态唯一。
 
     在模块导入时自动执行一次——类型错误在导入阶段立即暴露。
     """
     for btype, entry in BEHAVIOR_REGISTRY.items():
-        if "preset" in entry:
-            preset = entry["preset"]
-            if not callable(preset):
-                raise TypeError(
-                    f"BEHAVIOR_REGISTRY['{btype}'].preset={preset!r}: "
-                    f"必须为可调用的 preset 工厂函数"
-                )
-            continue
-        # ── 过渡分支（S4-3 收口时整段删除）：尚未迁移的条目仍走旧判据 ──
-        cls = entry.get("class")
-        if cls is None or not isinstance(cls, type) or not issubclass(cls, PityBehavior):
+        preset = entry.get("preset")
+        if not callable(preset):
             raise TypeError(
-                f"BEHAVIOR_REGISTRY['{btype}'].class={cls!r}: "
-                f"未迁移条目（无 'preset' 键）必须提供 PityBehavior 子类"
+                f"BEHAVIOR_REGISTRY['{btype}'].preset={preset!r}: "
+                f"必须为可调用的 preset 工厂函数"
             )
 
 

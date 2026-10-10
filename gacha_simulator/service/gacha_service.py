@@ -250,7 +250,6 @@ class GachaService:
 
     def _apply_non_draw(self, action, banners, pity_engine, pity_state):
         """P56：执行 NonDrawAction——定轨切换/取消。"""
-        from ..core.pity import TargetedBehavior
         if action.action_id not in NON_DRAW_ACTION_REGISTRY:
             raise InvalidActionError(f"未注册的 NonDrawAction action_id: '{action.action_id}'")
         pool_id = action.params.get('pool_id')
@@ -271,8 +270,15 @@ class GachaService:
         pool = banner.active_pool
         qualified_key = f"{banner.id}.{banner.active_pool_id}"
         targeted_name = None
-        for pname, bh in pity_engine.get_behaviors_for_pool(qualified_key):
-            if isinstance(bh, TargetedBehavior):
+        for pname, _bh in pity_engine.get_behaviors_for_pool(qualified_key):
+            # P64 S4-3：判据由旧类 `isinstance(bh, TargetedBehavior)` 改为按 `btype`
+            # 判定。`targeted` / `targeted_soft` 已 preset 化为统一骨架 `Pity`，不再是
+            # 旧类实例，按旧类判型会**恒不命中**并抛 `InvalidActionError`（池子明明配了
+            # 定轨保底却报「未配置 targeted 保底」）。骨架的公开面只有
+            # `before_draw` / `after_draw` / `did_fire` / `_rebind_state`，不暴露 `btype`，
+            # 故经引擎的 `get_pity_def()` 取 `PityDef.btype`（旧类时代该表同样齐备）。
+            _pdef = pity_engine.get_pity_def(pname)
+            if getattr(_pdef, 'btype', None) in ('targeted', 'targeted_soft'):
                 targeted_name = pname
                 break
         if targeted_name is None:

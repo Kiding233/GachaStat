@@ -7,17 +7,18 @@ from .banner import Banner, DrawOutcome, TransitionRule, TransitionPreview  # �
 from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
 from .pity import (
-    PityBehavior, SoftStepBehavior,
-    CounterBasedBehavior, HardPityBehavior,
+    PityBehavior,
     PoolPitySpec,
     PityState, PityEngine,
     DrawInfo, PityContext, Counter, Flag, LifecycleConfig,
     BEHAVIOR_REGISTRY, create_behavior,
     compute_scope_mappings,
-    RotatingBehavior, RotatingSoftBehavior,
-    RotatingCRBehavior, RotatingCRSoftBehavior,
-    TargetedBehavior, TargetedSoftBehavior,
-    SoftPityMixin, _redistribute_scope,
+    # P64 S4-3（AUDIT-BREAK-8）：10 个旧行为类 + `SoftPityMixin` 的 re-export 已随
+    # preset 化在本包公共面上退役（本包内已无 registry 入口，留着只会诱惑新代码
+    # 继续用旧类）。**旧类本体保留到发布前**（GATE-5），故
+    # `from gacha_simulator.core.pity import HardPityBehavior` 不受影响；
+    # `_redistribute_scope` 的导出随 S8-4 删（其替换对象是 S8 的卡级管道）。
+    _redistribute_scope,
 )
 from .milestone import MilestoneEngine, MilestoneDef, MilestoneConfig, register_milestone_engine  # P58
 from .config_store import SelectVoucherDef  # P78
@@ -104,17 +105,15 @@ __all__ = [
     'Banner', 'DrawOutcome', 'TransitionRule', 'TransitionPreview',
     'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
-    'PityBehavior', 'SoftStepBehavior',
-    'CounterBasedBehavior', 'HardPityBehavior',
+    'PityBehavior',
     'PoolPitySpec',
     'PityState', 'PityEngine',
     'DrawInfo', 'PityContext', 'Counter', 'Flag', 'LifecycleConfig',
     'BEHAVIOR_REGISTRY', 'create_behavior',
     'compute_scope_mappings',
-    'RotatingBehavior', 'RotatingSoftBehavior',
-    'RotatingCRBehavior', 'RotatingCRSoftBehavior',
-    'TargetedBehavior', 'TargetedSoftBehavior',
-    'SoftPityMixin', '_redistribute_scope',
+    # 10 个旧行为类 + `SoftPityMixin` 的条目随 import 同批删除（AUDIT-BREAK-8：
+    # 只删 import 会留 `NameError`、只删 `__all__` 会留下指向已删符号的 re-export）
+    '_redistribute_scope',
     'MilestoneEngine', 'MilestoneDef', 'MilestoneConfig', 'register_milestone_engine',
     'SelectVoucherDef',
     'ResourceLifecycle', 'ResourceLifecycleConfig', 'resolve_expire_time',

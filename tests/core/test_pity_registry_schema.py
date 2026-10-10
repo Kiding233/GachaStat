@@ -1,26 +1,35 @@
-"""P64 S4-1：registry schema 改造（过渡判据 + `create_behavior` 的 preset 分支，§3.2）。
+"""P64 S4-1 / S4-2 / S4-3：registry schema 改造（preset 判据 + `create_behavior` 的 preset 分支，§3.2）。
 
 覆盖：
-- `_validate_registry()` 的**过渡判据**（GATE-3 定稿）两形态判定：含 `preset` 键判
-  其可调用（导入期**不调用 preset、不校验返回键集**，ISSUE-405）；无 `preset` 键
-  （尚未迁移）走旧判据（`class` 非 None 且为 `PityBehavior` 子类）；
-- **过渡期两种条目形态都自洽**：现有 10 条旧形态经 `_validate_registry()` 通过 +
-  人为注入的 preset 形态条目亦通过；
-- 非法条目**必抛**（非 callable 的 `preset`、未迁移条目 `class` 置 `None`），
-  **不得只测「不抛」**；
+- `_validate_registry()` 的**收口判据**（GATE-3 定稿）：**条目一律判 `preset` 可调用**
+  （导入期**不调用 preset、不校验返回键集**，ISSUE-405）；
+- 非法条目**必抛**（非 callable 的 `preset`、缺 `preset` 键），**不得只测「不抛」**；
 - `create_behavior` 的 preset 分支：按名取键构造 `Pity`、两道**互补**校验各抛
   `ConfigError`（查多未知键 / 查漏 `lifecycle`）、无 preset 且 `class` 为 `None` 时报未实现；
 - `Pity.__init__` 签名不含旧类分支的两个注入点（`target_featured` / `reset`）。
 
-**P64 S4-2 追加（本文件下半的 `TestCounterPresetsS42`）**：counter 驱动四类
+**P64 S4-2 追加（`TestCounterPresetsS42`）**：counter 驱动四类
 （`soft_interval` / `soft_additive` / `soft_step` / `hard`）的 preset 工厂本体，
 条目原子形态、五键全集、`flags` / `counters` 的**消费者断言**、`priority` 走构造形参、
 `_target_of` 的 `target=` 选择子、裁决 7B 的类型级硬拒、以及「工厂不是模块级常量实例」。
 
-**S4-3 收口时的删除面**：`TestValidateRegistryTransition` 里「无 `preset` 键」形态的
-三条用例（旧形态通过 / 未迁移条目 class 置 None 必抛 / 无 preset 且 class None 报未实现）
-随过渡分支一并删除；`TestValidateRegistryPresetForm` 与 `TestCreateBehaviorPresetBranch`
-不受收口影响。
+**P64 S4-3 追加（`TestEventPresetsS43` / `TestRotatingCrTrackerOrder`）**：事件驱动六类
+（`rotating` / `rotating_soft` / `rotating_cr` / `rotating_cr_soft` / `targeted` /
+`targeted_soft`）的 preset 工厂本体，条目原子形态、五键全集、`flags` / `counters`
+消费者断言、「工厂不是模块级常量实例」、三个 `_soft` 类型的 `NamespaceTracker` 载体与
+`X_soft._active` 落点、事件驱动族一律不写 `target=`、以及 `rotating_cr` 的
+**`[StreakTracker, FlagTracker]` 顺序契约**（语义级用例，顺序对调即 `cr_counter`
+恒为 0）。**GATE-3 收口断言**（10 条目一律 `class: None` + 可调用 `preset`）亦在本段。
+
+**S4-3 收口已完成的删除面**：`TestValidateRegistryTransition`（过渡判据的三条用例：
+现有条目经旧判据通过 / 未迁移条目 `class` 置 `None` 必抛 / 未迁移条目 `class`
+非子类必抛）已随 `_validate_registry()` 的「无 `preset` 键」分支一并删除。收口后
+「无 `preset` 键的条目必抛」这一格由 `TestValidateRegistryPresetForm` 与
+`TestEventPresetsS43` 承接（消息与收口判据同源）。
+`TestValidateRegistryPresetForm` 与 `TestCreateBehaviorPresetBranch` 不受收口影响：
+后者里的 `test_no_preset_and_class_none_raises_value_error` / `test_legacy_branch_still_works`
+守的是 `create_behavior` 的**旧类兼容分支**（保留到发布前，见 GATE-5），与
+`_validate_registry()` 的过渡判据不是同一条代码路径，故不随收口删除。
 """
 import inspect
 
@@ -28,12 +37,20 @@ import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
 from gacha_simulator.core.pity import (
-    BEHAVIOR_REGISTRY, HardPityBehavior, Pity, _preset_hard, _preset_soft_step,
-    _target_of, _validate_registry, create_behavior,
+    BEHAVIOR_REGISTRY, HardPityBehavior, Pity, PityEngine, _preset_hard,
+    _preset_soft_step, _preset_targeted, _preset_targeted_soft, _target_of,
+    _validate_registry, create_behavior,
 )
-from gacha_simulator.core.pity_modifier import HardModifier, SoftModifier
-from gacha_simulator.core.pity_primitives import PityState
-from gacha_simulator.core.pity_tracker import AlwaysActive, CounterTracker
+from gacha_simulator.core.pity_modifier import (
+    HardModifier, SelectedModifier, SoftModifier,
+)
+from gacha_simulator.core.pity_primitives import (
+    DrawInfo, PityContext, PityState,
+)
+from gacha_simulator.core.pity_tracker import (
+    AlwaysActive, CounterTracker, FateTracker, FlagTracker, NamespaceTracker,
+    StreakTracker,
+)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -102,56 +119,34 @@ def _preset_no_lifecycle(pdef):
 
 
 # ══════════════════════════════════════════════════════════════════
-# `_validate_registry()` 过渡判据
+# `_validate_registry()` 收口判据（GATE-3：条目一律判 `preset` 可调用）
+#
+# 过渡判据（「无 `preset` 键」形态沿用旧 `PityBehavior` 子类判据）的三条用例已随
+# §七 S4-3 的收口删除（见模块 docstring 的「删除面」段）。
 # ══════════════════════════════════════════════════════════════════
 
-class TestValidateRegistryTransition:
-    """过渡判据：「无 `preset` 键」形态沿用旧判据（S4-3 收口删除）。"""
-
-    def test_current_entries_pass_validate_registry(self):
-        """现有 10 条目（S4-1 时全为旧形态）经判据通过（**显式重跑**，不只靠导入）。"""
-        # 条目数用 `>=` 而非 `== 10`（S4-1 审查 minor）：S6a 注册 `rotating_inverse`、
-        # S9-3 再增两条后，写死的等值断言必红，而那不是本用例要守的东西。此处只守
-        # 「既有条目未被误删」这一下限。
-        assert len(BEHAVIOR_REGISTRY) >= 10
-        _validate_registry()  # 不抛即通过
-
-    def test_unmigrated_entry_with_class_none_raises(self):
-        """未迁移条目（无 `preset` 键）把 `class` 置 `None` 则判据必抛。
-
-        这正是过渡判据相对旧判据**收严**的那一格：旧代码 `if cls is not None`
-        会把 `class: None` 静默放过，条目既无 preset 又无 class 即「构造时必炸」。
-        """
-        entry = _entry(**{'class': None})
-        BEHAVIOR_REGISTRY[_FAKE_LEGACY_NONE] = entry
-        try:
-            with pytest.raises(TypeError, match='必须提供 PityBehavior 子类'):
-                _validate_registry()
-        finally:
-            BEHAVIOR_REGISTRY.pop(_FAKE_LEGACY_NONE, None)
-
-    def test_unmigrated_entry_with_non_subclass_raises(self):
-        """未迁移条目的 `class` 不是 `PityBehavior` 子类则判据必抛。"""
-        entry = _entry(**{'class': dict})
-        BEHAVIOR_REGISTRY[_FAKE_LEGACY_NONE] = entry
-        try:
-            with pytest.raises(TypeError, match='必须提供 PityBehavior 子类'):
-                _validate_registry()
-        finally:
-            BEHAVIOR_REGISTRY.pop(_FAKE_LEGACY_NONE, None)
-
-
 class TestValidateRegistryPresetForm:
-    """过渡判据：「含 `preset` 键」形态判其可调用（S4-3 收口后为唯一形态）。"""
+    """收口判据：「含 `preset` 键」形态判其可调用（收口后为唯一形态）。"""
 
     def test_callable_preset_passes(self, registry_entries):
-        """preset 形态条目通过判据：两种形态在过渡期都自洽。"""
+        """preset 形态条目通过判据。"""
         registry_entries(_FAKE_VALID, _entry(preset=_preset_valid))
         _validate_registry()
 
     def test_non_callable_preset_raises(self, registry_entries):
         """`preset` 非 callable 则判据必抛（导入期唯一的 preset 侧判据）。"""
         registry_entries(_FAKE_BAD_PRESET, _entry(preset='not-callable'))
+        with pytest.raises(TypeError, match='必须为可调用的 preset 工厂函数'):
+            _validate_registry()
+
+    def test_missing_preset_key_raises(self, registry_entries):
+        """**缺 `preset` 键**的条目必抛（S4-3 收口后 `.get()` 与显式 `None` 同判据）。
+
+        本条承接被删的过渡判据用例的「必抛」覆盖：收口前该形态走旧 `PityBehavior`
+        子类判据（`class` 为子类即通过），收口后 `class` 已不再是判据输入，
+        缺 `preset` 键与 `preset: None` 报同一条消息。
+        """
+        registry_entries(_FAKE_LEGACY_NONE, _entry(**{'class': HardPityBehavior}))
         with pytest.raises(TypeError, match='必须为可调用的 preset 工厂函数'):
             _validate_registry()
 
@@ -442,3 +437,367 @@ class TestTargetFeaturedS42:
         assert bh._scope == 'ssr'
         assert bh._trackers[0]._scope == 'ssr'
         assert bh._modifiers[0]._scope == 'ssr'
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4-3：事件驱动 preset（6 类）+ GATE-3 收口
+# ══════════════════════════════════════════════════════════════════
+
+_C43_TYPES = ('rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft',
+              'targeted', 'targeted_soft')
+_ALL_TYPES = _C42_TYPES + _C43_TYPES          # 10 条目全集
+_SOFT_FAMILY = ('rotating_soft', 'rotating_cr_soft', 'targeted_soft')
+
+# ── 夹具：ssr（含 featured）/ sr / r 三稀有度池（与 S1b 起的 tracker 单测同形）──
+_FX_SCOPE_CARDS = {'ssr': ('up', 'std'), 'sr': ('sr1',), 'r': ('r1',)}
+_FX_FEATURED_CARDS = {'ssr': ('up',)}
+_FX_SCOPE_SLOTS = {'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr',), 'r': ('r',)}
+_FX_FEATURED_SLOTS = {'ssr': ('ssr_featured',), 'sr': ('sr',), 'r': ('r',)}
+_FX_CARD_TO_SLOT = {'up': 'ssr_featured', 'std': 'ssr', 'sr1': 'sr', 'r1': 'r'}
+_FX_BASE = {'ssr_featured': 0.006, 'ssr': 0.004, 'sr': 0.05, 'r': 0.94}
+
+
+def _fx_draw(rarity='ssr', featured=False):
+    return DrawInfo(
+        pool_id='p', pool_instance_id='p_0', reward_id='std',
+        reward_rarity=rarity, is_featured=featured,
+        scope_cards=_FX_SCOPE_CARDS, featured_cards=_FX_FEATURED_CARDS,
+        scope_slots=_FX_SCOPE_SLOTS, featured_slots=_FX_FEATURED_SLOTS,
+        card_to_slot=_FX_CARD_TO_SLOT, base_probabilities=_FX_BASE,
+        rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
+    )
+
+
+def _fx_build(btype, **kw):
+    """经 `create_behavior` 构造 preset 形态的 `Pity` 并完成首次 rebind。
+
+    `_rebind_state` 是**必需**的一步：S4-2 删除了 `PityEngine._rebind_state` 的
+    `state is self._state` 早退后，零件的 Counter / Flag 只在本方法里绑定；
+    未经它直接驱动即在 `Tracker.advance` 处 `AttributeError`。
+    """
+    pdef = PityDef(name='fx', btype=btype, scope='ssr', **kw)
+    state = PityState()
+    bh = create_behavior(pdef, state)
+    bh._rebind_state(state)
+    return bh, state
+
+
+class TestEventPresetsS43:
+    """六类 preset 工厂本体（§3.2 / §3.10.3 / §七 S4-3 的验收面）。"""
+
+    def test_gate3_all_entries_preset_form(self):
+        """**GATE-3 收口**：10 条目一律 `class: None` + 可调用 `preset`（ISSUE-015 终局）。
+
+        收口后 `_validate_registry()` 的「无 `preset` 键」过渡分支已删除，
+        故本断言与导入期判据是同一条纪律的两面：条目既无 `preset` 又无 `class`
+        时导入即失败。
+        """
+        assert set(BEHAVIOR_REGISTRY) >= set(_ALL_TYPES)
+        for t in _ALL_TYPES:
+            entry = BEHAVIOR_REGISTRY[t]
+            assert entry['class'] is None, f'{t}: class 未置 None'
+            assert callable(entry['preset']), f'{t}: preset 不可调用'
+        _validate_registry()          # 显式重跑收口判据（不只靠导入期那一次）
+
+    def test_all_ten_presets_construct_in_engine(self):
+        """全部 10 类经 `PityEngine` 构造后 `len(engine.behaviors) == 1`（§六 ISSUE-204）。
+
+        `PityEngine.__init__` 对 preset 构造失败只 `logger.warning` 后**跳过**
+        （不抛），跳过会让 `_resolve_order` / `_validate_behaviors` 在截断后的列表上
+        执行、形成「配置里写了保底、运行时该保底不存在且无可见报错」。逐类单独建
+        engine 是**唯一**能同时容纳 10 类的形态：规则 3 禁同 scope 两个事件驱动型，
+        故「一个 engine 装 10 条同 scope 保底」在任何合法配置下都不存在。
+        """
+        for t in _ALL_TYPES:
+            engine = PityEngine(pool_specs={}, pity_defs=[
+                PityDef(name=f'n_{t}', btype=t, scope='ssr')],
+                state=PityState(), rarity_rank={'ssr': 0, 'sr': 1, 'r': 2})
+            assert len(engine.behaviors) == 1, f'{t}: preset 构造失败被静默跳过'
+            assert isinstance(engine.behaviors[f'n_{t}'], Pity)
+
+    def test_mixed_engine_behavior_count_equals_defs(self):
+        """合法混合配置（5 条、scope 不冲突）下 `len(engine.behaviors) == len(pity_defs)`。"""
+        defs = [
+            PityDef(name='m_hard', btype='hard', scope='ssr', threshold=90),
+            PityDef(name='m_soft', btype='soft_step', scope='ssr',
+                    deltas=((73, 0.0), (17, 5.88))),
+            PityDef(name='m_rot', btype='rotating', scope='ssr'),
+            PityDef(name='m_tgt', btype='targeted', scope='sr'),
+            PityDef(name='m_rot_soft', btype='rotating_soft', scope='r',
+                    deltas=((74, 0.0), (16, 6.0))),
+        ]
+        engine = PityEngine(pool_specs={}, pity_defs=defs, state=PityState(),
+                            rarity_rank={'ssr': 0, 'sr': 1, 'r': 2})
+        assert len(engine.behaviors) == len(defs)
+
+    def test_preset_key_sets_within_five_key_universe(self):
+        """六类 preset 返回 dict ⊆ 五键全集且含三必需键（AUDIT-BREAK-3 的上界口径）。"""
+        for t in _C43_TYPES:
+            built = BEHAVIOR_REGISTRY[t]['preset'](PityDef(name=t, btype=t))
+            assert isinstance(built, dict), t
+            assert _REQUIRED_KEYS <= set(built) <= _KEY_UNIVERSE, (t, sorted(built))
+
+    def test_preset_is_factory_not_module_level_instance(self):
+        """工厂不是模块级常量实例（ISSUE-005）：两次调用返回互不相同的零件。
+
+        模块级赋值会让同一 preset 的所有保底共享同一批 Counter/Flag 遥控器，
+        `_rebind_state` 把它们重绑到最后调度的保底，串扰既跨保底又跨模拟。
+        """
+        pd = PityDef(name='x', btype='rotating_soft')
+        factory = BEHAVIOR_REGISTRY['rotating_soft']['preset']
+        a, b = factory(pd), factory(pd)
+        for i in range(len(a['trackers'])):
+            assert a['trackers'][i] is not b['trackers'][i]
+        for i in range(len(a['modifiers'])):
+            assert a['modifiers'][i] is not b['modifiers'][i]
+        assert a['lifecycle'] is not b['lifecycle']
+        # 六类逐一确认 trackers / modifiers 非空（空列表下的身份断言恒真、无信息量）
+        for t in _C43_TYPES:
+            built = BEHAVIOR_REGISTRY[t]['preset'](PityDef(name=t, btype=t))
+            assert built['trackers'] and built['modifiers'], t
+
+    @pytest.mark.parametrize('btype', _C43_TYPES)
+    def test_event_presets_write_no_target_key(self, btype):
+        """六类一律不写 `target=`（ISSUE-403）：`target_featured=True` 不改变零件构成。
+
+        旧实现忽略事件驱动族的 `target_featured`（`RotatingBehavior.__init__` 收进
+        `**kwargs` 后丢弃，三个 `_soft` 变体内层也未传该值），故把 `_preset_hard`
+        的 `_target_of(pdef)` 照抄到本族即为语义漂移。`HardModifier` 是 `target` 的
+        **唯一消费者**，故「modifiers 里无 `HardModifier`」+「无零件带 `_target`」
+        两条共同钉住该契约（漏写不报错，`target` 默认 `'scope'`）。
+        """
+        built = BEHAVIOR_REGISTRY[btype]['preset'](
+            PityDef(name='tf', btype=btype, target_featured=True))
+        for mod in built['modifiers']:
+            assert not isinstance(mod, HardModifier), btype
+            assert not hasattr(mod, '_target'), btype
+        # 本族不是 7B 的硬拒面（7B 只拒 `soft_*` 前缀三型），构造不得抛
+        bh = create_behavior(
+            PityDef(name='tf', btype=btype, target_featured=True), PityState())
+        assert isinstance(bh, Pity)
+
+    @pytest.mark.parametrize('btype', _SOFT_FAMILY)
+    def test_soft_family_has_namespace_carrier(self, btype):
+        """三个 `_soft` 类型的 preset 必须含 `NamespaceTracker(namespace=f'{name}_soft')`
+        （ISSUE-407，强制）。
+
+        缺它则 `X_soft` 命名空间不存在、`Lifecycle.initialize` 的推广写入无处落，
+        `PityState.to_dict()` 的快照口径随之与旧实现不一致（ISSUE-023 的
+        `X_soft: {_active: True}` 是 S1–S5 逐场一致的前提）。
+        """
+        built = BEHAVIOR_REGISTRY[btype]['preset'](PityDef(name='ns', btype=btype))
+        carriers = [tr for tr in built['trackers'] if isinstance(tr, NamespaceTracker)]
+        assert len(carriers) == 1, f'{btype}: 命名空间载体缺失或重复'
+        assert carriers[0].namespace == 'ns_soft'
+        assert carriers[0].state_keys() == (), '载体语义为空，不声明任何状态键'
+
+    @pytest.mark.parametrize('btype', _SOFT_FAMILY)
+    def test_soft_namespace_active_written_by_lifecycle(self, btype):
+        """`X_soft: {_active: True}` 由 `Lifecycle.initialize` 的推广作用域写入（ISSUE-407）。"""
+        bh, state = _fx_build(btype)
+        assert state.get('fx', '_active') is True
+        assert state.get('fx_soft', '_active') is True, 'X_soft 的 _active 未写入'
+        # `X_soft` 只含 `_active`（旧实现在该空间也只有这一个键）
+        assert state.to_dict()['data']['fx_soft'] == {'_active': True}
+
+    def test_soft_counter_lands_in_default_namespace(self):
+        """软计数落在默认 view（`X` 命名空间），对齐旧 mixin 的 `X.counter`（§3.10.3）。
+
+        软计数若落进 `X_soft`，`SoftModifier`（读默认 view）恒读到 0、
+        软保底静默失效；本断言是该失效模式的唯一捕获面。
+        """
+        bh, state = _fx_build('rotating_soft', deltas=((74, 0.0), (16, 6.0)))
+        bh.before_draw(PityContext(draw=_fx_draw(), current=dict(_FX_BASE), state=state))
+        assert state.get('fx', 'counter') == 1
+        assert 'counter' not in state.to_dict()['data']['fx_soft']
+
+    def test_flags_counters_consumers(self):
+        """`flags` / `counters` 被 `Pity.__init__` 真写进 state（AUDIT-BREAK-3 消费者断言）。
+
+        逐条对齐旧类的构造期写入：`rotating` 族 `guaranteed_init`、`targeted` 族
+        `guaranteed_init` + `fate_points_init`、三个 `_soft` 类型的软计数
+        `counter_init`。判据取「声明了初值但没人读」这一失效模式的反面。
+        """
+        _, st = _fx_build('rotating', guaranteed_init=True)
+        assert st.get('fx', 'guaranteed') is True
+
+        _, st = _fx_build('targeted', guaranteed_init=True, fate_points_init=3)
+        assert st.get('fx', 'guaranteed') is True
+        assert st.get('fx', 'fate_points') == 3
+
+        _, st = _fx_build('targeted_soft', counter_init=7, fate_points_init=2)
+        assert st.get('fx', 'counter') == 7
+        assert st.get('fx', 'fate_points') == 2
+
+    def test_consumers_truthy_rule(self):
+        """truthy 规则：初值为 0 / False 时不预建键（对齐 `_build_pity_state_init`）。"""
+        _, st = _fx_build('rotating_soft', counter_init=0, guaranteed_init=False)
+        assert st.get('fx', 'counter') is None
+        assert st.get('fx', 'guaranteed') is None
+
+    def test_targeted_selected_modifier_tau_from_pdef(self):
+        """`SelectedModifier` 的 `tau` 取 `pdef.fate_threshold`，`None` 回退 1（§3.2 补登行）。
+
+        漏写 `tau=` 即该字段静默失效、阈值恒取缺省 1：`targeted(fate_threshold=0)`
+        （G19 尘白禁区不歪池）会从「定轨即必出」退化为「定轨后须等 1 抽」。
+        """
+        built = _preset_targeted(PityDef(name='t', btype='targeted', fate_threshold=2))
+        mod = built['modifiers'][0]
+        assert isinstance(mod, SelectedModifier)
+        assert mod._tau == 2
+        assert _preset_targeted(PityDef(name='t', btype='targeted'))['modifiers'][0]._tau == 1
+        assert _preset_targeted(
+            PityDef(name='t', btype='targeted', fate_threshold=0))['modifiers'][0]._tau == 0
+        assert _preset_targeted_soft(
+            PityDef(name='t', btype='targeted_soft', fate_threshold=3)
+        )['modifiers'][1]._tau == 3
+
+    def test_targeted_fate_tracker_keys_and_judge(self):
+        """`FateTracker` 的 `judge='selected'` 与四键写面由机制语义固定（§3.2 该行）。"""
+        for factory, t in ((_preset_targeted, 'targeted'),
+                           (_preset_targeted_soft, 'targeted_soft')):
+            tr = factory(PityDef(name='t', btype=t))['trackers'][0]
+            assert isinstance(tr, FateTracker)
+            assert tr._judge == 'selected'
+            assert tr.state_keys() == ('fate_points', 'losses',
+                                       'guaranteed', 'lost_rotating')
+
+    def test_cr_params_reach_streak_tracker(self):
+        """`cr_counter_threshold` / `cr_base_rate` / `cr_state_probs` 逐条取自 `pdef`。
+
+        这三项不写即 `StreakTracker` 落默认值（阈值 3 / 基础率 0 / `[0.0]*3+[1.0]`），
+        配置被静默忽略。
+        """
+        built = BEHAVIOR_REGISTRY['rotating_cr_soft']['preset'](
+            PityDef(name='cr', btype='rotating_cr_soft',
+                    cr_counter_threshold=5, cr_base_rate=0.0125,
+                    cr_state_probs=[0.0, 0.1, 1.0]))
+        streak = built['trackers'][0]
+        assert isinstance(streak, StreakTracker)
+        assert streak._max == 5
+        assert streak._base_rate == 0.0125
+        assert streak._state_probs == [0.0, 0.1, 1.0]
+        # 缺省路径：三项全 None 时落 tracker 自带的缺省，与旧类同源
+        d = BEHAVIOR_REGISTRY['rotating_cr']['preset'](
+            PityDef(name='cr', btype='rotating_cr'))['trackers'][0]
+        assert (d._max, d._base_rate, d._state_probs) == (3, 0.0, [0.0, 0.0, 0.0, 1.0])
+
+
+class TestRotatingCrTrackerOrder:
+    """`rotating_cr` / `rotating_cr_soft` 的 `[StreakTracker, FlagTracker]` 顺序契约。
+
+    顺序是**语义的一部分**（RULING-6B′ / §3.1.1「Tracker 顺序是契约」条）：
+    `StreakTracker.commit` 的归零条件含「抽前 `guaranteed` 未置位」一项，而
+    `Pity.after_draw` 按 `trackers` 列表顺序调 `commit`。`FlagTracker` 排在前面时，
+    两处读点取到同一个（抽后的）值，`cr_counter` 恒为 0。
+    """
+
+    _CR_SEQ = [('ssr', False), ('ssr', True)] * 4
+
+    def test_tracker_order_is_streak_then_flag(self):
+        """两个类型的 `trackers[0]` / `trackers[1]` 必须是 `StreakTracker` / `FlagTracker`。"""
+        for t in ('rotating_cr', 'rotating_cr_soft'):
+            built = BEHAVIOR_REGISTRY[t]['preset'](PityDef(name='cr', btype=t))
+            assert isinstance(built['trackers'][0], StreakTracker), t
+            assert isinstance(built['trackers'][1], FlagTracker), t
+
+    def test_order_contract_pinned_semantically(self):
+        """语义级：错位抽卡序列下 `cr_counter` 轨迹 == 旧类；顺序对调即恒 0。
+
+        序列为「出 ssr 未命中 / 出 ssr 命中」交替四轮，故 `guaranteed` 每轮置位后
+        又被命中清掉。轨迹 `[1, 1, 2, 2, 3, 3, 4, 4]` 的**奇数位**即「未命中累计
+        +1」、偶数位即「命中当轮由抽前 `guaranteed` 短路、计数不动」——两者都要求
+        `StreakTracker.commit` 读到的是**抽前**的 `guaranteed`（块报告的牙齿实测：
+        顺序对调后该轨迹退化为全 0）。
+        """
+        from gacha_simulator.core.pity import RotatingCRBehavior
+
+        bh, state = _fx_build('rotating_cr', cr_counter_threshold=3,
+                              cr_state_probs=[0.0, 0.0, 0.0, 1.0])
+        old_state = PityState()
+        old = RotatingCRBehavior('fx', old_state, scope='ssr',
+                                 cr_counter_threshold=3,
+                                 cr_state_probs=[0.0, 0.0, 0.0, 1.0])
+        old._rebind_state(old_state)
+
+        traj_new, traj_old = [], []
+        for rarity, featured in self._CR_SEQ:
+            draw = _fx_draw(rarity, featured)
+            bh.before_draw(PityContext(draw=draw, current=dict(_FX_BASE), state=state))
+            old.before_draw(PityContext(draw=draw, current=dict(_FX_BASE),
+                                        state=old_state))
+            bh.after_draw(PityContext(draw=draw, current=dict(_FX_BASE), state=state))
+            old.after_draw(PityContext(draw=draw, current=dict(_FX_BASE),
+                                       state=old_state))
+            traj_new.append(state.get('fx', 'cr_counter', 0))
+            traj_old.append(old_state.get('fx', 'cr_counter', 0))
+
+        assert traj_new == [1, 1, 2, 2, 3, 3, 4, 4]
+        assert traj_new == traj_old, '与旧类的 cr_counter 轨迹必须逐位相同（M1 口径）'
+
+
+class TestRedistributeScopeExportStillPresent:
+    """`_redistribute_scope` 的导出**不属 S4-3 的删除面**（AUDIT-BREAK-8 C 项）。
+
+    该符号随 **S8-4** 删（它是 S8 的替换对象）；S4-3 只删 10 个旧行为类 +
+    `SoftPityMixin`。误删会使 S8 前的 `tests/core/test_pity_rotating.py` 导入即失败。
+    """
+
+    def test_redistribute_scope_exported_knowingly(self):
+        import gacha_simulator.core as core_pkg
+        assert '_redistribute_scope' in core_pkg.__all__
+        assert callable(core_pkg._redistribute_scope)
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4-3：AUDIT-BREAK-8——10 个旧行为类 + `SoftPityMixin` 的 re-export 退役
+# ══════════════════════════════════════════════════════════════════
+
+# 随 S4-3 从 `gacha_simulator.core` 的公共面退役的 11 个符号。
+# **不含** `_redistribute_scope`：它的导出随 S8-4 删（AUDIT-BREAK-8 的 C 项）。
+_RETIRED_EXPORTS = (
+    'SoftStepBehavior', 'CounterBasedBehavior', 'HardPityBehavior',
+    'RotatingBehavior', 'RotatingSoftBehavior', 'RotatingCRBehavior',
+    'RotatingCRSoftBehavior', 'TargetedBehavior', 'TargetedSoftBehavior',
+    'SoftPityMixin',
+)
+
+
+class TestAuditBreak8ExportRetirement:
+    """`core/__init__.py` 的双删面（AUDIT-BREAK-8）：import 与 `__all__` 必须同批。
+
+    两个方向各有一条断言，因为它们**症状不同**：只删 `__all__` 留下仍可访问的
+    re-export（旧类继续被新代码用，正是本步要消除的诱惑）；只删 import 留下指向
+    未定义名字的 `__all__` 条目（`from gacha_simulator.core import *` 即
+    `AttributeError`，而 `import gacha_simulator.core` 本身不报错）。
+    """
+
+    def test_old_classes_retired_from_package_face(self):
+        """11 个符号既不在 `__all__`、也不作为本包属性存在（双删面同批）。"""
+        import gacha_simulator.core as core_pkg
+        for name in _RETIRED_EXPORTS:
+            assert name not in core_pkg.__all__, \
+                f'{name} 仍在 core.__all__（只删 import 的残留）'
+            assert not hasattr(core_pkg, name), \
+                f'{name} 仍是 core 的属性（只删 __all__ 的残留）'
+
+    def test_old_class_bodies_survive_until_release(self):
+        """旧类**本体**保留到发布前（GATE-5）：`core.pity` 的导入路径不受影响。
+
+        S5a 的等价性 harness 直接 import 旧类构造对照物，故本体删除的时点是
+        「发布前一次性移除旧保底类」，不是本步。
+        """
+        from gacha_simulator.core import pity as pity_mod
+        for name in _RETIRED_EXPORTS:
+            assert hasattr(pity_mod, name), f'{name} 的本体不该在本步删除（GATE-5）'
+
+    def test_all_exports_resolvable(self):
+        """`__all__` 的每个名字都必须是本包可解析属性（re-export 不得悬空）。
+
+        `__all__` 是纯字符串列表，删除 import 而留下条目**不会**让
+        `import gacha_simulator.core` 报错，只会让 `import *` 与 `getattr` 在
+        使用期炸；本断言把该形态提前到测试期暴露。
+        """
+        import gacha_simulator.core as core_pkg
+        missing = [n for n in core_pkg.__all__ if not hasattr(core_pkg, n)]
+        assert missing == [], f'__all__ 含无法解析的名字（re-export 悬空）：{missing}'

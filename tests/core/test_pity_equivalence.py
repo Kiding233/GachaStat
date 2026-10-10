@@ -48,7 +48,7 @@ S5b 分两批接入（§七 S5b 的分批纪律）：批次一 = counter 驱动 
 | **无 featured 卡的池 + 必然拦截**时旧侧把 scope 清零、新侧恒等（§六 F2） | 旧侧 Σ_scope = 0 / 新侧保持基础总量 | 登记用例（断言差异形状，**不断言等价**） | `test_f2_registered_no_featured_pool_with_forced_interception` |
 
 **容差已裁决（S5b 批次一开工时落地，§六 2026-10-11 同步后的措辞）**：§六 主线
-把口径拆成两列——「**概率分布 = 容差 1e-12 内逐场一致**」+「**状态快照 =
+把口径拆成两列：「**概率分布 = 容差 1e-12 内逐场一致**」+「**状态快照 =
 位级一致**」，并注明该 1 ULP 是旧侧 `_redistribute_scope` 的「除再乘」往返
 产物、不含语义内容（§3.1.5.6 的「位级一致」行与 §3.1.5 定理 1 的效力说明）。
 故本装置按机制族分派容差：**counter 驱动 4 型取 `EXACT`**（两侧同为绝对赋值、
@@ -1294,7 +1294,7 @@ class TestS5bCounterDrivenBatch:
         判别面用同一阈值下的 `target_featured=False` 变体作对照：两条配置在触发抽上
         的分布必须不同（`tf=True` → featured 槽 1.0 / standard 槽 0.0；`tf=False` →
         两槽各 0.5）。preset 漏写 `target=` 时 `HardModifier` 的 `target` 落到缺省
-        `'scope'`，两种配置的分布**合并为一**，本断言即红——`_target_of(pdef)` 在
+        `'scope'`，两种配置的分布**合并为一**，本断言即红：`_target_of(pdef)` 在
         该批次里别无第二个捕获面（静默放宽、不报错）。
         """
         shape = _default_shape()
@@ -1321,7 +1321,7 @@ class TestS5bCounterDrivenBatch:
 
         取 `sr` 作 scope（`DEFAULT_CARDS` 里 `sr` 只有非 featured 的 `sr1`）。两条
         断言：① 与旧类逐场一致（对齐旧 `featured_slots.get(scope, scope_slots)`
-        的回退）；② 回退**真的发生**——同 scope 上 `tf=True` 与 `tf=False` 的两侧
+        的回退）；② 回退**真的发生**：同 scope 上 `tf=True` 与 `tf=False` 的两侧
         分布逐位相同，因为目标集都等于 scope 全集。缺回退时
         `HardModifier._target_keys()` 给空集、`apply` 走 `if not A: return None`
         恒等，而旧侧仍做绝对赋值，①即红。
@@ -1448,7 +1448,7 @@ EVENT_BATCH: Tuple[Tuple[str, Callable[[], PityDef]], ...] = (
 def _ulp_bound(report: EquivalenceReport) -> float:
     """从**超容差**报告推出差异幅值上界：受影响槽位取值的 4 ULP。
 
-    上界由**发生差异的那些槽位自身的取值**推出（`math.ulp`），不写死常数——
+    上界由**发生差异的那些槽位自身的取值**推出（`math.ulp`），不写死常数，
     与 S5a 的 `test_registered_ulp_in_event_driven_non_trigger_branch` 同法。
     """
     if not report.prob_mismatches:

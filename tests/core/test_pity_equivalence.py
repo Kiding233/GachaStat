@@ -87,8 +87,11 @@ S5b / S5c 的验收面。
 `FlagTracker` 提供 `did_reset` 的 `rotating` / `rotating_cr` /
 `rotating_guaranteed_init` 在 S5b 批次与该型的两列断言上同时变红）。这是
 ISSUE-102 的放宽本身带来的语义冗余，不是本装置的漏测：要覆盖它须下沉到「逐个
-Tracker 的 `did_reset`」断言，超出等价性装置的对拍面，登记给 S10 / S11（保障层
-的组合判据与状态层校验）。
+Tracker 的 `did_reset`」的自洽断言，超出等价性装置的对拍面。**该面已有专属单测**
+（`tests/core/test_pity_tracker.py` 的 `TestFlagTrackerDidReset` / `TestFateTrackerDidReset`
+等），且 preset 组合面若被破坏会由快照列的 `missing_new_keys` 抓到，故此处只登记为
+**本装置的边界**，不另派后续块（S5c 审查 low 4 订正：原写「登记给 S10 / S11」，而计划
+的 S10-1 / S10-2 / S11 三条块条目里并无对应项，属无处落地的登记）。
 
 1. **不走 `PityEngine` 的池过滤 / 池内排序 / 激活传播**。旧类在 registry 上已无
    入口（10 条 `registry` 条目全部 preset 化、`class` 置 None），旧侧无法经引擎
@@ -1771,8 +1774,12 @@ class TestS5bEventDrivenBatch:
 # **M4 为何取两类断言**（S5a 审查结论）：三个 `_soft` 复合类型的 preset 同时含
 # 「事件驱动 Tracker（命中才翻转）」与「触发稀有度 counter Tracker（出 scope 即重置）」，
 # 而 `did_fire` 取 `any(...)`，故那个 CounterTracker 会在 featured SSR 抽上同样报
-# `did_reset`，把同型 FlagTracker 的回归**完全掩盖**：S5b 的十个批次对 `did_fire`
-# 的覆盖贡献为零，本节是该语义在本文件里的**唯一防线**。两类断言的分工：
+# `did_reset`，把同型 FlagTracker 的回归**完全掩盖**。掩盖面**限于该族的三个类型**：
+# `rotating` / `rotating_cr` / `rotating_guaranteed_init` 没有 CounterTracker，其
+# `did_fire` 只由 FlagTracker 提供，实测会被 S5b 批次抓到（S5c 审查 minor 1 订正：
+# 原写「S5b 的十个批次覆盖贡献为零、本节是唯一防线」，与本 commit 自己的实测相反）。
+# 本文件对 `did_fire` 的防线是「S5b 批次 + 本节」之和，本节补的是三个 `_soft` 型那一面。
+# 两类断言的分工：
 # ① 与**状态转移**自洽（flag 翻转 / counter 归零是独立观测面，能抓到
 # `FlagTracker.did_reset` 恒 False 一类变异）；② 与**统一语义表**逐抽相等
 # （钉住不可由状态转移分辨的那些抽）。只做 ① 会在三个 `_soft` 型上漏掉命中抽，
@@ -1964,8 +1971,12 @@ class TestS5cN1Phase:
         2. 第 90 抽的**抽前** `counter` 为 89，即 Modifier 读到的值是 `pre + 1 = 90`
            （这正是 N1 的读相位：`advance` 在 `before_draw` 的 Modifier 链之前）。
 
-        若递增挪到 `after_draw`（旧稿的近似写法），该抽读到 89、首次 100% 落到第 91 抽，
-        两条同时变红，而总触发次数不变。
+        **本用例哪条断言抓相位**（S5c 审查 minor 2 订正）：是 `firsts` 那条分布列断言。
+        实测把递增挪到 `commit` 相位后，new 侧的首次 100% 下标由 89 前移到 90，而
+        `pre_counter` 两侧都仍是 89（递增相位不改变「抽后计数 = 已抽次数」这一不变量，
+        快照列对相位不敏感）。原 docstring 写「两条同时变红」不成立：下面的
+        `pre_counter` 断言另有用处（钉住抽后不变量的初值偏移与 readonly 误推），
+        **不构成相位判据**。
         """
         shape = _default_shape()
         pdef = counter_fixture(name='n1_hard90', btype='hard', scope='ssr',
@@ -1979,10 +1990,11 @@ class TestS5cN1Phase:
                 f'期望 {list(range(89, len(steps)))}。'
                 f'序列全为 R 抽（出非 scope 不重置计数），故第 90 抽起应当抽抽 100%；'
                 f'首个下标落在 90 即计数型 Tracker 的递增相位被挪到了 after_draw')
+        # 钉的是**抽后不变量**（第 90 抽抽后计数 == 已抽次数），不是相位（见 docstring）
         pre_counter = report.new.snapshots[88][pdef.name]['counter']
         assert pre_counter == 89, (
-            f'第 90 抽的抽前 counter 为 {pre_counter}，期望 89'
-            f'（Modifier 读自增后的值 90 == threshold）')
+            f'第 90 抽抽后 counter 为 {pre_counter}，期望 89'
+            f'（不等即初值偏移或只读查询误推进了计数）')
         assert report.is_equivalent(), report.failure_messages()
 
     @pytest.mark.parametrize('counter_init, expected_index', [(0, 3), (2, 1)])
@@ -2399,10 +2411,14 @@ class TestS5cH4RandomConsumption:
         """H4 负例一（2026-10-10 上调）：**只读查询不消耗随机数**。
 
         §3.1.2 协议第 3 条：`StreakTracker.prepare` 必须在 `readonly=True` 时早退，
-        「漏掉即策略层每次概率查询都掷骰、全局随机流整体错位」。判据取同一序列、
-        同一种子下「带只读探针」与「不带探针」的**逐抽消费列全等**：`prepare` 若
-        忽略 `readonly`，带探针的每一抽会多消费一枚，逐抽列立刻不等（总数也会翻倍，
-        但逐抽列能把「只多一次」的形态也照出来）。
+        「漏掉即策略层每次概率查询都掷骰、全局随机流整体错位」。
+
+        **本用例实际生效的判据是快照列（状态副作用）**（S5c 审查 minor 3 订正）：
+        `_drive_cr_per_draw` 的消费计数窗口取在只读探针**之后**，故探针自身的消费不在
+        窗口内，`probe_consumed == plain_consumed` 是**构造上恒等**的，抓不住「探针掷了
+        骰」；真正变红的是 `probe_snaps == plain_snaps`（只读查询产生了状态副作用）。
+        窗口如此取是为了让消费列能与 `_expected_cr_rolls` 的非探针模型对齐。若要直接
+        钉消费，须把窗口前移到探针之前并同时换掉那个模型的期望值。
         """
         shape = _default_shape()
         pdef = counter_fixture(name='s5c_h4_ro', btype='rotating_cr', scope='ssr',

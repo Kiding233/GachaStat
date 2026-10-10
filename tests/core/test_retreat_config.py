@@ -429,3 +429,47 @@ def test_truncate_counter_init_override_still_wins():
     """counter_init 覆盖语义不受字段驱动改造影响（唯一改写点）。"""
     got = _truncated_pity({'pity_full': 30})
     assert got.counter_init == 30
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4-2 审查 important：截断 store 必须带上 `rarity_rank`
+# ══════════════════════════════════════════════════════════════════
+# 截断路径**不过 TOML 往返**（`PlanSearchEngine._build_env` 把 `RetreatConfigBuilder`
+# 的产物直接喂 `SimulationEnvBuilder`），故 `ConfigStore()` 的空表会一路带到引擎。
+# 旧 `SoftStepBehavior` 从 dist 键推导量来源 Q、不依赖本表；新 `SoftModifier` 的
+# `_lower_rarities` 依赖它，空表下 `pool == 0` 即 `apply` 返回恒等，软保底**静默
+# 失效**（退避点 / 最少资源搜索会低估保底效果、高估资源需求，且不报错）。
+
+def test_truncate_copies_rarity_rank():
+    """`rarity_rank` 与其余十余个字段同等对待，必须浅拷贝（S4-2 审查 important）。"""
+    store = _make_store_with_3_pools()
+    store.rarity_rank = {'SSR': 0, 'SR': 1, 'R': 2}
+    truncated = RetreatConfigBuilder.build(
+        original_store=store, from_pool_id='pool_2',
+        initial_resources={'draw_resource': 5000}, pity_counter_init={})
+    assert truncated.rarity_rank == {'SSR': 0, 'SR': 1, 'R': 2}
+
+
+def test_truncated_env_soft_pity_is_not_identity():
+    """截断 env 的软保底必须真的改动分布（漏拷 `rarity_rank` 时恒等）。
+
+    实测（真实 config.toml、`from_pool_id='pool_c1'`、counter=90、
+    `base={'ssr': 0.02, 'r': 0.98}`）：空表下分布原样返回；补齐后 `ssr` 由 0.02 抬到 1.0。
+    """
+    from gacha_simulator.core.config_toml import load_toml
+    from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
+
+    # 用真实配置（合成 store 的池 id 与保底 pool_specs 的键空间对不上，`spec=None`
+    # 会在 `before_draw` 首行早退，测不到本缺陷）。
+    store = load_toml('gacha_simulator/config/config.toml')
+    truncated = RetreatConfigBuilder.build(
+        original_store=store, from_pool_id='pool_c1',
+        initial_resources={'draw_resource': 0.0},
+        pity_counter_init={'ssr_soft': 90})
+    assert truncated.rarity_rank, '截断 copy 丢了 rarity_rank'
+    env = SimulationEnvBuilder.from_config_store(truncated)
+    eng = env.pity_engine
+    base = {'ssr': 0.02, 'r': 0.98}
+    out = eng.before_draw(truncated.pools[0].pool_id, eng._state, dict(base))
+    assert out['ssr'] > base['ssr'], (
+        f"截断路径的软保底恒等（ssr 仍为 {out['ssr']}）——`rarity_rank` 未随截断复制")

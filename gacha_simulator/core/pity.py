@@ -56,7 +56,7 @@ def build_lifecycle(pdef) -> Lifecycle:
 # 三者与 `build_lifecycle` 同为「PityDef 字段 → 零件实参」的唯一转换点，故同居本模块。
 
 def _norm_scope(pdef, default: str = 'ssr') -> str:
-    """scope 的**唯一归一化点**（ISSUE-503）——`create_behavior` 与全部 preset 工厂共用。
+    """scope 的**唯一归一化点**（ISSUE-503），`create_behavior` 与全部 preset 工厂共用。
 
     与 `create_behavior` 的 `scope = (getattr(pdef,'scope',None) or _default_scope).lower()`
     同式同源：`create_behavior` 侧把 registry 条目的 `default_scope` 传进来（10 条目
@@ -71,7 +71,7 @@ def _norm_scope(pdef, default: str = 'ssr') -> str:
 
 
 def _target_of(pdef) -> str:
-    """`pdef.target_featured` 决定目标集（ISSUE-403）——全库唯一的取值点。
+    """`pdef.target_featured` 决定目标集（ISSUE-403），全库唯一的取值点。
 
     `True`  → 目标集 = scope 内的 featured 卡集（旧 `target_slots = featured_slots`）
     `False` → 目标集 = scope 内全部卡（旧 `target_slots = scope_slots`）
@@ -91,7 +91,7 @@ def _target_of(pdef) -> str:
 
 
 def _soft_deltas_of(pdef) -> tuple:
-    """`deltas` 的**唯一展开点**（ISSUE-001 / M6）——四个 soft 系类型共用。
+    """`deltas` 的**唯一展开点**（ISSUE-001 / M6），四个 soft 系类型共用。
 
     旧 `SoftPityMixin._init_soft_pity`（`CounterBasedBehavior` 侧的对应物是
     `create_behavior` 的 deltas 组装段）三分支归一的 preset 侧替代：
@@ -103,7 +103,14 @@ def _soft_deltas_of(pdef) -> tuple:
 
     对 counter 驱动三类型，`_build_pity` 已在 `pdef.deltas` 里放好展开结果
     （`config_toml.py:927-934`），故 ① 是常态路径；分支 ②③ 是「后缀型只写语法糖」
-    的路径——旧路径由 `_init_soft_pity` 承担，preset 化后由本函数承担。
+    的路径，旧路径由 `_init_soft_pity` 承担，preset 化后由本函数承担。
+
+    **分支 ③ 相对旧路径改变了行为（S4-2 审查 minor，登记）**：纯 `soft_interval` /
+    `soft_additive` 在 `deltas` 与语法糖都缺省时，旧路径 `SoftStepBehavior.__init__`
+    抛 `ValueError`（被引擎吞成 warning、该保底整条消失），而本函数的 74/90 缺省会
+    让它**真的生效**（counter=85 时 `ssr` 0.02 对 0.78）。方向是「从静默消失变为按
+    缺省生效」，属修复方向；但旧路径并无此缺省（缺省值原本只服务三个 `_soft` 复合
+    类型），故该形态的行为差异须由 S5b 的 counter 驱动批次或 §六 口径一并覆盖。
 
     **`pdef.btype` 一律不得直喂 `_expand_soft_to_deltas`**：该函数
     （`config_toml.py:1838`）只认 `soft_interval` / `soft_additive` 两个字面量，其余
@@ -763,7 +770,7 @@ class TargetedSoftBehavior(SoftPityMixin, TargetedBehavior):
 #   **必须是工厂函数、不是模块级常量实例（ISSUE-005）**：模块级赋值会把
 #   Tracker / Modifier 实例化在模块命名空间里，`create_behavior` 每次拿回的是
 #   同一批对象，同进程内所有用该 preset 的保底共享同一批 Counter/Flag 遥控器，
-#   `_rebind_state` 会把它们重绑到最后调度的保底——串扰既跨保底又跨模拟。
+#   `_rebind_state` 会把它们重绑到最后调度的保底，串扰既跨保底又跨模拟。
 #
 #   逐条可配字段一律取自 `pdef`（取值来源表见 §3.2），**不得写成常量**：
 #   否则 M1 的「与旧类逐场一致」只在默认配置下成立，任何非默认
@@ -794,7 +801,7 @@ def _preset_soft_step(pdef):
 
 
 def _preset_hard(pdef):
-    """硬保底 preset——`counter >= τ` 时目标集概率强制 100%（F 语义）。"""
+    """硬保底 preset，`counter >= τ` 时目标集概率强制 100%（F 语义）。"""
     _scope = _norm_scope(pdef)
     tau = pdef.threshold if pdef.threshold is not None else 90
     return dict(
@@ -803,7 +810,7 @@ def _preset_hard(pdef):
                                  init=pdef.counter_init)],
         modifiers=[
             # ISSUE-403：target_featured 由本类自己的 apply() 消费；本类型是它的
-            # 唯一合法消费者（soft 侧已按裁决 7B 移出）。漏写 `target=` 不报错——
+            # 唯一合法消费者（soft 侧已按裁决 7B 移出）。漏写 `target=` 不报错，
             # `HardModifier` 的 `target` 默认 `'scope'`，`target_featured=True` 的
             # 配置会把目标集由 featured 卡集静默放宽为 scope 全集。
             HardModifier(_scope, threshold=tau, target=_target_of(pdef)),
@@ -820,7 +827,7 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
     # `class` 置 `None` 与 `preset` 赋值**按条目原子地**完成（GATE-3 定稿）：
     # 条目既无 `preset` 又无 `class` 时导入期的 `_validate_registry()` 即失败，
     # 故两者不得跨 commit 拆开（§3.2 首段 / §七 S4-1 的落地时序）。
-    # `params` / `ui_params` 保留——它们是 GUI 控件声明面，与本键集契约无关
+    # `params` / `ui_params` 保留，它们是 GUI 控件声明面，与本键集契约无关
     # （`_PITY_TYPE_KEYS` 才是 TOML 键契约，S4c）。
     "soft_interval": {
         "class": None,
@@ -1194,7 +1201,7 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     # 2026-09-16 修正：此前只读 registry，PityDef.scope 被静默忽略，
     # 导致跨稀有度保底无法配置。P55 前的旧格式无 scope 字段，
     # getattr 返回 None 时自然回退。
-    # P64 S4-2：本式与 preset 侧取同一个归一化点 `_norm_scope`（ISSUE-503）——
+    # P64 S4-2：本式与 preset 侧取同一个归一化点 `_norm_scope`（ISSUE-503），
     # 两处各写一份 `.lower()` 时，任何一处漏改都会让 `Pity._scope`（小写）与
     # 零件 `_scope`（原值）分叉，`ctx.draw.scope_cards.get('SSR', ())` 取空、
     # 该保底静默恒等且不报错。
@@ -1641,14 +1648,14 @@ class PityEngine:
 
         **`state is self._state` 早退已删除（S4-2 处置，2026-10-10）**。原缺陷
         （S3-1 独立审查 → S4-1 登记 → S4-1 审查订正）：该早退对**旧类**成立（旧类
-        在构造期即 `Counter(state, ...)` 绑定），对统一骨架 `Pity` **不成立**——
+        在构造期即 `Counter(state, ...)` 绑定），对统一骨架 `Pity` **不成立**，
         `Pity` 照 §3.1.4 骨架**不在构造期绑定**零件 Counter/Flag，绑定只发生在
         `Pity._rebind_state`；故早退路径下零件永不绑定，`Tracker.advance` 读
         `self._counter.incr()` 即抛 `AttributeError`（`PityEngine.__init__` 把
         `self._state` 设为构造态却不 rebind，**传 `engine._state` 的派发必抛**）。
         触发条件是「派发的 state 恰为构造期那个对象」而非「早退本身」；实测
         `python -m gacha_simulator.cli -n 3 -w 1 -s 42` 在早退处插桩得
-        hits=2379 / misses=3——一场模拟的 `pity_state` 对象整场复用，首调绑定后
+        hits=2379 / misses=3，一场模拟的 `pity_state` 对象整场复用，首调绑定后
         其余每次派发都走早退，**早退是常态路径而非死分支**。构造态 `self._state`
         是唯一未绑定的那一格，故本处置是**修复**而非「顺手清死代码」。
 
@@ -1656,12 +1663,14 @@ class PityEngine:
         那一格）：① 本方法全程是纯重定向（不复制旧值），重跑幂等，删掉后语义收敛
         为「把三族重定向到本调用的 `state`」，不新增分支；② 骨架的构造期职责由
         §3.1.4 写死（收集命名空间 → 汇总声明键集 → `Lifecycle.initialize` → 建 view
-        → 消费 `flags` / `counters`），**不含**零件绑定——加一处构造期绑定会让「谁
+        → 消费 `flags` / `counters`），**不含**零件绑定，加一处构造期绑定会让「谁
         负责绑定零件」出现两个答案（构造期 + 每次派发），与 P75 纪律「初始值完全由
         per-call state 承载」的口径相抵；③ 按对象同一性短路使「构造态」成为唯一
         例外格，删掉后无例外格，新建克隆 / 快照派生 / 构造态三条路径走同一条重定向。
-        **代价如实登记**：每轮模拟的每次派发都重建三族遥控器，`-n 300 -w 1 -s 42`
-        的墙钟变化见该 commit message（同配置 A/B 实测）。用例
+        **代价如实登记**：每轮模拟的每次派发都重建三族遥控器。隔离 A/B（同配置、
+        各 4 次交错、与「只在 `PityEngine._rebind_state` 加回早退」的补丁树对照，
+        2026-10-10 S4-2 审查实测）：median 15.92s 对 15.26s（约 +4.4%）、
+        min 14.96s 对 14.80s（约 +1.1%）。用例
         `tests/core/test_pity_rebind.py::TestEngineRebind::test_rebind_same_state_still_rebinds`
         钉住本处置（原 `test_rebind_same_state_short_circuit` 守的是已删除的短路）。
         """

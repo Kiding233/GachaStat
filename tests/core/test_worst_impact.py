@@ -295,7 +295,7 @@ def test_synthetic_pool_pity_moves_mass_into_featured_slot():
     """保底生效后，质量必须是从低稀有度槽搬进 scope 槽（证明方向，不只是「有变化」）。
 
     **目标集口径（2026-10-10，S4-2 随裁决 7B 改写）**：本用例原断言「搬进
-    `ssr_featured`（限定槽）、从 `ssr`（普通槽）取」——那是样例配置
+    `ssr_featured`（限定槽）、从 `ssr`（普通槽）取」，那是样例配置
     `config.toml` 的 `ssr_soft` 带 `target_featured = true` 时的形态。裁决 7B
     （2026-10-05）把 `soft_*` + `target_featured = true` 定为 `ConfigError`
     （soft 的目标集恒为 scope 全集，该形态可等价分解为「稀有度级 + 卡级」两步

@@ -977,7 +977,7 @@ class TestPityAdjustmentReachesCardLevel:
         ]
         b = _ssr_only_banner('b1', pools=[_pool(rewards=rewards)])
         # counter_init=0 时首个 before_draw 即 counter=1 → boost 50%，保底必触发。
-        # `target_featured` 已按裁决 7B（2026-10-05）从 soft 配置面移除——该形态现于
+        # `target_featured` 已按裁决 7B（2026-10-05）从 soft 配置面移除，该形态现于
         # `create_behavior` 抛 `ConfigError`（soft 的目标集恒为 scope 全集）；本用例
         # 的三条断言（Σ = 1 / 槽位集合相符 / 逐槽位相等）与目标集取哪个槽无关。
         store = _make_store([b], pity_enabled=True, pity_defs=[

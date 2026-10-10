@@ -206,5 +206,13 @@ class RetreatConfigBuilder:
         ]
         truncated.card_overflow_map = dict(original_store.card_overflow_map)
         truncated.rarity_defaults = dict(original_store.rarity_defaults)
+        # P64 S4-2 审查 important：`rarity_rank` 必须一并复制。截断路径不过 TOML
+        # 往返（`RetreatSearch._build_env` 直接把它喂 `SimulationEnvBuilder`），故
+        # 此前 `ConfigStore()` 的空表会一路带到引擎；旧 `SoftStepBehavior` 从 dist
+        # 键推导量来源、不依赖本表，新 `SoftModifier` 的 `_lower_rarities` 依赖它，
+        # 空表下 `pool == 0` 直接返回恒等，即**软保底静默失效**（退避点/最少资源
+        # 搜索会低估保底效果、高估资源需求，且不报错）。实测 `from_pool_id='pool_c1'`
+        # 端到端：修复前 `before_draw` 分布等于原始分布，修复后与旧类逐字段一致。
+        truncated.rarity_rank = dict(original_store.rarity_rank)
 
         return truncated

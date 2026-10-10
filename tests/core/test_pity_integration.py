@@ -493,7 +493,7 @@ class TestNeverResetHardPity:
             'reset="never" 未透传到 CounterTracker.reset_on'
         # 骨架**不在构造期绑定**零件 Counter/Flag（§3.1.4；绑定只发生在
         # `Pity._rebind_state`），本用例不经引擎直驱，故须自行完成一次重绑
-        # ——引擎的三条派发入口（before_draw / after_draw / get_probabilities）
+        # 引擎的三条派发入口（before_draw / after_draw / get_probabilities）
         # 首行都会做这件事。
         bh._rebind_state(state)
 

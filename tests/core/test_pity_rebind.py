@@ -91,12 +91,12 @@ class TestEngineRebind:
         assert engine.is_active('nonexistent') is False
 
     def test_rebind_same_state_still_rebinds(self):
-        """同 state 也重绑——`state is self._state` 早退已删除（S4-2 处置，2026-10-10）。
+        """同 state 也重绑，`state is self._state` 早退已删除（S4-2 处置，2026-10-10）。
 
         早退对统一骨架 `Pity` **不成立**：`Pity` 照 §3.1.4 骨架**不在构造期绑定**
         零件 Counter/Flag，绑定只发生在 `Pity._rebind_state`。而一场模拟的
         `pity_state` 对象整场复用（首调绑定后其余每次派发都命中早退，实测
-        hits=2379 / misses=3），故构造态 `self._state` 是唯一未绑定的那一格——
+        hits=2379 / misses=3），故构造态 `self._state` 是唯一未绑定的那一格，
         早退在时，**传构造态的派发必抛 `AttributeError`**（零件永不绑定）。
 
         本用例钉住该修复：`tracker._counter is None`（构造期不绑定）+ 同对象
@@ -111,7 +111,7 @@ class TestEngineRebind:
         bh = engine._behavior_list[0]
         tracker = bh._trackers[0]        # soft_interval 已 preset 化（S4-2）
         assert tracker._counter is None, '骨架不在构造期绑定零件（§3.1.4）'
-        engine._rebind_state(a)          # 同一对象——旧早退在此返回、零件永不绑定
+        engine._rebind_state(a)          # 同一对象，旧早退在此返回、零件永不绑定
         assert tracker._counter is not None, '早退已删：同对象也须重定向'
         assert tracker._counter._state is a
         tracker._counter.incr()

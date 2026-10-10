@@ -13,7 +13,7 @@
 - `Pity.__init__` 签名不含旧类分支的两个注入点（`target_featured` / `reset`）。
 
 **P64 S4-2 追加（本文件下半的 `TestCounterPresetsS42`）**：counter 驱动四类
-（`soft_interval` / `soft_additive` / `soft_step` / `hard`）的 preset 工厂本体——
+（`soft_interval` / `soft_additive` / `soft_step` / `hard`）的 preset 工厂本体，
 条目原子形态、五键全集、`flags` / `counters` 的**消费者断言**、`priority` 走构造形参、
 `_target_of` 的 `target=` 选择子、裁决 7B 的类型级硬拒、以及「工厂不是模块级常量实例」。
 
@@ -281,7 +281,7 @@ class TestCounterPresetsS42:
     def test_registry_entries_atomic_preset_form(self):
         """① 四条 registry 条目已原子地 `class: None` + 可调用 `preset`。
 
-        「原子」的含义：`class` 置空与 `preset` 赋值必须在同一条目上同时成立——
+        「原子」的含义：`class` 置空与 `preset` 赋值必须在同一条目上同时成立，
         条目既无 `preset` 又无 `class` 时，导入期的 `_validate_registry()` 即
         `TypeError`。故 `python -c "import gacha_simulator.core.pity"` 通过本身就是
         本断言的另一半（导入期已跑过判据）。
@@ -294,7 +294,7 @@ class TestCounterPresetsS42:
     def test_preset_key_sets_within_five_key_universe(self):
         """② 四类 preset 均可构造，返回 dict ⊆ 五键全集且含三必需键。
 
-        上界取五键全集而非子集判断的补集——子集式（`<= set(x)`）不拒绝多余键，
+        上界取五键全集而非子集判断的补集，子集式（`<= set(x)`）不拒绝多余键，
         「`flags` / `counters` 成了死键」在其下不可见（AUDIT-BREAK-3）。
         """
         for t in _C42_TYPES:
@@ -306,7 +306,7 @@ class TestCounterPresetsS42:
         """③ 工厂不是模块级常量实例（ISSUE-005）：两次调用返回互不相同的零件。
 
         模块级赋值会让同一 preset 的所有保底共享同一批 Counter/Flag 遥控器，
-        `_rebind_state` 把它们重绑到最后调度的保底——串扰既跨保底又跨模拟。
+        `_rebind_state` 把它们重绑到最后调度的保底，串扰既跨保底又跨模拟。
         """
         for factory, t in ((_preset_soft_step, 'soft_step'), (_preset_hard, 'hard')):
             pd = PityDef(name=t, btype=t)
@@ -402,7 +402,7 @@ class TestTargetFeaturedS42:
     def test_preset_soft_does_not_write_target_key(self):
         """`_preset_soft_step` **不写** `target=`（裁决 7B：soft 无该消费路径）。
 
-        `SoftModifier` 的构造形参只有 `(scope, deltas)`——若有人给它加 `target=`
+        `SoftModifier` 的构造形参只有 `(scope, deltas)`，若有人给它加 `target=`
         即与 7B 的硬拒面互斥（照计划验收必红、按 7B 施工则验收不可执行）。
         """
         for t in ('soft_interval', 'soft_additive', 'soft_step'):

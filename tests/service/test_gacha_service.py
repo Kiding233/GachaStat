@@ -297,6 +297,22 @@ def _write_targeted_config():
     return path
 
 
+#: `targeted` 的软保底变体。`_apply_non_draw` 的判据必须**同时**认这两型
+#: （旧判据 `isinstance(bh, TargetedBehavior)` 天然覆盖子类 `TargetedSoftBehavior`，
+#: 改为按 `btype` 元组判定后，漏写 `'targeted_soft'` 不会被任何用例判红）。
+_TARGETED_SOFT_TOML = _TARGETED_TOML.replace(
+    'type = "targeted"', 'type = "targeted_soft"').replace(
+    'switch_resets_progress = true',
+    'switch_resets_progress = true' + chr(10) + 'start = 74' + chr(10) + 'end = 90')  # TOML 键空间用 start/end（软保底语法糖），非字段名 soft_start/soft_end
+
+
+def _write_targeted_soft_config():
+    fd, path = tempfile.mkstemp(suffix='.toml')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(_TARGETED_SOFT_TOML)
+    return path
+
+
 def test_zero_progress_dead_loop_is_caught():
     """四例之一：真死循环（恒返回 WaitAction(0)）被兜住并打 warning。"""
     r = _run_with(_ZeroWaitStrategy(), AllPoolsEndCondition(1000.0))
@@ -331,7 +347,27 @@ def test_zero_progress_affordability_spin_is_caught():
 
 def test_zero_progress_does_not_kill_legit_non_draw_rounds():
     """四例之三：防误杀——合法多轮 NonDrawAction（改写保底状态）不被终止。"""
-    path = _write_targeted_config()
+    r = _run_legit_non_draw_rounds(_write_targeted_config())
+    assert r.warnings == [], f'合法 NonDrawAction 被误杀: {r.warnings}'
+    assert r.iterations > 4, '未越过 NonDrawAction 阶段即结束'
+    assert r.total_draws == 0
+
+
+def test_non_draw_action_recognizes_targeted_soft():
+    """`targeted_soft` 与 `targeted` 同为定轨族，`_apply_non_draw` 必须一并识别。
+
+    S4-3 审查 minor 的守卫：判据由旧类判型改为 `btype` 元组后，把元组写成
+    `('targeted',)`（漏 `'targeted_soft'`）时全量套件仍绿。本用例钉住该元组的完整性。
+    """
+    r = _run_legit_non_draw_rounds(_write_targeted_soft_config())
+    assert r.warnings == [], (
+        f'`targeted_soft` 未被 `_apply_non_draw` 识别（误杀）: {r.warnings}')
+    assert r.iterations > 4
+    assert r.total_draws == 0
+
+
+def _run_legit_non_draw_rounds(path):
+    """跑一场「多轮合法 NonDrawAction」的模拟，返回结果（两条用例共用同一装置）。"""
     try:
         store = load_toml(path)
         env = SimulationEnvBuilder.from_config_store(store)
@@ -347,13 +383,9 @@ def test_zero_progress_does_not_kill_legit_non_draw_rounds():
             batch = run_batch_parallel(
                 env=env, target_specs={}, initial_resources=env.initial_resources,
                 num_simulations=1, max_workers=1, seed=42)
-            r = batch.results[0]
+            return batch.results[0]
         finally:
             _bs.create_strategy = orig
-
-        assert r.warnings == [], f'合法 NonDrawAction 被误杀: {r.warnings}'
-        assert r.iterations > rounds, '未越过 NonDrawAction 阶段即结束'
-        assert r.total_draws == 0
     finally:
         os.unlink(path)
 

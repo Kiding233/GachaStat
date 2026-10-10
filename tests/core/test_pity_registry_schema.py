@@ -569,8 +569,14 @@ class TestEventPresetsS43:
         built = BEHAVIOR_REGISTRY[btype]['preset'](
             PityDef(name='tf', btype=btype, target_featured=True))
         for mod in built['modifiers']:
+            # 实质守卫有两条（S4-3 审查 low 订正：原先还断言 `not hasattr(mod,
+            # '_target')`，而本族三个 Modifier 类都不定义该属性，任何现状变异都不会
+            # 让它变红，属无判别力的冗余）。
+            # ① `HardModifier` 是 `target` 的**唯一**消费者，本族出现它即语义漂移；
+            # ② 本族三个 Modifier 的构造签名都不收 `target`，故「preset 在
+            # `target_featured=True` 下能构造成功」本身即排除漏传（漏传会
+            # `TypeError`，上面的构造即用例本体）。
             assert not isinstance(mod, HardModifier), btype
-            assert not hasattr(mod, '_target'), btype
         # 本族不是 7B 的硬拒面（7B 只拒 `soft_*` 前缀三型），构造不得抛
         bh = create_behavior(
             PityDef(name='tf', btype=btype, target_featured=True), PityState())

@@ -274,9 +274,12 @@ class GachaService:
             # P64 S4-3：判据由旧类 `isinstance(bh, TargetedBehavior)` 改为按 `btype`
             # 判定。`targeted` / `targeted_soft` 已 preset 化为统一骨架 `Pity`，不再是
             # 旧类实例，按旧类判型会**恒不命中**并抛 `InvalidActionError`（池子明明配了
-            # 定轨保底却报「未配置 targeted 保底」）。骨架的公开面只有
-            # `before_draw` / `after_draw` / `did_fire` / `_rebind_state`，不暴露 `btype`，
-            # 故经引擎的 `get_pity_def()` 取 `PityDef.btype`（旧类时代该表同样齐备）。
+            # 定轨保底却报「未配置 targeted 保底」）。
+            # 取 `PityDef.btype` 而非零件自身的 `_btype`：后者对**旧类**可能被硬编码成
+            # 与 btype 不同的值（如 `RotatingSoftBehavior._btype` 是 `'rotating'`），
+            # 而 `PityDef.btype` 与本函数下游 `switch_allowed` 的取法同源
+            # (`get_pity_def`)，不受零件侧实现细节影响（S4-3 审查 low）。
+            # 注：`Pity` 骨架实际持 `self._btype`；此处不用它只是为免踩旧类口径。
             _pdef = pity_engine.get_pity_def(pname)
             if getattr(_pdef, 'btype', None) in ('targeted', 'targeted_soft'):
                 targeted_name = pname

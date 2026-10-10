@@ -254,19 +254,26 @@ def _pity_dict_to_pitydef(p: dict):
     `name` 无默认值，缺失即抛 `ConfigError`（不静默合成 `'pity'`）。
     `pools` 归一为 tuple：dict 形态允许 list（TOML 读入形态）或裸字符串。
 
-    **四个别名键（`_PITY_DICT_ALIAS_KEYS`）硬拒**：它们已不属本函数契约。若放行，
-    传 TOML 口径 dict 的调用方会拿到 `btype` 落回字段默认 `'soft'`、软保底三段
-    参数全 None 的 `PityDef`，**且不报错**（该 `btype` 不在 `BEHAVIOR_REGISTRY`，
+    **未知键一律硬拒（白名单制，键集上界 = `PityDef` 字段名）**：四个别名键
+    （`_PITY_DICT_ALIAS_KEYS`）是历史键名，命中时另外点出映射关系；其余未知键（如
+    TOML 口径的 `func` 与嵌套 `lifecycle`）一并拒收。只拒别名键是不够的（S4b 审查
+    low：实测 `func` 与嵌套 `lifecycle` 会被静默丢掉）——放行任一未知键都是「静默
+    丢字段」，传 TOML 口径 dict 的调用方会拿到 `btype` 落回字段默认 `'soft'`、软保底
+    三段参数全 None 的 `PityDef`，**且不报错**（该 `btype` 不在 `BEHAVIOR_REGISTRY`，
     连带的 `KeyError` 被 `PityEngine.__init__` 吞成 `logger.warning`，保底静默消失）。
     这正是 AUDIT-BREAK-1 要消除的失效形态，故由静默错值改为显式报错。
     """
     from gacha_simulator.core.config_store import PityDef
     src = dict(p)
-    _aliases_hit = sorted(k for k in _PITY_DICT_ALIAS_KEYS if k in src)
-    if _aliases_hit:
+    _field_names = {f.name for f in fields(PityDef)}
+    _unknown = sorted(set(src) - _field_names)
+    if _unknown:
+        _alias_hit = {k: _PITY_DICT_ALIAS_KEYS[k] for k in _unknown
+                      if k in _PITY_DICT_ALIAS_KEYS}
+        _hint = f"，其中 {_alias_hit} 是已废弃的别名键" if _alias_hit else ""
         raise ConfigError(
-            f"保底 dict 含已废弃的别名键 {_aliases_hit}——键空间已统一为 PityDef "
-            f"字段名（{' / '.join(f'{k} → {v}' for k, v in _PITY_DICT_ALIAS_KEYS.items())}），"
+            f"保底 dict 含未声明键 {_unknown}{_hint}——键空间上界为 PityDef 字段名"
+            f"（{len(_field_names)} 个，见 batch_simulator._pitydef_to_pity_dict），"
             f"见 P64 S4b / §3.6 AUDIT-BREAK-1")
     _pools = src.get('pools', ('*',))
     src['pools'] = tuple(_pools) if isinstance(_pools, (list, tuple)) else (_pools,)

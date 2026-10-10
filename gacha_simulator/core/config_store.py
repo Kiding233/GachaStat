@@ -191,9 +191,11 @@ class PityDef:
     # ── 重置条件 ──
     reset: str = ''                            # '' → scope fallback
     # ── 管道顺序（G5 / §3.6） ──
-    # 作为 `PityEngine._resolve_order` 排序键的一环（稀有度 rank 之后、type order
-    # 之前）。全 0 时排序结果与接线后默认序一致；显式值覆盖 type 顺序。
-    # 消费点：`create_behavior` 的 `Pity(..., priority=pdef.priority)`。
+    # **前向声明**：S4b 只落地本字段的定义 / 解析 / 写回，两个消费点尚未接线。
+    # 将作为 `PityEngine._resolve_order` 排序键的一环（稀有度 rank 之后、type order
+    # 之前）：全 0 时排序结果与接线后默认序一致，显式值覆盖 type 顺序。
+    # 消费点（**均属后续块**）：S4-2 的 `Pity(..., priority=pdef.priority)` 构造形参、
+    # S6b 的 `_resolve_order` 排序键。接线前全库无 `_priority` 读取点（S4b 审查 low）。
     priority: int = 0
 
 

@@ -650,10 +650,12 @@ class TestPriorityTomlRoundTrip:
     def test_full_field_toml_roundtrip(self):
         """字段全量 TOML round-trip：除「deltas 形态压制语法糖三元组」外逐字段等值。
 
-        例外只有一处且属**格式层互斥**而非透传缺陷：`_pitydef_to_toml` 在
-        `deltas` 已给出且与语法糖展开一致时只写 `deltas`（两者是同一分布的两个写法），
-        故重载后 `soft_start` / `soft_end` / `soft_increment` 为 None。
-        `soft_deltas` 反而保值——`_build_pity` 从写出的 `deltas` 重建它。
+        例外只有一处且属**格式层互斥**而非透传缺陷：`_pitydef_to_toml`（经
+        `_write_sugar_form` / `_sugar_matches_deltas`）在 `deltas` 与语法糖三元组
+        **不能无损互译**时只写 `deltas`（`deltas` 是语义权威），语法糖三元组随之在
+        重载后为 None；两者一致时反而写语法糖形式、三元组保值。本用例的 fixture 走的
+        是「不一致」那一支（实测 `_sugar_matches_deltas` 为 False）。
+        `soft_deltas` 保值：`_build_pity` 从写出的 `deltas` 重建它。
         """
         import dataclasses
 

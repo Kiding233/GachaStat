@@ -307,7 +307,13 @@ class TestPityDefFieldPassthrough:
         """同一断言落在**生产路径实际产出的那份 `pentry`** 上。
 
         上一条断言的是辅助函数的输出；本条的取值来自 `from_config_store` 实际调用的
-        `_build_pity_cfg_dict`，故「把调用点改回内联枚举式 dict」这种回退亦被覆盖。
+        `_build_pity_cfg_dict`。
+
+        **注意覆盖面**（S4b 审查 minor）：本断言只保证「该函数本身不漏字段」，对
+        「把**调用点**改回内联枚举式 dict」无检测力（实测该回退下本文件全绿，而生产
+        链路的 `priority` 真的丢了）。后者由
+        `test_from_config_store_carries_priority_end_to_end` 末尾对 `engine.pity_defs`
+        的断言钉住。
         """
         store = load_toml(CONFIG)
         store.pity.pities = [PityDef(**_all_fields_non_default())]
@@ -340,7 +346,13 @@ class TestPityDefFieldPassthrough:
         assert restored == pd
 
     def test_missing_key_falls_back_to_field_default(self):
-        """键缺失落回字段默认值（与旧的 `p.get(k, default)` 口径一致）。"""
+        """键缺失落回 dataclass 字段默认值。
+
+        **不与旧口径完全一致**（S4b 审查 low）：旧读端 `p.get(k, default)` 对 `btype`
+        缺键落 `'soft_interval'`（合法），新读端落字段默认 `'soft'`（不在
+        `BEHAVIOR_REGISTRY`，该保底会被引擎跳过、只留一条 warning）。生产路径不可达
+        （写端恒发全字段），故只登记不改。
+        """
         pd = _pity_dict_to_pitydef({'name': 'x'})
         assert pd == PityDef(name='x')
 
@@ -393,3 +405,8 @@ class TestPityDefFieldPassthrough:
         pentry = _pitydef_to_pity_dict(store.pity.pities[0])
         assert pentry['priority'] == 5
         assert _pity_dict_to_pitydef(pentry).priority == 5
+        # **生产对象上的断言**（S4b 审查 minor）：上面两条断言的是辅助函数，把
+        # `from_config_store` 的**调用点**改回内联枚举式 dict（漏 priority）时它们
+        # 仍全绿，而生产链路的 priority 已静默丢失。此处直接观察引擎最终收到的
+        # `PityDef`：实测该突变下本行是唯一变红的断言。
+        assert env.pity_engine.pity_defs['pf'].priority == 5

@@ -13,7 +13,9 @@ from .pity_primitives import (  # noqa: F401
 )
 from .pity_tracker import (  # noqa: F401
     AlwaysActive, DependentActive, DependentFiniteActive, FiniteActive, Lifecycle,
+    Tracker,
 )
+from .pity_modifier import Modifier  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -801,6 +803,218 @@ def _validate_registry():
 
 
 _validate_registry()
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S3-1：StateView 薄版（§3.10.3）+ 统一 Pity 骨架（§3.1.4）
+# ══════════════════════════════════════════════════════════════════
+
+class StateView:
+    """限定在单个保底命名空间内的只读视图（§3.10.3；**S3 落薄版 / S9 收紧**）。
+
+    **不得在构造期缓存命名空间 dict**（ISSUE-004）：`PityState.data` 是惰性创建的
+    ——构造期 `data.get(name, {})` 若该命名空间尚不存在（`depends_on` 依赖方在构造
+    期不写 `_active`），会拿到一个与 state 脱联的空 dict，此后引擎 `state.set` 新建
+    的命名空间与该 view 无关，所有读取恒返回 default 且不报错。故 `get()` 每次现取；
+    配合 `Pity._rebind_state` 重建 view（§3.1.4），worker 内同一 engine 连跑 N 场
+    模拟时每场读到的都是当场的账本。
+
+    S9 才切断 `name` 之外的读取（跨保底读在架构上关闭）；本薄版的接口面与 S9 定稿
+    一致（`get(key, default)`），故收紧只改可读面、不改签名。
+    """
+
+    def __init__(self, state: 'PityState', name: str):
+        self._state = state
+        self._name = name
+
+    def get(self, key, default=None):
+        return self._state.data.get(self._name, {}).get(key, default)
+
+
+class Pity(PityBehavior):
+    """统一保底骨架（§3.1.4）——Tracker + Modifier + Lifecycle 三元组。
+
+    **不继承 `CounterBasedBehavior`**：三个分类标志由 `btype` 自行推导（ISSUE-001），
+    故 `_SOFT_TYPES` / `_HARD_TYPES` / `_EVENT_DRIVEN_TYPES` 走 `pity_primitives`
+    的模块级常量裸名引用（ISSUE-024）。写死 `is_event_driven` 会让
+    `_validate_behaviors` 的规则 2/3/4 全部落到「事件驱动型」分支——soft 组合由
+    「通过」变 `ConfigError`、`rotating` + `hard` 同 scope 被拒、规则 2 静默失效。
+
+    构造期顺序（**不可颠倒**，ISSUE-202 / ISSUE-407）：
+
+    1. 收集零件声明的命名空间（`trackers` / `modifiers` / `lifecycle` 的 `namespace`
+       属性去 `None`）；
+    2. 汇总三族声明键集 `_declared_keys`（S10-2 / S11 的唯一输入；本步只汇总、不校验）；
+    3. `Lifecycle.initialize(state, name, namespaces)`——写初始 `_active`。**须先于
+       `_view` 创建**：`initialize` 只写 state、不依赖 view；
+    4. 建默认 view（`self._name`）与零件命名空间 view（`self._ns_views`）；
+    5. 按 truthy 规则消费 `flags` / `counters`（AUDIT-BREAK-3）；写入点须在
+       `initialize` 之后——`_active` 归 Lifecycle，不在此列。
+
+    本块（S3-1）只要求骨架**可独立构造并验收**；接入 `PityEngine` / preset 是 S4 的事。
+    """
+
+    def __init__(self, *, name, state, scope, btype,
+                 trackers: List[Tracker],
+                 modifiers: List[Modifier],
+                 lifecycle: Lifecycle = AlwaysActive(),
+                 priority: int = 0,
+                 pools: tuple = ('*',),
+                 flags: Optional[dict] = None,
+                 counters: Optional[dict] = None):
+        self._name = name
+        self._state = state
+        # `scope` 必须是**已归一化的小写值**（ISSUE-503）——归一化由 `create_behavior`
+        # / preset 侧完成，本骨架**不做二次归一化**（否则 `Pity._scope` 与零件
+        # `_scope` 会再次分叉）。
+        self._scope = scope
+        self._btype = btype
+        self._priority = priority
+        # ISSUE-019：`_pools` 由 `PityDef.pools` 注入，`PityEngine._build_activation_graph`
+        # 的池交集校验据此恢复语义（§3.12.2）——S1a 至 S2a-2 期间该警告对每条
+        # `depends_on` 恒真触发，属已登记的过渡态。
+        self._pools = pools
+        self._trackers = trackers
+        self._modifiers = modifiers
+        self._lifecycle = lifecycle
+
+        # ISSUE-001：三个分类标志由 btype 推导，与 CounterBasedBehavior.__init__ 同源。
+        self.is_soft = btype in _SOFT_TYPES
+        self.is_hard = btype in _HARD_TYPES
+        self.is_event_driven = btype in _EVENT_DRIVEN_TYPES
+
+        # ISSUE-407：先收集零件声明的命名空间（去 None），再调 initialize——
+        # Lifecycle 需要知道「本保底声明了哪些命名空间」才能把 `_active` 写进 `X_soft`。
+        self._namespaces = tuple(sorted(
+            {getattr(_p, 'namespace', None)
+             for _p in (*trackers, *modifiers, lifecycle)} - {None}))
+
+        # ISSUE-501：三族声明键集的**汇总点**（S10-2 的两条构造期判据与 S11 状态层
+        # checker 的唯一输入）。三族一律暴露只读成员 `state_keys()`（由构造形参决定、
+        # 不依赖 state），故此处无守卫直调；缺该方法即首次构造 `AttributeError`。
+        # 三者分开存，因为判据口径不同：判据 1 查 `'trackers'` 内的重复，判据 2 以
+        # `trackers ∪ lifecycle` 为「存在」的并集（`'modifiers'` 只作被查方）。
+        self._declared_keys = {
+            'trackers': tuple(k for _p in trackers for k in _p.state_keys()),
+            'modifiers': tuple(k for _p in modifiers for k in _p.state_keys()),
+            'lifecycle': tuple(lifecycle.state_keys()),
+        }
+
+        # ISSUE-202 / ISSUE-407：构造期写入初始 `_active` 的**唯一归属方法**。漏掉即
+        # 非 `depends_on` 保底 `_active` 恒 False、`before_draw` / `after_draw` 首行
+        # 双双早退，全部计数型保底静默失效。
+        self._lifecycle.initialize(state, name, self._namespaces)
+
+        # ISSUE-004：默认 view——随 state 重建，见 `_rebind_state`。
+        self._view = StateView(state, name)
+        # ISSUE-407：零件命名空间 view（keyed by namespace）。调用零件时经
+        # `self._view_for(part)` 取值，**不得写死 `self._view`**，否则 `X_soft` 的
+        # 读取全落默认命名空间。
+        self._ns_views = {_ns: StateView(state, _ns) for _ns in self._namespaces}
+
+        # AUDIT-BREAK-3：preset 返回 dict 的 `flags` / `counters` 两键的消费者。
+        # 写入规则与 §3.1.1 的 L4 键集语义一致——**仅 truthy 才预建键**（对齐
+        # `_build_pity_state_init` 的 `if cv:`），故与引擎侧的 `env.pity_state_init`
+        # 快照幂等同值，不引入第二套初值口径。
+        for _k, _v in (flags or {}).items():
+            if _v:
+                state.set(name, _k, _v)
+        for _k, _v in (counters or {}).items():
+            if _v:
+                state.set(name, _k, _v)
+
+    # ── P75：`_rebind_state`——三族统一实现 ──
+
+    def _rebind_state(self, state: 'PityState') -> None:
+        """把三族的 Counter / Flag / view 全部重绑到 per-call `state`（纯重定向）。
+
+        `PityEngine._rebind_state` 经 `hasattr(bh, '_rebind_state')` 对其**无守卫**
+        调用（P75 纪律），故本方法必须存在且覆盖三族：Tracker / Modifier 两族
+        `rebind(state, name)` 两实参；Lifecycle `rebind(state, name, namespaces)`
+        **三实参**（ISSUE-917：与 `initialize` 实参面对称，漏传即 `X_soft` 的
+        `_active` Flag 跨场不重绑、仍指上一场 state）。
+        """
+        self._state = state
+        for tr in self._trackers:
+            tr.rebind(state, self._name)
+        for mod in self._modifiers:
+            mod.rebind(state, self._name)
+        self._lifecycle.rebind(state, self._name, self._namespaces)
+        # ISSUE-004：view 必须随 state 重建。worker 内同一 engine 被 N 次模拟复用，
+        # 跨模拟隔离唯一靠 rebind；view 若只在构造期建一次，第 2..N 场读的仍是旧账本。
+        self._view = StateView(state, self._name)
+        # ISSUE-407：零件命名空间 view **同批重建**（否则与 ISSUE-004 同一失效模式）。
+        self._ns_views = {_ns: StateView(state, _ns) for _ns in self._namespaces}
+
+    def _view_for(self, part):
+        """零件级 view 取值（ISSUE-407）：声明了 `namespace` 的零件拿它自己的 view，
+        其余拿默认 view。**遍历 `trackers` / `modifiers` 时一律经本方法，不得写死
+        `self._view`。**
+
+        注意：Tracker 的 `advance` / `prepare` / `commit` / `did_reset` 形参是**原始
+        `state`**（§3.1.1 协议表），故本方法只用于 Modifier 的 `view` 形参。
+        """
+        return self._ns_views.get(getattr(part, 'namespace', None)) or self._view
+
+    # ── N1 相位：before_draw ──
+
+    def before_draw(self, ctx: 'PityContext', readonly: bool = False) -> Dict[str, float]:
+        """`is_active` 早退 → `advance` 循环 → **`prepare` 循环** → Modifier 链。
+
+        `prepare` 相位（2026-10-10，裁决 6B′）位于 `advance` 之后、本保底 Modifier
+        链**之前**，**并透传 `readonly`**：`StreakTracker` 在此掷骰，`readonly=True`
+        时早退不掷——策略层每次概率查询都会经 `PityEngine.before_draw` 走到本相位，
+        漏透传即每次查询都掷骰、全局随机流整体错位（§3.1.1 的 N1 相位表）。
+        """
+        if not self._lifecycle.is_active(self._state, self._name):
+            return ctx.current.copy()
+        for tr in self._trackers:            # N1 首段：计数型先在 before 侧推进
+            tr.advance(ctx, self._state, self._name, readonly=readonly)
+        for tr in self._trackers:            # N1 中段：抽前需读 state 并消费随机源的零件
+            tr.prepare(ctx, self._state, self._name, readonly=readonly)
+        out = ctx.current.copy()
+        for mod in self._modifiers:
+            # ISSUE-407：按零件命名空间取 view，不得写死 `self._view`
+            nxt = mod.apply(ctx, self._view_for(mod), out, readonly)
+            if nxt is not None:
+                out = nxt                    # 链式应用（非短路）
+        return out
+
+    # ── M4 / 退役：after_draw ──
+
+    def after_draw(self, ctx: 'PityContext') -> None:
+        """`is_active` 早退 → `did_fire` → 退役判定（**四实参**）→ 退役 → `commit`。
+
+        `fired = self.did_fire(ctx)` 必须在退役判定**之前**取值（ISSUE-402）：
+        `should_deactivate` 的第四实参是「本次抽卡是否让本保底回到初始状态」，由
+        `any(tr.did_reset(...))` 给出——Lifecycle 自身拿不到该判据（`LifecycleConfig`
+        只有 `deactivate_on_early_hit` / `depends_on`，无 `scope` / `reset`，而「命中」
+        的定义依赖后者）。三实参调用有两种失败形态：① 按四参协议实现 → 每次抽卡
+        `TypeError`；② 迁就三参 → `triggers` 退化为「激活后的**抽数**」，
+        `max_triggers=2` 在第 2 抽即退役，与「触发 N 次后退役」相反。
+
+        **退役先于 `commit`**（ISSUE-018）：旧实现在 `_on_reset()` 返回 True 时提前
+        return、跳过 `counter().reset()`。若写成「先 commit 后 deactivate」，counter
+        会被无条件归零，与 N1 例外断言相悖。`did_reset` 只看本次 `ctx.draw`
+        （§3.1.1 M4 统一语义），与 `commit` 的先后无关，故先取值是安全的。
+        """
+        if not self._lifecycle.is_active(self._state, self._name):
+            return
+        fired = self.did_fire(ctx)
+        retire = self._lifecycle.should_deactivate(
+            ctx, self._state, self._name, fired)
+        if retire:
+            self._lifecycle.deactivate(self._state, self._name)
+        # 仅 `deactivate_on_early_hit` 触发的退役跳过重置；其余退役动作（如触发次数
+        # 用尽）不改变 commit 语义，counter 照常归零。
+        skip_reset = retire and self._lifecycle.deactivate_on_early_hit
+        for tr in self._trackers:            # N1 末段：此处只落重置/翻转/累积
+            tr.commit(ctx, self._state, self._name, skip_reset=skip_reset)
+
+    def did_fire(self, ctx: 'PityContext') -> bool:
+        """M4：统一为「本次抽卡是否让本保底回到初始状态」（§3.1.1 M4 表）。"""
+        return any(tr.did_reset(ctx, self._state, self._name)
+                   for tr in self._trackers)
 
 
 def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':

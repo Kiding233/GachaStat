@@ -183,7 +183,7 @@ Tracker 是 pure 函数：给定旧状态和本次抽卡事件，返回新状态
 | Tracker（**签名以 §3.2 / §3.3 / §3.14.2 的定稿代码为准**，ISSUE-104） | 语义 | 对应现有 | 状态键 |
 |---------|------|---------|--------|
 | `CounterTracker(scope, reset_on, init)` | 每抽 +1；出金重置：`reset_on="scope"`（出触发稀有度即重置）、`"featured"`（仅 featured 重置）、`"never"`（永不重置，G16）。`init` 为计数初值，取值 `pdef.counter_init`（§3.2 取值来源表） | CounterBasedBehavior 计数逻辑 | `counter` |
-| `FlagTracker(judge, hit, miss, flag)` | 出 scope 时，judge 命中取 `hit` / 未命中取 `miss`（`"set"` / `"clear"`），写 `flag` 指定的标记键。**四关键字参**，preset 实例：`FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`（rotating）/ `... hit="set", miss="clear", flag="forced_loss"`（G1 rotating_inverse，§3.3） | RotatingBehavior guaranteed | 由 `flag` 形参指定（`guaranteed` / `forced_loss` 等） |
+| `FlagTracker(scope, judge, hit, miss, flag)`（**`scope` 为 2026-10-10 实施时补入**：原表与 §3.2 / §3.3 / §3.10.3 的四处调用点一律写四参，而本表「语义」列与 M4 表都要求「出 scope」门控、旧 `RotatingBehavior.after_draw` / `did_fire` 亦以 `reward_rarity == scope` 为前提；缺它则「出非 scope 稀有度的 featured 卡」会翻转标记并报 `did_reset=True`，与旧类实测不符，M1 的「与旧类逐场一致」不成立。落点见 S1b-2） | 出 scope 时，judge 命中取 `hit` / 未命中取 `miss`（`"set"` / `"clear"`），写 `flag` 指定的标记键。**四关键字参**，preset 实例：`FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`（rotating）/ `... hit="set", miss="clear", flag="forced_loss"`（G1 rotating_inverse，§3.3） | RotatingBehavior guaranteed | 由 `flag` 形参指定（`guaranteed` / `forced_loss` 等） |
 | `StreakTracker(judge, threshold, base_rate, state_probs, flag='cr_intercepted', guard_flag='guaranteed')` | 连续未命中计数，未命中 +1、命中清零（在 `commit`）；**在 `prepare`（`before_draw`、`advance` 之后、Modifier 链之前）掷骰**，判定本抽是否拦截为 100% UP，结果写入 `flag` 指定的标记键。含 `guard_flag` 守卫（抽前该标记已置位时不掷骰）与 `readonly` 早退（两条都**不掷骰**）。**flag 每抽无条件写**（成功置位、失败清位），否则脏 flag 残留会静默抬高拦截率。**与 `FlagTracker` 的先后是契约**（`StreakTracker` 在前），见 §3.2 的 `_preset_rotating_cr`。`threshold` / `base_rate` / `state_probs` 取值 `pdef.cr_counter_threshold` / `cr_base_rate` / `cr_state_probs`。**形参与语义按裁决 6B 扩充**（掷骰自 `InterceptModifier` 移入，见下；**2026-10-10 改判为 6B′**，相位改归 `prepare`，见 §3.1.1 的 CR 掷骰相位段） | RotatingCRBehavior cr_counter + `before_draw` 掷骰分支 | `cr_counter`, `cr_intercepted` | <!-- REVIEW-R1-FIX: RULING-6B --><!-- REVIEW-R1-FIX: RULING-6B-PRIME -->
 | `FateTracker(judge, hit, miss, keys)` | 出 scope 时，命中定轨对 `keys` 集清零/未命中累积。`keys` 即多键集：`fate_points` / `losses` / `guaranteed` / `lost_rotating`（§3.2 targeted 行；`hit` / `miss` 由 S1 定稿，形参名同 `FlagTracker` 口径）。另**读**外部注入的 `selected_card`，见 L4 | TargetedBehavior fate/losses | `fate_points`, `losses`, `guaranteed`, `lost_rotating`（另**读** `selected_card`） |
 | `NamespaceTracker(namespace)`（**ISSUE-407 新增**） | **语义为空**：`advance` / `commit` / `did_reset` 全 no-op，不参与计数与概率。唯一作用是**声明一个命名空间**（§3.10.3 的 `X_soft` 载体），使该命名空间在 `PityState` 中存在、可被 `Lifecycle.initialize` 写入 `_active`、可进快照比对 | 旧实现由内层 `SoftStepBehavior(name + '_soft', …)` 经 `CounterBasedBehavior.__init__` 隐式产生（[pity.py:133](gacha_simulator/core/pity.py#L133)） | **无**（不声明任何键） | <!-- REVIEW-R1-FIX: ISSUE-407 --><!-- REVIEW-R1-FIX: ISSUE-002 -->
@@ -1199,7 +1199,7 @@ preset 自身只保留**语义固定项**（如 `judge="featured"` / `hit="clear
 def _preset_rotating(pdef):          # ISSUE-030：形参 pdef，逐条可配值一律取自它
     return dict(
         lifecycle=build_lifecycle(pdef),         # ISSUE-301：生命周期唯一转换点（§3.1.3）
-        trackers=[FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")],
+        trackers=[FlagTracker(scope=scope, judge="featured", hit="clear", miss="set", flag="guaranteed")],
         modifiers=[
             RotatingModifier(scope),      # 条件（guaranteed）内联在 compute_delta() 里（§3.14）
         ],
@@ -1225,7 +1225,7 @@ def _preset_rotating_cr(pdef):
                           state_probs=pdef.cr_state_probs,
                           flag="cr_intercepted",
                           guard_flag="guaranteed"),   # ← 顺序是契约：必须在 FlagTracker 之前
-            FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed"),
+            FlagTracker(scope=scope, judge="featured", hit="clear", miss="set", flag="guaranteed"),
         ],
         modifiers=[
             RotatingModifier(scope, extra_flag="cr_intercepted"),
@@ -1327,7 +1327,7 @@ def _preset_soft_step(pdef):
 |-----------|------------------------------------------|-----------------------------------|
 | hard | Tracker: `CounterTracker(scope, reset_on, init)`；Modifier: `HardModifier(scope, threshold=τ, target=_target_of(pdef))` | `counter >= τ` |
 | soft_step / soft_interval / soft_additive | Tracker: `CounterTracker(scope, reset_on, init)`；Modifier: `SoftModifier(scope, deltas=deltas)`（`deltas` 由工厂经 `_soft_deltas_of(pdef)` 展开，M6 / **ISSUE-001**；**不写 `target=`**，ISSUE-002） | `boost > 0` |
-| rotating | Tracker: `FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`；Modifier: `RotatingModifier(scope)` | `guaranteed` |
+| rotating | Tracker: `FlagTracker(scope=scope, judge="featured", hit="clear", miss="set", flag="guaranteed")`；Modifier: `RotatingModifier(scope)` | `guaranteed` |
 | rotating_soft | rotating 的 Tracker + `CounterTracker`；Modifier: `SoftModifier` + `RotatingModifier` | 各自 |
 | rotating_cr | `[StreakTracker(judge="featured", …, flag='cr_intercepted', guard_flag='guaranteed'), FlagTracker(...)]`（**顺序是契约：`StreakTracker` 必须在前**，见 §3.1.1「Tracker 顺序是契约」条；代码见下方 `_preset_rotating_cr`）；Modifier: `RotatingModifier(scope, extra_flag='cr_intercepted')` | `guaranteed ∨ cr_intercepted` |
 | rotating_cr_soft | rotating_cr 的 Tracker；Modifier: 再加 `SoftModifier` | 各自 |
@@ -1364,7 +1364,7 @@ class RotatingModifier(Modifier):
 def _preset_rotating_inverse(pdef):          # ISSUE-030：形参 pdef；ISSUE-031：条件外置形态
     return dict(
         lifecycle=build_lifecycle(pdef),         # ISSUE-301
-        trackers=[FlagTracker(judge="featured", hit="set", miss="clear", flag="forced_loss")],
+        trackers=[FlagTracker(scope=scope, judge="featured", hit="set", miss="clear", flag="forced_loss")],
         modifiers=[
             NonFeaturedModifier(scope),     # 条件（forced_loss）内联
         ],
@@ -2097,7 +2097,7 @@ def _preset_rotating_soft(pdef):
     return dict(
         lifecycle=build_lifecycle(pdef),
         trackers=[
-            FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed"),
+            FlagTracker(scope=scope, judge="featured", hit="clear", miss="set", flag="guaranteed"),
             CounterTracker(scope=_norm_scope(pdef), reset_on=_norm_scope(pdef), init=pdef.counter_init),
             NamespaceTracker(namespace=f'{pdef.name}_soft'),   # ← ISSUE-407：X_soft 的唯一产出者
         ],

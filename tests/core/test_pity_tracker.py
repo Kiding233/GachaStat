@@ -14,17 +14,18 @@
 """
 
 from gacha_simulator.core.pity_primitives import DrawInfo, PityContext, PityState
-from gacha_simulator.core.pity_tracker import CounterTracker, Tracker
+from gacha_simulator.core.pity_tracker import CounterTracker, FlagTracker, Tracker
 
 NAME = 'ssr_hard'
 SCOPE = 'ssr'
 
 
-def _ctx(rarity: str = 'sr', is_featured: bool = False, state: PityState = None):
+def _ctx(rarity: str = 'sr', is_featured: bool = False, state: PityState = None,
+         reward_id: str = None):
     """构造一次抽卡的 PityContext（默认出非 scope 的非 featured 卡）。"""
     st = state if state is not None else PityState()
     draw = DrawInfo(
-        pool_id='p', pool_instance_id='p_0', reward_id=f'{rarity}_card',
+        pool_id='p', pool_instance_id='p_0', reward_id=reward_id or f'{rarity}_card',
         reward_rarity=rarity, is_featured=is_featured,
     )
     return PityContext(draw=draw, current={}, state=st)
@@ -225,3 +226,168 @@ class TestTrackerProtocol:
         """`init` 由构造形参持有（`Pity` 建初始快照时取用）。"""
         assert CounterTracker(scope=SCOPE, reset_on=SCOPE, init=20).init == 20
         assert CounterTracker(scope=SCOPE, reset_on=SCOPE).init == 0
+
+
+# ══════════════════════════════════════════════════════════════════
+# S1b-2：FlagTracker
+# ══════════════════════════════════════════════════════════════════
+
+ROTATING_KW = dict(scope=SCOPE, judge='featured', hit='clear', miss='set',
+                   flag='guaranteed')
+INVERSE_KW = dict(scope=SCOPE, judge='featured', hit='set', miss='clear',
+                  flag='forced_loss')
+
+
+def _flag_tracker(kw=None, state=None, name=NAME):
+    st = state if state is not None else PityState()
+    tr = FlagTracker(**(kw or ROTATING_KW))
+    tr.rebind(st, name)
+    return tr, st
+
+
+class TestFlagTrackerFlip:
+    """`commit` 落翻转——rotating 的二态翻转（§3.2 preset 表）。"""
+
+    def test_flag_tracker_rotating_flip(self):
+        """出 scope：命中（featured）→ 清位；未命中 → 置位。出非 scope 不动。"""
+        tr, st = _flag_tracker()
+        st.set(NAME, 'guaranteed', True)
+
+        tr.commit(_ctx(rarity='sr', state=st), st, NAME)
+        assert st.get(NAME, 'guaranteed') is True, '出非触发稀有度不得翻转'
+
+        tr.commit(_ctx(rarity='ssr', is_featured=True, state=st), st, NAME)
+        assert st.get(NAME, 'guaranteed') is False, '命中应清位（回到初始态）'
+
+        tr.commit(_ctx(rarity='ssr', is_featured=False, state=st), st, NAME)
+        assert st.get(NAME, 'guaranteed') is True, '未命中应置位（进入大保底）'
+
+    def test_flag_tracker_selected_judge_hit(self):
+        """`judge='selected'`：命中判据是 `reward_id == selected_card`（读外部注入键）。"""
+        tr, st = _flag_tracker(dict(scope=SCOPE, judge='selected', hit='clear',
+                                    miss='set', flag='guaranteed'))
+        st.set(NAME, 'selected_card', 'up_card')
+        st.set(NAME, 'guaranteed', True)
+
+        tr.commit(_ctx(rarity='ssr', reward_id='other_card', state=st), st, NAME)
+        assert st.get(NAME, 'guaranteed') is True, '未命中定轨卡应置位'
+
+        tr.commit(_ctx(rarity='ssr', reward_id='up_card', state=st), st, NAME)
+        assert st.get(NAME, 'guaranteed') is False, '命中定轨卡应清位'
+
+    def test_flag_tracker_inverse_form_flips_oppositely(self):
+        """G1 形态（`hit='set'` / `miss='clear'`，flag=`forced_loss`）翻转方向相反。"""
+        tr, st = _flag_tracker(INVERSE_KW)
+        tr.commit(_ctx(rarity='ssr', is_featured=True, state=st), st, NAME)
+        assert st.get(NAME, 'forced_loss') is True, '连中后进入「必歪」态'
+        tr.commit(_ctx(rarity='ssr', is_featured=False, state=st), st, NAME)
+        assert st.get(NAME, 'forced_loss') is False, '歪掉后退出「必歪」态'
+
+    def test_flag_tracker_skip_reset_does_not_skip_flip(self):
+        """`skip_reset=True` 不跳过翻转——与旧 `RotatingBehavior.after_draw` 同构
+        （该参数对事件驱动型不可达：`deactivate_on_early_hit` 被 H3 硬拒）。"""
+        tr, st = _flag_tracker()
+        st.set(NAME, 'guaranteed', True)
+        tr.commit(_ctx(rarity='ssr', is_featured=True, state=st), st, NAME,
+                  skip_reset=True)
+        assert st.get(NAME, 'guaranteed') is False
+
+    def test_flag_tracker_advance_and_prepare_are_noop(self):
+        """非计数型：`advance` / `prepare` 均 no-op（`cr_counter` 归 StreakTracker）。"""
+        tr, st = _flag_tracker()
+        ctx = _ctx(state=st)
+        tr.advance(ctx, st, NAME, False)
+        tr.prepare(ctx, st, NAME, False)
+        assert st.data.get(NAME, {}) == {}
+
+    def test_flag_tracker_requires_rebind_first(self):
+        """未 `rebind` 即 `commit` 是 AttributeError。"""
+        tr = FlagTracker(**ROTATING_KW)
+        try:
+            tr.commit(_ctx(rarity='ssr', is_featured=True), PityState(), NAME)
+        except AttributeError:
+            return
+        raise AssertionError('未 rebind 的 FlagTracker 不应可用')
+
+
+class TestFlagTrackerDidReset:
+    """M4：`did_reset` = 本次写入的是 flag 的初值侧（走到 `clear` 的那一支）。"""
+
+    def test_flag_tracker_did_reset_rotating(self):
+        """M4 表行：出 scope ∧ `is_featured`（与 `RotatingBehavior.did_fire` 逐字一致）。"""
+        tr, st = _flag_tracker()
+        assert tr.did_reset(_ctx(rarity='ssr', is_featured=True, state=st), st, NAME) is True
+        assert tr.did_reset(_ctx(rarity='ssr', is_featured=False, state=st), st, NAME) is False
+        assert tr.did_reset(_ctx(rarity='sr', is_featured=True, state=st), st, NAME) is False, (
+            '须带 scope 门控——「出非 scope 稀有度的 UP」不算回到初始态')
+
+    def test_flag_tracker_did_reset_selected(self):
+        """M4 表行：出 scope ∧ `reward_id == selected`。"""
+        tr, st = _flag_tracker(dict(scope=SCOPE, judge='selected', hit='clear',
+                                    miss='set', flag='guaranteed'))
+        st.set(NAME, 'selected_card', 'up_card')
+        assert tr.did_reset(_ctx(rarity='ssr', reward_id='up_card', state=st), st, NAME) is True
+        assert tr.did_reset(_ctx(rarity='ssr', reward_id='other', state=st), st, NAME) is False
+        assert tr.did_reset(_ctx(rarity='sr', reward_id='up_card', state=st), st, NAME) is False
+
+    def test_flag_tracker_inverse_form_did_reset(self):
+        """G1 形态：`clear` 落在未命中侧，故 `did_reset` = 出 scope ∧ 未命中。
+
+        G1 的 `rotating_inverse` 不在 §3.1.1 M4 的六行表内，此处按 M4 的**统一语义**
+        （「本次抽卡是否让本保底回到初始状态」）推导：`forced_loss` 初值为 False，
+        被**置位**表示「进入必歪态」，故置位不算回到初始态、清位才算。若改按
+        「judge 命中」实现，本行会在置位时报 True，与统一语义相反。
+        """
+        tr, st = _flag_tracker(INVERSE_KW)
+        assert tr.did_reset(_ctx(rarity='ssr', is_featured=True, state=st), st, NAME) is False
+        assert tr.did_reset(_ctx(rarity='ssr', is_featured=False, state=st), st, NAME) is True
+
+    def test_flag_tracker_did_reset_matches_commit_flip_to_initial(self):
+        """同一 ctx 下 `did_reset` 为真 ⟺ `commit` 把 flag 写回初值（False）。"""
+        for kw in (ROTATING_KW, INVERSE_KW):
+            tr, st = _flag_tracker(kw)
+            for feat in (True, False):
+                st.set(NAME, kw['flag'], not feat)   # 先置于相反态
+                ctx = _ctx(rarity='ssr', is_featured=feat, state=st)
+                fired = tr.did_reset(ctx, st, NAME)
+                tr.commit(ctx, st, NAME)
+                back_to_init = st.get(NAME, kw['flag']) is False
+                assert fired == back_to_init, f'{kw}: feat={feat} 不一致'
+
+
+class TestFlagTrackerProtocol:
+    """协议面：`state_keys` / `namespace` / 形参校验 / rebind。"""
+
+    def test_flag_tracker_state_keys(self):
+        """`state_keys()` = `(flag,)`——`selected_card` 是**读**的键，不进声明集。"""
+        assert FlagTracker(**ROTATING_KW).state_keys() == ('guaranteed',)
+        assert FlagTracker(**INVERSE_KW).state_keys() == ('forced_loss',)
+
+    def test_flag_tracker_namespace_default_none(self):
+        assert FlagTracker(**ROTATING_KW).namespace is None
+
+    def test_flag_tracker_rejects_unknown_judge(self):
+        """未知 `judge` / `hit` / `miss` 立即抛错，不静默退化为恒等。"""
+        for bad in (dict(scope=SCOPE, judge='nope', hit='clear', miss='set', flag='g'),
+                    dict(scope=SCOPE, judge='featured', hit='nope', miss='set', flag='g'),
+                    dict(scope=SCOPE, judge='featured', hit='clear', miss='nope',
+                         flag='g')):
+            try:
+                FlagTracker(**bad)
+            except ValueError:
+                continue
+            raise AssertionError(f'未拒绝非法形参: {bad}')
+
+    def test_flag_tracker_rebind_redirects_to_new_state(self):
+        """`rebind` 纯重定向——重绑后翻转落在新 state。"""
+        tr, old = _flag_tracker()
+        old.set(NAME, 'guaranteed', True)
+        tr.commit(_ctx(rarity='ssr', is_featured=True, state=old), old, NAME)
+        assert old.get(NAME, 'guaranteed') is False
+
+        new = PityState()
+        new.set(NAME, 'guaranteed', True)
+        tr.rebind(new, NAME)
+        tr.commit(_ctx(rarity='ssr', is_featured=True, state=new), new, NAME)
+        assert new.get(NAME, 'guaranteed') is False
+        assert old.get(NAME, 'guaranteed') is False, '旧 state 不得再被触碰'

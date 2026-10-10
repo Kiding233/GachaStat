@@ -17,9 +17,9 @@ M4 语义调用，故**方法必须存在、不得省略**（无状态零件写�
 
 from typing import Optional
 
-from .pity_primitives import Counter, PityContext, PityState
+from .pity_primitives import Counter, Flag, PityContext, PityState
 
-__all__ = ['Tracker', 'CounterTracker']
+__all__ = ['Tracker', 'CounterTracker', 'FlagTracker']
 
 
 class Tracker:
@@ -155,3 +155,106 @@ class CounterTracker(Tracker):
             # G16 幻塔「出金不重置」
             return False
         return ctx.draw.reward_rarity == self._reset_on
+
+
+class FlagTracker(Tracker):
+    """标记型 Tracker——出触发稀有度时按 `judge` 命中/未命中翻转一个标记键。
+
+    **`scope` 形参不在计划签名表内（本步补入，2026-10-10）**：§3.1.1 的签名表与
+    §3.2 / §3.3 / §3.10.3 的 preset 代码一律写作 `FlagTracker(judge, hit, miss, flag)`
+    四参，而同表「语义」列与 §3.1.1 的 M4 表都要求「**出 scope 时**」这一门控，
+    旧 `RotatingBehavior.after_draw` / `did_fire` 亦均以
+    `reward_rarity == scope` 为前提。缺该形参则门控无处可落：出「非 scope 稀有度
+    的 featured 卡」（如保 SSR 的池子里出 featured 的 SR）会翻转标记并报
+    `did_reset=True`，与旧类实测不符（旧类该情形下 `guaranteed` 保持未置位、
+    `did_fire` 为 False），M1 的「与旧类逐场一致」随之不成立。故本步取最小改动，
+    把 `scope` 补为**首个形参**；S4-2 / S4-3 的 preset 调用点须相应传
+    `scope=_norm_scope(pdef)`（计划正文的四处 `FlagTracker(...)` 代码块需同步）。
+
+    | 形参 | 语义 | 取值来源（§3.2） |
+    |------|------|------------------|
+    | `scope` | 触发稀有度——只有出该稀有度时才参与翻转与 `did_reset` | `_norm_scope(pdef)` |
+    | `judge` | 命中判据：`'featured'`（`draw.is_featured`）/ `'selected'`（`draw.reward_id == state[name]['selected_card']`） | rotating 用 `'featured'`；targeted 族用 `'selected'` |
+    | `hit` / `miss` | 命中 / 未命中时对标记的动作，取值 `'set'` / `'clear'` | rotating：`hit='clear'` / `miss='set'`；G1：`hit='set'` / `miss='clear'` |
+    | `flag` | 被写的标记键 | `'guaranteed'`（rotating）/ `'forced_loss'`（G1） |
+
+    两族实例（§3.2 preset 表）：
+
+    - rotating：`FlagTracker(judge="featured", hit="clear", miss="set", flag="guaranteed")`
+    - G1 `rotating_inverse`：`FlagTracker(judge="featured", hit="set", miss="clear", flag="forced_loss")`
+
+    **N1 相位**：非计数型，`advance` / `prepare` 均 no-op，全部状态变更落在 `commit`
+    （旧 `RotatingBehavior.after_draw` 即「先判触发稀有度、再按命中置位/清位」）。
+
+    **M4 `did_reset`**：判据是**「本次写入的是 flag 的初值侧」**——两个在用标记
+    （`guaranteed` / `forced_loss`）的初值均为 `False`，故走到 `clear` 的那一支即
+    「回到初始状态」。这与 §3.1.1 M4 表的两行**逐字一致**：
+    rotating（`hit='clear'`）得「出 scope ∧ `is_featured`」，targeted 族
+    （`hit='clear'`）得「出 scope ∧ `reward_id == selected`」。对 G1 的
+    `rotating_inverse`（`hit='set'` / `miss='clear'`）本式给出「出 scope ∧ 未命中」
+    ——该类型**不在 M4 六行表内**，此处置按 M4 的统一语义（「本次抽卡是否让本保底
+    回到初始状态」）推导，而非照抄某一行；若改按「judge 命中」实现，G1 会在标记被
+    **置位**时报 `did_reset=True`，与统一语义相反。
+
+    **`skip_reset` 对本 Tracker 无影响**：`deactivate_on_early_hit` 对事件驱动型由
+    `_build_pity` 硬拒（H3），故 `Pity` 传 `skip_reset=True` 的路径对事件驱动型
+    不可达；旧 `RotatingBehavior.after_draw` 亦无跳过分支。此处**不写**跳过分支，
+    以与旧实现逐行同构。
+
+    **读 `selected_card`**：`judge='selected'` 读该键，而它**不由本 Tracker 声明**
+    （写入者是策略层 `NonDrawAction`，§3.1.1 L4 例外 2），故 `state_keys()` 只含
+    `flag`。
+    """
+
+    _JUDGES = ('featured', 'selected')
+    _ACTIONS = ('set', 'clear')
+
+    def __init__(self, scope: str, judge: str, hit: str, miss: str, flag: str):
+        self._scope = scope
+        if judge not in self._JUDGES:
+            raise ValueError(f"FlagTracker: 未知 judge={judge!r}（可用：{self._JUDGES}）")
+        for name, action in (('hit', hit), ('miss', miss)):
+            if action not in self._ACTIONS:
+                raise ValueError(
+                    f"FlagTracker: 未知 {name}={action!r}（可用：{self._ACTIONS}）")
+        self._judge = judge
+        self._hit = hit
+        self._miss = miss
+        self._flag = flag
+        self._flag_ctl: Optional[Flag] = None
+
+    # ── 契约成员 ──
+
+    def rebind(self, state: PityState, name: str) -> None:
+        self._flag_ctl = Flag(state, name, self._flag)
+
+    def commit(self, ctx: PityContext, state: PityState, name: str,
+               skip_reset: bool = False) -> None:
+        if not self._is_trigger_rarity(ctx):
+            return
+        if self._action(ctx, state, name) == 'set':
+            self._flag_ctl.set()
+        else:
+            self._flag_ctl.clear()
+
+    def did_reset(self, ctx: PityContext, state: PityState, name: str) -> bool:
+        if not self._is_trigger_rarity(ctx):
+            return False
+        return self._action(ctx, state, name) == 'clear'
+
+    def state_keys(self) -> tuple:
+        return (self._flag,)
+
+    # ── 内部 ──
+
+    def _is_trigger_rarity(self, ctx: PityContext) -> bool:
+        return ctx.draw.reward_rarity == self._scope
+
+    def _judge_hit(self, ctx: PityContext, state: PityState, name: str) -> bool:
+        if self._judge == 'featured':
+            return bool(ctx.draw.is_featured)
+        return ctx.draw.reward_id == state.get(name, 'selected_card')
+
+    def _action(self, ctx: PityContext, state: PityState, name: str) -> str:
+        """本次该对标记做哪个动作（`commit` 与 `did_reset` 的唯一判据）。"""
+        return self._hit if self._judge_hit(ctx, state, name) else self._miss

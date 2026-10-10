@@ -492,3 +492,235 @@ class TestPityPoolsActivationGraph:
         _, messages = self._graph(src, dst)
         assert [m for m in messages if 'pools' in m], \
             '池无交集须保留告警（这是全库唯一的跨池一致性检查）'
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S3-2：生命周期顺序与视图接线（§3.1.4 行内注释 / §3.10.3 配套 2、3）
+# ══════════════════════════════════════════════════════════════════
+#
+# 本段的每一条都对应 S3-2 块条目里的一项，且**都不被 S3-1 的既有断言覆盖**：
+#   1. 构造期写入**次序**——`Lifecycle.initialize` 先于 `flags` / `counters` 消费
+#      （§3.1.4 行内注释：「写入点必须在 `_lifecycle.initialize` 之后」）；
+#   2. `initialize` 与 **view 创建**的相对次序：两条 view 的构造本身不写 state，
+#      故第 1 条的写入序列观测不到它，须以 `StateView` 构造探针钉住；
+#   3. `_namespaces` 的**收集面是三族**（`trackers` / `modifiers` / `lifecycle`）、
+#      去重排序，且 `_ns_views` 的键集与之逐项相同：S3-1 的
+#      `test_namespaces_collected_and_active_written_to_each` 只喂了 Tracker；
+#   4. `_namespaces` / `_ns_views` **去 `None`**：单列一条用例，因为该缺陷若混入
+#      真命名空间会先在 `sorted` 处 `TypeError`，断言反被掩盖；
+#   5. `FiniteActive`（非 `depends_on` 维）的构造期写入——S3-1 只断言了 `AlwaysActive`
+#      与 `DependentActive`，而 §六 ISSUE-202 的口径是「**非 `depends_on`** 保底」；
+#   6. `_view_for` 的**调用点**——S3-1 的 `test_view_for_dispatches_by_namespace` 直调
+#      helper，**不经过 `before_draw`**，故把调用行写死成 `self._view` 时它不红；
+#   7. N 场隔离下 view 的落点：S3-1 只覆盖 2 场且只查 `_view` / `_ns_views` 的
+#      `_state` 身份，不查「Modifier 经调用点拿到的 view 是否绑当场 state」。
+
+
+class _RecordingState(PityState):
+    """记录 `set` 调用序列的 `PityState`——用于断言构造期的写入**次序**。"""
+
+    def __init__(self):
+        super().__init__()
+        self.writes = []
+
+    def set(self, name, key, value):
+        self.writes.append((name, key, value))
+        super().set(name, key, value)
+
+
+class _NsProbeModifier(Modifier):
+    """命名空间 Modifier 探针——记录每次 `apply` 收到的 view 的命名空间与所绑 state。"""
+
+    def __init__(self, log, namespace):
+        self.log = log
+        self.namespace = namespace
+
+    def apply(self, ctx, view, dist, readonly):
+        self.log.append((view._name, view._state))
+        return None
+
+
+class TestPityLifecycleOrderAndViewWiring:
+    """S3-2——构造期写入次序、命名空间收集面、`_view_for` 的调用点、N 场 view 落点。"""
+
+    def test_initialize_precedes_flags_and_counters_consumption(self):
+        """`Lifecycle.initialize` 先于 `flags` / `counters` 消费（§3.1.4 行内注释）。
+
+        `_active` 归 Lifecycle 负责、不属 `flags` 键集，故两条写入路径的相对次序
+        是「先 `_active` 后 `flags` / `counters`」；把两段 `for` 循环挪到
+        `initialize` 之前即本断言必红。
+        """
+        st = _RecordingState()
+        _make_pity(st, flags={'guaranteed': True}, counters={'counter': 5})
+        keys = [(name, key) for name, key, _ in st.writes]
+        assert (PITY_NAME, '_active') in keys, \
+            'initialize 的 _active 写入须落在 state 上（ISSUE-202）'
+        assert keys.index((PITY_NAME, '_active')) < \
+            keys.index((PITY_NAME, 'guaranteed')), \
+            'flags 消费必须在 initialize 之后（§3.1.4：写入点须在 initialize 之后）'
+        assert keys.index((PITY_NAME, '_active')) < \
+            keys.index((PITY_NAME, 'counter')), \
+            'counters 消费必须在 initialize 之后'
+
+    def test_initialize_precedes_view_creation(self, monkeypatch):
+        """`Lifecycle.initialize` 须先于 `_view` / `_ns_views` 创建（§3.1.4 行内注释）。
+
+        块条目原文：「`Pity.__init__` 在创建 `_view` **之前**调用
+        `Lifecycle.initialize(state, name, namespaces)` 写初始 `_active`」。
+        两条 view 的构造本身不写 state，故该次序**无法**由 state 写入序列观测
+        （上一条用例只钉住「先于 `flags` / `counters` 消费」），须以 `StateView`
+        构造探针记录它与 `initialize` 的相对位置。把 `_view` / `_ns_views` 两行
+        挪到 `initialize` 之前即本断言必红。
+        """
+        import gacha_simulator.core.pity as pity_module
+
+        events = []
+
+        class _OrderLifecycle(AlwaysActive):
+            def initialize(self, state, name, namespaces=()):
+                events.append(('initialize', name))
+                super().initialize(state, name, namespaces)
+
+        real_view = pity_module.StateView
+
+        def _spy_view(state, name):
+            events.append(('view', name))
+            return real_view(state, name)
+
+        monkeypatch.setattr(pity_module, 'StateView', _spy_view)
+        _make_pity(PityState(), btype='rotating_soft',
+                   trackers=[NamespaceTracker(namespace=NS_SOFT)],
+                   lifecycle=_OrderLifecycle(LifecycleConfig()))
+        assert events[0] == ('initialize', PITY_NAME), \
+            'initialize 须先于 _view / _ns_views 创建（§3.1.4 的 ISSUE-202 行）'
+        assert events[1:] == [('view', PITY_NAME), ('view', NS_SOFT)], \
+            '默认 view 与零件 view 须在 initialize 之后创建，且默认 view 在先'
+
+    def test_namespaces_collected_from_all_three_families(self):
+        """`_namespaces` 的收集面是 **三族**（`trackers` / `modifiers` / `lifecycle`）。
+
+        块条目原文：「`namespaces` 由 `Pity` 从 `trackers` / `modifiers` /
+        `lifecycle` 的 `namespace` 属性收集（去 `None`）」。漏掉任一族的后果是
+        该族的命名空间收不到 `_active`，而骨架**不报错**（读取侧静默返回 default）。
+        重复项去重、结果排序亦在此一并钉住（「去 `None`」见下一条用例）。
+
+        `_ns_views` 的键集断言另封住「收集了命名空间却没建对应 view」：该形态下
+        `_view_for` 静默回落默认 view（`X_soft` 的读取全落 `X`），且**不报错**。
+        """
+        ns_tr, ns_md, ns_lc = 'x_tr', 'x_md', 'x_lc'
+
+        class _NsLifecycle(AlwaysActive):
+            pass
+
+        _NsLifecycle.namespace = ns_lc
+
+        st = PityState()
+        pity = _make_pity(
+            st, btype='rotating_soft',
+            trackers=[NamespaceTracker(namespace=ns_tr),
+                      NamespaceTracker(namespace=ns_tr)],   # 重复项须去重
+            modifiers=[_NsProbeModifier([], ns_md)],
+            lifecycle=_NsLifecycle(LifecycleConfig()))
+        assert pity._namespaces == tuple(sorted({ns_tr, ns_md, ns_lc})), \
+            '三族命名空间须全部收集（含 modifiers / lifecycle 两族）'
+        assert set(pity._ns_views) == set(pity._namespaces), \
+            '零件 view 的键集须与收集到的命名空间一致（缺一即静默回落默认 view）'
+        for ns in (ns_tr, ns_md, ns_lc):
+            assert st.get(ns, '_active') is True, \
+                f'命名空间 {ns} 的 _active 须由 initialize 写入'
+        assert st.get(PITY_NAME, '_active') is True
+
+    def test_namespaces_excludes_none(self):
+        """`_namespaces` / `_ns_views` **去 `None`**（块条目原文：「（去 `None`）」）。
+
+        收集面按 `getattr(part, 'namespace', None)` 取值，而 `Tracker` / `Modifier` /
+        `Lifecycle` 三族基类都把 `namespace` 声明为默认 `None`，故「不声明命名空间的
+        零件」在此一律返回 `None`（**不是** `AttributeError`）。漏去 `None` 时：
+        `None` 成为 `_namespaces` 成员与 `_ns_views` 键，`initialize` 随即
+        `state.set(None, '_active', True)`，状态快照里多出一个非法命名空间；
+        而 `_view_for` 对这类零件仍经 `or self._view` 回落默认 view，**全程不报错**。
+
+        判别力为何单列一条用例：本用例只喂无 `namespace` 的零件，故漏去 `None` 时
+        `sorted({None})` 是单元素排序、不触发 `None < str` 的 `TypeError`，缺陷得以
+        走到断言；若混入真命名空间（上一条用例的形态），同一缺陷会先在 `sorted`
+        处抛 `TypeError`，断言反被掩盖。
+        """
+        st = PityState()
+        pity = _make_pity(st, trackers=[_ProbeTracker([])],
+                          modifiers=[_ProbeModifier([])])
+        assert pity._namespaces == (), '无 namespace 的零件不得产出 None 项'
+        assert pity._ns_views == {}, '无 namespace 的零件不得产出 None 键'
+        assert None not in st.to_dict()['data'], \
+            'None 不得成为命名空间（initialize 会写 _active 进该非法空间）'
+        assert st.get(PITY_NAME, '_active') is True, '默认命名空间仍须写入'
+
+    def test_finite_active_writes_active_to_name_and_namespaces(self):
+        """`FiniteActive`（非 `depends_on` 维）构造期写 `_active = True`。
+
+        §六 ISSUE-202 的口径是「**非 `depends_on` 保底**在构造后
+        `state.get(name, "_active")` 为 `True`」——`FiniteActive` 的激活维是
+        `Always`，故与 `AlwaysActive` 同属写入面；S3-1 只断言了 `AlwaysActive`。
+        命名空间侧须一并写入（`X_soft: {_active: True}` 的唯一产出路径）。
+        """
+        st = PityState()
+        pity = _make_pity(
+            st, btype='rotating_soft',
+            trackers=[NamespaceTracker(namespace=NS_SOFT)],
+            lifecycle=FiniteActive(LifecycleConfig(), max_triggers=2))
+        assert st.get(PITY_NAME, '_active') is True
+        assert st.get(NS_SOFT, '_active') is True, \
+            'FiniteActive 亦须对零件命名空间写 _active'
+        assert pity._lifecycle.is_active(st, PITY_NAME) is True
+
+    def test_before_draw_dispatches_namespace_view_to_modifier(self):
+        """`before_draw` 的 Modifier 链**经 `_view_for(mod)` 取 view**（§3.10.3 配套 3）。
+
+        块条目原文：「遍历 `trackers` / `modifiers` 时经 `self._ns_views.get(...)
+        or self._view` 取值，**不得写死 `self._view`**」。本断言走**调用点**而非
+        helper——命名空间 Modifier 必须收到 `StateView(state, mod.namespace)`，
+        否则 `X_soft` 的读取全落默认命名空间且**不报错**。
+        """
+        st = PityState()
+        log = []
+        pity = _make_pity(st, btype='rotating_soft', rebind=True,
+                          trackers=[NamespaceTracker(namespace=NS_SOFT)],
+                          modifiers=[_NsProbeModifier(log, NS_SOFT)])
+        st.set(NS_SOFT, 'probe_key', 41)
+        pity.before_draw(_pity_ctx(state=st))
+        assert len(log) == 1
+        view_name, view_state = log[0]
+        assert view_name == NS_SOFT, \
+            '调用点写死 self._view 会让此处变成默认命名空间（本断言即红）'
+        assert view_state is st
+        assert pity._view_for(pity._modifiers[0]).get('probe_key') == 41
+        assert pity._view.get('probe_key') is None, \
+            '默认 view 不得看见 X_soft 命名空间的键'
+
+    def test_n_fields_isolation_views_track_current_state(self):
+        """P75 跨模拟隔离（worker 内连跑 N 场）——view 与 Modifier 收到的 view 逐场跟随。
+
+        每场 state 由上一场构造完成后的快照 `from_dict` 重建（与真实流程
+        `env.pity_state_init` → 每场 `PityState.from_dict` 同形），逐场 `_rebind_state`。
+        `_rebind_state` 漏建 `_ns_views`、或调用点写死 `self._view`，本断言必红。
+        """
+        st = PityState()
+        log = []
+        pity = _make_pity(st, btype='rotating_soft', rebind=True,
+                          trackers=[NamespaceTracker(namespace=NS_SOFT),
+                                    CounterTracker(scope=PITY_SCOPE, init=0)],
+                          modifiers=[_NsProbeModifier(log, NS_SOFT)])
+        snapshot = st.to_dict()
+        fields = [PityState.from_dict(snapshot) for _ in range(5)]
+        for i, fld in enumerate(fields):
+            pity._rebind_state(fld)
+            pity.before_draw(_pity_ctx(state=fld))
+            assert pity._state is fld
+            assert pity._view._state is fld
+            assert pity._ns_views[NS_SOFT]._state is fld, \
+                f'第 {i} 场：零件 view 须同批重建（否则读第 1 场账本）'
+            assert log[-1][1] is fld, \
+                f'第 {i} 场：Modifier 经调用点拿到的 view 须绑当场 state'
+            assert log[-1][0] == NS_SOFT
+            assert fld.get(PITY_NAME, 'counter') == 1, '每场计数各自独立'
+        assert st.get(PITY_NAME, 'counter') is None, \
+            '构造期 state 不得被后续场次写入（跨场隔离）'

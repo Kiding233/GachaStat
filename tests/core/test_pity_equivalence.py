@@ -44,6 +44,8 @@ S5b 分两批接入（§七 S5b 的分批纪律）：批次一 = counter 驱动 
 | `rotating_cr` / `rotating_cr_soft` 快照多 `cr_intercepted` 键 | 两型 | 同上 | 同上 |
 | 三个 `_soft` 复合类型的 `did_fire` 放宽为「出 scope」（ISSUE-102） | 非 featured 的 SSR 抽上 旧 False / 新 True | `SideTrace.did_fire` + 差异抽索引 | `test_m4_registered_did_fire_relaxation_for_soft_suffix_types` |
 | 三个 `_soft` 后缀类型的 deltas 取值源分叉（新读 `pdef.deltas`，旧只读 `pdef.soft_deltas`） | `deltas` 直构时两侧分叉 | fixture 规则（`soft_fixture()`）+ 登记用例 | `test_registered_soft_deltas_source_divergence` |
+| `counter_soft` 的 deltas 与语法糖全缺省时两侧不同处置（旧构造失败、新按 74/90 缺省生效） | 旧 `SoftStepBehavior.__init__` 抛 `ValueError` | 登记用例（不断言等价，只断言两侧各自事实） | `test_registered_counter_soft_deltas_default_divergence` |
+| **无 featured 卡的池 + 必然拦截**时旧侧把 scope 清零、新侧恒等（§六 F2） | 旧侧 Σ_scope = 0 / 新侧保持基础总量 | 登记用例（断言差异形状，**不断言等价**） | `test_f2_registered_no_featured_pool_with_forced_interception` |
 
 **容差已裁决（S5b 批次一开工时落地，§六 2026-10-11 同步后的措辞）**：§六 主线
 把口径拆成两列——「**概率分布 = 容差 1e-12 内逐场一致**」+「**状态快照 =
@@ -67,6 +69,12 @@ S5c 要求的六类逐类断言），**`n1` 零命中**。S5c 须补齐三类各
 不得以本文件的既有命中充当覆盖。
 
 ## 本装置测不出来的形态（S5a 已知边界，如实列出）
+
+**S5b 落地后的边界（2026-10-11）**：10 个类型的逐类型等价性已按两批接入
+（`TestS5bCounterDrivenBatch` / `TestS5bEventDrivenBatch`），装置的自检面之外
+仍**未覆盖**下列形态：多保底叠加（`hard` + `rotating` 同 scope）、`depends_on`
+激活传播、池过滤与池内排序、跨场 `rebind`（worker 内连跑第 2..N 场）、退役维
+（`max_triggers`）。这批分归 S5c / S6 / S7d / S10，不属 S5b 的验收面。
 
 1. **不走 `PityEngine` 的池过滤 / 池内排序 / 激活传播**。旧类在 registry 上已无
    入口（10 条 `registry` 条目全部 preset 化、`class` 置 None），旧侧无法经引擎
@@ -1386,3 +1394,272 @@ class TestS5bCounterDrivenBatch:
         peak = max(sum(v for k, v in probs.items() if k.startswith('ssr'))
                    for probs in trace.probs)
         assert peak == 1.0, f'{btype} 的 74/90 缺省展开未生效（峰值 SSR 总量 {peak!r}）'
+
+
+# ══════════════════════════════════════════════════════════════════
+# 十一、S5b 批次二：事件驱动 6 型
+# ══════════════════════════════════════════════════════════════════
+#
+# 本批覆盖 `BEHAVIOR_REGISTRY` 的六个事件驱动型，并落地 §七 S5b 的 ISSUE-001 追加
+# （两条语法糖分支的等价性用例）与 §六 F2 的显形用例。
+#
+# **容差取 `FLOAT_ORDER`（1e-12）的理由（§六 2026-10-11 同步后的口径）**：六个
+# 事件驱动型的**非条件分支**实测有 1 ULP 差（条件不成立时新侧 `return None` 恒等，
+# 旧侧走 `_redistribute_scope` 的「除再乘」往返）。§六 主线把口径拆成两列，浮点
+# 分布一列取 1e-12（该数值即 §六 S8 与 S5 产物对比所用，非本装置新造），
+# 状态快照一列仍为**位级一致**；状态机的部分（flag 布尔翻转、随机流消费次数）
+# 在两种口径下都是精确比较。差异幅值的上界逐型断言为「受影响槽位取值的 4 ULP」。
+
+#: 事件驱动批次的 fixture 表（§3.2 preset 映射表的六个事件驱动型全覆盖，
+#: 另加 `guaranteed_init=True` 一条横向变体）。
+EVENT_BATCH: Tuple[Tuple[str, Callable[[], PityDef]], ...] = (
+    ('rotating', lambda: counter_fixture(
+        name='b2_rotating', btype='rotating', scope='ssr')),
+    ('rotating_guaranteed_init', lambda: counter_fixture(
+        name='b2_rotating_gi', btype='rotating', scope='ssr', guaranteed_init=True)),
+    ('rotating_cr', lambda: counter_fixture(
+        name='b2_rotating_cr', btype='rotating_cr', scope='ssr',
+        cr_counter_threshold=3, cr_base_rate=0.018,
+        cr_state_probs=(0.0, 0.4, 0.75, 1.0))),
+    ('rotating_soft', lambda: soft_fixture(
+        name='b2_rotating_soft', btype='rotating_soft', scope='ssr')),
+    ('rotating_cr_soft', lambda: soft_fixture(
+        name='b2_rotating_cr_soft', btype='rotating_cr_soft', scope='ssr',
+        cr_counter_threshold=3, cr_base_rate=0.018,
+        cr_state_probs=(0.0, 0.4, 0.75, 1.0))),
+    ('targeted', lambda: counter_fixture(
+        name='b2_targeted', btype='targeted', scope='ssr',
+        fate_threshold=2, fate_points_init=0)),
+    ('targeted_soft', lambda: soft_fixture(
+        name='b2_targeted_soft', btype='targeted_soft', scope='ssr',
+        fate_threshold=2, fate_points_init=0)),
+    # 命定分支（`fate_points >= τ`）的**唯一可达形态**：默认序列下 fate_points 与
+    # `guaranteed` 同时置位，故命定分支只有经 `fate_points_init` 才能单独成立，
+    # 见 `test_fate_branch_is_reachable_and_tau_is_consumed`。
+    ('targeted_fate_points_init', lambda: counter_fixture(
+        name='b2_targeted_fi', btype='targeted', scope='ssr',
+        fate_threshold=1, fate_points_init=1)),
+    ('targeted_soft_fate_points_init', lambda: soft_fixture(
+        name='b2_targeted_soft_fi', btype='targeted_soft', scope='ssr',
+        fate_threshold=1, fate_points_init=1)),
+)
+
+
+def _ulp_bound(report: EquivalenceReport) -> float:
+    """从**超容差**报告推出差异幅值上界：受影响槽位取值的 4 ULP。
+
+    上界由**发生差异的那些槽位自身的取值**推出（`math.ulp`），不写死常数——
+    与 S5a 的 `test_registered_ulp_in_event_driven_non_trigger_branch` 同法。
+    """
+    if not report.prob_mismatches:
+        return 0.0
+    affected = max(max(abs(m.old), abs(m.new)) for m in report.prob_mismatches)
+    return 4 * math.ulp(affected)
+
+
+class TestS5bEventDrivenBatch:
+    """S5b 批次二：事件驱动 6 型的等价性 + ISSUE-001 追加 + §六 F2 显形。"""
+
+    @pytest.mark.parametrize('make', [c[1] for c in EVENT_BATCH],
+                             ids=[c[0] for c in EVENT_BATCH])
+    def test_batch_equivalence_float_order(self, make):
+        pdef = make()
+        report = assert_equivalent(
+            pdef, DRAW_SEQUENCE, shape=_default_shape(), tolerance=FLOAT_ORDER)
+
+        # 快照一列仍是位级：多出的键必须**恰为**登记集合，且无缺失键
+        registered = registered_snapshot_policy(pdef)
+        assert report.extra_new_keys == registered.allowed_new_only_keys
+        assert report.missing_new_keys == frozenset()
+        assert report.snapshot_mismatches == []
+        assert report.rng_calls_equal, (
+            f'{pdef.name}: 随机数消费次数不同 '
+            f'old={report.old.rng_calls} new={report.new.rng_calls}')
+        assert report.old.changed_from_base and report.new.changed_from_base
+
+        # `did_fire` 的差异（ISSUE-102）：仅三个 `_soft` 后缀型放宽为「出 scope」，
+        # 差异面必须恰为「出 scope 稀有度且未命中」的那些抽（语义式，不写抽次索引）
+        expected = {i for i, s in enumerate(DRAW_SEQUENCE)
+                    if s.rarity == 'ssr' and not s.is_featured}
+        if pdef.btype in _SOFT_SUFFIX_BTYPES:
+            assert set(report.did_fire_divergent_draws) == expected
+        else:
+            assert report.did_fire_divergent_draws == []
+
+    @pytest.mark.parametrize('make', [c[1] for c in EVENT_BATCH],
+                             ids=[c[0] for c in EVENT_BATCH])
+    def test_registered_one_ulp_in_non_conditional_branch(self, make):
+        """登记的差异（§六 2026-10-11 同步的「概率分布 1e-12 / 快照位级」两列口径）：
+        六个事件驱动型的**非条件分支**存在 1 ULP 位级差。
+
+        来源：条件不成立时新 `RotatingModifier` / `SelectedModifier` / `SoftModifier`
+        直接返回恒等，旧类走 `_redistribute_scope()` 重算一遍（`total * ratio` 后再
+        `* w / Σw`），浮点往返引入 1 ULP。本用例逐型钉住两件事：① `EXACT` 口径下
+        该差异**确实存在**（差异消失即须按 §六 字面口径收严并删本用例）；② 幅值
+        停留在 4 ULP 以内（超出即回归，不得当作「已知差异」放行）。
+        """
+        pdef = make()
+        shape = _default_shape()
+        strict = compare_runs(pdef, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+        assert not strict.bit_exact, (
+            f'{pdef.name}: 非条件分支的 1 ULP 差已消失，请按 §六 字面口径把本型'
+            f'的容差收严为 EXACT，并删除本用例与模块 docstring 的对应行')
+        assert strict.prob_mismatches
+        bound = _ulp_bound(strict)
+        assert 0.0 < strict.max_prob_diff <= bound, (
+            f'{pdef.name}: 位级差 {strict.max_prob_diff:.3e} 超出 4 ULP 上界 '
+            f'{bound:.3e}（回归而非已知差异）')
+
+        relaxed = compare_runs(pdef, DRAW_SEQUENCE, shape=shape, tolerance=FLOAT_ORDER)
+        assert relaxed.max_prob_diff == strict.max_prob_diff
+        assert relaxed.is_equivalent(), relaxed.failure_messages()
+
+    def test_issue001_soft_sugar_interval_only(self):
+        """ISSUE-001 分支 ③ 的**唯一显形面**：`rotating_soft` **只写 `soft_start` /
+        `soft_end`**（`deltas` 与 `soft_deltas` 都缺省）。
+
+        该形态走 `_soft_deltas_of(pdef)` 的分支 ③（先归一为 `soft_interval`，再交
+        `_expand_soft_to_deltas`）。若 preset 按 `pdef.btype` 直喂
+        `_expand_soft_to_deltas`（后缀型不在该函数的白名单内），展开结果为空元组 →
+        `SoftModifier` 的 boost 恒 0 → 软保底静默消失，而**本批次的其余用例
+        （写 `deltas` 或写 `soft_increment`）测不出来**。
+
+        判别面两条：① 与旧类逐场一致（旧 `SoftPityMixin._init_soft_pity` 亦先归一
+        btype 再展开）；② 新侧该 sugar 配置与「显式写展开结果」的配置**逐抽位级
+        相同**，把「展开真的发生」钉在语义上（不靠「分布变了」这类带余量的弱断言）。
+        """
+        from gacha_simulator.core.config_toml import _expand_soft_to_deltas
+        shape = _default_shape()
+        expanded = _expand_soft_to_deltas('soft_interval', 4, 90, None)
+        sugar = PityDef(name='b2_rotating_soft_sugar', btype='rotating_soft',
+                        scope='ssr', soft_start=4, soft_end=90)
+        explicit = PityDef(name='b2_rotating_soft_sugar', btype='rotating_soft',
+                           scope='ssr', deltas=expanded, soft_deltas=expanded)
+
+        report = assert_equivalent(sugar, DRAW_SEQUENCE, shape=shape,
+                                   tolerance=FLOAT_ORDER)
+        assert report.new.probs == run_new(explicit, DRAW_SEQUENCE, shape=shape).probs
+        assert report.new.changed_from_base
+
+    def test_issue001_soft_sugar_increment_only(self):
+        """ISSUE-001 分支 ②：`rotating_cr_soft` **只写 `soft_increment`**（`deltas` /
+        `soft_deltas` / `soft_end` 都缺省）。
+
+        该形态走 `_soft_deltas_of(pdef)` 的分支 ②（先归一为 `soft_additive`，再用
+        `soft_end` 缺省 90 展开）。判别面与分支 ③ 用例同形，另含 CR 掷骰的随机数
+        消费次数断言（`FLOAT_ORDER` 外唯一在两种口径下都精确的量）。
+        """
+        from gacha_simulator.core.config_toml import _expand_soft_to_deltas
+        shape = _default_shape()
+        expanded = _expand_soft_to_deltas('soft_additive', 4, 90, 6.0)
+        cr_kwargs = dict(cr_counter_threshold=3, cr_base_rate=0.018,
+                         cr_state_probs=(0.0, 0.4, 0.75, 1.0))
+        sugar = PityDef(name='b2_rotating_cr_soft_sugar', btype='rotating_cr_soft',
+                        scope='ssr', soft_start=4, soft_increment=6.0, **cr_kwargs)
+        explicit = PityDef(name='b2_rotating_cr_soft_sugar', btype='rotating_cr_soft',
+                           scope='ssr', deltas=expanded, soft_deltas=expanded,
+                           **cr_kwargs)
+
+        report = assert_equivalent(sugar, DRAW_SEQUENCE, shape=shape,
+                                   tolerance=FLOAT_ORDER)
+        assert report.new.probs == run_new(explicit, DRAW_SEQUENCE, shape=shape).probs
+        assert report.new.changed_from_base
+        assert report.rng_calls_equal and report.old.rng_calls > 0
+
+    @pytest.mark.parametrize('btype', ('targeted', 'targeted_soft'))
+    def test_fate_branch_is_reachable_and_tau_is_consumed(self, btype):
+        """`targeted` 族的**命定分支**（`fate_points >= τ`）与 τ 的消费面。
+
+        默认序列（`fate_points_init=0`）下 counter 最多被推到 1，而两侧实现都在
+        「命定值 +1」的同一次 `after_draw` 里置 `guaranteed`，故 `fate_points >= 1`
+        恒与 `guaranteed` 同时成立，命定分支**永不单独成立**（实测把
+        `fate_threshold` 由 2 改成 3 时整批不变红，即 τ 在该形态下没有观测面）。
+        可达路径只有 `fate_points_init`：`guaranteed_init=False` + 初值 >= τ 时，
+        命定分支在首抽即成立。本用例即钉住该路径与 τ 的消费。
+
+        ① `fate_threshold=1` 时首抽目标组即定轨卡（featured 槽 1.0 / standard 槽 0）；
+        ② 同配置把 τ 抬到 2 时首抽恒等，即 `pdef.fate_threshold` 真的进了
+           `SelectedModifier` 的 `tau`（preset 写死缺省 1、或漏写 `tau=` 都让 ② 变红）。
+        """
+        shape = _default_shape()
+        maker = counter_fixture if btype == 'targeted' else soft_fixture
+        kwargs = dict(name='b2_fate_tau', btype=btype, scope='ssr',
+                      fate_points_init=1)
+        fired = maker(fate_threshold=1, **kwargs)
+        not_yet = maker(fate_threshold=2, **kwargs)
+
+        report = assert_equivalent(fired, DRAW_SEQUENCE, shape=shape,
+                                   tolerance=FLOAT_ORDER)
+        first = report.new.probs[0]
+        scope_keys = shape.scope_slots[shape.scope]
+        scope_total = sum(report.new.base_probabilities[k] for k in scope_keys)
+        selected_slot = shape.card_to_slot[TARGETED_CARD]
+        others = [k for k in scope_keys if k != selected_slot]
+        assert sum(first[k] for k in others) == 0.0, (
+            f'首抽未走命定分支（fate_points_init=1 >= τ=1），scope 其余槽未清零：{first}')
+        assert FLOAT_ORDER.holds(first[selected_slot], scope_total), (
+            f'定轨槽未拿走 scope 全量：{first[selected_slot]!r} vs {scope_total!r}')
+
+        gated = compare_runs(not_yet, DRAW_SEQUENCE, shape=shape,
+                             tolerance=FLOAT_ORDER)
+        assert gated.is_equivalent(), gated.failure_messages()
+        assert gated.new.probs[0] == gated.new.base_probabilities, (
+            'fate_threshold 未被消费：τ=2 时首抽应当恒等（命定值 1 < τ）')
+        assert gated.new.probs[0] != first
+
+    def test_f2_registered_no_featured_pool_with_forced_interception(self):
+        """§六 F2（2026-10-10 补登记，强制）：无 featured 卡的池 + **必然拦截**时，
+        旧 `RotatingCRBehavior._force_featured` 把整个 scope 的概率清零（Σ = 0），
+        新 `RotatingModifier` 在空目标集上 `return None`（恒等）。两者**不等价**。
+
+        本用例把它**显形**并按缺口登记，**不断言等价**。判为「旧实现的行为本身是
+        缺陷」的两条依据：① 旧侧输出 Σ = 0 的分布（`_redistribute_scope` 在
+        `featured_slots` 为空时既无 A 侧可写、又把 Q 侧整体乘 0），任何配置都不以
+        「整池不可出」为目的；② 新侧的恒等是 §六「S8 空目标集断言」的**显式裁定**
+        （`A` 为空 → 恒等，不得把空集传给 `transfer_linear`），且与旧实现**非强制
+        路径**（`RotatingBehavior.before_draw` 的空集早退）同形，即旧实现两条路径
+        自相矛盾、强制路径是离群的那一支。
+
+        **形状可达性**：生产 `compute_scope_mappings` 在「该稀有度无 featured 卡」时
+        填 `featured_slots[rarity] = (rarity,)`（非空），故 F2 只能在手工构造的
+        `featured_slots={}` 上显形，与 §六 自述的「当前不可达」一致。
+        """
+        no_featured = make_pool_shape((
+            ('s1', 'ssr', False, 0.4),
+            ('sr1', 'sr', False, 0.051),
+            ('r1', 'r', False, 0.549),
+        ))
+        shape = dataclasses.replace(no_featured, featured_cards={}, featured_slots={})
+        pdef = counter_fixture(name='b2_cr_no_featured', btype='rotating_cr',
+                               scope='ssr', cr_counter_threshold=3,
+                               cr_base_rate=1.0,
+                               cr_state_probs=(0.0, 0.0, 0.0, 1.0))
+        old = run_old(pdef, DRAW_SEQUENCE, shape=shape)
+        new = run_new(pdef, DRAW_SEQUENCE, shape=shape)
+        report = compare_traces(old, new, tolerance=FLOAT_ORDER,
+                                snapshot_policy=registered_snapshot_policy(pdef))
+
+        scope_keys = shape.scope_slots[shape.scope]
+        base_total = sum(shape.base_probabilities[k] for k in scope_keys)
+        assert base_total == 0.4, '本形状的 scope 基础总量变了，下面的对照须重取'
+        assert old.changed_from_base, '旧侧若也恒等，本用例就不是在显形差异'
+        assert not new.changed_from_base, '新侧的空目标集恒等是 §六 的显式裁定'
+        old_totals = [sum(probs[k] for k in scope_keys) for probs in old.probs]
+        new_totals = [sum(probs[k] for k in scope_keys) for probs in new.probs]
+        assert set(new_totals) == {base_total}, (
+            f'新侧出现了既非恒等又非基础总量的取值：{sorted(set(new_totals))}')
+        forced = [i for i, t in enumerate(old_totals) if t == 0.0]
+        identity = [i for i, t in enumerate(old_totals) if t == base_total]
+        assert len(forced) + len(identity) == len(DRAW_SEQUENCE), (
+            f'旧侧出现了第三类取值：{sorted(set(old_totals))}')
+        assert forced, '旧侧的强制拦截一次都没走到，本用例失去判别力'
+        assert identity, (
+            '旧侧的非强制路径（guaranteed 命中后的空集早退）应恒等；若它也已清零，'
+            '说明旧实现改了行为，本登记须重新核对')
+
+        assert not report.is_equivalent()
+        assert {m.key for m in report.prob_mismatches} == set(scope_keys)
+        assert report.max_prob_diff == base_total
+        assert report.rng_calls_equal, (
+            f'拦截掷骰的消费次数在两侧应当一致：'
+            f'old={report.old.rng_calls} new={report.new.rng_calls}')

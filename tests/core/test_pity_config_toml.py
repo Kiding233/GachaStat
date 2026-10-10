@@ -753,8 +753,13 @@ class TestPityKeyContract:
     def test_emitted_keys_equal_contract(self, btype):
         """① 全量键 fixture → `_pitydef_to_toml` 产出键集 == 该 btype 的契约。
 
-        双向断言：`⊆` 防「写侧产出未声明键」（写盘后自己读不回来），
         `==` 的补集方向防「契约表登记了写侧产不出的幽灵键」（表与实现漂移）。
+
+        **`⊆` 方向的触发面有限（S4c 审查 low，2026-10-10 实测）**：fixture 由
+        `_pity_declared_keys(btype)` 派生，产不出跨类型键，故「写侧产出未声明键」
+        在本用例下不可触发（实测删掉写侧过滤时，本用例 10 个 btype 全绿）；真正
+        杀死该变异的是 `test_writer_filters_cross_type_fields`。此处保留 `⊆` 作为
+        廉价不变式，但不要把它当作写侧过滤的守卫。
         """
         from gacha_simulator.core.config_toml import (_pity_declared_keys,
                                                       _pitydef_to_toml)

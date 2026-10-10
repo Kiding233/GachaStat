@@ -895,9 +895,12 @@ def test_b8_legacy_colon_gain_rule_surfaces_as_load_warning():
 # `ConfigError` 的异常同样回滚），断言失败后传入的 store 与加载前逐字段相同。
 
 # 基准配置 = 真实 `config/config.toml` + 本增量段。增量段的用途是**反空转**：
-# 真实配置自身在 resource_lifecycle / select_voucher / stop_condition 三段上是空的，
-# 不补的话这三段的用例分不清「回滚成功」与「这些段本来就没内容」——实测把原子性
-# 变异回「先 clear 再构建」后，这三段的用例**仍然绿**（其余五段红），正是该盲区。
+# 真实配置自身在 resource_lifecycle / select_voucher / stop_condition 三段上是空的。
+# **订正（S4c 审查 low，2026-10-10 实测）**：原文写「不补的话这三段的用例仍然绿」，
+# 与实测不符。删掉 `_GOOD_EXTRAS` 且把原子性变异回「先 clear 再构建」后，这三段的
+# 用例并非绿，而是先在下方反空转守卫（`assert all(c >= 1 ...)` 覆盖这三段的计数）
+# 处报错，10 条全红。让这三段有判别力的是「守卫 + 增量段」**两者**：守卫保证段落非
+# 空，增量段保证「确有内容可被清掉」，缺任一半该段用例都失去意义。
 _GOOD_EXTRAS = '''
 [resources.lifecycle]
 enabled = true

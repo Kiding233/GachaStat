@@ -62,6 +62,12 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
         ConfigError: 配置非法（各 `_build_*` 校验）。**P64 S4c：失败时传入的
             store 逐字段回滚到调用前状态**（原实现是半装：已构建的段落留下、
             未构建的段落已清空，banner 8→0 / pity 1→0 实测可复现）。
+
+    **两条边界（S4c 审查 low）**：① 快照走 `copy.deepcopy(store)`，要求 store 的字段
+    取值全部可深拷贝（现状成立：取值均来自 TOML / GUI 基本类型）。将来若有字段持不可
+    深拷贝的对象（如 module），本函数会在 `clear()` **之前**以 `TypeError` 失败，此时
+    store 未被改动、异常直接冒泡。② 回滚只保证**字段内容**与加载前一致，**不保证**
+    调用前取到的可变容器别名的身份与内容（回滚赋的是快照的深拷贝）。
     """
     if store is None:
         store = ConfigStore()
@@ -768,12 +774,13 @@ def pity_key_issues(pity_list: list) -> List[str]:
     其中的 dict）、返回人类可读的消息列表。输入非法（非 list、条目非 dict）时
     静默跳过——那是 `_build_pity` 既有校验的报错面，不由本函数代劳。
 
-    报两类「配置没按你写的生效」：
+    报三类「配置没按你写的生效」：
 
     1. **条目含未声明键。** 读侧 `p.get(key)` 取不到就落默认值，键名笔误
        （`max_tirggers`）与跨类型误写（`soft_step` 写 `threshold`）都零信号。
     2. **`[pity.lifecycle]` 子表含未声明键。** 同理，写错了只会静默落
        `False` / `None`。
+    3. **`type` 不是字符串。** 见函数体内注释（S4c 审查 minor）。
 
     合法键集由 `_pity_declared_keys(btype)` 给出，错误信息里点名列全，
     用户无需查文档即可改对。
@@ -787,6 +794,17 @@ def pity_key_issues(pity_list: list) -> List[str]:
             continue
         btype = entry.get('type', 'soft_interval')
         name = entry.get('name', '?')
+        if not isinstance(btype, str):
+            # S4c 审查 minor：TOML 写成 `type = ["soft_interval"]` 这类非字符串取值时，
+            # `_PITY_TYPE_KEYS.get(btype)` 会抛 `TypeError: unhashable type`，破坏本函数
+            # 「不抛、只读、返回消息列表」的契约（对照 `stop_condition_shape_issues`）。
+            # 本函数是保存闸门的守卫，抛 TypeError 会让闸门以 Python 内部错误失败而不是
+            # 给出配置讯息。故改为报一条 issue（`_build_pity` 消费该列表并抛
+            # `ConfigError`），不代 `_build_pity` 判类型合法性。
+            issues.append(
+                f"[[pity]] 条目 name='{name}' 的 type 取值 {btype!r} 不是字符串"
+                f"（合法类型：{sorted(_PITY_TYPE_KEYS)}）")
+            continue
         declared = _pity_declared_keys(btype)
         flat = sorted(k for k in declared if not k.startswith('lifecycle.'))
         nested = sorted(k.split('.', 1)[1] for k in declared
@@ -2041,9 +2059,14 @@ def _pitydef_to_toml(p) -> dict:
         entry['cr_state_probs'] = list(p.cr_state_probs)
     if p.fate_threshold is not None:
         entry['fate_threshold'] = p.fate_threshold
-    if not p.switch_allowed:
+    # `is not None` 判据不可省（S4c 审查 minor）：两字段的读侧是 `p.get(k, True)`，而
+    # GUI 的缺键形态会给到 `None`（`pd.get('switch_allowed')`）。只写
+    # `if not p.switch_allowed` 会把 `None` 当成「非默认」写成 `false`，重载后读成
+    # `False`，即「允许中途切换」被往返成「禁止切换」（引擎侧 `None` 的语义是默认
+    # True）。与本块写侧过滤修的是同一类「写盘 → 重载自破」。
+    if p.switch_allowed is not None and not p.switch_allowed:
         entry['switch_allowed'] = False
-    if not p.switch_resets_progress:
+    if p.switch_resets_progress is not None and not p.switch_resets_progress:
         entry['switch_resets_progress'] = False
 
     # 生命周期

@@ -6,6 +6,10 @@
   3. 多保底协同：rotating + hard 同时作用于一个池子
 """
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from gacha_simulator.core.pity import (
     PityState, PityEngine, DrawInfo, PityContext,
@@ -15,6 +19,14 @@ from gacha_simulator.core.pity import (
 )
 from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pool import Pool, Reward
+
+ROOT = Path(__file__).resolve().parents[2]
+# 与 scripts/p82_baseline.py 的 BUILTIN_KEYS / PLUGIN_KEYS 同源（9 组）
+P82_BUILTIN_KEYS = [
+    'smart', 'pool_quota', 'pity_reserve', 'stop_on_target',
+    'fixed_count', 'target_hunting', 'no_draw', 'draw_target',
+]
+P82_PLUGIN_KEYS = ['plugin/example_phased']
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -135,6 +147,16 @@ class TestDependsOnIntegration:
         # 依赖方被激活
         assert state.get('dependent', '_active', False) is True
 
+        # P82-2 观察点（P64 §1.5）：本类的 `pity_names` 书写顺序是
+        # ('source', 'dependent')，接线后池内**执行**顺序按排序键反转为
+        # (dependent, source)——同 scope 下 type 序决定先后（source 是 rotating、
+        # dependent 是 hard）。上面的激活断言在两种顺序下都成立（实测反转后仍为
+        # True），故此处单独钉住反转事实，把「接线被静默回退」与「接线生效但本类
+        # 无差异」区分开。`pity_names` 本身保持 TOML 顺序不动。
+        assert [n for n, _ in engine.get_behaviors_for_pool('test_pool')] == [
+            'dependent', 'source']
+        assert tuple(engine.pool_specs['test_pool'].pity_names) == ('source', 'dependent')
+
 
 # ══════════════════════════════════════════════════════════════════
 # 多保底协同
@@ -192,6 +214,13 @@ class TestMultiPityCoordination:
         # 两条保底叠加后 standard 槽位归零（全部导向 featured）
         assert probs2['ssr_standard'] == pytest.approx(0.0)
         assert probs2['ssr_featured'] >= 0.005  # featured 至少保持基础概率
+
+        # P82-2 观察点（P64 §1.5）：书写顺序 ('rot', 'hard90') 接线后反转为
+        # (hard90, rot)；上面的概率断言在两种顺序下都成立（本组合属 §1.5
+        # 「其余组合数学可交换」一档），故反转事实须单独钉住。
+        assert [n for n, _ in engine.get_behaviors_for_pool('test_pool')] == [
+            'hard90', 'rot']
+        assert tuple(engine.pool_specs['test_pool'].pity_names) == ('rot', 'hard90')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -526,3 +555,38 @@ class TestPoolOrderView:
         assert engine._pool_order['p'] == ['aa_hard']
         assert [n for n, _ in engine.get_behaviors_for_pool('p')] == ['aa_hard']
 
+
+# ══════════════════════════════════════════════════════════════════
+# P82-2：接线基线固化 + 等价对照（P64 §1.5 / §七 P82-2）
+# ══════════════════════════════════════════════════════════════════
+
+class TestP82OrderWiringBaseline:
+    """`scripts/p82_baseline.py` 的活守卫（分工同 P79：脚本跑对照，本类断言其结论）。
+
+    快照是**接线前**（`a41de1b^`）在固定种子与固定 `sim_start_date` 下固化的
+    `CompactResult`；本类在**接线后**的代码上以子进程重跑 `--verify`，逐字段对比。
+    `config.toml` 仅一条保底定义，P64 §1.5 的五类敏感集合均不受影响，故差异数
+    必须为 0——任何差异都意味着接线改变了管道输出（回归），而不是「无差异」。
+    """
+
+    BASELINE_DIR = ROOT / 'tests' / 'fixtures' / 'p82_baseline'
+
+    def test_baseline_snapshots_present(self):
+        """9 组快照齐备（缺任一即对照退化为部分覆盖）。"""
+        keys = P82_BUILTIN_KEYS + P82_PLUGIN_KEYS
+        missing = [
+            k for k in keys
+            if not (self.BASELINE_DIR / (k.replace('/', '__') + '.json')).exists()
+        ]
+        assert not missing, f'P82 基线快照缺失: {missing}'
+
+    def test_equivalence_verify_script_passes(self):
+        """对照脚本退出码 0 且输出 PASS = 逐字段等价、`draw_pity_names` 不变。"""
+        result = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts' / 'p82_baseline.py'), '--verify'],
+            cwd=str(ROOT), capture_output=True, text=True,
+            encoding='utf-8', errors='replace',
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert '等价对照结果：PASS' in result.stdout
+        assert result.stdout.count('draw_pity_names 不变') == 9

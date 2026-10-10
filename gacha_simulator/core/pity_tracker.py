@@ -20,7 +20,8 @@ from typing import Optional
 
 from .pity_primitives import Counter, Flag, PityContext, PityState
 
-__all__ = ['Tracker', 'CounterTracker', 'FlagTracker', 'StreakTracker']
+__all__ = ['Tracker', 'CounterTracker', 'FlagTracker', 'StreakTracker',
+           'FateTracker', 'NamespaceTracker']
 
 
 def _is_trigger_rarity(scope: str, ctx: PityContext) -> bool:
@@ -395,3 +396,127 @@ class StreakTracker(Tracker):
             if state_prob > 0 and random.random() < state_prob:
                 return True
         return False
+
+
+#: 定轨族的状态键词表（§3.2 targeted 行）——`FateTracker` 的 `keys` 形参是**扁平
+#: 键名元组**，而同一动作对计数器与标记的作用不同（`clear` = 计数器归零 / 标记清位，
+#: `accumulate` = 计数器 +1 / 标记置位），故键的类别必须显式给出。本表是**唯一来源**，
+#: 未知键一律抛 `ValueError`（不静默当成标记处理）。
+_FATE_KEY_KINDS = {
+    'fate_points': 'counter',
+    'losses': 'counter',
+    'guaranteed': 'flag',
+    'lost_rotating': 'flag',
+}
+
+
+class FateTracker(Tracker):
+    """定轨（targeted）族的状态追踪——命中定轨卡则清零，未命中则累积。
+
+    | 形参 | 语义 | 取值来源（§3.2） |
+    |------|------|------------------|
+    | `scope` | 触发稀有度（同 `FlagTracker`） | `_norm_scope(pdef)` |
+    | `judge` | 命中判据（`'selected'`，即 `reward_id == selected_card`） | 机制语义固定 |
+    | `hit` / `miss` | 命中 / 未命中时的动作，取值 `'clear'`（计数器归零、标记清位）/ `'accumulate'`（计数器 +1、标记置位） | 机制语义固定 |
+    | `keys` | 被写的键名元组（**只含「写」的键**） | `('fate_points', 'losses', 'guaranteed', 'lost_rotating')` |
+
+    **`hit` / `miss` 的取值由 S1 定稿（§3.1.1 该行明写）**：本步取 `'clear'` /
+    `'accumulate'` 两值，逐行对齐旧 `TargetedBehavior.after_draw` 的命中 / 未命中
+    两分支（命中：`fate_points.reset()` + `guaranteed.clear()` +
+    `lost_rotating.clear()` + `losses.reset()`；未命中：四个键分别 incr / set）。
+    其余取值一律抛 `ValueError`，不静默退化。
+
+    **N1 相位**：非计数型，`advance` / `prepare` 均 no-op；状态变更全在 `commit`。
+
+    **两处早退（逐行对齐旧实现）**：① 出非 scope 不动；② `selected_card` 为
+    `None` 时**整段不动**（旧 `after_draw` 的 `if selected is None: return`）——
+    缺这一条则「未定轨」会被当成「未命中」而累积 `losses` / 置位 `guaranteed`。
+
+    **M4 `did_reset`** = 出 scope ∧ 命中定轨（§3.1.1 M4 表行）。`selected_card`
+    为 `None` 时 `reward_id == None` 恒假，故自然为 False——与旧
+    `TargetedBehavior.did_fire`（`trigger_rarity ∧ _is_hit`，而 `_is_hit` 在
+    `selected is None` 时返回 False）逐字一致。
+
+    **`selected_card` 是读的键**：由策略层 `NonDrawAction` 写入，不进
+    `state_keys()`（§3.1.1 L4 例外 2）。
+
+    **`skip_reset` 无影响**：同 `FlagTracker`（事件驱动型不可配
+    `deactivate_on_early_hit`）。
+    """
+
+    _ACTIONS = ('clear', 'accumulate')
+
+    def __init__(self, scope: str, judge: str, hit: str, miss: str, keys):
+        if judge not in _JUDGES:
+            raise ValueError(f"FateTracker: 未知 judge={judge!r}（可用：{_JUDGES}）")
+        for nm, action in (('hit', hit), ('miss', miss)):
+            if action not in self._ACTIONS:
+                raise ValueError(
+                    f"FateTracker: 未知 {nm}={action!r}（可用：{self._ACTIONS}）")
+        unknown = [k for k in keys if k not in _FATE_KEY_KINDS]
+        if unknown:
+            raise ValueError(
+                f"FateTracker: 未知状态键 {unknown}（词表见 _FATE_KEY_KINDS）")
+        self._scope = scope
+        self._judge = judge
+        self._hit = hit
+        self._miss = miss
+        self._keys = tuple(keys)
+        self._ctls: dict = {}
+
+    # ── 契约成员 ──
+
+    def rebind(self, state: PityState, name: str) -> None:
+        self._ctls = {
+            key: (Counter(state, name, key) if kind == 'counter'
+                  else Flag(state, name, key))
+            for key, kind in ((k, _FATE_KEY_KINDS[k]) for k in self._keys)
+        }
+
+    def commit(self, ctx: PityContext, state: PityState, name: str,
+               skip_reset: bool = False) -> None:
+        if not _is_trigger_rarity(self._scope, ctx):
+            return
+        if state.get(name, 'selected_card') is None:
+            return                      # 未定轨：整段不动（旧实现的早退）
+        action = (self._hit if _judge_hit(self._judge, ctx, state, name)
+                  else self._miss)
+        for key in self._keys:
+            ctl = self._ctls[key]
+            is_counter = _FATE_KEY_KINDS[key] == 'counter'
+            if action == 'clear':
+                if is_counter:
+                    ctl.reset()
+                else:
+                    ctl.clear()
+            elif is_counter:            # 'accumulate'
+                ctl.incr()
+            else:
+                ctl.set()
+
+    def did_reset(self, ctx: PityContext, state: PityState, name: str) -> bool:
+        if not _is_trigger_rarity(self._scope, ctx):
+            return False
+        return _judge_hit(self._judge, ctx, state, name)
+
+    def state_keys(self) -> tuple:
+        return self._keys
+
+
+class NamespaceTracker(Tracker):
+    """命名空间载体（ISSUE-407）——**语义为空**，唯一作用是声明一个命名空间。
+
+    三个 `_soft` 类型的 preset 用它产出 `X_soft` 命名空间（§3.10.3 配套 1），使该
+    命名空间在 `PityState` 中存在、可被 `Lifecycle.initialize` 写入 `_active`、
+    并进快照比对。旧实现由内层 `SoftStepBehavior(name + '_soft', …)` 经
+    `CounterBasedBehavior.__init__` **隐式**产生该命名空间（写入 `_active: True`）。
+
+    `advance` / `prepare` / `commit` / `did_reset` 全为基类的 no-op 默认实现、
+    `state_keys()` 返回 `()`（不声明任何状态键）；**构造后 `state` 中不新增任何键**
+    ——`X_soft._active` 由 `Lifecycle.initialize` 的推广作用域写入，不由本零件写。
+    """
+
+    def __init__(self, namespace: str):
+        if not namespace:
+            raise ValueError('NamespaceTracker: namespace 不得为空')
+        self.namespace = namespace

@@ -15,7 +15,8 @@
 
 from gacha_simulator.core.pity_primitives import DrawInfo, PityContext, PityState
 from gacha_simulator.core.pity_tracker import (
-    CounterTracker, FlagTracker, StreakTracker, Tracker,
+    CounterTracker, FateTracker, FlagTracker, NamespaceTracker, StreakTracker,
+    Tracker,
 )
 
 NAME = 'ssr_hard'
@@ -621,3 +622,234 @@ class TestStreakTrackerH4RandomConsumption:
                 new_traj.append(new_st.get('cr', 'cr_counter', 0))
 
             assert old_traj == new_traj, f'seed={seed}：旧 {old_traj} 新 {new_traj}'
+
+
+# ══════════════════════════════════════════════════════════════════
+# S1c-2：FateTracker（定轨）+ NamespaceTracker
+# ══════════════════════════════════════════════════════════════════
+
+FATE_NAME = 'ssr_targeted'
+FATE_KEYS = ('fate_points', 'losses', 'guaranteed', 'lost_rotating')
+FATE_KW = dict(scope=SCOPE, judge='selected', hit='clear', miss='accumulate',
+               keys=FATE_KEYS)
+
+
+def _fate_tracker(kw=None, state=None, selected='up_card'):
+    st = state if state is not None else PityState()
+    tr = FateTracker(**(kw or FATE_KW))
+    tr.rebind(st, FATE_NAME)
+    if selected is not None:
+        st.set(FATE_NAME, 'selected_card', selected)
+    return tr, st
+
+
+class TestFateTrackerCommit:
+    """`commit` 的命中清零 / 未命中累积（逐行对齐旧 `TargetedBehavior.after_draw`）。"""
+
+    def test_fate_tracker_miss_accumulates(self):
+        """出 scope 且未命中定轨：计数器 +1、标记置位（四键齐动）。"""
+        tr, st = _fate_tracker()
+        tr.commit(_ctx(rarity='ssr', reward_id='other', state=st), st, FATE_NAME)
+        assert st.get(FATE_NAME, 'fate_points', 0) == 1
+        assert st.get(FATE_NAME, 'losses', 0) == 1
+        assert st.get(FATE_NAME, 'guaranteed') is True
+        assert st.get(FATE_NAME, 'lost_rotating') is True
+
+    def test_fate_tracker_hit_clears_all_keys(self):
+        """出 scope 且命中定轨：计数器归零、标记清位。"""
+        tr, st = _fate_tracker()
+        tr.commit(_ctx(rarity='ssr', reward_id='other', state=st), st, FATE_NAME)
+        tr.commit(_ctx(rarity='ssr', reward_id='other', state=st), st, FATE_NAME)
+        assert st.get(FATE_NAME, 'fate_points', 0) == 2
+
+        tr.commit(_ctx(rarity='ssr', reward_id='up_card', state=st), st, FATE_NAME)
+        assert st.get(FATE_NAME, 'fate_points', 0) == 0
+        assert st.get(FATE_NAME, 'losses', 0) == 0
+        assert st.get(FATE_NAME, 'guaranteed') is False
+        assert st.get(FATE_NAME, 'lost_rotating') is False
+
+    def test_fate_tracker_out_of_scope_no_change(self):
+        """出非 scope 稀有度：整段不动（即使 reward_id 等于定轨卡）。"""
+        tr, st = _fate_tracker()
+        tr.commit(_ctx(rarity='sr', reward_id='up_card', state=st), st, FATE_NAME)
+        assert st.get(FATE_NAME, 'fate_points', 0) == 0
+        assert st.get(FATE_NAME, 'guaranteed') is None, '不得写任何键'
+
+    def test_fate_tracker_selected_none_no_change(self):
+        """未定轨（`selected_card is None`）：整段不动。
+
+        旧 `after_draw` 的 `if selected is None: return`——缺这一条则「未定轨」会
+        被当成「未命中」而累积 `losses` / 置位 `guaranteed`。
+        """
+        tr, st = _fate_tracker(selected=None)
+        st.set(FATE_NAME, 'selected_card', None)     # 无条件注入的 None
+        tr.commit(_ctx(rarity='ssr', reward_id='any', state=st), st, FATE_NAME)
+        assert st.get(FATE_NAME, 'fate_points', 0) == 0
+        assert st.get(FATE_NAME, 'losses', 0) == 0
+        assert st.get(FATE_NAME, 'guaranteed') is None
+
+    def test_fate_tracker_advance_and_prepare_are_noop(self):
+        """非计数型：`advance` / `prepare` 均 no-op。"""
+        tr, st = _fate_tracker()
+        ctx = _ctx(state=st)
+        tr.advance(ctx, st, FATE_NAME, False)
+        tr.prepare(ctx, st, FATE_NAME, False)
+        assert st.get(FATE_NAME, 'fate_points', 0) == 0
+        assert st.get(FATE_NAME, 'guaranteed') is None
+
+
+class TestFateTrackerDidReset:
+    """M4：出 scope ∧ 命中定轨（§3.1.1 M4 表行）。"""
+
+    def test_fate_tracker_did_reset(self):
+        tr, st = _fate_tracker()
+        assert tr.did_reset(_ctx(rarity='ssr', reward_id='up_card', state=st),
+                            st, FATE_NAME) is True
+        assert tr.did_reset(_ctx(rarity='ssr', reward_id='other', state=st),
+                            st, FATE_NAME) is False
+        assert tr.did_reset(_ctx(rarity='sr', reward_id='up_card', state=st),
+                            st, FATE_NAME) is False, '须带 scope 门控'
+
+    def test_fate_tracker_did_reset_false_when_not_selected(self):
+        """未定轨时恒 False（与旧 `_is_hit` 在 `selected is None` 时返回 False 一致）。"""
+        tr, st = _fate_tracker(selected=None)
+        st.set(FATE_NAME, 'selected_card', None)
+        assert tr.did_reset(_ctx(rarity='ssr', reward_id='up_card', state=st),
+                            st, FATE_NAME) is False
+
+    def test_fate_tracker_did_reset_matches_commit_clear_branch(self):
+        """`did_reset` 为真 ⟺ `commit` 走了 `clear` 分支。"""
+        for rarity, rid in (('ssr', 'up_card'), ('ssr', 'other'),
+                            ('sr', 'up_card')):
+            tr, st = _fate_tracker()
+            st.set(FATE_NAME, 'fate_points', 3)
+            ctx = _ctx(rarity=rarity, reward_id=rid, state=st)
+            fired = tr.did_reset(ctx, st, FATE_NAME)
+            tr.commit(ctx, st, FATE_NAME)
+            cleared = st.get(FATE_NAME, 'fate_points', 0) == 0
+            assert fired == cleared, f'{rarity}/{rid}: {fired} vs {cleared}'
+
+
+class TestFateTrackerProtocol:
+    """协议面与形参校验。"""
+
+    def test_fate_tracker_state_keys(self):
+        """`state_keys()` = `keys` 形参——只含「写」的键，`selected_card` 不在内。"""
+        assert FateTracker(**FATE_KW).state_keys() == FATE_KEYS
+        assert FateTracker(scope=SCOPE, judge='selected', hit='clear',
+                           miss='accumulate', keys=('fate_points',)).state_keys() == \
+            ('fate_points',)
+
+    def test_fate_tracker_namespace_default_none(self):
+        assert FateTracker(**FATE_KW).namespace is None
+
+    def test_fate_tracker_rejects_unknown_key(self):
+        """未知状态键抛 `ValueError`，不静默当成标记处理。"""
+        try:
+            FateTracker(scope=SCOPE, judge='selected', hit='clear',
+                        miss='accumulate', keys=('fate_points', 'no_such_key'))
+        except ValueError:
+            return
+        raise AssertionError('未拒绝未知状态键')
+
+    def test_fate_tracker_rejects_unknown_action_and_judge(self):
+        for bad in (dict(scope=SCOPE, judge='nope', hit='clear',
+                         miss='accumulate', keys=FATE_KEYS),
+                    dict(scope=SCOPE, judge='selected', hit='nope',
+                         miss='accumulate', keys=FATE_KEYS),
+                    dict(scope=SCOPE, judge='selected', hit='clear',
+                         miss='nope', keys=FATE_KEYS)):
+            try:
+                FateTracker(**bad)
+            except ValueError:
+                continue
+            raise AssertionError(f'未拒绝非法形参: {bad}')
+
+    def test_fate_tracker_requires_rebind_first(self):
+        """未 `rebind` 即 `commit` 当场报错，不静默成功。
+
+        具体异常类型按族的实现而异（`CounterTracker` 是 `None.incr()` 的
+        `AttributeError`，本族是空控制器字典的 `KeyError`），契约是「未重绑即报错」
+        而非某一种异常类型。此处须先置 `selected_card`，否则会在旧实现同源的
+        「未定轨整段不动」早退处返回，走不到控制器查表。
+        """
+        tr = FateTracker(**FATE_KW)
+        st = PityState()
+        st.set(FATE_NAME, 'selected_card', 'up_card')
+        try:
+            tr.commit(_ctx(rarity='ssr', reward_id='up_card', state=st), st, FATE_NAME)
+        except (AttributeError, KeyError):
+            return
+        raise AssertionError('未 rebind 的 FateTracker 不应可用')
+
+    def test_fate_tracker_trajectory_matches_old_behavior(self):
+        """12 抽序列下四个键的轨迹与旧 `TargetedBehavior.after_draw` 逐位相同。"""
+        from gacha_simulator.core.pity import TargetedBehavior
+
+        seq = [('ssr', 'other'), ('sr', 'up_card'), ('ssr', 'up_card'),
+               ('ssr', 'other'), ('ssr', 'other'), ('sr', 'other'),
+               ('ssr', 'other'), ('ssr', 'up_card'), ('ssr', 'other'),
+               ('ssr', 'other'), ('ssr', 'up_card'), ('ssr', 'other')]
+
+        old_st = PityState()
+        old = TargetedBehavior('tg', old_st, scope=SCOPE, fate_threshold=2)
+        old_st.set('tg', 'selected_card', 'up_card')
+        old_traj = []
+        for rarity, rid in seq:
+            old.after_draw(_ctx(rarity=rarity, reward_id=rid, state=old_st))
+            old_traj.append(tuple(old_st.get('tg', k, 0) for k in FATE_KEYS))
+
+        new_st = PityState()
+        fate = FateTracker(**FATE_KW)
+        fate.rebind(new_st, 'tg')
+        new_st.set('tg', 'selected_card', 'up_card')
+        new_traj = []
+        for rarity, rid in seq:
+            fate.commit(_ctx(rarity=rarity, reward_id=rid, state=new_st), new_st, 'tg')
+            new_traj.append(tuple(new_st.get('tg', k, 0) for k in FATE_KEYS))
+
+        assert old_traj == new_traj, f'旧 {old_traj}\n新 {new_traj}'
+
+    def test_fate_tracker_trajectory_matches_old_when_not_selected(self):
+        """未定轨（`selected_card=None`）时两侧轨迹同为「整段不动」。"""
+        from gacha_simulator.core.pity import TargetedBehavior
+
+        old_st = PityState()
+        old = TargetedBehavior('tg', old_st, scope=SCOPE, fate_threshold=2)
+        old_st.set('tg', 'selected_card', None)
+        old.after_draw(_ctx(rarity='ssr', reward_id='any', state=old_st))
+
+        new_st = PityState()
+        fate = FateTracker(**FATE_KW)
+        fate.rebind(new_st, 'tg')
+        new_st.set('tg', 'selected_card', None)
+        fate.commit(_ctx(rarity='ssr', reward_id='any', state=new_st), new_st, 'tg')
+
+        for k in FATE_KEYS:
+            assert old_st.get('tg', k, 0) == new_st.get('tg', k, 0), k
+        assert new_st.get('tg', 'fate_points', 0) == 0
+
+
+class TestNamespaceTracker:
+    """命名空间载体（ISSUE-407）——语义为空，只声明命名空间。"""
+
+    def test_namespace_tracker_declares_namespace_only(self):
+        """`namespace` 是构造形参，`state_keys()` 为空、构造后不写任何 state 键。"""
+        tr = NamespaceTracker(namespace='ssr_soft')
+        st = PityState()
+        ctx = _ctx(state=st)
+        tr.rebind(st, 'ssr')
+        tr.advance(ctx, st, 'ssr', False)
+        tr.prepare(ctx, st, 'ssr', False)
+        tr.commit(ctx, st, 'ssr')
+        assert tr.did_reset(ctx, st, 'ssr') is False
+        assert tr.namespace == 'ssr_soft'
+        assert tr.state_keys() == ()
+        assert st.data == {}, '构造后不得新增任何键（X_soft._active 由 Lifecycle 写）'
+
+    def test_namespace_tracker_rejects_empty_namespace(self):
+        try:
+            NamespaceTracker(namespace='')
+        except ValueError:
+            return
+        raise AssertionError('未拒绝空 namespace')

@@ -250,17 +250,23 @@ class TestCreateBehaviorPresetBranch:
         仍然存在。探测类记录 `create_behavior` 传给旧类的构造实参名。
         """
         registry_entries(_FAKE_LEGACY_PROBE, _entry(**{'class': _LegacyKwargsProbe}))
-        bh = create_behavior(
-            PityDef(name='s44l', btype=_FAKE_LEGACY_PROBE,
-                    deactivate_on_early_hit=True, depends_on='other',
-                    max_triggers=2),
-            PityState())
+        # ① 不配生命周期字段：正常构造，且实参里不含 lifecycle
+        bh = create_behavior(PityDef(name='s44l', btype=_FAKE_LEGACY_PROBE),
+                             PityState())
         # 反向断言在前：分支未执行时下面的「不含」可因 `received_kwargs` 为空而假绿
         assert {'name', 'state', 'scope', 'btype'} <= bh.received_kwargs, (
             bh.received_kwargs)
         assert 'lifecycle' not in bh.received_kwargs, (
             '旧类分支仍在注入 LifecycleConfig，与 preset 分支的 build_lifecycle '
             '构成第二转换点（§3.1.3：同一转换不得留两处）')
+        # ② 配任一生命周期字段：显式拒绝。此前是**静默丢弃**（删掉 lifecycle_kwargs
+        # 段后这三个字段不再被转换、也不报错）。分支在生产上结构性不可达，但「不可达」
+        # 是易失前提，此处把它变成硬约束（S4-4 审查 minor）。
+        for kw in ({'deactivate_on_early_hit': True}, {'depends_on': 'other'},
+                   {'max_triggers': 2}):
+            with pytest.raises(ConfigError, match='生命周期字段'):
+                create_behavior(
+                    PityDef(name='s44m', btype=_FAKE_LEGACY_PROBE, **kw), PityState())
 
     def test_preset_branch_passes_priority_and_pools(self, registry_entries):
         """preset 分支透传 `priority` / `pools`（S4-1 审查 low：原无断言覆盖）。

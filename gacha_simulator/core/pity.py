@@ -1509,6 +1509,20 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     # 分支在 registry 上已无入口（只剩测试注入的合成条目），故此处不再注入
     # `LifecycleConfig`。留着即「同一转换两处」，而两处各留一半时的失效模式
     # 没有对照实现可发现。本分支的 `params` 组装段整体随「发布前一次性移除旧类」删除。
+    #
+    # **代价：本分支对三个生命周期字段静默丢弃**（S4-4 审查 minor）。分支在生产上
+    # 结构性不可达（导入期 `_validate_registry()` 要求每条目 `preset` 可调用，且全库
+    # 无第二处 registry 注入点），但「不可达」是易失前提，故对任一字段非默认即显式
+    # 拒绝，把静默丢弃变成响亮的失败（与 ISSUE-301 消除「配置静默失效」同取向）。
+    # `False` / `None` / `0` 即默认，不触发。
+    _lc_fields = [f for f in ('deactivate_on_early_hit', 'depends_on', 'max_triggers')
+                  if getattr(pdef, f, None)]
+    if _lc_fields:
+        from .config_store import ConfigError as _ConfigError
+        raise _ConfigError(
+            f"旧类兼容分支（btype='{pdef.btype}'）不支持生命周期字段 {_lc_fields}："
+            f"它们的唯一转换点是 `build_lifecycle(pdef)`，由 preset 工厂消费（§3.1.3）。"
+            f"本分支只服务未 preset 化的测试合成条目。")
 
     return cls(name=pdef.name, state=state, scope=scope, **params)
 

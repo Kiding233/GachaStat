@@ -1092,12 +1092,16 @@ class TestMaxTriggersTomlRoundTrip:
         with pytest.raises(ConfigError, match='max_triggers'):
             _write_and_load(toml)
 
-    @pytest.mark.parametrize('literal', ['"2"', 'true', '1.5'])
-    def test_non_integer_rejected(self, literal):
-        """非整数取值硬拒：字符串会让 `_n > 0` 抛 `TypeError`（被构造兜底吞掉）。"""
-        toml = (_BASE_TOML +
-                '[[pity]]\nname = "p1"\ntype = "hard"\nscope = "ssr"\n'
-                f'threshold = 90\nmax_triggers = {literal}\n')
+    @pytest.mark.parametrize('value', ['2', True, 1.5])
+    def test_non_integer_rejected(self, value):
+        """非整数取值硬拒：字符串会让 `_n > 0` 抛 `TypeError`（被构造兜底吞掉）。
+
+        参数是**值**而非 TOML 字面量（`_pity_section` 按 Python 类型自行书写）。
+        """
+        # 复用 `_pity_section`（S4-4 审查 low：内联手写等于第二份段格式，
+        # 段格式一改本用例会静默失效）
+        toml = _BASE_TOML + _pity_section('hard', 'p1', threshold=90,
+                                          max_triggers=value)
         with pytest.raises(ConfigError, match='max_triggers'):
             _write_and_load(toml)
 

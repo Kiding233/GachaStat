@@ -2032,14 +2032,20 @@ def _pitydef_to_toml(p) -> dict:
         # P61（ISSUE-328）：pools=()（空勾选 = 不绑定任何池）必须显式写出 pools = []
         # ——否则重载默认 ('*',) 语义反转（不绑定 → 绑定全部池）
         entry['pools'] = list(p.pools)
-    # ISSUE-923：条件式逐字段书写——**新字段不会自动带上**。不补这一行，
-    # 「GUI 加载 → 保存」一次即把手写的 priority 从 TOML 抹掉（默认值 0
-    # 与「缺键」在解析侧等价，故丢失无任何报错）。非默认才写（round-trip 纪律）。
+    # ISSUE-923：条件式逐字段书写，**新字段不会自动带上**。不补这一行，凡不经本
+    # 函数之外的路径（CLI / 脚本 / 手工编辑的直读直写）都会在保存时丢掉手写的
+    # priority（默认值 0 与「缺键」在解析侧等价，丢失无任何报错）。非默认才写
+    # （round-trip 纪律）。
+    # **注意丢失点的位置**（S4-4 审查 minor 订正）：写成「GUI 加载 → 保存」是不准的。
+    # GUI 路径上该字段在**更早**的两处字段表就没了（`config_panel.py` 的
+    # `apply_to_store` 逐字段重建 `PityDef` 与 `_refresh_from_store_impl` 的字段表），
+    # 根本走不到本行。GUI 侧的同批改造归 S7a（ISSUE-911），本行的作用面只到
+    # 本函数的调用方。
     if p.priority:
         entry['priority'] = p.priority
     # ISSUE-032（S4-4）：触发次数上限。与 `priority` 同为「非默认才写」的标量，
-    # 同属条件式逐字段书写的漏写面：不补这一行，「GUI 加载 → 保存」一次即把手写的
-    # `max_triggers` 抹掉（缺键与 0 在解析侧等价，丢失无任何报错；ISSUE-923 先例）。
+    # 同属条件式逐字段书写的漏写面（缺键与 0 在解析侧等价，丢失无任何报错；
+    # ISSUE-923 先例，丢失点位置的说明同上）。
     if p.max_triggers:
         entry['max_triggers'] = p.max_triggers
 

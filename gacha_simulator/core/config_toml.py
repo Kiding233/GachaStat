@@ -1732,9 +1732,15 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
 # 事件驱动型：`deactivate_on_early_hit` 对其不适用（_build_pity 据此硬拒）。
 # 对应 pity.py 的 `CounterBasedBehavior._SOFT_SUFFIX_TYPES` / `._EVENT_DRIVEN_TYPES`，
 # 两者由 tests/core/test_pity_config_toml.py::TestDuplicatedConstants 钉住相等。
+# P64 S1a：pity 侧两个 `_*_TYPES` 已升为 `pity_primitives` 的模块级常量，
+# `_EVENT_DRIVEN_TYPES` 的内容按 ISSUE-105 追加了 `rotating_inverse`（G1 幻塔
+# 连中后必歪，事件驱动型），本拷贝**同批补齐**以维持等值断言——副作用只有一条：
+# S6a 之前「`rotating_inverse` + `deactivate_on_early_hit`」也走本文件的 H3 硬拒，
+# 与 S6a 之后的语义一致（该类型本就是事件驱动型）。本拷贝的消费分支到 S6a 才删。
 _SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
 _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
-                                 'rotating_cr_soft', 'targeted', 'targeted_soft'})
+                                 'rotating_cr_soft', 'targeted', 'targeted_soft',
+                                 'rotating_inverse'})
 
 
 def _sugar_matches_deltas(p, btype: str) -> bool:

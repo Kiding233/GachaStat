@@ -1,89 +1,18 @@
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Set
 import logging
 import random
 
+# ── P64 S1a：叶子原语层迁出至 pity_primitives（§3.1.6）──
+# 下方 re-export 使既有导入路径不变；三个类型集合常量在本模块内**裸名**可用
+# （`Pity` 骨架不继承 CounterBasedBehavior，S3-1 起需要）。
+from .pity_primitives import (  # noqa: F401
+    Counter, Flag, DrawInfo, PityContext, LifecycleConfig, PityState,
+    _SOFT_TYPES, _HARD_TYPES, _EVENT_DRIVEN_TYPES,
+)
+
 logger = logging.getLogger(__name__)
-
-
-# ── P60 新增：DrawInfo (frozen) + PityContext (可变载体) ──
-
-@dataclass(frozen=True)
-class DrawInfo:
-    """抽卡上下文中不可变的部分——本次抽卡的静态事实。"""
-    pool_id: str
-    pool_instance_id: str
-    reward_id: str
-    reward_rarity: str
-    is_featured: bool
-    scope_cards: Mapping[str, tuple] = field(default_factory=dict)
-    featured_cards: Mapping[str, tuple] = field(default_factory=dict)
-    scope_slots: Mapping[str, tuple] = field(default_factory=dict)
-    featured_slots: Mapping[str, tuple] = field(default_factory=dict)
-    card_to_slot: Mapping[str, str] = field(default_factory=dict)
-    base_probabilities: Mapping[str, float] = field(default_factory=dict)
-    rarity_rank: Mapping[str, int] = field(default_factory=dict)
-
-
-@dataclass
-class PityContext:
-    """管道中流转的可变载体。"""
-    draw: DrawInfo
-    current: Dict[str, float]
-    state: 'PityState'
-
-
-# ── P60 新增：Counter / Flag 微抽象 ──
-
-@dataclass
-class Counter:
-    """PityState 计数器遥控器——记住地址，封装操作。"""
-    _state: 'PityState'
-    _name: str
-    _key: str = "counter"
-
-    def incr(self, delta: int = 1) -> int:
-        return self._state.incr(self._name, self._key, delta)
-
-    def reset(self) -> None:
-        self._state.set(self._name, self._key, 0)
-
-    def value(self) -> int:
-        return self._state.get(self._name, self._key, 0)
-
-    def reached(self, threshold: int) -> bool:
-        return self.value() >= threshold
-
-
-@dataclass
-class Flag:
-    """PityState 布尔标志遥控器。"""
-    _state: 'PityState'
-    _name: str
-    _key: str
-
-    def set(self) -> None:
-        self._state.set(self._name, self._key, True)
-
-    def clear(self) -> None:
-        self._state.set(self._name, self._key, False)
-
-    def is_set(self) -> bool:
-        return self._state.get(self._name, self._key, False)
-
-
-# ── P60 新增：跨 type 生命周期参数 ──
-
-@dataclass(frozen=True)
-class LifecycleConfig:
-    """跨 type 共享的生命周期参数。P56 扩展 deactivate_on_early_hit / depends_on。
-
-    frozen=True：纵深防御——阻止运行时意外修改。
-    """
-    deactivate_on_early_hit: bool = False         # P56 扩展
-    depends_on: Optional[str] = None              # P56 扩展
 
 
 class PityBehavior(ABC):
@@ -109,10 +38,13 @@ class CounterBasedBehavior(PityBehavior, ABC):
     """
 
     # ── btype → 分类属性映射 ──
-    _SOFT_TYPES = frozenset({'soft_interval', 'soft_additive', 'soft_step'})
-    _HARD_TYPES = frozenset({'hard'})
-    _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'targeted', 'targeted_soft',
-                                     'rotating_cr', 'rotating_cr_soft', 'rotating_soft'})
+    # P64 S1a：内容升为 `pity_primitives` 的模块级常量（§3.1.6），此处保留为
+    # **同对象别名**——既有读法（本类的 is_soft/is_hard/is_event_driven、下方
+    # create_behavior 的局部常量、config_toml 的防漂移断言）一律不变，且不存在
+    # 第二份真相源。`_SOFT_SUFFIX_TYPES` 不在迁移面内（两侧内容本已相同）。
+    _SOFT_TYPES = _SOFT_TYPES
+    _HARD_TYPES = _HARD_TYPES
+    _EVENT_DRIVEN_TYPES = _EVENT_DRIVEN_TYPES
     # 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas。
     # config_toml._SOFT_SUFFIX_TYPES 是同内容的另一份拷贝（写回侧用），
     # 两者由 tests/core/test_pity_config_toml.py::TestDuplicatedConstants 钉住相等。
@@ -912,6 +844,7 @@ _BTYPE_ORDER = {
     'hard': 1,
     'rotating_soft': 2, 'rotating_cr': 2, 'rotating_cr_soft': 2,
     'rotating': 3, 'targeted': 3, 'targeted_soft': 3,
+    'rotating_inverse': 3,   # G1 幻塔连中后必歪（ISSUE-105，随 S1a 的集合内容同批）
 }
 
 
@@ -1082,45 +1015,6 @@ def compute_scope_mappings(pool) -> tuple:
             featured_slots[rarity] = (rarity,)
 
     return scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot
-
-
-class PityState:
-    """三层嵌套 namespace 容器——每个 behavior 通过自身 name 存取任意类型数据。"""
-
-    def __init__(self):
-        self.data: Dict[str, Dict[str, Any]] = {}
-
-    def get(self, name: str, key: str, default=None):
-        """读取 behavior name 下 key 的值。"""
-        return self.data.get(name, {}).get(key, default)
-
-    def set(self, name: str, key: str, value):
-        """写入 behavior name 下 key 的值。"""
-        self.data.setdefault(name, {})[key] = value
-
-    def incr(self, name: str, key: str, delta=1) -> int:
-        """递增 behavior name 下 key 的计数器值。"""
-        v = self.get(name, key, 0) + delta
-        self.set(name, key, v)
-        return v
-
-    def clone(self) -> 'PityState':
-        ps = PityState()
-        ps.data = {name: dict(ns) for name, ns in self.data.items()}
-        return ps
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {"data": {name: dict(ns) for name, ns in self.data.items()}}
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> 'PityState':
-        ps = cls()
-        if "data" in d:
-            # 防御性复制——确保 from_dict() 返回的 PityState 与输入 dict 完全解耦
-            ps.data = {name: dict(ns) for name, ns in d["data"].items()}
-        # P81 B9：P60 之前的 {"counters": {...}} 旧序列化格式的自动升级分支已删除
-        # （其生产者只有测试；真实数据均为 to_dict() 产出的 {"data": {...}} 新格式）。
-        return ps
 
 
 class PityEngine:

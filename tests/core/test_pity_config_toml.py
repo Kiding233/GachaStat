@@ -598,6 +598,293 @@ def _all_fields_non_default_pitydef():
     )
 
 
+# ══════════════════════════════════════════════════════════════════
+# P64 S4c：`[[pity]]` 键契约的一致性测试与硬拒用例
+# ══════════════════════════════════════════════════════════════════
+# 契约源是 `config_toml._PITY_COMMON_KEYS` / `._PITY_TYPE_KEYS`（全篇唯一契约源，
+# 扩表编辑点见该处注释）。本组钉住三件事：
+#   ① 每个 btype 的「全量键 fixture」经 `_pitydef_to_toml` 的产出键集**恰等于**
+#      该 btype 的契约（双向：既不产出未声明键，也不漏产已声明键）；
+#   ② 契约 ⊆ `_build_pity` 的**读取面**（读侧不认的键写进表里 = 幽灵键）；
+#   ③ 未声明键在加载期硬拒，且错误信息点名该键与合法键集。
+
+# TOML 键 → (PityDef 字段, 非默认值)。与 `_pitydef_to_toml` 的写回分支一一对应；
+# `deltas` / `soft_deltas` 不在此表（形态互斥，由 `_pitydef_from_contract` 处理），
+# `lifecycle` 也不是字段（嵌套键各自映射到 `deactivate_on_early_hit` / `depends_on`）。
+_PITY_KEY_TO_FIELD = {
+    'priority': ('priority', 5),
+    'target_featured': ('target_featured', True),
+    'reset': ('reset', 'featured'),
+    'pools': ('pools', ('test_pool.main',)),
+    'counter_init': ('counter_init', 3),
+    'guaranteed_init': ('guaranteed_init', True),
+    'fate_points_init': ('fate_points_init', 2),
+    'selected_card_init': ('selected_card_init', 'up_a'),
+    'lifecycle.deactivate_on_early_hit': ('deactivate_on_early_hit', True),
+    'lifecycle.depends_on': ('depends_on', 'other'),
+    'start': ('soft_start', 74),
+    'end': ('soft_end', 90),
+    'increment': ('soft_increment', 6.25),
+    'threshold': ('threshold', 90),
+    'cr_counter_threshold': ('cr_counter_threshold', 3),
+    'cr_base_rate': ('cr_base_rate', 0.018),
+    'cr_state_probs': ('cr_state_probs', (0.0, 0.0, 0.0, 1.0)),
+    'fate_threshold': ('fate_threshold', 1),
+    'switch_allowed': ('switch_allowed', False),
+    'switch_resets_progress': ('switch_resets_progress', False),
+}
+
+_EVENT_BTYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
+                           'rotating_cr_soft', 'targeted', 'targeted_soft'})
+
+
+def _pity_type_key_btypes():
+    """契约表里的 btype 全集——参数化用例由此派生，扩表即自动覆盖新类型。"""
+    from gacha_simulator.core.config_toml import _PITY_TYPE_KEYS
+    return set(_PITY_TYPE_KEYS)
+
+
+def _flat_type_keys(btype):
+    """该 btype 的类型专用键（去掉嵌套的 `lifecycle.*`）。"""
+    from gacha_simulator.core.config_toml import _PITY_TYPE_KEYS
+    return {k for k in _PITY_TYPE_KEYS[btype] if not k.startswith('lifecycle.')}
+
+
+def _form_for_btype(btype):
+    """该 btype 的软保底形态：'deltas' / 'sugar' / None（无软保底键）。
+
+    `deltas` 与语法糖三元组（`start` / `end` / `increment`）在写侧由同一分支产出、
+    不能同时写出（`_write_sugar_form`），故 fixture 二选一；`soft_step` 只有
+    `deltas` 一个类型键，只能走 deltas 形态。
+    """
+    keys = _flat_type_keys(btype)
+    if 'deltas' in keys and 'start' not in keys:
+        return 'deltas'
+    if 'start' in keys:
+        return 'sugar'
+    return None
+
+
+def _pitydef_from_contract(btype, *, form):
+    """按 btype 的键契约构造「全量键」`PityDef`——契约内字段一律置非默认值。
+
+    **必须是非默认值**：`_pitydef_to_toml` 是条件式逐字段书写（`priority` /
+    `target_featured` / `lifecycle` 等均为「非默认才写」），全默认构造时用例恒绿、
+    检测力归零。
+
+    事件驱动型不置 `deactivate_on_early_hit`：读侧对「事件驱动型 + 提前命中」有专条
+    硬拒，那是另一处被测面。
+    """
+    from gacha_simulator.core.config_store import PityDef
+    from gacha_simulator.core.config_toml import (_expand_soft_to_deltas,
+                                                  _pity_declared_keys)
+
+    keys = _pity_declared_keys(btype) - {'name', 'type', 'scope', 'lifecycle'}
+    kwargs = {}
+    for key in sorted(k for k in keys if k != 'deltas'):
+        field, value = _PITY_KEY_TO_FIELD[key]
+        kwargs[field] = value
+    if btype in _EVENT_BTYPES:
+        kwargs.pop('deactivate_on_early_hit', None)
+
+    if form == 'deltas':
+        for f in ('soft_start', 'soft_end', 'soft_increment'):
+            kwargs.pop(f, None)
+        kwargs['deltas'] = ((74, 0.0), (16, 6.25))
+        kwargs['soft_deltas'] = kwargs['deltas']   # 读侧由写出的 deltas 重建
+    elif form == 'sugar' and btype in ('soft_interval', 'soft_additive'):
+        # 直写语法糖的配置，读侧会展开出 deltas；fixture 预置同一份展开值，
+        # 否则「往返等值」会因这一处**格式层**产物而失配。
+        kwargs['deltas'] = _expand_soft_to_deltas(
+            btype, kwargs['soft_start'], kwargs.get('soft_end'),
+            kwargs.get('soft_increment'))
+
+    return PityDef(name='p_' + btype, btype=btype, scope='ssr', **kwargs)
+
+
+def _expected_emitted_keys(btype, form):
+    """该 btype 的全量键 fixture 经写侧应产出的键集（与被测实现独立推导）。"""
+    from gacha_simulator.core.config_toml import _PITY_COMMON_KEYS
+
+    drop = {'deltas'} if form != 'deltas' else {'start', 'end', 'increment'}
+    return set(_PITY_COMMON_KEYS) | (_flat_type_keys(btype) - drop)
+
+
+def _build_pity_read_keys():
+    """从 `_build_pity` 源码提取「被读取的 TOML 键」集合（反向断言用）。
+
+    源码扫描而非用例穷举：读侧每加一处 `p.get(k)` / `p[k]` / `'k' in p` 即自动纳入，
+    无需同步维护第二份清单。`lifecycle_raw.get(...)` 的一层嵌套键单独收，
+    返回 `(顶层键集, 嵌套键集)`。
+    """
+    import inspect
+    import re
+
+    from gacha_simulator.core.config_toml import _build_pity
+
+    code = inspect.getsource(_build_pity)
+    pats = [r"p\.get\(\s*'([a-z_]+)'", r'p\.get\(\s*"([a-z_]+)"',
+            r"p\['([a-z_]+)'\]", r"'([a-z_]+)'\s+in\s+p\b"]
+    top = set()
+    for pat in pats:
+        top |= set(re.findall(pat, code))
+    nested = set(re.findall(r"lifecycle_raw\.get\(\s*'([a-z_]+)'", code))
+    return top, nested
+
+
+class TestPityKeyContract:
+    """契约表的一致性（双向）+ 读侧面覆盖 + 硬拒。"""
+
+    def test_contract_tables_are_module_level_and_disjoint(self):
+        """契约表形态：通用键与类型键不交叠，且类型键表覆盖全部 btype。"""
+        from gacha_simulator.core.config_toml import _PITY_COMMON_KEYS, _PITY_TYPE_KEYS
+        from gacha_simulator.core.pity import BEHAVIOR_REGISTRY
+
+        assert 'priority' in _PITY_COMMON_KEYS, (
+            'priority 由 S4b 落地且要求 round-trip 写回，缺它即拒收刚写出的合法配置')
+        for btype, keys in _PITY_TYPE_KEYS.items():
+            flat = {k for k in keys if not k.startswith('lifecycle.')}
+            assert not (flat & _PITY_COMMON_KEYS), (btype, flat & _PITY_COMMON_KEYS)
+        assert set(_PITY_TYPE_KEYS) == set(BEHAVIOR_REGISTRY), (
+            '契约表的 btype 集与 BEHAVIOR_REGISTRY 不一致：'
+            f'{set(_PITY_TYPE_KEYS) ^ set(BEHAVIOR_REGISTRY)}')
+
+    @pytest.mark.parametrize('btype', sorted(_pity_type_key_btypes()))
+    def test_emitted_keys_equal_contract(self, btype):
+        """① 全量键 fixture → `_pitydef_to_toml` 产出键集 == 该 btype 的契约。
+
+        双向断言：`⊆` 防「写侧产出未声明键」（写盘后自己读不回来），
+        `==` 的补集方向防「契约表登记了写侧产不出的幽灵键」（表与实现漂移）。
+        """
+        from gacha_simulator.core.config_toml import (_pity_declared_keys,
+                                                      _pitydef_to_toml)
+
+        form = _form_for_btype(btype)
+        emitted = set(_pitydef_to_toml(_pitydef_from_contract(btype, form=form)))
+        expected = _expected_emitted_keys(btype, form)
+        assert emitted <= _pity_declared_keys(btype), (
+            f'{btype}: 写侧产出了未声明键 '
+            f'{sorted(emitted - _pity_declared_keys(btype))}')
+        assert emitted == expected, (
+            f'{btype}: 写侧产出与契约不符；多 {sorted(emitted - expected)}、'
+            f'少 {sorted(expected - emitted)}')
+
+    def test_priority_keys_subset_of_contract(self):
+        """`PityDef(priority=5)` 的产出键集 ⊆ 通用键（S4b 写回面的自检）。"""
+        from gacha_simulator.core.config_store import PityDef
+        from gacha_simulator.core.config_toml import (_PITY_COMMON_KEYS,
+                                                      _pitydef_to_toml)
+
+        assert set(_pitydef_to_toml(PityDef(name='x', priority=5))) <= _PITY_COMMON_KEYS
+
+    def test_contract_subset_of_build_pity_read_face(self):
+        """② 反向：契约表 ⊆ `_build_pity` 的读取面。
+
+        表里声明、读侧却不读的键 = 幽灵键（用户写它 → 加载期放行 → 无声失效），
+        与建表立意相反。
+        """
+        from gacha_simulator.core.config_toml import (_PITY_COMMON_KEYS,
+                                                      _PITY_TYPE_KEYS)
+
+        top, nested = _build_pity_read_keys()
+        # 扫描本身有效性的守卫：扫不到主体育（如 `_build_pity` 被抽成多个函数、
+        # 读键改走变量）时下面的子集断言会假通过，故先钉住扫描面。
+        assert len(top) >= 20 and 'priority' in top and 'name' in top, (
+            f'源码扫描面异常（读键不足或缺少已知键）：{sorted(top)}')
+        assert nested >= {'deactivate_on_early_hit', 'depends_on'}, sorted(nested)
+
+        read_face = top | {f'lifecycle.{k}' for k in nested}
+        contract = set(_PITY_COMMON_KEYS)
+        for keys in _PITY_TYPE_KEYS.values():
+            contract |= keys
+        assert contract <= read_face, f'幽灵键：{sorted(contract - read_face)}'
+
+    def test_pity_key_issues_is_pure_and_readonly(self):
+        """③ `pity_key_issues` 不抛、只读、返回消息列表（形态同 shape_issues）。"""
+        import copy
+
+        from gacha_simulator.core.config_toml import pity_key_issues
+
+        legal = [{'name': 'ok', 'type': 'hard', 'scope': 'ssr', 'threshold': 90}]
+        assert pity_key_issues(legal) == []
+
+        bad = [{'name': 'bad', 'type': 'hard', 'scope': 'ssr', 'max_tirggers': 2,
+                'lifecycle': {'deactivate_on_early_hit': True, 'foo': 1}}]
+        before = copy.deepcopy(bad)
+        issues = pity_key_issues(bad)
+        assert bad == before, '被测函数修改了入参'
+        assert len(issues) == 2, issues
+        assert any('max_tirggers' in m for m in issues)
+        assert any('foo' in m for m in issues)
+
+        # 输入非法（非 list / 条目非 dict）不抛——那是 _build_pity 既有校验的报错面
+        assert pity_key_issues(None) == []
+        assert pity_key_issues({'name': 'x'}) == []
+        assert pity_key_issues(['not a dict']) == []
+
+    def test_unknown_key_rejected_names_key_and_legal_set(self):
+        """未声明键 → `ConfigError`，信息点名该键与合法键集（端到端）。"""
+        toml = (_BASE_TOML +
+                '[[pity]]\nname = "bad"\ntype = "hard"\nscope = "ssr"\n'
+                'threshold = 90\nmax_tirggers = 2\n')
+        with pytest.raises(ConfigError) as ei:
+            _write_and_load(toml)
+        msg = str(ei.value)
+        assert 'max_tirggers' in msg, msg      # 点名出错键
+        assert 'threshold' in msg, msg         # 该 type 的类型键
+        assert 'counter_init' in msg, msg      # 通用键
+        assert 'name' in msg, msg
+
+    def test_func_still_rejected_by_legacy_check(self):
+        """`func` 不入契约表：它由 `_check_pity_format` 的旧格式判据报出（提示语更贴题）。
+
+        这同时钉住硬拒的**次序**：未声明键的报错排在 `_check_pity_format` 之后，
+        含 `func` 的条目先吃到旧格式提示，而不是被当成「未声明键 func」。
+        """
+        toml = (_BASE_TOML +
+                '[[pity]]\nname = "x"\ntype = "soft_interval"\nscope = "ssr"\n'
+                'start = 73\nfunc = "linear"\n')
+        with pytest.raises(ConfigError) as ei:
+            _write_and_load(toml)
+        msg = str(ei.value)
+        assert 'func' in msg, msg
+        assert '未声明键' not in msg, msg
+
+    def test_cross_type_key_rejected(self):
+        """跨类型误写（soft_step 写 threshold）→ `ConfigError`（读侧确实不消费它）。"""
+        toml = _BASE_TOML + _pity_section('soft_step', 'x', threshold=90)
+        with pytest.raises(ConfigError, match='threshold'):
+            _write_and_load(toml)
+
+    def test_nested_lifecycle_unknown_key_rejected(self):
+        """`[pity.lifecycle]` 子表的未声明键 → `ConfigError`。"""
+        toml = _BASE_TOML + '''[[pity]]
+name = "x"
+type = "hard"
+scope = "ssr"
+threshold = 90
+
+[pity.lifecycle]
+deactivate_on_early_hit = true
+deactvate_on_early_hit = true
+'''
+        with pytest.raises(ConfigError, match='lifecycle'):
+            _write_and_load(toml)
+
+    def test_registered_key_of_other_type_still_accepted_for_its_own_type(self):
+        """未声明键硬拒不是「白名单外的键一刀切」——各类型自己的键照常放行。"""
+        toml = _BASE_TOML + (
+            _pity_section('soft_additive', 'a', start=65, increment=6.0) +
+            _pity_section('rotating_cr', 'b', cr_counter_threshold=3,
+                          cr_state_probs=[0.0, 0.0, 0.0, 1.0]) +
+            _pity_section('targeted', 'c', fate_threshold=1, switch_allowed=False))
+        store, path = _write_and_load(toml)
+        try:
+            assert [p.btype for p in store.pity.pities] == [
+                'soft_additive', 'rotating_cr', 'targeted']
+        finally:
+            os.unlink(path)
+
 class TestPriorityTomlRoundTrip:
     """`PityDef.priority` 的 TOML 往返：解析、非默认写回、默认不写。"""
 
@@ -647,33 +934,78 @@ class TestPriorityTomlRoundTrip:
             assert 'priority = 5' in f.read()
         assert store2.pity.pities[0].priority == 5
 
-    def test_full_field_toml_roundtrip(self):
-        """字段全量 TOML round-trip：除「deltas 形态压制语法糖三元组」外逐字段等值。
+    @pytest.mark.parametrize('btype', sorted(_pity_type_key_btypes()))
+    def test_full_field_toml_roundtrip(self, btype):
+        """字段全量 TOML round-trip：**按键契约**逐字段等值（S4c 重写）。
 
-        例外只有一处且属**格式层互斥**而非透传缺陷：`_pitydef_to_toml`（经
-        `_write_sugar_form` / `_sugar_matches_deltas`）在 `deltas` 与语法糖三元组
-        **不能无损互译**时只写 `deltas`（`deltas` 是语义权威），语法糖三元组随之在
-        重载后为 None；两者一致时反而写语法糖形式、三元组保值。本用例的 fixture 走的
-        是「不一致」那一支（实测 `_sugar_matches_deltas` 为 False）。
-        `soft_deltas` 保值：`_build_pity` 从写出的 `deltas` 重建它。
+        原版用单个 `soft_interval` + 全字段非默认的 fixture，在 S4c 键契约落地后
+        不再成立——那份额外把 `cr_*` / `fate_*` / `switch_*` / `threshold` 也置了
+        非默认值，而这些键对 `soft_interval` 未声明：写侧按契约过滤、读侧按契约硬拒。
+        改为**按 btype 参数化**：每条只置该类型契约内的键（通用键 + 该类型键），
+        断言 `PityDef` 全部字段往返等值——契约外字段恒为默认，「串值」也会被这条
+        断言抓住。
+
+        软保底形态由 `_form_for_btype()` 自动挑（`deltas` 与语法糖三元组在写侧由
+        同一分支产出、不能同时写出，见 `_write_sugar_form`）。
         """
         import dataclasses
 
         from gacha_simulator.core.config_store import ConfigStore, PityConfig, PityDef
 
-        src = _all_fields_non_default_pitydef()
+        src = _pitydef_from_contract(btype, form=_form_for_btype(btype))
         store = ConfigStore()
         store.pity = PityConfig(enabled=True, pities=[src])
-        path = tempfile.mkdtemp() + '/p64_full.toml'
+        path = tempfile.mkdtemp() + '/p64_full_' + btype + '.toml'
         save_toml(store, path)
         got = load_toml(path).pity.pities[0]
 
-        sugar_form = {'soft_start', 'soft_end', 'soft_increment'}
         lost = []
         for f in dataclasses.fields(PityDef):
-            if f.name in sugar_form:
-                continue
             if getattr(got, f.name) != getattr(src, f.name):
                 lost.append((f.name, getattr(src, f.name), getattr(got, f.name)))
         assert lost == [], f"下列字段在 TOML round-trip 中失真：{lost}"
         assert got.btype == src.btype
+
+    def test_writer_filters_cross_type_fields(self):
+        """写侧按键契约过滤跨类型字段（S4c 新增，防「写盘 → 重载」自破）。
+
+        `_pitydef_to_toml` 对 `cr_*` / `fate_*` / `switch_*` / `threshold` 是逐字段
+        无条件书写（只看字段非默认，不看 btype）。读侧自 S4c 起对未声明键硬拒，
+        故写侧必须同表过滤，否则把该 btype 不消费的字段写进 TOML 后自己读不回来。
+
+        **可达路径不止手构 PityDef**：GUI 兜底条目经 `PityDef(switch_allowed=None)`
+        令 `not None` 为真，给 `soft_interval` 条目写出 `switch_allowed = false`
+        （2026-10-10 实测），过滤前「导入无保底段的配置 → 导出 → 再导入」即失败。
+        """
+        import dataclasses
+
+        from gacha_simulator.core.config_store import ConfigStore, PityConfig, PityDef
+        from gacha_simulator.core.config_toml import (_pity_declared_keys,
+                                                      _pitydef_to_toml)
+
+        src = _all_fields_non_default_pitydef()          # btype='soft_interval'
+        entry = _pitydef_to_toml(src)
+
+        assert set(entry) <= _pity_declared_keys('soft_interval'), sorted(entry)
+        for cross in ('cr_base_rate', 'cr_counter_threshold', 'cr_state_probs',
+                      'fate_threshold', 'switch_allowed', 'switch_resets_progress',
+                      'threshold'):
+            assert cross not in entry, cross + ' 属其他类型的键，不该写进 soft_interval'
+        # 契约内的键照常写出（过滤只砍跨类型字段，不是整体丢弃）
+        assert entry['priority'] == 5 and entry['reset'] == 'featured'
+        assert entry['deltas'] == [[74, 0.0], [16, 6.25]]
+        assert entry['lifecycle'] == {'deactivate_on_early_hit': True,
+                                      'depends_on': 'other'}
+
+        # 端到端：往返后跨类型字段落回默认值，条目仍可加载
+        store = ConfigStore()
+        store.pity = PityConfig(enabled=True, pities=[src])
+        path = tempfile.mkdtemp() + '/p64_filter.toml'
+        save_toml(store, path)
+        got = load_toml(path).pity.pities[0]
+        for f in dataclasses.fields(PityDef):
+            if f.name in ('cr_base_rate', 'cr_counter_threshold', 'cr_state_probs',
+                          'fate_threshold', 'threshold'):
+                assert getattr(got, f.name) is None, f.name
+        assert got.switch_allowed is True and got.switch_resets_progress is True
+        assert got.deltas == ((74, 0.0), (16, 6.25))

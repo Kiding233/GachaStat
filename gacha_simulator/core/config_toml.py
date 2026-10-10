@@ -5,6 +5,8 @@ P61（Ph4）：池子配置段已从旧 [[pools]]（含 distribution_template/bi
 （§3.10.6）——模板在迁移时展开为内联 [[banner.pool.reward]]。
 """
 
+import copy as _copy
+import dataclasses as _dataclasses
 import datetime as _dt
 import warnings
 from typing import Dict, List, Optional
@@ -55,12 +57,39 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
 
     Returns:
         填充后的 ConfigStore。
+
+    Raises:
+        ConfigError: 配置非法（各 `_build_*` 校验）。**P64 S4c：失败时传入的
+            store 逐字段回滚到调用前状态**（原实现是半装：已构建的段落留下、
+            未构建的段落已清空，banner 8→0 / pity 1→0 实测可复现）。
     """
     if store is None:
         store = ConfigStore()
+        _snapshot = None
     else:
+        # P64 S4c：失败原子性——先留快照，任一步抛错即整体回滚
+        # （`_restore_config_store()`）。原实现是先 `store.clear()`
+        # 再逐段构建，中途抛错即停在半装状态。
+        _snapshot = _copy.deepcopy(store)
         store.clear()
 
+    try:
+        _fill_store_from_toml(path, store)
+    except BaseException:
+        if _snapshot is not None:
+            _restore_config_store(store, _snapshot)
+        raise
+    return store
+
+
+def _fill_store_from_toml(path: str, store: ConfigStore) -> None:
+    """`load_toml` 的填充主体（P64 S4c 自 `load_toml` 原样抽出，无独立调用者）。
+
+    抽出只为让 `load_toml` 能把「打开文件 → 各段构建 → 校验」整体包进
+    try/except：填充全程在**传入的 store 上原地进行**（各 `_build_*` 直接
+    追加/覆盖字段，且依赖 `load_toml` 已 `clear()`），中途抛错即半装，
+    故必须整体回滚而不是局部补偿。
+    """
     with open(path, 'rb') as f:
         data = tomllib.load(f)
 
@@ -110,7 +139,20 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     _build_stop_condition(data, store)
     _validate_stop_condition_config(data, store)
 
-    return store
+
+def _restore_config_store(store: ConfigStore, snapshot: ConfigStore) -> None:
+    """把 `snapshot` 的全部字段写回 `store`（P64 S4c：`load_toml` 失败回滚）。
+
+    逐字段**现取**（`dataclasses.fields`）而非手写清单：手写清单漏一项即静默
+    留下半装状态，而 `ConfigStore` 自 P58 起已多次加字段（P60/P63/P77/P78/P79）
+    且以后还会加。写回的是 `load_toml` 开头那份深拷贝的字段值，故回滚后
+    「与加载前逐字段相同」是构造上的直接结果，不依赖逐字段比对。
+
+    原地赋值而非返回新对象：调用方（GUI 的 `self._store`、webui 的
+    `self._store`）持有的是同一个 ConfigStore 引用，换对象等于没修。
+    """
+    for _f in _dataclasses.fields(ConfigStore):
+        setattr(store, _f.name, getattr(snapshot, _f.name))
 
 
 def save_toml(store: ConfigStore, path: str) -> None:
@@ -640,6 +682,139 @@ def legal_reset_values(rarity_rank_map: dict) -> set:
     return {'', 'featured', 'never'} | set(rarity_rank_map)
 
 
+# ══════════════════════════════════════════════════════════════════
+# P64 S4c：`[[pity]]` 的 TOML 键契约（**全篇唯一契约源**）
+# ══════════════════════════════════════════════════════════════════
+# 读侧 `_build_pity` 对未声明键是**静默忽略**（`p.get(...)` 取不到即落默认值），
+# 写侧 `_pitydef_to_toml` 是条件式逐字段书写——两者叠加的后果是：键名笔误
+# （如 `max_tirggers`）与「该类型根本不消费的键」（如 `soft_step` 写 `end`）
+# 都**零信号地**改变配置语义。故此处建表，`_build_pity` 按表硬拒、
+# `_pitydef_to_toml` 按表过滤产出。
+#
+# **白名单不得改取 `BEHAVIOR_REGISTRY[btype]['params']`**（2026-10-10 实测确认）：
+# 那是 GUI 控件声明面，比真键契约**窄**——`rotating_soft` 缺 `end`、
+# `rotating_cr` 缺 `cr_state_probs`、四个 init 键与 `reset` / `pools` /
+# `lifecycle` / `target_featured` 均不在其中，照抄会把合法键报成未知。
+#
+# **扩表编辑点只有三处**：S4-4 的 `max_triggers` 入 `_PITY_COMMON_KEYS`；
+# S6a 的 `rotating_inverse`、S9-3 的 `hard_exclude_owned_skip` /
+# `hard_exclude_owned_any`（键集含 `on_all_owned`）入 `_PITY_TYPE_KEYS`。
+# 写侧产出按本表过滤，故扩表后写侧自动跟随，无需第二处编辑。
+
+# 跨类型的通用键（任何 btype 均合法）。
+_PITY_COMMON_KEYS = frozenset({
+    # 标识
+    'name', 'type',
+    # 语义与绑定
+    'scope', 'target_featured', 'reset', 'pools',
+    # 管道顺序（G5 / §3.6，S4b；非默认才写回）
+    'priority',
+    # 生命周期（嵌套键形态见 _PITY_TYPE_KEYS 的 lifecycle.* 项）
+    'lifecycle',
+    # 四个初始状态键
+    'counter_init', 'guaranteed_init', 'fate_points_init', 'selected_card_init',
+})
+
+# 嵌套键（写侧形态为 `[pity.lifecycle]` 子表）。对**全部** btype 放行：
+# `deactivate_on_early_hit=true` 配事件驱动型应由 `_build_pity` 的专条拒绝
+# （提示语「不适用于事件驱动型保底」比「未声明键」贴题），故此处不按类型收窄。
+_PITY_LIFECYCLE_KEYS = frozenset({
+    'lifecycle.deactivate_on_early_hit', 'lifecycle.depends_on',
+})
+
+# 每 btype 的类型专用键集（含嵌套键）——与写侧 `_pitydef_to_toml` 的各类型分支
+# **一一对应**：表里有的键写侧必能产出、写侧产出的键必在表内（一致性测试钉住）。
+# `soft_interval` / `soft_additive` 的差异是实质的：前者的 `increment` 与后者的
+# `end` 都不参与 `_expand_soft_to_deltas()` 的展开、也都不被写侧写回，写进 TOML
+# 只会静默丢失，故**不入表**（写它即报未知键）。
+_PITY_TYPE_KEYS = {
+    # ── counter 驱动型 ──
+    'soft_interval': frozenset({'start', 'end', 'deltas'}),
+    'soft_additive': frozenset({'start', 'increment', 'deltas'}),
+    'soft_step': frozenset({'deltas'}),
+    'hard': frozenset({'threshold'}),
+    # ── 事件驱动型 ──
+    'rotating': frozenset(),
+    'rotating_soft': frozenset({'start', 'end', 'increment', 'deltas'}),
+    'rotating_cr': frozenset({'cr_counter_threshold', 'cr_base_rate',
+                              'cr_state_probs'}),
+    'rotating_cr_soft': frozenset({'start', 'end', 'increment', 'deltas',
+                                   'cr_counter_threshold', 'cr_base_rate',
+                                   'cr_state_probs'}),
+    'targeted': frozenset({'fate_threshold', 'switch_allowed',
+                           'switch_resets_progress'}),
+    'targeted_soft': frozenset({'start', 'end', 'increment', 'deltas',
+                                'fate_threshold', 'switch_allowed',
+                                'switch_resets_progress'}),
+}
+_PITY_TYPE_KEYS = {_bt: _ks | _PITY_LIFECYCLE_KEYS
+                   for _bt, _ks in _PITY_TYPE_KEYS.items()}
+
+
+def _pity_declared_keys(btype: str) -> frozenset:
+    """某 btype 的合法 `[[pity]]` 键全集 = 通用键 ∪ 该类型键。
+
+    未注册的 btype（如 S6a 扩表前的 `rotating_inverse`）只剩通用键，
+    与「该类型暂无类型专用键」等价。btype 本身是否已注册**不在本表职责内**
+    （`create_behavior` 在装配期对未注册类型报错）。
+    """
+    return _PITY_COMMON_KEYS | _PITY_TYPE_KEYS.get(btype, frozenset())
+
+
+def pity_key_issues(pity_list: list) -> List[str]:
+    """`[[pity]]` 列表的**未声明键**清单（加载期与保存闸门共用，单一实现点）。
+
+    形态照 `stop_condition_shape_issues`：**不抛、只读**（不修改传入的 list 与
+    其中的 dict）、返回人类可读的消息列表。输入非法（非 list、条目非 dict）时
+    静默跳过——那是 `_build_pity` 既有校验的报错面，不由本函数代劳。
+
+    报两类「配置没按你写的生效」：
+
+    1. **条目含未声明键。** 读侧 `p.get(key)` 取不到就落默认值，键名笔误
+       （`max_tirggers`）与跨类型误写（`soft_step` 写 `threshold`）都零信号。
+    2. **`[pity.lifecycle]` 子表含未声明键。** 同理，写错了只会静默落
+       `False` / `None`。
+
+    合法键集由 `_pity_declared_keys(btype)` 给出，错误信息里点名列全，
+    用户无需查文档即可改对。
+    """
+    if not isinstance(pity_list, list):
+        return []
+
+    issues: List[str] = []
+    for entry in pity_list:
+        if not isinstance(entry, dict):
+            continue
+        btype = entry.get('type', 'soft_interval')
+        name = entry.get('name', '?')
+        declared = _pity_declared_keys(btype)
+        flat = sorted(k for k in declared if not k.startswith('lifecycle.'))
+        nested = sorted(k.split('.', 1)[1] for k in declared
+                        if k.startswith('lifecycle.'))
+
+        unknown = sorted(k for k in entry if k not in declared)
+        if unknown:
+            issues.append(
+                f"[[pity]] 条目 name='{name}'（type='{btype}'）含未声明键 {unknown}。"
+                f"这些键在解析时被忽略、配置不会按写的生效"
+                f"（该 type 的合法键集：{flat}；"
+                f"另有 [pity.lifecycle] 的 {nested}）"
+            )
+
+        lifecycle = entry.get('lifecycle')
+        if isinstance(lifecycle, dict):
+            nested_unknown = sorted(k for k in lifecycle
+                                    if f'lifecycle.{k}' not in declared)
+            if nested_unknown:
+                issues.append(
+                    f"[[pity]] 条目 name='{name}'（type='{btype}'）的 "
+                    f"[pity.lifecycle] 含未声明键 {nested_unknown}。"
+                    f"这些键在解析时被忽略（合法：[pity.lifecycle] 的 {nested}）"
+                )
+
+    return issues
+
+
 def _build_pity(data: dict, store: ConfigStore) -> None:
     """[[pity]] → store.pity（P55 扁平化 PityDef 格式）。"""
     pity_list = data.get('pity', [])
@@ -655,6 +830,16 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
 
     # P81 B11：旧格式不再自动迁移，改为显式拒绝（口径同 P65 _check_card_format）
     _check_pity_format(pity_list)
+
+    # P64 S4c：键契约硬拒（原先未声明键被静默忽略，见 `_PITY_COMMON_KEYS` 处说明）。
+    # 排在 `_check_pity_format` 之后：旧格式（含 func / 带 start 却缺 scope）的
+    # 提示语比「未声明键」更贴题，故旧格式优先报出。
+    _key_issues = pity_key_issues(pity_list)
+    if _key_issues:
+        raise ConfigError(
+            "[[pity]] 配置含未声明的键，加载已中止（整份配置未被采用）：\n"
+            + '\n'.join(_key_issues)
+        )
 
     # 稀有度 rank map（小写归一化——ISSUE-023/§0.2）
     rarity_rank_map = {k.lower(): v for k, v in store.rarity_rank.items()}
@@ -1869,6 +2054,23 @@ def _pitydef_to_toml(p) -> dict:
         lifecycle['depends_on'] = p.depends_on
     if lifecycle:
         entry['lifecycle'] = lifecycle
+
+    # P64 S4c：产出按**键契约**过滤（唯一契约源见 `_PITY_COMMON_KEYS` 处说明）。
+    # 本函数对 cr_* / fate_* / switch_* / threshold 等类型专用字段是**逐字段无条件
+    # 书写**（只看字段是否非默认，不看 btype），而读侧自 S4c 起对未声明键硬拒——
+    # 不过滤则「写盘 → 重载」自破。可达路径不止手构 PityDef：GUI 兜底条目经
+    # `PityDef(switch_allowed=None)` 让 `not None` 为真，给 soft_interval 条目写出
+    # `switch_allowed = false`（2026-10-10 实测）。
+    # 被过滤掉的字段对该 btype 本就无消费者（引擎按 btype 取键），故行为不变。
+    declared = _pity_declared_keys(p.btype)
+    for _key in [k for k in entry if k not in declared]:
+        del entry[_key]
+    _lc = entry.get('lifecycle')
+    if isinstance(_lc, dict):
+        for _key in [k for k in _lc if f'lifecycle.{k}' not in declared]:
+            del _lc[_key]
+        if not _lc:
+            del entry['lifecycle']
 
     return entry
 

@@ -878,3 +878,214 @@ def test_b8_legacy_colon_gain_rule_surfaces_as_load_warning():
     ]}}, store2)
     assert [w for w in store2.load_warnings if '旧写法' in w] == []
     assert [r.rule_type for r in store2.gain_rules] == ['every_n_days']
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4c ②：`load_toml` 失败原子性
+# ══════════════════════════════════════════════════════════════════
+# 原实现先 `store.clear()` 再逐段构建，中途抛错即停在**半装**状态——实测（真实
+# 配置 + 一处非法输入）：`banner.banners` 8→0、`pity.pities` 1→0，已构建的段落
+# 留下、未构建的段落已清空；而 GUI 的 `_load_default_config` / `import_config`
+# 是 `except Exception` → stderr traceback + 状态栏一行字，窗口照常打开，即
+# **静默半开**。
+#
+# `load_toml` 调用链内现有近百处 `raise ConfigError`（cards / pity / milestone /
+# select_voucher / banners / resource_lifecycle / stop_condition 各段皆有），逐处
+# 包 try 治不了本，故改为「先快照、抛错即整体回滚」（`_restore_config_store`）。
+# 本组对**每个段落**各注入一处非法输入（外加一例 TOML 语法错误，证明非
+# `ConfigError` 的异常同样回滚），断言失败后传入的 store 与加载前逐字段相同。
+
+# 基准配置 = 真实 `config/config.toml` + 本增量段。增量段的用途是**反空转**：
+# 真实配置自身在 resource_lifecycle / select_voucher / stop_condition 三段上是空的，
+# 不补的话这三段的用例分不清「回滚成功」与「这些段本来就没内容」——实测把原子性
+# 变异回「先 clear 再构建」后，这三段的用例**仍然绿**（其余五段红），正是该盲区。
+_GOOD_EXTRAS = '''
+[resources.lifecycle]
+enabled = true
+
+[[resources.lifecycle.rules]]
+resource_id = "exchange_currency"
+expire_at = 100
+
+[resources.lifecycle.rules.on_expire]
+clear = true
+
+[[select_voucher]]
+voucher = "draw_resource"
+cards = ["limited_ssr_1"]
+
+[stop_condition]
+type = "fixed_action_count"
+max_actions = 500
+'''
+
+
+def _real_config_path():
+    """真实配置路径（开发环境即 `gacha_simulator/config/config.toml`）。"""
+    from gacha_simulator.paths import get_config_dir
+    return os.path.join(get_config_dir(), 'config.toml')
+
+
+def _good_config_text():
+    with open(_real_config_path(), encoding='utf-8') as f:
+        return f.read() + _GOOD_EXTRAS
+
+
+def _store_field_snapshot(store):
+    """store 全部 dataclass 字段的深拷贝快照（逐字段比对的基准）。
+
+    逐字段**现取**（`dataclasses.fields`）而非手写清单——手写清单漏一项即让
+    「逐字段相同」的断言失去覆盖面。
+    """
+    import copy as _c
+    import dataclasses as _d
+    from gacha_simulator.core.config_store import ConfigStore
+    return {f.name: _c.deepcopy(getattr(store, f.name))
+            for f in _d.fields(ConfigStore)}
+
+
+def _load_text_into(store, text):
+    """写临时文件后加载到 store（无论成败清临时文件）。"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.toml', delete=False,
+                                     encoding='utf-8') as f:
+        f.write(text)
+        path = f.name
+    try:
+        return load_toml(path, store=store)
+    finally:
+        os.unlink(path)
+
+
+def _inject(text, find, replace):
+    """在基准配置上注入一处非法输入：`find` 空串表示**追加**，否则为定点替换。"""
+    if not find:
+        return text + replace
+    assert text.count(find) == 1, f'注入锚点在基准配置中不唯一：{find!r}'
+    return text.replace(find, replace)
+
+
+# 段落名 → (锚点, 替换文本, 期望异常)
+# 追加形态用于数组表（`[[card]]` / `[[pity]]` / …），定点替换用于基准配置里
+# **已存在**的表（`[resources.lifecycle]` / `[stop_condition]`）——同名表不能
+# 二次定义，追加会退化成 TOMLDecodeError，测不到该段自己的校验分支。
+_ILLEGAL_BY_SEGMENT = [
+    ('cards',
+     '', '\n[[cards]]\nid = "x"\nname = "x"\nrarity = "SSR"\n',
+     ConfigError),
+    ('pity',
+     '', '\n[[pity]]\nname = "bad"\ntype = "hard"\nscope = "ssr"\n'
+         'threshold = 90\nmax_tirggers = 2\n',
+     ConfigError),
+    ('milestone',
+     '', '\n[[milestone]]\nname = "m_bad"\nthreshold = 0\n',
+     ConfigError),
+    ('select_voucher',
+     '', '\n[[select_voucher]]\nvoucher = "exchange_currency"\n'
+         'cards = ["no_such_card"]\n',
+     ConfigError),
+    ('banners',
+     '', '\n[[banner]]\nid = "b_bad"\nname = "bad"\nstart_day = 0\nend_day = 1\n'
+         '\n[[banner.pool]]\nid = "main"\ncost = "draw_resource:160"\n'
+         'epitomizable_cards = ["nonexistent"]\n'
+         '\n[[banner.pool.reward]]\ncard_id = "limited_ssr_1"\n'
+         'probability = 1.0\nrarity = "SSR"\nfeatured = true\n',
+     ConfigError),
+    ('resource_lifecycle',
+     'resource_id = "exchange_currency"\n', '',
+     ConfigError),
+    ('stop_condition',
+     '[stop_condition]\ntype = "fixed_action_count"\nmax_actions = 500\n',
+     '[stop_condition]\nconditions = "not_a_list"\n',
+     ConfigError),
+    ('toml_syntax',
+     '', '\n[[banner]\n',
+     Exception),
+]
+
+
+class TestLoadTomlFailureAtomicity:
+    """加载失败 → 传入的 store 逐字段回滚（P64 S4c ②）。"""
+
+    @staticmethod
+    def _loaded_store():
+        """基准配置装好的 store + 反空转守卫（任一段落为空则本组用例失去意义）。"""
+        store = _load_text_into(None, _good_config_text())
+        counts = (len(store.banner.banners), len(store.card_defs),
+                  len(store.pity.pities), len(store.resource_defs),
+                  len(store.milestone.milestones),
+                  len(store.resource_lifecycle.rules), len(store.select_vouchers))
+        assert all(c >= 1 for c in counts) and store.stop_condition is not None, (
+            f'基准配置的段落为空 {counts} / stop_condition={store.stop_condition}——'
+            f'本组用例的反空转前提失效（计划实测：banners 8 / cards 24 / pity 1）')
+        return store
+
+    @pytest.mark.parametrize('segment,find,replace,exc',
+                             _ILLEGAL_BY_SEGMENT,
+                             ids=[c[0] for c in _ILLEGAL_BY_SEGMENT])
+    def test_failed_load_leaves_store_unchanged(self, segment, find, replace, exc):
+        """各段落各自的非法输入 → 抛错，且 store 逐字段与加载前相同。"""
+        store = self._loaded_store()
+        before = _store_field_snapshot(store)
+        counts_before = (len(store.banner.banners), len(store.card_defs),
+                         len(store.pity.pities), len(store.resource_defs),
+                         len(store.milestone.milestones),
+                         len(store.resource_lifecycle.rules),
+                         len(store.select_vouchers))
+
+        with pytest.raises(exc):
+            _load_text_into(store, _inject(_good_config_text(), find, replace))
+
+        after = _store_field_snapshot(store)
+        counts_after = (len(store.banner.banners), len(store.card_defs),
+                        len(store.pity.pities), len(store.resource_defs),
+                        len(store.milestone.milestones),
+                        len(store.resource_lifecycle.rules),
+                        len(store.select_vouchers))
+        assert counts_after == counts_before, (
+            f'{segment}：失败后段落计数被改动（原实现此处为 banners 8→0 / pity 1→0）')
+        diff = sorted(k for k in before if before[k] != after[k])
+        assert diff == [], f'{segment}：失败后下列字段与加载前不同：{diff}'
+
+    def test_failed_load_keeps_store_usable(self):
+        """失败后 store 仍可用（回滚不留残留：配置项与派生值都对得上）。"""
+        store = self._loaded_store()
+        end_time_before = store.end_time
+        n_pools = len(store.pools)
+
+        with pytest.raises(ConfigError):
+            _load_text_into(
+                store,
+                _inject(_good_config_text(), '',
+                        '\n[[pity]]\nname = "bad"\ntype = "hard"\nscope = "ssr"\n'
+                        'max_tirggers = 2\n'))
+
+        assert store.end_time == end_time_before
+        assert len(store.pools) == n_pools
+        assert store.pity.pities and store.pity.pities[0].name == 'ssr_soft'
+
+    def test_successful_load_after_failure_still_replaces(self):
+        """失败 → 再成功加载：成功那次照常整体替换（回滚不粘连上次的失败）。"""
+        store = self._loaded_store()
+        with pytest.raises(ConfigError):
+            _load_text_into(
+                store,
+                _inject(_good_config_text(), '',
+                        '\n[[milestone]]\nname = "m_bad"\nthreshold = 0\n'))
+
+        minimal = ('[rarities]\nranks = [["SSR"], ["SR"], ["R"]]\n'
+                   '\n[[banner]]\nid = "b1"\nname = "b1"\nstart_day = 0\nend_day = 3\n'
+                   '\n[[banner.pool]]\nid = "main"\ncost = "draw_resource:160"\n'
+                   '\n[[banner.pool.reward]]\ncard_id = "c1"\nprobability = 1.0\n'
+                   'rarity = "SSR"\nfeatured = true\n')
+        _load_text_into(store, minimal)
+        assert len(store.banner.banners) == 1
+        assert store.card_defs == []
+        assert store.pity.pities == []
+
+    def test_failure_with_fresh_store_still_raises(self):
+        """`store=None`（新建实例）路径：照常抛错，异常不被吞掉。"""
+        with pytest.raises(ConfigError):
+            _load_text_into(
+                None,
+                _inject(_good_config_text(), '',
+                        '\n[[pity]]\nname = "bad"\ntype = "hard"\nscope = "ssr"\n'
+                        'max_tirggers = 2\n'))

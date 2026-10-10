@@ -573,3 +573,105 @@ class TestResetValueWhitelist:
 
         assert legal_reset_values({'ssr': 0, 'sr': 1, 'r': 2}) == {
             '', 'featured', 'never', 'ssr', 'sr', 'r'}
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4b：`priority` 字段的解析 + round-trip 写回（G5 / ISSUE-923）
+# ══════════════════════════════════════════════════════════════════
+# `_pitydef_to_toml` 是**条件式逐字段书写**，不会自动带上任何新字段：不补写回，
+# 「GUI 加载 → 保存」一次即把手写的 `priority` 从 TOML 抹掉（默认 0 与缺键在解析
+# 侧等价，故丢失无任何报错）。
+
+def _all_fields_non_default_pitydef():
+    """全部字段非默认值的 `PityDef`（字段集由 dataclasses 现取，见同批守卫）。"""
+    from gacha_simulator.core.config_store import PityDef
+
+    return PityDef(
+        name='p1', btype='soft_interval', scope='ssr', target_featured=True,
+        deltas=((74, 0.0), (16, 6.25)), threshold=90, counter_init=3,
+        guaranteed_init=True, fate_points_init=2, selected_card_init='up_a',
+        soft_start=74, soft_end=90, soft_increment=6.25,
+        soft_deltas=((74, 0.0), (16, 6.25)), cr_counter_threshold=3,
+        cr_base_rate=0.018, cr_state_probs=(0.0, 0.0, 0.0, 1.0), fate_threshold=1,
+        switch_allowed=False, switch_resets_progress=False, pools=('test_pool.main',),
+        deactivate_on_early_hit=True, depends_on='other', reset='featured', priority=5,
+    )
+
+
+class TestPriorityTomlRoundTrip:
+    """`PityDef.priority` 的 TOML 往返：解析、非默认写回、默认不写。"""
+
+    def test_writeback_emits_non_default(self):
+        from gacha_simulator.core.config_toml import _pitydef_to_toml
+        from gacha_simulator.core.config_store import PityDef
+
+        assert _pitydef_to_toml(PityDef(name='x', priority=5))['priority'] == 5
+
+    def test_writeback_omits_default(self):
+        """默认 0 不写出该键（round-trip 纪律：缺键与 0 在解析侧等价）。"""
+        from gacha_simulator.core.config_toml import _pitydef_to_toml
+        from gacha_simulator.core.config_store import PityDef
+
+        assert 'priority' not in _pitydef_to_toml(PityDef(name='x'))
+        assert 'priority' not in _pitydef_to_toml(PityDef(name='x', priority=0))
+
+    def test_parse_from_toml(self):
+        toml = _BASE_TOML + _pity_section('soft_interval', 'p1',
+                                          start=74, end=90, priority=5)
+        store, path = _write_and_load(toml)
+        try:
+            assert store.pity.pities[0].priority == 5
+        finally:
+            os.unlink(path)
+
+    def test_parse_missing_key_defaults_to_zero(self):
+        toml = _BASE_TOML + _pity_section('soft_interval', 'p1', start=74, end=90)
+        store, path = _write_and_load(toml)
+        try:
+            assert store.pity.pities[0].priority == 0
+        finally:
+            os.unlink(path)
+
+    def test_save_load_closed_loop_preserves_priority(self):
+        """「写盘 → 重载」闭环：priority=5 经 `save_toml` / `load_toml` 后不变。"""
+        from gacha_simulator.core.config_store import ConfigStore, PityConfig
+
+        store = ConfigStore()
+        store.pity = PityConfig(enabled=True, pities=[
+            _all_fields_non_default_pitydef()])
+        path = tempfile.mkdtemp() + '/p64_priority.toml'
+        save_toml(store, path)
+        store2 = load_toml(path)
+        # 写回确实落了盘（而非被条件式逐字段书写漏掉）
+        with open(path, encoding='utf-8') as f:
+            assert 'priority = 5' in f.read()
+        assert store2.pity.pities[0].priority == 5
+
+    def test_full_field_toml_roundtrip(self):
+        """字段全量 TOML round-trip：除「deltas 形态压制语法糖三元组」外逐字段等值。
+
+        例外只有一处且属**格式层互斥**而非透传缺陷：`_pitydef_to_toml` 在
+        `deltas` 已给出且与语法糖展开一致时只写 `deltas`（两者是同一分布的两个写法），
+        故重载后 `soft_start` / `soft_end` / `soft_increment` 为 None。
+        `soft_deltas` 反而保值——`_build_pity` 从写出的 `deltas` 重建它。
+        """
+        import dataclasses
+
+        from gacha_simulator.core.config_store import ConfigStore, PityConfig, PityDef
+
+        src = _all_fields_non_default_pitydef()
+        store = ConfigStore()
+        store.pity = PityConfig(enabled=True, pities=[src])
+        path = tempfile.mkdtemp() + '/p64_full.toml'
+        save_toml(store, path)
+        got = load_toml(path).pity.pities[0]
+
+        sugar_form = {'soft_start', 'soft_end', 'soft_increment'}
+        lost = []
+        for f in dataclasses.fields(PityDef):
+            if f.name in sugar_form:
+                continue
+            if getattr(got, f.name) != getattr(src, f.name):
+                lost.append((f.name, getattr(src, f.name), getattr(got, f.name)))
+        assert lost == [], f"下列字段在 TOML round-trip 中失真：{lost}"
+        assert got.btype == src.btype

@@ -18,7 +18,7 @@ import time                                      # P83 §3.5：阶段计时（�
 import traceback
 from typing import Dict, Any, Optional, Callable
 from multiprocessing import Pool as MPPool
-from dataclasses import dataclass, field as dc_field
+from dataclasses import MISSING, dataclass, field as dc_field, fields
 
 from gacha_simulator.core.config_store import ConfigError   # P77：from_dict 类型守卫异常通道
 from gacha_simulator.core.stop_condition import (
@@ -189,17 +189,113 @@ class SimulationEnv:
     resource_lifecycle_rules: list = dc_field(default_factory=list)
 
 
+# ══════════════════════════════════════════════════════════════════
+# P64 S4b / §3.6 AUDIT-BREAK-1：PityDef 字段级透传纪律
+# ══════════════════════════════════════════════════════════════════
+# 配置到运行期引擎的桥接原为**枚举式逐字段列举**（写端 `pentry` 的 24 键字典、
+# 读端 `_PityDef(...)` 的逐字段重建）：新增一个 `PityDef` 字段若漏写即
+# **静默落回默认值**，配置层与测试都看不出异常。现改为由
+# `dataclasses.fields(PityDef)` 驱动，结构上不可能漏字段。
+#
+# **四个别名键与字段驱动同 commit 改口径**（ISSUE-910 的强制前提）：写端原写
+# `'type'` / `'start'` / `'end'` / `'increment'`（分别对应字段 `btype` /
+# `soft_start` / `soft_end` / `soft_increment`），读端原按这四个别名读回。
+# 若只把写端改成 `{f.name: getattr(pd, f.name)}` 而不改名，读端仍找 `'type'`
+# → `btype` 落回默认 `'soft_interval'`（软保底类型全变）、软保底三段参数整体
+# 丢失，**且不报错**；键集断言 `set(pentry) == {f.name for f in fields(PityDef)}`
+# 在别名制下亦恒不相等（多四个别名键、少四个字段名键）。
+# GUI 侧五处的同批改名归 S7a，不在本组（本组只管引擎侧三处）。
+
+
+def _pitydef_to_pity_dict(pd) -> dict:
+    """`PityDef` → 扁平 dict（**字段名口径**，供 `_build_pity_engine_from_gui`）。
+
+    键集恒等于 `{f.name for f in dataclasses.fields(PityDef)}`——新增字段自动带上。
+    """
+    return {f.name: getattr(pd, f.name) for f in fields(pd)}
+
+
+def _build_pity_cfg_dict(config_store) -> dict:
+    """`ConfigStore.pity` → `_build_pity_engine_from_gui` 的入参 dict。
+
+    **单点产出 `pentry`**（自 `from_config_store` 提取，2026-10-10 / S4b）：提取的
+    唯一动机是让守卫测试断言的对象就是**生产路径实际交给读端的那份 `pentry`**，
+    而不是一份复制品。原为内联块且原实现是 24 键枚举式 dict（其中四个还是别名键
+    `'type'` / `'start'` / `'end'` / `'increment'`，见 §3.6 AUDIT-BREAK-1 表 #1），
+    漏字段即静默落回默认值。逐字段枚举与那份 24 键清单**同批删除**，不得与新写法
+    并存（并存即第二真相源）。
+    """
+    pity_cfg_dict = {'enabled': True, 'pities': [], 'counter_init': {}}
+    pc = getattr(config_store, 'pity', None)
+    if pc and hasattr(pc, 'pities'):
+        pity_cfg_dict['enabled'] = getattr(pc, 'enabled', True)
+        for pd in pc.pities:
+            pentry = _pitydef_to_pity_dict(pd)
+            pity_cfg_dict['pities'].append(pentry)
+            # counter_init 从 PityDef 读取
+            ci = getattr(pd, 'counter_init', 0)
+            if ci:
+                pity_cfg_dict['counter_init'][pd.name] = ci
+    return pity_cfg_dict
+
+
+_PITY_DICT_ALIAS_KEYS = {
+    'type': 'btype',
+    'start': 'soft_start',
+    'end': 'soft_end',
+    'increment': 'soft_increment',
+}
+
+
+def _pity_dict_to_pitydef(p: dict):
+    """扁平 dict → `PityDef`（`_pitydef_to_pity_dict` 的逆，字段名口径）。
+
+    键缺失时落回 dataclass 字段默认值（`PityDef` 除 `name` 外均有默认值）。
+    `name` 无默认值，缺失即抛 `ConfigError`（不静默合成 `'pity'`）。
+    `pools` 归一为 tuple：dict 形态允许 list（TOML 读入形态）或裸字符串。
+
+    **四个别名键（`_PITY_DICT_ALIAS_KEYS`）硬拒**：它们已不属本函数契约。若放行，
+    传 TOML 口径 dict 的调用方会拿到 `btype` 落回字段默认 `'soft'`、软保底三段
+    参数全 None 的 `PityDef`，**且不报错**（该 `btype` 不在 `BEHAVIOR_REGISTRY`，
+    连带的 `KeyError` 被 `PityEngine.__init__` 吞成 `logger.warning`，保底静默消失）。
+    这正是 AUDIT-BREAK-1 要消除的失效形态，故由静默错值改为显式报错。
+    """
+    from gacha_simulator.core.config_store import PityDef
+    src = dict(p)
+    _aliases_hit = sorted(k for k in _PITY_DICT_ALIAS_KEYS if k in src)
+    if _aliases_hit:
+        raise ConfigError(
+            f"保底 dict 含已废弃的别名键 {_aliases_hit}——键空间已统一为 PityDef "
+            f"字段名（{' / '.join(f'{k} → {v}' for k, v in _PITY_DICT_ALIAS_KEYS.items())}），"
+            f"见 P64 S4b / §3.6 AUDIT-BREAK-1")
+    _pools = src.get('pools', ('*',))
+    src['pools'] = tuple(_pools) if isinstance(_pools, (list, tuple)) else (_pools,)
+    kwargs = {}
+    for f in fields(PityDef):
+        if f.name in src:
+            kwargs[f.name] = src[f.name]
+        elif f.default is not MISSING:
+            kwargs[f.name] = f.default
+        else:
+            raise ConfigError(
+                f"保底 dict 缺少 PityDef 必填字段 '{f.name}'（键集口径见 "
+                f"batch_simulator._pitydef_to_pity_dict）")
+    return PityDef(**kwargs)
+
+
 def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool_ssr_map=None, pool_type_map=None, rarity_rank=None):
     """P55 重写：从扁平化 PityDef dict 构造 PityEngine。
 
-    新格式示例：{'name': 'p1', 'type': 'soft_interval', 'scope': 'ssr',
+    新格式示例：{'name': 'p1', 'btype': 'soft_interval', 'scope': 'ssr',
                   'deltas': ((73,0.0), (17,5.882353)), ...}
+    （键为 `PityDef` **字段名**口径，见 `_pitydef_to_pity_dict`）
     """
     from gacha_simulator.core.pity import (
         PityEngine, PoolPitySpec, PityState,
         compute_scope_mappings,
     )
-    from gacha_simulator.core.config_store import PityDef as _PityDef
+    # P64 S4b：原函数内的 `PityDef as _PityDef` 局部 import 随逐字段重建块一并删除
+    # （读端现走 `_pity_dict_to_pitydef`，其内部按需 import）。
 
     if not pity_config.get('enabled', True):
         return None
@@ -213,34 +309,10 @@ def _build_pity_engine_from_gui(pity_config, pools, pool_featured_map=None, pool
         return None
 
     # ── P55 新路径：从扁平化 dict 构造 PityDef → create_behavior() ──
+    # P64 S4b：读端改为字段驱动（原为逐字段 `p.get(...)` 列举，四个键还是别名口径）
     pity_defs_list = []
     for p in pities_cfg:
-        pdef = _PityDef(
-            name=p.get('name', 'pity'),
-            btype=p.get('type', 'soft_interval'),
-            scope=p.get('scope', 'ssr'),
-            target_featured=p.get('target_featured', False),
-            deltas=p.get('deltas'),
-            threshold=p.get('threshold'),
-            counter_init=p.get('counter_init', 0),
-            guaranteed_init=p.get('guaranteed_init', False),
-            fate_points_init=p.get('fate_points_init', 0),
-            selected_card_init=p.get('selected_card_init'),
-            soft_start=p.get('start'),
-            soft_end=p.get('end'),
-            soft_increment=p.get('increment'),
-            soft_deltas=p.get('soft_deltas'),
-            cr_counter_threshold=p.get('cr_counter_threshold'),
-            cr_base_rate=p.get('cr_base_rate'),
-            cr_state_probs=p.get('cr_state_probs'),
-            fate_threshold=p.get('fate_threshold'),
-            switch_allowed=p.get('switch_allowed'),
-            switch_resets_progress=p.get('switch_resets_progress'),
-            pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), (list, tuple)) else (p.get('pools', '*'),),
-            deactivate_on_early_hit=p.get('deactivate_on_early_hit', False),
-            depends_on=p.get('depends_on'),
-            reset=p.get('reset', ''),
-        )
+        pdef = _pity_dict_to_pitydef(p)
         pity_defs_list.append(pdef)
 
     state = PityState()
@@ -1159,43 +1231,7 @@ class SimulationEnvBuilder:
         from gacha_simulator.core.config_store import resolve_banner_end_time
         end_time = resolve_banner_end_time(schedules)
 
-        pity_cfg_dict = {'enabled': True, 'pities': [], 'counter_init': {}}
-        pc = config_store.pity
-        if pc and hasattr(pc, 'pities'):
-            pity_cfg_dict['enabled'] = getattr(pc, 'enabled', True)
-            for pd in pc.pities:
-                # P55：扁平化 PityDef → 兼容旧 dict 格式（供 _build_pity_engine_from_gui 消费）
-                pentry = {
-                    'name': pd.name,
-                    'type': getattr(pd, 'btype', 'soft'),
-                    'scope': getattr(pd, 'scope', 'ssr'),
-                    'target_featured': getattr(pd, 'target_featured', False),
-                    'deltas': getattr(pd, 'deltas', None),
-                    'threshold': getattr(pd, 'threshold', None),
-                    'reset': getattr(pd, 'reset', ''),
-                    'pools': getattr(pd, 'pools', ('*',)),
-                    'counter_init': getattr(pd, 'counter_init', 0),
-                    'guaranteed_init': getattr(pd, 'guaranteed_init', False),
-                    'fate_points_init': getattr(pd, 'fate_points_init', 0),
-                    'selected_card_init': getattr(pd, 'selected_card_init', None),
-                    'deactivate_on_early_hit': getattr(pd, 'deactivate_on_early_hit', False),
-                    'depends_on': getattr(pd, 'depends_on', None),
-                    'start': getattr(pd, 'soft_start', None),
-                    'end': getattr(pd, 'soft_end', None),
-                    'increment': getattr(pd, 'soft_increment', None),
-                    'soft_deltas': getattr(pd, 'soft_deltas', None),
-                    'cr_counter_threshold': getattr(pd, 'cr_counter_threshold', None),
-                    'cr_base_rate': getattr(pd, 'cr_base_rate', None),
-                    'cr_state_probs': getattr(pd, 'cr_state_probs', None),
-                    'fate_threshold': getattr(pd, 'fate_threshold', None),
-                    'switch_allowed': getattr(pd, 'switch_allowed', None),
-                    'switch_resets_progress': getattr(pd, 'switch_resets_progress', None),
-                }
-                pity_cfg_dict['pities'].append(pentry)
-                # counter_init 从 PityDef 读取
-                ci = getattr(pd, 'counter_init', 0)
-                if ci:
-                    pity_cfg_dict['counter_init'][pd.name] = ci
+        pity_cfg_dict = _build_pity_cfg_dict(config_store)
 
         rarity_rank = {k.lower(): v for k, v in config_store.rarity_rank.items()}
         pity_engine = _build_pity_engine_from_gui(

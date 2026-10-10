@@ -12,9 +12,13 @@ from_config_store 的接线用例（含 getattr 容忍断言）不在此处，�
 4a3 解析 / 4b2b2 树分派三者，落子任务 4a5、同为该文件。
 """
 import copy
+import dataclasses
 import os
 import pickle
 
+import pytest
+
+from gacha_simulator.core.config_store import ConfigError, PityDef
 from gacha_simulator.core.config_toml import load_toml
 from gacha_simulator.core.state import GachaState
 from gacha_simulator.core.stop_condition import (
@@ -22,7 +26,8 @@ from gacha_simulator.core.stop_condition import (
     NotCondition, ResourceThresholdCondition, TargetAcquiredCondition,
 )
 from gacha_simulator.service.batch_simulator import (
-    SimulationEnvBuilder, run_batch_parallel,
+    SimulationEnvBuilder, _build_pity_cfg_dict, _pity_dict_to_pitydef,
+    _pitydef_to_pity_dict, run_batch_parallel,
 )
 
 CONFIG = 'gacha_simulator/config/config.toml'
@@ -229,3 +234,162 @@ def _stats(**kw):
     for k, v in kw.items():
         setattr(s, k, v)
     return s
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4b / §3.6 AUDIT-BREAK-1：PityDef 字段级透传守卫
+# ══════════════════════════════════════════════════════════════════
+# 三处透传点（`pentry` 写端 / `_PityDef` 读端 / `retreat_config` 浅拷贝）原为
+# 枚举式逐字段列举：新增字段漏写即静默落回默认值，配置层与测试都看不出异常。
+# 本组把「键集相等」与「逐字段等值」两条钉死，使「第 N+1 个字段漏透传」在 CI
+# 期即失败（§六「PityDef 字段枚举透传守卫」条）。
+
+
+def _all_fields_non_default() -> dict:
+    """一条**全部字段均为非默认值**的 `PityDef` kwargs（字段集由 dataclasses 现取）。
+
+    取值本身不参与语义断言，唯一作用是让下面每条用例对**每个字段**都有检测力
+    （全默认构造时用例恒绿、检测力归零）。
+    """
+    return {
+        'name': 'p1',
+        'btype': 'soft_interval',
+        'scope': 'sr',
+        'target_featured': True,
+        'deltas': ((74, 0.0), (16, 6.25)),
+        'threshold': 90,
+        'counter_init': 3,
+        'guaranteed_init': True,
+        'fate_points_init': 2,
+        'selected_card_init': 'up_a',
+        'soft_start': 74,
+        'soft_end': 90,
+        'soft_increment': 6.25,
+        'soft_deltas': ((74, 0.0), (16, 6.25)),
+        'cr_counter_threshold': 3,
+        'cr_base_rate': 0.018,
+        'cr_state_probs': (0.0, 0.0, 0.0, 1.0),
+        'fate_threshold': 1,
+        'switch_allowed': False,
+        'switch_resets_progress': False,
+        'pools': ('b1.main',),
+        'deactivate_on_early_hit': True,
+        'depends_on': 'other',
+        'reset': 'featured',
+        'priority': 5,
+    }
+
+
+class TestPityDefFieldPassthrough:
+    """`PityDef` → `pentry` → `PityDef` 的字段全量保真（S4b 改造的守卫）。"""
+
+    def test_non_default_table_covers_every_field(self):
+        """取值表必须覆盖 `PityDef` 全部字段——否则本组用例对该字段零检测力。"""
+        names = {f.name for f in dataclasses.fields(PityDef)}
+        assert set(_all_fields_non_default()) == names, (
+            f"字段集不匹配：仅取值表有 {sorted(set(_all_fields_non_default()) - names)}，"
+            f"仅 PityDef 有 {sorted(names - set(_all_fields_non_default()))}")
+
+    def test_non_default_table_values_are_actually_non_default(self):
+        """逐字段确认取值 != 字段默认值——防「表里写了，但恰好写的就是默认值」。"""
+        pd = PityDef(**_all_fields_non_default())
+        bad = [f.name for f in dataclasses.fields(PityDef)
+               if f.default is not dataclasses.MISSING
+               and getattr(pd, f.name) == f.default]
+        assert bad == [], f"这些字段取的是默认值，本组用例对它们零检测力：{bad}"
+
+    def test_pentry_keyset_equals_pitydef_fields(self):
+        """键集相等（防漏**亦防多**）——AUDIT-BREAK-1 的强制断言。"""
+        pentry = _pitydef_to_pity_dict(PityDef(**_all_fields_non_default()))
+        assert set(pentry) == {f.name for f in dataclasses.fields(PityDef)}
+
+    def test_production_pentry_keyset_equals_pitydef_fields(self):
+        """同一断言落在**生产路径实际产出的那份 `pentry`** 上。
+
+        上一条断言的是辅助函数的输出；本条的取值来自 `from_config_store` 实际调用的
+        `_build_pity_cfg_dict`，故「把调用点改回内联枚举式 dict」这种回退亦被覆盖。
+        """
+        store = load_toml(CONFIG)
+        store.pity.pities = [PityDef(**_all_fields_non_default())]
+        cfg = _build_pity_cfg_dict(store)
+        assert len(cfg['pities']) == 1
+        pentry = cfg['pities'][0]
+        assert set(pentry) == {f.name for f in dataclasses.fields(PityDef)}
+        assert pentry['priority'] == 5
+        assert cfg['counter_init'] == {'p1': 3}
+
+    def test_pentry_carries_no_alias_keys(self):
+        """四个别名键已弃用，写端不得再产出（ISSUE-910 的改名前提）。"""
+        pd = PityDef(**_all_fields_non_default())
+        pentry = _pitydef_to_pity_dict(pd)
+        assert {'type', 'start', 'end', 'increment'} & set(pentry) == set()
+        # 四者的字段名口径必须真实携带值（防「删了别名键又忘了加字段名键」）
+        assert pentry['btype'] == 'soft_interval'
+        assert pentry['soft_start'] == 74
+        assert pentry['soft_end'] == 90
+        assert pentry['soft_increment'] == 6.25
+
+    def test_field_driven_roundtrip_preserves_every_field(self):
+        """字段驱动往返：`PityDef` → `pentry` → `PityDef` 逐字段等值。"""
+        pd = PityDef(**_all_fields_non_default())
+        restored = _pity_dict_to_pitydef(_pitydef_to_pity_dict(pd))
+        for f in dataclasses.fields(PityDef):
+            assert getattr(restored, f.name) == getattr(pd, f.name), (
+                f"字段 '{f.name}' 在字段驱动往返中失真："
+                f"{getattr(pd, f.name)!r} → {getattr(restored, f.name)!r}")
+        assert restored == pd
+
+    def test_missing_key_falls_back_to_field_default(self):
+        """键缺失落回字段默认值（与旧的 `p.get(k, default)` 口径一致）。"""
+        pd = _pity_dict_to_pitydef({'name': 'x'})
+        assert pd == PityDef(name='x')
+
+    def test_pools_normalized_to_tuple_from_list_and_str(self):
+        """`pools` 归一为 tuple：list（TOML 读入形态）与裸字符串均收。"""
+        assert _pity_dict_to_pitydef({'name': 'x', 'pools': ['b1.main']}).pools == ('b1.main',)
+        assert _pity_dict_to_pitydef({'name': 'x', 'pools': 'b1.main'}).pools == ('b1.main',)
+        assert _pity_dict_to_pitydef({'name': 'x'}).pools == ('*',)
+
+    def test_missing_required_name_raises(self):
+        """`name` 是唯一无默认值的字段，缺失必须显式报错而非静默合成。"""
+        with pytest.raises(ConfigError, match='name'):
+            _pity_dict_to_pitydef({'btype': 'hard'})
+
+    @pytest.mark.parametrize('alias', ['type', 'start', 'end', 'increment'])
+    def test_legacy_alias_keys_rejected(self, alias):
+        """别名键已不属契约——放行即静默错值，故硬拒（AUDIT-BREAK-1 的失效形态）。"""
+        with pytest.raises(ConfigError, match='别名键'):
+            _pity_dict_to_pitydef({'name': 'x', alias: 'anything'})
+
+    def test_priority_survives_both_passthrough_sites(self):
+        """§六 ISSUE-007：`priority=5` 经 `pentry` 与 `_PityDef` 两处后仍为 5。"""
+        pd = PityDef(name='pf', btype='soft_interval', scope='ssr', priority=5)
+        pentry = _pitydef_to_pity_dict(pd)
+        assert pentry['priority'] == 5
+        assert _pity_dict_to_pitydef(pentry).priority == 5
+
+    def test_priority_default_zero_is_carried_as_zero(self):
+        """默认 0 亦须显式携带（读端不依赖「缺键」这一隐式默认）。"""
+        pentry = _pitydef_to_pity_dict(PityDef(name='x'))
+        assert pentry['priority'] == 0
+        assert _pity_dict_to_pitydef(pentry).priority == 0
+
+    def test_from_config_store_carries_priority_end_to_end(self):
+        """端到端：`ConfigStore` 携带 `priority=5` 的配置能走通 `from_config_store`。
+
+        本步只做透传（消费方是紧随其后的 S4-2 构造形参与 S6b 排序键），故断言落点
+        在「写端 `pentry` 与读端重建出的 `PityDef` 仍带 priority」；`from_config_store`
+        一侧断言引擎可正常构造（改造后读端不再认别名键，若两处口径不一致则此处
+        保底的 btype 会落回默认而抛 `KeyError`→被吞成 warning，`pity_engine` 仍在
+        但保底列表为空）。故一并断言 `_behavior_list` 非空以钉住「保底确实建出来了」。
+        """
+        store = load_toml(CONFIG)
+        store.pity.pities = [PityDef(name='pf', btype='soft_interval', scope='ssr',
+                                     soft_start=74, soft_end=90, priority=5)]
+        env = SimulationEnvBuilder.from_config_store(store)
+        assert env.pity_engine is not None
+        assert len(env.pity_engine._behavior_list) == 1
+        # 写端 → 读端两处的优先级保真
+        pentry = _pitydef_to_pity_dict(store.pity.pities[0])
+        assert pentry['priority'] == 5
+        assert _pity_dict_to_pitydef(pentry).priority == 5

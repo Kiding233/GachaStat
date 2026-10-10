@@ -768,6 +768,8 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             deactivate_on_early_hit=deactivate_on_early_hit,
             depends_on=depends_on,
             reset=reset,
+            # G5（§3.6）：管道排序键的显式覆盖入口。缺省 0 = 不覆盖 type 顺序。
+            priority=p.get('priority', 0),
         ))
 
     store.pity = PityConfig(enabled=True, pities=pities)
@@ -1803,6 +1805,11 @@ def _pitydef_to_toml(p) -> dict:
         # P61（ISSUE-328）：pools=()（空勾选 = 不绑定任何池）必须显式写出 pools = []
         # ——否则重载默认 ('*',) 语义反转（不绑定 → 绑定全部池）
         entry['pools'] = list(p.pools)
+    # ISSUE-923：条件式逐字段书写——**新字段不会自动带上**。不补这一行，
+    # 「GUI 加载 → 保存」一次即把手写的 priority 从 TOML 抹掉（默认值 0
+    # 与「缺键」在解析侧等价，故丢失无任何报错）。非默认才写（round-trip 纪律）。
+    if p.priority:
+        entry['priority'] = p.priority
 
     # 语法糖参数（写出直观形式，前提是它能还原出同一份 deltas；否则写 deltas）
     if p.btype in _SOFT_SUFFIX_TYPES and p.deltas is None and (

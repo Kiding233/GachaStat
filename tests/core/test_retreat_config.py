@@ -347,3 +347,85 @@ def test_min_resource_build_env_banner_fallback_equiv():
     assert ids1 == ids2, f'env1={ids1} env2={ids2}'
     assert ids1 == ['b2']  # offset_day=b1.end_day(42) → 截断保留 b2
     assert env1.pool_end_times == env2.pool_end_times
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4b / §3.6 AUDIT-BREAK-1：retreat_config 浅拷贝的字段全量保真
+# ══════════════════════════════════════════════════════════════════
+# 第三处透传点。原为 24 个字段的显式列举（曾漏拷 selected_card_init，即 ISSUE-132），
+# 现由 `dataclasses.fields(PityDef)` 驱动——漏字段的失败形态是**静默落回默认值**。
+
+def _all_fields_non_default() -> dict:
+    """一条全部字段均为非默认值的 `PityDef` kwargs（取值同 S4b 的字段往返守卫）。"""
+    return {
+        'name': 'pity_full',
+        'btype': 'soft_interval',
+        'scope': 'sr',
+        'target_featured': True,
+        'deltas': ((74, 0.0), (16, 6.25)),
+        'threshold': 90,
+        'counter_init': 3,
+        'guaranteed_init': True,
+        'fate_points_init': 2,
+        'selected_card_init': 'up_a',
+        'soft_start': 74,
+        'soft_end': 90,
+        'soft_increment': 6.25,
+        'soft_deltas': ((74, 0.0), (16, 6.25)),
+        'cr_counter_threshold': 3,
+        'cr_base_rate': 0.018,
+        'cr_state_probs': (0.0, 0.0, 0.0, 1.0),
+        'fate_threshold': 1,
+        'switch_allowed': False,
+        'switch_resets_progress': False,
+        'pools': ('pool_3.main',),
+        'deactivate_on_early_hit': True,
+        'depends_on': 'other',
+        'reset': 'featured',
+        'priority': 5,
+    }
+
+
+def _truncated_pity(pity_counter_init=None):
+    store = _make_store_with_3_pools()
+    store.pity.pities = [PityDef(**_all_fields_non_default())]
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='pool_2',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init=pity_counter_init or {},
+    )
+    assert len(truncated.pity.pities) == 1
+    return truncated.pity.pities[0]
+
+
+def test_truncate_preserves_every_pitydef_field():
+    """截断浅拷贝逐字段等值——漏字段即静默落回默认值（AUDIT-BREAK-1）。"""
+    import dataclasses
+
+    store = _make_store_with_3_pools()
+    store.pity.pities = [PityDef(**_all_fields_non_default())]
+    src = store.pity.pities[0]
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='pool_2',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init={},
+    )
+    got = truncated.pity.pities[0]
+    for f in dataclasses.fields(PityDef):
+        assert getattr(got, f.name) == getattr(src, f.name), (
+            f"字段 '{f.name}' 在截断浅拷贝中失真："
+            f"{getattr(src, f.name)!r} → {getattr(got, f.name)!r}")
+    assert got == src
+
+
+def test_truncate_shallow_copy_carries_priority():
+    """`priority` 是 S4b 新增字段——浅拷贝必须带上（第三处透传点，ISSUE-007）。"""
+    assert _truncated_pity().priority == 5
+
+
+def test_truncate_counter_init_override_still_wins():
+    """counter_init 覆盖语义不受字段驱动改造影响（唯一改写点）。"""
+    got = _truncated_pity({'pity_full': 30})
+    assert got.counter_init == 30

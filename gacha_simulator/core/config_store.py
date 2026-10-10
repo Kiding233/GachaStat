@@ -148,10 +148,16 @@ def resolve_banner_end_time(banners) -> float:
 
 @dataclass
 class PityDef:
-    """P55 扁平化：24 个独立类型字段（由 P55 之前的 6 字段旧格式 + param 分裂而来）。
+    """P55 扁平化：全部独立类型字段（由 P55 之前的 6 字段旧格式 + param 分裂而来）。
 
     旧字段（params/target_distribution/reset_condition）已移除。
     counter_init 从 PityConfig 全局移至每条 PityDef。
+
+    **字段数以 `dataclasses.fields(PityDef)` 为准**，本注释不再复述具体数字——
+    P64 AUDIT-BREAK-1 之前「按数字复述」的写法是「枚举式透传」的同源病根：
+    每加一个字段就要改四处注释与三处透传点，漏一处即静默落回默认值。
+    配置到引擎的三处透传点（`batch_simulator` 的 `pentry` / `_PityDef` 重建、
+    `retreat_config` 的浅拷贝）已改造为字段驱动，见 §3.6 AUDIT-BREAK-1。
     """
     name: str
     btype: str = 'soft'
@@ -184,6 +190,11 @@ class PityDef:
     depends_on: Optional[str] = None
     # ── 重置条件 ──
     reset: str = ''                            # '' → scope fallback
+    # ── 管道顺序（G5 / §3.6） ──
+    # 作为 `PityEngine._resolve_order` 排序键的一环（稀有度 rank 之后、type order
+    # 之前）。全 0 时排序结果与接线后默认序一致；显式值覆盖 type 顺序。
+    # 消费点：`create_behavior` 的 `Pity(..., priority=pdef.priority)`。
+    priority: int = 0
 
 
 @dataclass

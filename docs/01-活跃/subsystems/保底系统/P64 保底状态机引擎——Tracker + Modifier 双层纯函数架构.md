@@ -1019,7 +1019,7 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 
 | 项 | 为何只能测 / 说明 |
 |----|-----------|
-| 位级一致 | 定理 1 保证构造存在，不保证浮点运算顺序一致；卡级管道下聚合次数随算子数增加，差异量级仍在 1e-16，但 §六 的等价性口径须由「完全一致」放宽为「容差内一致」 |
+| 位级一致 | 定理 1 保证构造存在，不保证浮点运算顺序一致；卡级管道下聚合次数随算子数增加，差异量级仍在 1e-16，但 §六 的等价性口径须由「完全一致」放宽为「容差内一致」。**2026-10-11 由 S5a 实测落地**：差异来源是新 `RotatingModifier` / `SelectedModifier` 条件不成立时直接返回恒等、旧类走 `_redistribute_scope` 的除再乘往返；量的上界 1.11e-16（九种池形状扫描），且**依赖基础概率的位模式**（0.2/0.2 形状下 28 抽里 23 抽不等、恰 1 ULP；0.006/0.004 与 0.005/0.005 为精确零差）。§六 S1–S5 口径已按本行拆为「分布容差 1e-12 + 状态位级一致」，落点 `tests/core/test_pity_equivalence.py` 的 `Tolerance` / `SnapshotPolicy` 显式参数 |
 | 随机数消费次数 | 可证，但需先把 H4 的短路条件写死，再把 ω 显式化为消费序列逐位比对 |
 | 全配置组合 | 组合空间过大，采样测试只覆盖有限点；本节的判据用于缩小「必须实测」的范围 |
 | **无货可取（`p(Q) = 0`）** | 由性质 3，此时转移无源。语义上这是「无源可搬」，物理上不应发生（保底不作用于零概率组）。实现约定：返回 `None`，与现行早退路径一致 |
@@ -1664,7 +1664,7 @@ def _should_reset(self, ctx):                       # pity.py:205
 
 > §3.1.2 的 D20 是**声明**（分布空间归属改为卡级），§3.1.5 是**数学形式**（乘性算子），本节是**实施方案**（改哪些函数、接口怎么变、边界怎么处理）。三者配套，缺一则 S8 不可执行。
 >
-> **过渡期纪律**：S1–S5 期间本节内容全部**不实施**，Modifier 内部沿用槽位法，以保证与旧类位级一致（§六 S1–S5 口径）。S8 一次性切换，验收对 S5 产物取 1e-12 容差。 **本轮（AUDIT-BREAK-3）补一处唯一例外**：本纪律**不覆盖 `Modifier` 基类自身的落地**——S2a-1（M1）就要交付 `Modifier` 基类，而本节下方给的基类 `apply` 默认实现体依赖 S8 才存在的两个符号（`_apply_delta` 归 S8-1、`compute_delta` 是 S8 起的方法名），照抄即 `NameError`。故 **M1 期基类 `apply` 只写占位实现 `raise NotImplementedError`，S8-1 替换为正式默认实现**（见 §3.14.3 与 §七 S2a-1）；「本节内容全部不实施」= 增量接口与引擎侧归一化不在 M1 落地，**不等于基类不落地**。<!-- REVIEW-R1-FIX: AUDIT-BREAK-3 -->
+> **过渡期纪律**：S1–S5 期间本节内容全部**不实施**，Modifier 内部沿用槽位法，以保证与旧类一致（§六 S1–S5 口径；**2026-10-11 订正**：该口径已按 §3.1.5.6 拆为「概率分布容差 1e-12 + 状态快照位级一致」，故此处不再写「位级一致」）。S8 一次性切换，验收对 S5 产物取 1e-12 容差。 **本轮（AUDIT-BREAK-3）补一处唯一例外**：本纪律**不覆盖 `Modifier` 基类自身的落地**——S2a-1（M1）就要交付 `Modifier` 基类，而本节下方给的基类 `apply` 默认实现体依赖 S8 才存在的两个符号（`_apply_delta` 归 S8-1、`compute_delta` 是 S8 起的方法名），照抄即 `NameError`。故 **M1 期基类 `apply` 只写占位实现 `raise NotImplementedError`，S8-1 替换为正式默认实现**（见 §3.14.3 与 §七 S2a-1）；「本节内容全部不实施」= 增量接口与引擎侧归一化不在 M1 落地，**不等于基类不落地**。<!-- REVIEW-R1-FIX: AUDIT-BREAK-3 -->
 
 #### 3.9.1 现状路径与目标路径
 
@@ -2499,7 +2499,7 @@ class RotatingModifier(Modifier):
 
 ### 主线（Tracker + Modifier 统一骨架 + G1 + G5）
 
-- [ ] **S1–S5 口径**：全部 10 个类型同配置下，新引擎输出概率分布 + 状态快照与旧类**逐场完全一致**（固定种子，含 hard/soft_step/rotating/targeted/soft 组合各基准；**`rotating_cr` / `rotating_cr_soft` 已于 2026-10-10 回归本行**——RULING-6B′ 把掷骰相位移回 `before_draw` 的 `StreakTracker.prepare`，首抽缺口与随机流位置差同时消除，与旧类逐场一致；原「不在此列」的排除与下方差异归因清单 (c) 项一并作废）。此阶段 Modifier 内部沿用槽位法，故要求位级一致 <!-- REVIEW-R1-FIX: ISSUE-702 --> <!-- REVIEW-R1-FIX: ISSUE-940 -->
+- [ ] **S1–S5 口径**：全部 10 个类型同配置下，新引擎输出与旧类**逐场一致**，承诺按两列拆分（**2026-10-11 按 §3.1.5.6 的既有登记同步措辞**，见该节「位级一致」行与 §3.1.5 定理 1 的效力说明）：**概率分布 = 容差 1e-12 内逐场一致**（该数值即 S8 与 S5 产物对比所用，非新造）；**状态快照 = 位级一致**，除已登记的增量键（`_active`，ISSUE-202；`cr_intercepted`，§3.1.1 声明产物）之外逐字段相同。原写「逐场完全一致」对六个事件驱动型不成立：其实测差异为**非条件分支的 1 ULP**（来源是新侧条件不成立时直接恒等、旧侧走 `_redistribute_scope` 的除再乘往返，量的上界 1.11e-16，九种池形状扫描；该 1 ULP 是旧侧往返舍入的产物、不含语义内容）。状态机的部分（counter 整数相位、flag 布尔翻转、随机流位置）在两种口径下**都是精确比较**，故放宽的只是浮点分布一列，不削弱「重构未退化」的证明力。载体见 `tests/core/test_pity_equivalence.py` 的 `Tolerance` 参数。（固定种子，含 hard/soft_step/rotating/targeted/soft 组合各基准；**`rotating_cr` / `rotating_cr_soft` 已于 2026-10-10 回归本行**——RULING-6B′ 把掷骰相位移回 `before_draw` 的 `StreakTracker.prepare`，首抽缺口与随机流位置差同时消除，与旧类逐场一致；原「不在此列」的排除与下方差异归因清单 (c) 项一并作废）。此阶段 Modifier 内部沿用槽位法，故要求位级一致 <!-- REVIEW-R1-FIX: ISSUE-702 --> <!-- REVIEW-R1-FIX: ISSUE-940 -->
 <!-- REVIEW-FIX-PREV: ISSUE-023 -->
 <!-- REVIEW-FIX-PREV: ISSUE-GATE-dependency-order -->
 - [ ] **view 命名空间分配（ISSUE-GATE-dependency-order；接口由 ISSUE-407 补实）**：三个 `_soft` 类型的 preset 中，soft 族的**软计数落在默认 view（`X` 命名空间）**（对齐旧 mixin 的 `X.counter`），`X_soft` 命名空间只含 `_active`——**产出者是 preset 里显式的 `NamespaceTracker(namespace=f'{pdef.name}_soft')`**（§3.1.1 签名表新增条目，§3.2 的 `_preset_rotating_soft` 示例），`_active` 由 **`Lifecycle.initialize(state, name, namespaces)`** 的推广作用域写入（`namespaces` = `Pity` 收集的零件命名空间集合）；声明了 `namespace` 的零件收到的是 `StateView(state, part.namespace)` 而非默认 view（`Pity` 经 `self._ns_views` 取值，遍历 `trackers` / `modifiers` 时不得写死 `self._view`）；`_rebind_state` 重建默认 view 时**同批重建 `self._ns_views`**（否则 worker 内连跑 N 场模拟时第 2..N 场的零件 view 指向旧账本，与 ISSUE-004 同一失效模式）<!-- REVIEW-R1-FIX: ISSUE-407 -->

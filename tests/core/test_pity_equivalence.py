@@ -36,7 +36,7 @@
 
 | 差异 | 实测 | 表达方式 | 登记用例 |
 |------|------|---------|---------|
-| 六个事件驱动型的**非条件分支**有 1 ULP 位级差 | 最大 2.776e-17（本装置形状下恰 1 ULP） | `Tolerance` 显式参数（`EXACT` / `FLOAT_ORDER`） | `test_registered_ulp_in_event_driven_non_trigger_branch` |
+| 六个事件驱动型的**非条件分支**有 1 ULP 位级差 | 九种池形状扫描上界 1.11e-16（`rotating` 在本装置形状下恰 1 ULP；`_soft` 三型在 0.1/0.3 形状下达 1.11e-16） | `Tolerance` 显式参数（`EXACT` / `FLOAT_ORDER`） | `test_registered_ulp_in_event_driven_non_trigger_branch` |
 | 事件驱动型快照多 `_active` 键（ISSUE-202） | 六型全中 | `SnapshotPolicy` 白名单（精确集合，多退少补都报错） | `test_registered_extra_state_keys_are_exactly_whitelisted` |
 | `rotating_cr` / `rotating_cr_soft` 快照多 `cr_intercepted` 键 | 两型 | 同上 | 同上 |
 | 三个 `_soft` 复合类型的 `did_fire` 放宽为「出 scope」（ISSUE-102） | 非 featured 的 SSR 抽上 旧 False / 新 True | `SideTrace.did_fire` + 差异抽索引 | `test_m4_registered_did_fire_relaxation_for_soft_suffix_types` |
@@ -297,7 +297,7 @@ EXACT = Tolerance('exact', 0.0, '§六 主线 S1–S5 口径的字面要求：�
 #: 的容差），非为本装置新造的魔数。
 FLOAT_ORDER = Tolerance(
     'absolute', 1e-12,
-    '§六 S8 口径已采用的浮点求和顺序容差；覆盖非条件分支 1 ULP 差（实测 2.8e-17）',
+    '§六 S8 口径已采用的浮点求和顺序容差；覆盖非条件分支 1 ULP 差（九形状扫描上界 1.11e-16）',
 )
 
 
@@ -394,12 +394,19 @@ def _old_soft_kwargs(pdef: PityDef) -> dict:
     **fixture 必须按 TOML 形态同时写两个字段**（见 `soft_fixture()`），
     否则 S5b 的 `_soft` 批次会踩空。
     """
-    return dict(
+    # **`None` 项不入参**（S5a 审查 minor 4）：真实旧类分支是
+    # `if v is not None: params[attr] = v`（`core/pity.py` 的 `params` 组装段），
+    # 故缺省字段**根本不会出现在 kwargs 里**，`SoftPityMixin._init_soft_pity` 的
+    # `kwargs.get('soft_start', 74)` 才会回退到 74 / 90。此前本函数传的是显式
+    # `None`，覆盖了那些 default 值，旧侧展开成 `((0, 0.0), (91, 1.098901))`
+    # 而非真实的 `((73, 0.0), (17, 5.882353))`，与「旧 mixin 落到缺省 74 / 90」
+    # 的说明自相矛盾。改为与真实分支同形。
+    return {k: v for k, v in dict(
         soft_deltas=pdef.soft_deltas,
         soft_start=pdef.soft_start,
         soft_end=pdef.soft_end,
         soft_increment=pdef.soft_increment,
-    )
+    ).items() if v is not None}
 
 
 def _old_counter_soft_deltas(pdef: PityDef) -> tuple:
@@ -787,6 +794,16 @@ def compare_traces(old: SideTrace, new: SideTrace, *,
                    tolerance: Tolerance,
                    snapshot_policy: SnapshotPolicy) -> EquivalenceReport:
     """按显式口径比对两份轨迹，返回结构化报告（不做取舍）。"""
+    # 长度守卫（S5a 审查 minor 2）：`_diff_probs` / `_snapshot_facts` 用 `zip`，
+    # 两侧长度不等时会被静默截断到较短一侧、「等价」就此成立。经 `run_trace`
+    # 产生的两侧必然同长，故当前不可达；但本装置是 S5b / S5c 的验收入口，将来
+    # 一旦出现单侧截断（引擎路径、池过滤、异常吞掉）就是静默绿色，故前移到此处。
+    if not (len(old.probs) == len(new.probs)
+            and len(old.snapshots) == len(new.snapshots)):
+        raise AssertionError(
+            f'两侧轨迹长度不等（probs {len(old.probs)} vs {len(new.probs)}；'
+            f'snapshots {len(old.snapshots)} vs {len(new.snapshots)}）：'
+            f'比对会被静默截断，拒绝执行')
     report = EquivalenceReport(
         old=old, new=new, tolerance=tolerance, snapshot_policy=snapshot_policy)
     report.prob_mismatches, report.max_prob_diff, report.bit_exact = _diff_probs(
@@ -815,11 +832,23 @@ def compare_runs(
     tolerance: Tolerance,
     snapshot_policy: Optional[SnapshotPolicy] = None,
     probe_readonly: bool = True,
+    allow_vacuous: bool = False,
 ) -> EquivalenceReport:
     """`run_old` + `run_new` + `compare_traces` 的一步式入口（S5b 的批次主入口）。"""
     policy = snapshot_policy or registered_snapshot_policy(pdef)
     old = run_old(pdef, steps, shape=shape, seed=seed, probe_readonly=probe_readonly)
     new = run_new(pdef, steps, shape=shape, seed=seed, probe_readonly=probe_readonly)
+    # 非空转闸门（S5a 审查 important 1）：旧侧轨迹与基础分布逐抽相同，说明该
+    # fixture 下这条机制**从未触发**，此时「两侧一致」是空断言（`hard` 的阈值
+    # 超出序列长度、`soft` 的保底起点够不着、`targeted` 的定子不可达等都会落到
+    # 这一格）。S5b 要在此装置上叠十个批次，任一批次的 fixture 写错即「零覆盖
+    # 全绿」，故把它前移到装置属性而非靠个别用例手写自检。
+    if not old.changed_from_base and not allow_vacuous:
+        raise AssertionError(
+            f'装置空转（S5a 审查 important 1）：{pdef.name}（{pdef.btype}）的旧侧轨迹'
+            f'与基础分布逐抽相同，即该 config 下机制从未触发，「两侧一致」不构成'
+            f'等价性证据。请让 fixture 真的触发机制（阈值/起点落在序列内等）；'
+            f'若确要比一个不触发的形态，传 allow_vacuous=True 并自述理由。')
     return compare_traces(old, new, tolerance=tolerance, snapshot_policy=policy)
 
 
@@ -832,11 +861,13 @@ def assert_equivalent(
     tolerance: Tolerance,
     snapshot_policy: Optional[SnapshotPolicy] = None,
     probe_readonly: bool = True,
+    allow_vacuous: bool = False,
 ) -> EquivalenceReport:
     """比对并断言等价；不等价时抛出带全部差异项的 `AssertionError`。"""
     report = compare_runs(
         pdef, steps, shape=shape, seed=seed, tolerance=tolerance,
-        snapshot_policy=snapshot_policy, probe_readonly=probe_readonly)
+        snapshot_policy=snapshot_policy, probe_readonly=probe_readonly,
+        allow_vacuous=allow_vacuous)
     messages = report.failure_messages()
     if messages:
         raise AssertionError(
@@ -943,14 +974,27 @@ class TestDeviceSelfCheck:
         自证「直驱没有绕过引擎的调度语义」（引擎会 rebind、会把计数器初值经
         `env.pity_state_init` 送进来）。本用例对 `rotating` 比对两条路径的分布与
         快照；不一致即说明直驱漏了生产路径的某一环。
+
+        **另含 CR 型**（S5a 审查 minor 7）：`rotating` 不掷骰、两侧 `rng_calls`
+        恒 0/0，只测它时那条随机数断言是空的；`rotating_cr` 的掷骰在 `prepare`，
+        故补一条把随机数消费纳入判别面。
         """
         shape = _default_shape()
-        pdef = counter_fixture(name='rig_rot', btype='rotating', scope='ssr')
-        direct = run_new(pdef, DRAW_SEQUENCE, shape=shape)
-        via_engine = run_new_via_engine(pdef, DRAW_SEQUENCE, shape=shape)
-        assert direct.probs == via_engine.probs
-        assert direct.snapshots == via_engine.snapshots
-        assert direct.rng_calls == via_engine.rng_calls
+        seen_rng = 0
+        for pdef in (
+            counter_fixture(name='rig_rot', btype='rotating', scope='ssr'),
+            counter_fixture(name='rig_cr', btype='rotating_cr', scope='ssr',
+                            cr_counter_threshold=3, cr_base_rate=0.018,
+                            cr_state_probs=(0.0, 0.0, 0.75, 1.0)),
+        ):
+            direct = run_new(pdef, DRAW_SEQUENCE, shape=shape)
+            via_engine = run_new_via_engine(pdef, DRAW_SEQUENCE, shape=shape)
+            assert direct.probs == via_engine.probs, pdef.name
+            assert direct.snapshots == via_engine.snapshots, pdef.name
+            assert direct.rng_calls == via_engine.rng_calls, pdef.name
+            seen_rng = max(seen_rng, direct.rng_calls)
+        assert seen_rng > 0, '两条路径的随机数消费断言均无判别力（rng_calls 恒 0）'
+
 
     def test_device_shape_makes_soft_transfer_live(self):
         """装置形状自检：软保底的转移**必须真的发生**，否则装置在空转。

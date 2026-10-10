@@ -15,11 +15,38 @@ M4 语义调用，故**方法必须存在、不得省略**（无状态零件写�
 的唯一输入。
 """
 
+import random
 from typing import Optional
 
 from .pity_primitives import Counter, Flag, PityContext, PityState
 
-__all__ = ['Tracker', 'CounterTracker', 'FlagTracker']
+__all__ = ['Tracker', 'CounterTracker', 'FlagTracker', 'StreakTracker']
+
+
+def _is_trigger_rarity(scope: str, ctx: PityContext) -> bool:
+    """出触发稀有度判定——事件驱动型 Tracker 的公共门控。
+
+    旧 `RotatingBehavior._is_trigger_rarity` / `RotatingCRBehavior.after_draw` /
+    `TargetedBehavior._is_trigger_rarity` 均为 `rarity == scope`，三处逐字同源。
+    """
+    return ctx.draw.reward_rarity == scope
+
+
+def _judge_hit(judge: str, ctx: PityContext, state: PityState, name: str) -> bool:
+    """命中判据（§3.1.1 的 `judge` 形参）。
+
+    - `'featured'`：`draw.is_featured`（rotating 族）
+    - `'selected'`：`draw.reward_id == state[name]['selected_card']`（targeted 族；
+      该键由策略层 `NonDrawAction` 写入，Tracker 只读、不声明，§3.1.1 L4 例外 2）
+    """
+    if judge == 'featured':
+        return bool(ctx.draw.is_featured)
+    if judge == 'selected':
+        return ctx.draw.reward_id == state.get(name, 'selected_card')
+    raise ValueError(f"未知 judge={judge!r}（可用：('featured', 'selected')）")
+
+
+_JUDGES = ('featured', 'selected')
 
 
 class Tracker:
@@ -206,13 +233,12 @@ class FlagTracker(Tracker):
     `flag`。
     """
 
-    _JUDGES = ('featured', 'selected')
     _ACTIONS = ('set', 'clear')
 
     def __init__(self, scope: str, judge: str, hit: str, miss: str, flag: str):
         self._scope = scope
-        if judge not in self._JUDGES:
-            raise ValueError(f"FlagTracker: 未知 judge={judge!r}（可用：{self._JUDGES}）")
+        if judge not in _JUDGES:
+            raise ValueError(f"FlagTracker: 未知 judge={judge!r}（可用：{_JUDGES}）")
         for name, action in (('hit', hit), ('miss', miss)):
             if action not in self._ACTIONS:
                 raise ValueError(
@@ -230,7 +256,7 @@ class FlagTracker(Tracker):
 
     def commit(self, ctx: PityContext, state: PityState, name: str,
                skip_reset: bool = False) -> None:
-        if not self._is_trigger_rarity(ctx):
+        if not _is_trigger_rarity(self._scope, ctx):
             return
         if self._action(ctx, state, name) == 'set':
             self._flag_ctl.set()
@@ -238,7 +264,7 @@ class FlagTracker(Tracker):
             self._flag_ctl.clear()
 
     def did_reset(self, ctx: PityContext, state: PityState, name: str) -> bool:
-        if not self._is_trigger_rarity(ctx):
+        if not _is_trigger_rarity(self._scope, ctx):
             return False
         return self._action(ctx, state, name) == 'clear'
 
@@ -247,14 +273,125 @@ class FlagTracker(Tracker):
 
     # ── 内部 ──
 
-    def _is_trigger_rarity(self, ctx: PityContext) -> bool:
-        return ctx.draw.reward_rarity == self._scope
-
-    def _judge_hit(self, ctx: PityContext, state: PityState, name: str) -> bool:
-        if self._judge == 'featured':
-            return bool(ctx.draw.is_featured)
-        return ctx.draw.reward_id == state.get(name, 'selected_card')
-
     def _action(self, ctx: PityContext, state: PityState, name: str) -> str:
         """本次该对标记做哪个动作（`commit` 与 `did_reset` 的唯一判据）。"""
-        return self._hit if self._judge_hit(ctx, state, name) else self._miss
+        return self._hit if _judge_hit(self._judge, ctx, state, name) else self._miss
+
+
+class StreakTracker(Tracker):
+    """连续未命中计数 + 抽前随机拦截判定（`rotating_cr` 的「捕获明光」）。
+
+    | 形参 | 语义 | 取值来源（§3.2） |
+    |------|------|------------------|
+    | `scope` | 触发稀有度（同 `FlagTracker`，见其 docstring 的补入说明） | `_norm_scope(pdef)` |
+    | `judge` | `cr_counter` 的命中判据（`'featured'`） | 机制语义固定 |
+    | `threshold` | `cr_counter` 的封顶档位数 | `pdef.cr_counter_threshold`（`None` → 3） |
+    | `base_rate` | 每抽的固定拦截率 | `pdef.cr_base_rate`（`None` → 0.0） |
+    | `state_probs` | 逐档拦截概率表 | `pdef.cr_state_probs`（`None` → `[0.0]*threshold + [1.0]`） |
+    | `flag` | 拦截结果标记键 | `'cr_intercepted'` |
+    | `guard_flag` | 抽前守卫标记键（已置位则不掷骰） | `'guaranteed'` |
+
+    **N1 相位（裁决 6B′，2026-10-10 改判）**：掷骰归 **`prepare`**（`Pity.before_draw`
+    内、`advance` 之后、Modifier 链之前），与旧 `RotatingCRBehavior.before_draw`
+    同相位；`advance` 为 no-op（`cr_counter` **不属计数型**——旧实现只在
+    `after_draw` 累加与清零，若按「计数器」字面划入计数型，`advance` 会每抽多推
+    一次，§3.1.1 N1 显式例外）。`commit` 收窄为**只更新 `cr_counter`**。
+
+    **随机数消耗协议（H4，逐条复刻旧实现）**：`prepare` 里四条路径**不消耗随机数**
+    ——① `readonly=True`（只读查询早退）；② `guard_flag` 已置位（抽前已 guaranteed）；
+    ③ `state_prob >= 1.0`（确定性触发）；④ `state_prob <= 0`（掷骰的前置条件是
+    `state_prob > 0`）；另有 ⑤ 空 `state_probs`（`idx = min(0, -1) = -1`，不进分支）
+    与 ⑥ `base_rate == 0`（不进 `and` 的右侧）。其余路径的掷骰次数与次序与旧实现
+    逐位相同。
+
+    **flag 每抽写**：掷骰路径下成功置位、失败清位（旧实现只在命中分支 `return`，
+    照搬会让「上次掷中」的标记残留到下一抽、拦截率被静默抬高）。`guard_flag`
+    已置位的早退路径**清位**（同样防脏残留；该路径下 `guaranteed` 已强制 featured，
+    输出与旧实现一致）；`readonly` 早退路径**不写**（纯查询不得改状态，故该路径下
+    Modifier 也不得消费本标记——旧实现的只读查询从不应用拦截）。
+
+    **`commit` 的 `was_guaranteed` 读点**：`cr_counter` 的归零条件是
+    「出 scope ∧ **抽前** `guaranteed` 未置位 ∧ 命中」，抽前值由
+    **`[StreakTracker, FlagTracker]` 的顺序契约**保证——`StreakTracker.commit` 先跑，
+    此时 `FlagTracker` 尚未在本抽翻转 `guaranteed`（§3.1.1「Tracker 顺序是契约」）。
+
+    **M4 `did_reset` 恒 False**：`cr_counter` 归零是 rotating 族**内部子状态**的重置，
+    不构成「本保底回到初始状态」；判据由同族的 `FlagTracker` 提供。返回 False 使
+    `Pity.did_fire = any(tr.did_reset(...))` 与旧 `RotatingBehavior.did_fire`
+    （`rotating_cr` 经 MRO 落到的就是它）逐字一致。
+
+    **`skip_reset` 无影响**：同 `FlagTracker`（事件驱动型不可配
+    `deactivate_on_early_hit`，该路径不可达；旧实现亦无跳过分支）。
+    """
+
+    def __init__(self, scope: str, judge: str, threshold=None, base_rate=None,
+                 state_probs=None, flag: str = 'cr_intercepted',
+                 guard_flag: str = 'guaranteed'):
+        if judge not in _JUDGES:
+            raise ValueError(f"StreakTracker: 未知 judge={judge!r}（可用：{_JUDGES}）")
+        self._scope = scope
+        self._judge = judge
+        self._max = threshold if threshold is not None else 3
+        self._base_rate = base_rate if base_rate is not None else 0.0
+        if state_probs is not None:
+            self._state_probs = (list(state_probs)
+                                 if isinstance(state_probs, (list, tuple))
+                                 else [0.0] * self._max + [1.0])
+        else:
+            self._state_probs = [0.0] * self._max + [1.0]
+        self._flag = flag
+        self._guard_flag = guard_flag
+        self._cr_counter: Optional[Counter] = None
+        self._flag_ctl: Optional[Flag] = None
+        self._guard_ctl: Optional[Flag] = None
+
+    # ── 契约成员 ──
+
+    def rebind(self, state: PityState, name: str) -> None:
+        self._cr_counter = Counter(state, name, "cr_counter")
+        self._flag_ctl = Flag(state, name, self._flag)
+        self._guard_ctl = Flag(state, name, self._guard_flag)
+
+    def prepare(self, ctx: PityContext, state: PityState, name: str,
+                readonly: bool) -> None:
+        if readonly:
+            return                      # 纯查询：不掷骰、不写状态
+        if self._guard_flag and self._guard_ctl.is_set():
+            self._flag_ctl.clear()      # 抽前已 guaranteed：不掷骰，清位防脏残留
+            return
+        if self._roll_hit(ctx, state, name):
+            self._flag_ctl.set()
+        else:
+            self._flag_ctl.clear()
+
+    def commit(self, ctx: PityContext, state: PityState, name: str,
+               skip_reset: bool = False) -> None:
+        if not _is_trigger_rarity(self._scope, ctx):
+            return
+        if self._guard_flag and self._guard_ctl.is_set():
+            return                      # 抽前已 guaranteed → cr_counter 不动
+        if _judge_hit(self._judge, ctx, state, name):
+            self._cr_counter.reset()
+        else:
+            self._cr_counter.incr()
+
+    def did_reset(self, ctx: PityContext, state: PityState, name: str) -> bool:
+        return False
+
+    def state_keys(self) -> tuple:
+        return ('cr_counter', self._flag)
+
+    # ── 内部 ──
+
+    def _roll_hit(self, ctx: PityContext, state: PityState, name: str) -> bool:
+        """本次是否拦截为 100% UP（逐行复刻旧 `RotatingCRBehavior.before_draw`）。"""
+        if self._base_rate > 0 and random.random() < self._base_rate:
+            return True
+        idx = min(self._cr_counter.value(), len(self._state_probs) - 1)
+        if idx >= 0:
+            state_prob = self._state_probs[idx]
+            if state_prob >= 1.0:
+                return True
+            if state_prob > 0 and random.random() < state_prob:
+                return True
+        return False

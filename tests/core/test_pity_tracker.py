@@ -14,7 +14,9 @@
 """
 
 from gacha_simulator.core.pity_primitives import DrawInfo, PityContext, PityState
-from gacha_simulator.core.pity_tracker import CounterTracker, FlagTracker, Tracker
+from gacha_simulator.core.pity_tracker import (
+    CounterTracker, FlagTracker, StreakTracker, Tracker,
+)
 
 NAME = 'ssr_hard'
 SCOPE = 'ssr'
@@ -391,3 +393,231 @@ class TestFlagTrackerProtocol:
         tr.commit(_ctx(rarity='ssr', is_featured=True, state=new), new, NAME)
         assert new.get(NAME, 'guaranteed') is False
         assert old.get(NAME, 'guaranteed') is False, '旧 state 不得再被触碰'
+
+
+# ══════════════════════════════════════════════════════════════════
+# S1c-1：StreakTracker（rotating_cr 的捕获明光）
+# ══════════════════════════════════════════════════════════════════
+
+CR_KW = dict(scope=SCOPE, judge='featured', threshold=3, base_rate=0.018,
+             state_probs=[0.0, 0.0, 0.75, 1.0])
+CR_NAME = 'ssr_cr'
+
+
+def _cr_ctx(rarity='sr', is_featured=False, state=None, current=None):
+    st = state if state is not None else PityState()
+    draw = DrawInfo(
+        pool_id='p', pool_instance_id='p_0', reward_id=f'{rarity}_card',
+        reward_rarity=rarity, is_featured=is_featured,
+        scope_slots={'ssr': ('ssr', 'ssr_featured')},
+        featured_slots={'ssr': ('ssr_featured',)},
+    )
+    return PityContext(
+        draw=draw, state=st,
+        current=current if current is not None else {'ssr': 0.01, 'ssr_featured': 0.005},
+    )
+
+
+def _cr_tracker(kw=None, state=None):
+    st = state if state is not None else PityState()
+    tr = StreakTracker(**(kw or CR_KW))
+    tr.rebind(st, CR_NAME)
+    return tr, st
+
+
+class TestStreakTrackerN1Phase:
+    """`cr_counter` 不属计数型——`advance` 为 no-op，掷骰在 `prepare`（裁决 6B′）。"""
+
+    def test_advance_does_not_touch_cr_counter(self):
+        """`advance` 是 no-op——若按「计数器」字面把它划入计数型，会每抽多推一次。"""
+        tr, st = _cr_tracker()
+        tr.advance(_cr_ctx(state=st), st, CR_NAME, False)
+        assert st.get(CR_NAME, 'cr_counter', 0) == 0
+        assert st.data.get(CR_NAME, {}) == {}
+
+    def test_prepare_sets_flag_on_deterministic_intercept(self):
+        """`state_prob >= 1.0` 确定性触发：置位 flag，且**不消耗随机数**。"""
+        # state_probs 显式取 [1.0]，使 idx=0 即命中 1.0（确定性触发）
+        tr, st = _cr_tracker(dict(CR_KW, base_rate=0.0, state_probs=[1.0]))
+        tr.prepare(_cr_ctx(state=st), st, CR_NAME, False)
+        assert st.get(CR_NAME, 'cr_intercepted') is True
+
+    def test_prepare_clears_flag_when_no_intercept(self):
+        """未拦截时**清位**——旧实现只在命中分支 return，照搬会让脏 flag 残留、
+        拦截率被静默抬高。"""
+        tr, st = _cr_tracker(dict(CR_KW, base_rate=0.0, state_probs=[0.0]))
+        st.set(CR_NAME, 'cr_intercepted', True)      # 上一次掷中的残留
+        tr.prepare(_cr_ctx(state=st), st, CR_NAME, False)
+        assert st.get(CR_NAME, 'cr_intercepted') is False
+
+    def test_prepare_clears_flag_when_guard_flag_set(self):
+        """`guard_flag` 已置位：不掷骰，且清位防脏残留。"""
+        tr, st = _cr_tracker()
+        st.set(CR_NAME, 'guaranteed', True)
+        st.set(CR_NAME, 'cr_intercepted', True)
+        tr.prepare(_cr_ctx(state=st), st, CR_NAME, False)
+        assert st.get(CR_NAME, 'cr_intercepted') is False
+
+    def test_prepare_readonly_does_not_roll_or_write(self):
+        """`readonly=True`：不掷骰、**不写**状态（纯查询不得改状态）。"""
+        tr, st = _cr_tracker()
+        st.set(CR_NAME, 'cr_intercepted', True)
+        before = dict(st.data.get(CR_NAME, {}))
+        tr.prepare(_cr_ctx(state=st), st, CR_NAME, True)
+        assert st.data.get(CR_NAME, {}) == before
+
+
+class TestStreakTrackerCommit:
+    """`commit` 只更新 `cr_counter`；`was_guaranteed` 取**抽前**值（顺序契约）。"""
+
+    def test_commit_updates_cr_counter(self):
+        """出 scope：命中 → 归零；未命中 → 累积。出非 scope 不动。"""
+        tr, st = _cr_tracker()
+        tr.commit(_cr_ctx(rarity='ssr', is_featured=False, state=st), st, CR_NAME)
+        tr.commit(_cr_ctx(rarity='ssr', is_featured=False, state=st), st, CR_NAME)
+        assert st.get(CR_NAME, 'cr_counter', 0) == 2
+
+        tr.commit(_cr_ctx(rarity='sr', is_featured=True, state=st), st, CR_NAME)
+        assert st.get(CR_NAME, 'cr_counter', 0) == 2, '出非 scope 不得动 cr_counter'
+
+        tr.commit(_cr_ctx(rarity='ssr', is_featured=True, state=st), st, CR_NAME)
+        assert st.get(CR_NAME, 'cr_counter', 0) == 0
+
+    def test_commit_skips_when_guaranteed_was_set_before_draw(self):
+        """抽前 `guaranteed` 已置位 → `cr_counter` 不动（旧 `was_guaranteed` 分支）。
+
+        读点由 `[StreakTracker, FlagTracker]` 的顺序契约保证——此处显式先跑
+        `StreakTracker.commit`，此时 `FlagTracker` 尚未翻转 `guaranteed`。
+        """
+        tr, st = _cr_tracker()
+        st.set(CR_NAME, 'guaranteed', True)
+        tr.commit(_cr_ctx(rarity='ssr', is_featured=False, state=st), st, CR_NAME)
+        assert st.get(CR_NAME, 'cr_counter', 0) == 0, '抽前已 guaranteed 时不得累积'
+
+    def test_did_reset_is_false(self):
+        """M4：`cr_counter` 归零是族内子状态，不构成「本保底回到初始状态」。"""
+        tr, st = _cr_tracker()
+        assert tr.did_reset(_cr_ctx(rarity='ssr', is_featured=True, state=st), st, CR_NAME) is False
+        assert tr.did_reset(_cr_ctx(rarity='ssr', is_featured=False, state=st), st, CR_NAME) is False
+
+    def test_state_keys_declares_both_keys(self):
+        """`state_keys()` = `('cr_counter', flag)`——它多写一个拦截标记键。"""
+        assert StreakTracker(**CR_KW).state_keys() == ('cr_counter', 'cr_intercepted')
+
+    def test_rejects_unknown_judge(self):
+        try:
+            StreakTracker(scope=SCOPE, judge='nope')
+        except ValueError:
+            return
+        raise AssertionError('未拒绝非法 judge')
+
+
+class TestStreakTrackerH4RandomConsumption:
+    """H4：随机数消费次数与旧 `RotatingCRBehavior.before_draw` **逐位相同**。
+
+    表驱动：每组条件分别在旧类与新 Tracker 上跑一次，用同一个计数桩替换
+    `random.random`，比对调用次数。四条「不消耗随机数」的路径（readonly /
+    guard_flag / `state_prob >= 1.0` / `state_prob <= 0`）另加空表与
+    `base_rate == 0` 两条，逐条覆盖。
+    """
+
+    CASES = [
+        # (guaranteed, readonly, cr_counter, base_rate, state_probs, 说明)
+        (False, False, 0, 0.0,   [0.0, 0.0, 0.0, 1.0], 'state_prob=0 → 不掷'),
+        (False, False, 1, 0.0,   [0.0, 0.0, 0.0, 1.0], 'state_prob=0 → 不掷'),
+        (False, False, 3, 0.0,   [0.0, 0.0, 0.0, 1.0], 'idx 命中 1.0 → 确定性，不掷'),
+        (False, False, 9, 0.0,   [0.0, 0.0, 0.75, 1.0], '下标裁剪到 3 → 确定性，不掷'),
+        (False, False, 2, 0.0,   [0.0, 0.0, 0.75, 1.0], 'state_prob=0.75 → 掷 1 次'),
+        (False, False, 0, 0.018, [0.0, 0.0, 0.0, 1.0], 'base_rate 掷 1 次（失败）'),
+        (False, False, 0, 0.018, [],                    '空表 → idx=-1，仅 base_rate 掷'),
+        (True,  False, 0, 0.018, [0.0, 0.0, 0.0, 1.0], 'guaranteed → 不掷'),
+        (False, True,  0, 0.018, [0.0, 0.0, 0.0, 1.0], 'readonly → 不掷'),
+    ]
+
+    def test_random_consumption_matches_old_behavior(self, monkeypatch):
+        import random as _random
+        from gacha_simulator.core.pity import RotatingCRBehavior
+
+        for guaranteed, readonly, counter, base_rate, probs, why in self.CASES:
+            calls = {'n': 0}
+
+            def fake_random():
+                calls['n'] += 1
+                return 0.5          # base_rate=0.018 → 失败；state_prob=0.75 → 命中
+
+            monkeypatch.setattr(_random, 'random', fake_random)
+
+            # 旧实现
+            old_st = PityState()
+            old = RotatingCRBehavior('cr', old_st, scope=SCOPE, cr_counter_threshold=3,
+                                     cr_base_rate=base_rate, cr_state_probs=probs)
+            if guaranteed:
+                old_st.set('cr', 'guaranteed', True)
+            old_st.set('cr', 'cr_counter', counter)
+            calls['n'] = 0
+            old.before_draw(_cr_ctx(state=old_st), readonly=readonly)
+            old_n = calls['n']
+
+            # 新实现
+            new_st = PityState()
+            tr = StreakTracker(scope=SCOPE, judge='featured', threshold=3,
+                               base_rate=base_rate, state_probs=probs)
+            tr.rebind(new_st, 'cr')
+            if guaranteed:
+                new_st.set('cr', 'guaranteed', True)
+            new_st.set('cr', 'cr_counter', counter)
+            calls['n'] = 0
+            tr.prepare(_cr_ctx(state=new_st), new_st, 'cr', readonly)
+            new_n = calls['n']
+
+            assert old_n == new_n, (
+                f'{why}：旧实现掷 {old_n} 次、新实现掷 {new_n} 次'
+                f'（guaranteed={guaranteed} readonly={readonly} counter={counter} '
+                f'base_rate={base_rate} probs={probs}）'
+            )
+
+    def test_cr_counter_trajectory_matches_old_behavior(self, monkeypatch):
+        """15 抽序列下 `cr_counter` 轨迹与旧实现逐位相同（含 `was_guaranteed` 读点）。"""
+        import random as _random
+        from gacha_simulator.core.pity import RotatingCRBehavior
+
+        def make_rng(seed):
+            rng = _random.Random(seed)
+            return lambda: rng.random()
+
+        # 抽卡序列：(rarity, is_featured)
+        seq = [('ssr', False), ('sr', False), ('ssr', True), ('ssr', False),
+               ('ssr', False), ('ssr', True), ('ssr', False), ('sr', True),
+               ('ssr', False), ('ssr', False), ('ssr', True), ('ssr', False),
+               ('ssr', False), ('ssr', False), ('ssr', True)]
+
+        for seed in (1, 7, 42):
+            old_st = PityState()
+            old = RotatingCRBehavior('cr', old_st, scope=SCOPE, cr_counter_threshold=3,
+                                     cr_base_rate=0.018, cr_state_probs=[0.0, 0.0, 0.75, 1.0])
+            monkeypatch.setattr(_random, 'random', make_rng(seed))
+            old_traj = []
+            for rarity, feat in seq:
+                ctx = _cr_ctx(rarity=rarity, is_featured=feat, state=old_st)
+                old.before_draw(ctx)
+                old.after_draw(ctx)
+                old_traj.append(old_st.get('cr', 'cr_counter', 0))
+
+            new_st = PityState()
+            streak = StreakTracker(scope=SCOPE, judge='featured', threshold=3,
+                                   base_rate=0.018, state_probs=[0.0, 0.0, 0.75, 1.0])
+            flag = FlagTracker(scope=SCOPE, judge='featured', hit='clear', miss='set',
+                               flag='guaranteed')
+            streak.rebind(new_st, 'cr')
+            flag.rebind(new_st, 'cr')
+            monkeypatch.setattr(_random, 'random', make_rng(seed))
+            new_traj = []
+            for rarity, feat in seq:
+                ctx = _cr_ctx(rarity=rarity, is_featured=feat, state=new_st)
+                streak.prepare(ctx, new_st, 'cr', False)      # 掷骰相位
+                # 顺序契约：StreakTracker 在前，读到的 guaranteed 是抽前值
+                streak.commit(ctx, new_st, 'cr')
+                flag.commit(ctx, new_st, 'cr')
+                new_traj.append(new_st.get('cr', 'cr_counter', 0))
+
+            assert old_traj == new_traj, f'seed={seed}：旧 {old_traj} 新 {new_traj}'

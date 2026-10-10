@@ -2,6 +2,9 @@
 
 本文件是 §七 S5a / S5b / S5c 三块的共同落点。S5a 只交付**装置**与自检；
 逐类型等价性批次（S5b）与三条强制约束的专项断言（S5c）在此文件上叠加。
+S5b 分两批接入（§七 S5b 的分批纪律）：批次一 = counter 驱动 4 型
+（`TestS5bCounterDrivenBatch`），批次二 = 事件驱动 6 型
+（`TestS5bEventDrivenBatch`）。
 
 ## 装置形状（三层）
 
@@ -42,10 +45,16 @@
 | 三个 `_soft` 复合类型的 `did_fire` 放宽为「出 scope」（ISSUE-102） | 非 featured 的 SSR 抽上 旧 False / 新 True | `SideTrace.did_fire` + 差异抽索引 | `test_m4_registered_did_fire_relaxation_for_soft_suffix_types` |
 | 三个 `_soft` 后缀类型的 deltas 取值源分叉（新读 `pdef.deltas`，旧只读 `pdef.soft_deltas`） | `deltas` 直构时两侧分叉 | fixture 规则（`soft_fixture()`）+ 登记用例 | `test_registered_soft_deltas_source_divergence` |
 
-**待裁决项（S5b 开工前）**：§六 主线字面写「位级一致」，而实测非条件分支有
-1 ULP 差。两者不可同时成立。骨架把该决策点留在 `Tolerance` 参数上：
-`EXACT` 与 `FLOAT_ORDER` 都可用，选哪个须显式写出理由（`Tolerance.rationale`
-为空即抛 `ValueError`，禁止匿名魔数）。逐类型批次（S5b）开工前须先裁决。
+**容差已裁决（S5b 批次一开工时落地，§六 2026-10-11 同步后的措辞）**：§六 主线
+把口径拆成两列——「**概率分布 = 容差 1e-12 内逐场一致**」+「**状态快照 =
+位级一致**」，并注明该 1 ULP 是旧侧 `_redistribute_scope` 的「除再乘」往返
+产物、不含语义内容（§3.1.5.6 的「位级一致」行与 §3.1.5 定理 1 的效力说明）。
+故本装置按机制族分派容差：**counter 驱动 4 型取 `EXACT`**（两侧同为绝对赋值、
+实测 `max_prob_diff == 0.0`，位级一致字面成立）；**事件驱动 6 型取
+`FLOAT_ORDER`（1e-12）**，覆盖非条件分支的 1 ULP。两族都在调用点写理由
+（`Tolerance.rationale` 为空即抛 `ValueError`，禁止匿名魔数）。状态机部分
+（counter 整数相位、flag 布尔翻转、随机流消费次数）在两种口径下都是**精确
+比较**，放宽的只是浮点分布一列。
 
 ## 收集守卫（GATE-6）
 
@@ -73,6 +82,7 @@ S5c 要求的六类逐类断言），**`n1` 零命中**。S5c 须补齐三类各
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import random
 from contextlib import contextmanager
@@ -81,7 +91,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pytest
 
-from gacha_simulator.core.config_store import PityDef
+from gacha_simulator.core.config_store import ConfigError, PityDef
 from gacha_simulator.core.pity import (
     DrawInfo,
     HardPityBehavior,
@@ -1210,3 +1220,169 @@ class TestH4RandomConsumption:
             zeroed, DRAW_SEQUENCE, shape=shape, tolerance=FLOAT_ORDER)
         assert zero_report.rng_calls_equal
         assert report.old.rng_calls > zero_report.old.rng_calls
+
+
+# ══════════════════════════════════════════════════════════════════
+# 十、S5b 批次一：counter 驱动 4 类（hard / soft_step / soft_interval / soft_additive）
+# ══════════════════════════════════════════════════════════════════
+#
+# 本批覆盖 `BEHAVIOR_REGISTRY` 的 counter 驱动四型，并落地 §七 S5b 的两条强制追加：
+# `ISSUE-403`（`target_featured` 的两条 `hard` 用例 + 三条 soft 硬拒）与
+# `_soft_deltas_of` 分支 ③ 的行为差异登记。
+#
+# **容差取 `EXACT` 的理由（§六 主线口径）**：counter 驱动的四型两侧共用同一套
+# 绝对赋值公式（`HardModifier` / `SoftModifier` 与旧 `HardPityBehavior` /
+# `SoftStepBehavior` 同为 `w / Σw` 且同序），实测逐抽 `max_prob_diff == 0.0`、
+# 快照无多出键、无缺失键。故 §六 主线字面的「概率分布 = 容差 1e-12 内」在本批
+# **以位级一致满足**，无须动用任何容差（1e-12 是事件驱动六型才需要的放宽）。
+
+#: counter 驱动批次的 fixture 表。逐条取**非默认**值（§六 ISSUE-030：「非默认
+#: threshold / scope / counter_init 下 preset 与旧类逐场一致」）：`hard` 走非默认
+#: threshold + counter_init 与 `reset='featured'` 两条，软保底三型各取一种 deltas
+#: 来路（直写 `deltas` / `soft_interval` 语法糖 / `soft_additive` 语法糖），
+#: 并含 `scope='sr'` 一条横向变体。
+COUNTER_BATCH: Tuple[Tuple[str, Callable[[], PityDef]], ...] = (
+    ('hard_threshold+counter_init', lambda: counter_fixture(
+        name='b1_hard', btype='hard', scope='ssr', threshold=6, counter_init=2)),
+    ('hard_reset=featured', lambda: counter_fixture(
+        name='b1_hard_rf', btype='hard', scope='ssr', threshold=6, reset='featured')),
+    ('soft_step', lambda: counter_fixture(
+        name='b1_soft_step', btype='soft_step', scope='ssr', deltas=SOFT_DELTAS)),
+    ('soft_step_scope=sr', lambda: counter_fixture(
+        name='b1_soft_step_sr', btype='soft_step', scope='sr', deltas=SOFT_DELTAS)),
+    ('soft_interval_sugar', lambda: counter_fixture(
+        name='b1_soft_interval', btype='soft_interval', scope='ssr',
+        soft_start=5, soft_end=40)),
+    ('soft_additive_sugar', lambda: counter_fixture(
+        name='b1_soft_additive', btype='soft_additive', scope='ssr',
+        soft_start=5, soft_end=40, soft_increment=8.0)),
+)
+
+
+class TestS5bCounterDrivenBatch:
+    """S5b 批次一：counter 驱动 4 类的等价性 + §七 S5b 的两条强制追加。"""
+
+    @pytest.mark.parametrize('make', [c[1] for c in COUNTER_BATCH],
+                             ids=[c[0] for c in COUNTER_BATCH])
+    def test_batch_equivalence_bit_exact(self, make):
+        pdef = make()
+        report = assert_equivalent(
+            pdef, DRAW_SEQUENCE, shape=_default_shape(), tolerance=EXACT)
+        assert report.bit_exact, f'{pdef.name}: 期望位级一致'
+        assert report.max_prob_diff == 0.0
+        assert report.extra_new_keys == frozenset()
+        assert report.missing_new_keys == frozenset()
+        assert report.did_fire_divergent_draws == []
+        assert report.rng_calls_equal, (
+            f'{pdef.name}: 随机数消费次数不同 '
+            f'old={report.old.rng_calls} new={report.new.rng_calls}')
+        # 非空转（装置已对旧侧设闸，此处对两侧同时断言：任一侧恒等都说明该 config
+        # 下机制从未触发，「两侧一致」不构成证据）
+        assert report.old.changed_from_base and report.new.changed_from_base
+
+    def test_issue403_hard_target_featured_narrows_target_set(self):
+        """ISSUE-403 ①：`target_featured=True` 的 `hard` 目标集**收窄为 featured 卡集**。
+
+        判别面用同一阈值下的 `target_featured=False` 变体作对照：两条配置在触发抽上
+        的分布必须不同（`tf=True` → featured 槽 1.0 / standard 槽 0.0；`tf=False` →
+        两槽各 0.5）。preset 漏写 `target=` 时 `HardModifier` 的 `target` 落到缺省
+        `'scope'`，两种配置的分布**合并为一**，本断言即红——`_target_of(pdef)` 在
+        该批次里别无第二个捕获面（静默放宽、不报错）。
+        """
+        shape = _default_shape()
+        pdef_tf = counter_fixture(name='b1_hard_tf', btype='hard', scope='ssr',
+                                  threshold=6, target_featured=True)
+        pdef_scope = counter_fixture(name='b1_hard_tf', btype='hard', scope='ssr',
+                                     threshold=6, target_featured=False)
+
+        report = assert_equivalent(pdef_tf, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+        scoped = compare_runs(pdef_scope, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+
+        trigger = next(i for i, p in enumerate(report.new.probs)
+                       if p != report.new.base_probabilities)
+        tf_draw = report.new.probs[trigger]
+        scoped_draw = scoped.new.probs[trigger]
+        assert tf_draw['ssr_featured'] == 1.0 and tf_draw['ssr'] == 0.0, (
+            f'第 {trigger} 抽 target_featured=True 的目标集未收窄到 featured：{tf_draw}')
+        assert scoped_draw['ssr_featured'] == 0.5 and scoped_draw['ssr'] == 0.5, (
+            f'第 {trigger} 抽 target_featured=False 的目标集非 scope 全集：{scoped_draw}')
+        assert tf_draw != scoped_draw
+
+    def test_issue403_hard_target_featured_empty_featured_falls_back_to_scope(self):
+        """ISSUE-403 ②：该 scope **无 featured 卡**时目标集回退 scope 全集。
+
+        取 `sr` 作 scope（`DEFAULT_CARDS` 里 `sr` 只有非 featured 的 `sr1`）。两条
+        断言：① 与旧类逐场一致（对齐旧 `featured_slots.get(scope, scope_slots)`
+        的回退）；② 回退**真的发生**——同 scope 上 `tf=True` 与 `tf=False` 的两侧
+        分布逐位相同，因为目标集都等于 scope 全集。缺回退时
+        `HardModifier._target_keys()` 给空集、`apply` 走 `if not A: return None`
+        恒等，而旧侧仍做绝对赋值，①即红。
+
+        另覆盖旧实现回退分支的**缺键形态**：`featured_slots` 连该 scope 的键都没有
+        （走 `.get(scope, scope_slots)` 的缺省参数），结果同为 scope 全集。
+        """
+        shape = _default_shape()
+        pdef_tf = counter_fixture(name='b1_hard_sr_tf', btype='hard', scope='sr',
+                                  threshold=3, target_featured=True)
+        pdef_scope = counter_fixture(name='b1_hard_sr_tf', btype='hard', scope='sr',
+                                     threshold=3, target_featured=False)
+
+        report = assert_equivalent(pdef_tf, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+        scoped = compare_runs(pdef_scope, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+        assert report.new.probs == scoped.new.probs
+        assert report.old.probs == scoped.old.probs
+        assert report.new.changed_from_base, '空集回退若退化为恒等，本用例失去判别力'
+
+        # 缺键形态：`featured_slots` 删去 `sr` 键（旧 `.get(scope, scope_slots)` 的
+        # 缺省分支）。本装置可手工构造；生产 `compute_scope_mappings` 不会产出该形状
+        # （无 featured 卡时它填 scope 槽本身），故它是防御性覆盖而非生产路径。
+        keyless_shape = dataclasses.replace(
+            shape,
+            featured_slots={k: v for k, v in shape.featured_slots.items() if k != 'sr'})
+        keyless = compare_runs(pdef_tf, DRAW_SEQUENCE, shape=keyless_shape, tolerance=EXACT)
+        assert keyless.is_equivalent(), keyless.failure_messages()
+        assert keyless.new.probs == report.new.probs
+
+    @pytest.mark.parametrize('btype', ('soft_interval', 'soft_additive', 'soft_step'))
+    def test_issue403_soft_counter_types_reject_target_featured(self, btype):
+        """7B 硬拒（§3.2.1 落地面 ①）：counter 驱动三软类型配 `target_featured=True`
+        时 `create_behavior` 抛 `ConfigError`。
+
+        校验点必须是 `create_behavior`（而非 `_build_pity`）：本文件的等价性装置与
+        任何直构 `PityDef` 的路径都绕过 TOML 层，防线须盖住构造入口。同用例内以
+        `hard` 作正对照，防止本断言靠「一律拒绝」通过。
+        """
+        pdef = counter_fixture(name='b1_reject', btype=btype, scope='ssr',
+                               soft_start=5, soft_end=40, target_featured=True)
+        with pytest.raises(ConfigError):
+            create_behavior(pdef, initial_state(pdef))
+
+        ok = counter_fixture(name='b1_reject_ok', btype='hard', scope='ssr',
+                             threshold=6, target_featured=True)
+        create_behavior(ok, initial_state(ok))   # `hard` 侧不得被牵连
+
+    @pytest.mark.parametrize('btype', ('soft_interval', 'soft_additive'))
+    def test_registered_counter_soft_deltas_default_divergence(self, btype):
+        """登记的差异：counter 驱动软类型的 `deltas` 与语法糖**全缺省**时，旧路径
+        构造即失败（`SoftStepBehavior.__init__` 的 `deltas=None` 检查；生产路径上该
+        保底被引擎吞成 warning 后整条消失），新 `_soft_deltas_of` 分支 ③ 按 74 / 90
+        缺省展开、软保底**真的生效**。
+
+        本用例**不断言等价**，只断言两侧各自的事实：方向是「从静默消失变为按缺省
+        生效」（`_soft_deltas_of` 的 docstring 登记「须由 S5b 的 counter 驱动批次或
+        §六 口径一并覆盖」），属修复方向。新侧的生效面取全 `R` 长序列把 counter 推过
+        `soft_end=90`，此时 boost 封顶 100 → 转移量 `t = min(1.0, p(Q))` → scope 总
+        概率恰为 1.0（不是「大于基础值」这类带余量的弱断言）。
+        `soft_step` 不在本用例内：它无语法糖可回退（旧分支对 `soft_step` 不展开），
+        行为面与另两型不同。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='b1_soft_default', btype=btype, scope='ssr')
+        with pytest.raises(ValueError):
+            build_old(pdef, initial_state(pdef))
+
+        trace = run_new(pdef, (R_DRAW,) * 200, shape=shape)
+        assert trace.changed_from_base
+        peak = max(sum(v for k, v in probs.items() if k.startswith('ssr'))
+                   for probs in trace.probs)
+        assert peak == 1.0, f'{btype} 的 74/90 缺省展开未生效（峰值 SSR 总量 {peak!r}）'

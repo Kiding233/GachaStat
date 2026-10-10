@@ -786,20 +786,40 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
 
 
 def _validate_registry():
-    """BEHAVIOR_REGISTRY 自检——验证所有条目 class 字段可导入。
+    """BEHAVIOR_REGISTRY 自检：条目「可构造性」的两形态判定。
 
-    P55 阶段八集成：遍历注册表中所有条目，确认 counter 驱动型的 class 字段
-    非 None 且确为 PityBehavior 子类。事件驱动型（P56 stub）跳过。
+    **P64 S4-1 过渡判据（GATE-3 定稿）**：条目**含 `preset` 键则判其可调用**
+    （导入期只做 `callable()` 判定，**既不调用 preset、也不校验其返回键集**）。
+    两条理由（ISSUE-405）：① 本函数形参表为空，手上**没有 `PityDef` 实例**可传给
+    `preset(pdef)`；② 导入期真调用会把 preset 体内的运行期错误（类型集合常量未
+    随叶子层落地致 `NameError`、Modifier 构造签名不符致 `TypeError`）从
+    「`PityEngine` 构造期可见」升级为**整包 `import gacha_simulator.core` 失败**。
+    preset 返回 dict 的键集校验（未知键查多 / `lifecycle` 必需键查漏）一律在
+    **运行期**由 `create_behavior` 承担（§3.2 AUDIT-BREAK-3）。
+
+    **无 `preset` 键（尚未迁移）则沿用旧判据**：`class` 非 None 且为
+    `PityBehavior` 子类。该分支使 S4-1 单独落地时导入期仍通过（此时 10 条目
+    全为旧形态），且 S4-2 / S4-3 的任一中间态都自洽；**随 S4-3 收口删除**
+    （届时 10 条目一律 `class: None` + 可调用 `preset`）。
+
     在模块导入时自动执行一次——类型错误在导入阶段立即暴露。
     """
     for btype, entry in BEHAVIOR_REGISTRY.items():
-        cls = entry.get("class")
-        if cls is not None:
-            if not isinstance(cls, type) or not issubclass(cls, PityBehavior):
+        if "preset" in entry:
+            preset = entry["preset"]
+            if not callable(preset):
                 raise TypeError(
-                    f"BEHAVIOR_REGISTRY['{btype}'].class={cls!r}——"
-                    f"必须为 PityBehavior 子类"
+                    f"BEHAVIOR_REGISTRY['{btype}'].preset={preset!r}: "
+                    f"必须为可调用的 preset 工厂函数"
                 )
+            continue
+        # ── 过渡分支（S4-3 收口时整段删除）：尚未迁移的条目仍走旧判据 ──
+        cls = entry.get("class")
+        if cls is None or not isinstance(cls, type) or not issubclass(cls, PityBehavior):
+            raise TypeError(
+                f"BEHAVIOR_REGISTRY['{btype}'].class={cls!r}: "
+                f"未迁移条目（无 'preset' 键）必须提供 PityBehavior 子类"
+            )
 
 
 _validate_registry()
@@ -1020,16 +1040,13 @@ class Pity(PityBehavior):
 def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     """工厂函数——从 PityDef（P55 扁平化字段）构造 behavior 实例。
 
+    **P64 S4-1 双路径**：registry 条目含 `preset` 键则走 **preset 分支**（按名取键
+    构造统一骨架 `Pity`，§3.2）；否则走**旧类兼容分支**（保留到发布前，见 GATE-5）。
+
     参数直接从 dataclass 字段读取；软保底语法糖（soft_start/soft_end/soft_increment）
-    经 _expand_soft_to_deltas() 展开为 deltas。
+    经 _expand_soft_to_deltas() 展开为 deltas（仅旧类分支）。
     """
     entry = BEHAVIOR_REGISTRY[pdef.btype]
-    cls = entry["class"]
-    if cls is None:
-        raise ValueError(
-            f"Behavior type '{pdef.btype}' 尚未实现——"
-            f"P56 将交付事件驱动型保底。"
-        )
 
     # scope：优先取 PityDef.scope（用户配置），回退 registry 的 default_scope。
     # 2026-09-16 修正：此前只读 registry，PityDef.scope 被静默忽略，
@@ -1037,6 +1054,44 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     # getattr 返回 None 时自然回退。
     _default_scope = entry.get("default_scope", "ssr")
     scope = (getattr(pdef, 'scope', None) or _default_scope).lower()
+
+    # ══ P64 preset 分支（§3.2 AUDIT-BREAK-3；preset 本体随 S4-2 / S4-3 逐条落地）══
+    preset = entry.get("preset")
+    if preset is not None:
+        from .config_store import ConfigError
+        built = preset(pdef)
+        # 两道**互补**校验，**不得合并成一道**：前者查多（未知键）、后者查漏
+        # （必需键缺），合并后两类问题互相掩盖。二者都是**运行期**校验：导入期的
+        # `_validate_registry()` 只判 `preset` 可调用、不碰键集（ISSUE-405）。
+        _unknown = set(built) - {'trackers', 'modifiers', 'lifecycle', 'flags', 'counters'}
+        if _unknown:
+            raise ConfigError(
+                f"preset '{pdef.btype}' 返回未声明键 {sorted(_unknown)}")
+        if 'lifecycle' not in built:
+            raise ConfigError(
+                f"preset '{pdef.btype}' 缺少必需键 'lifecycle'")
+        # **按名取键，禁止 `**built` 直展开**：直展开会让未知键在 `Pity(...)` 处抛
+        # `TypeError`（键多余）或静默落成死代码（键无人读）。亦**不得传旧类分支的
+        # `params` dict**（其中 `target_featured` / `reset` 在骨架无对应形参，见
+        # §3.1.4 AUDIT-BREAK-2）。
+        return Pity(
+            name=pdef.name, state=state, scope=scope, btype=pdef.btype,
+            priority=getattr(pdef, 'priority', 0),
+            pools=tuple(getattr(pdef, 'pools', ('*',))),
+            trackers=built['trackers'], modifiers=built['modifiers'],
+            lifecycle=built['lifecycle'],
+            flags=built.get('flags'), counters=built.get('counters'),
+        )
+
+    # ══ 旧类兼容分支（**仅旧类分支**；保留到发布前，见 GATE-5）══
+    # 下面 `cls(**params)` 的 `params` 组装段随「发布前一次性移除旧类」一并删除，
+    # 勿按此形态复制到 preset 分支（GATE-5 末条）。
+    cls = entry.get("class")
+    if cls is None:
+        raise ValueError(
+            f"Behavior type '{pdef.btype}' 尚未实现——"
+            f"P56 将交付事件驱动型保底。"
+        )
 
     # btype 传递给 behavior——基类据此推导 is_soft/is_hard/is_event_driven
     params: Dict[str, Any] = {"btype": pdef.btype}
@@ -1414,6 +1469,19 @@ class PityEngine:
         阶段 3 完整快照（env.pity_state_init）承载。
         """
         if state is self._state:
+            # ⚠ 已登记缺陷（S3-1 独立审查 → S4-1 登记，2026-10-10）：本早退对**旧类**
+            # 成立（旧类在构造期即 `Counter(state, ...)` 绑定），对统一骨架 `Pity`
+            # **不成立**：`Pity.__init__` 照 §3.1.4 骨架**不绑定**零件 Counter/Flag，
+            # 绑定只发生在 `Pity._rebind_state`。故本早退路径下零件永不绑定，
+            # `Tracker.advance` 读 `self._counter.incr()` 即抛 `AttributeError`。
+            # 今日不可达：三条派发路径（`before_draw` / `after_draw` /
+            # `get_probabilities`）传入的都是**新建对象**（引擎构造态由
+            # `_build_pity_state_init` 产出，派发态由 `PityState.from_dict` 另建），
+            # 故 `state is self._state` 首次必为假、首调完成绑定。
+            # **S4-2 / S4-3 接线后，任何传 `engine._state`（或其派生同一对象）的调用
+            # 即触发**。落点：**S4-2 处置**（候选：删本早退，`_rebind_state` 全是纯
+            # 重定向、重跑幂等；或在 `Pity.__init__` 绑定零件）。S4-1 不改，以守住
+            # 本块「零运行时行为变更」的约束。
             return  # 同一对象——无需重绑定
         self._state = state
         for bh in self._behavior_list:

@@ -17,7 +17,9 @@
 
 **M1 形态的位级对照**：`HardModifier` / `SoftModifier` 的 M1 形态是「沿用旧实现」
 （§3.9 过渡期纪律 / §3.9.5 的 `Σ(p + δ) ≠ 1` 行：目标集绝对赋值 + 更高稀有度豁免），
-本文件末尾两条用例直接对旧 `HardPityBehavior` / `SoftStepBehavior` 做逐位比对，
+本文件末尾两条用例直接对旧 `HardPityBehavior` / `SoftStepBehavior` 做逐位比对
+（断言用**严格 `==`**、非 `pytest.approx`：两侧算式逐字同源、求和顺序亦一致，
+故 1e-6 以下的回归也必须钉住），
 钉住该形态（§六 S1–S5 口径的单元级前置；旧类随发布前一次性移除时这两条同批删除）。
 """
 
@@ -193,7 +195,7 @@ class TestHardModifier:
 
         expect = old._compute_probabilities(ctx, 5)
         got = new.apply(ctx, _view(5), dist, False)
-        assert got == pytest.approx(expect)
+        assert got == expect, '位级对照：严格相等（非 approx）'
 
     def test_hard_modifier_target_featured_matches_old_class(self):
         """M1 位级对照：`target='featured'` 与旧 `HardPityBehavior(target_featured=True)` 逐位相等。"""
@@ -205,7 +207,7 @@ class TestHardModifier:
 
         expect = old._compute_probabilities(ctx, 5)
         got = new.apply(ctx, _view(5), dist, False)
-        assert got == pytest.approx(expect)
+        assert got == expect, '位级对照：严格相等（非 approx）'
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -261,8 +263,8 @@ class TestSoftModifier:
         for counter in (0, 4, 5, 10, 40):
             expect = old._compute_probabilities(ctx, counter)
             got = new.apply(ctx, _view(counter), dist, False)
-            assert (got is None and expect == pytest.approx(dist)) or \
-                got == pytest.approx(expect), f'counter={counter} 与旧类不等'
+            assert (got is None and expect == dist) or \
+                got == expect, f'counter={counter} 与旧类位级不等'
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -310,7 +312,7 @@ class TestRandomisedEquivalence:
                 new_h = HardModifier(scope, threshold=5,
                                      target='featured' if tf else 'scope')
                 assert new_h.apply(ctx, _view(5), dist, False) == \
-                    pytest.approx(old_h._compute_probabilities(ctx, 5))
+                    old_h._compute_probabilities(ctx, 5), '位级对照：严格相等（非 approx）'
 
             for counter in (0, 4, 7):
                 dist = _random_dist(rng)
@@ -320,5 +322,5 @@ class TestRandomisedEquivalence:
                 new_s = SoftModifier(scope, TestSoftModifier.DELTAS)
                 expect = old_s._compute_probabilities(ctx, counter)
                 got = new_s.apply(ctx, _view(counter), dist, False)
-                assert (got is None and expect == pytest.approx(dist)) or \
-                    got == pytest.approx(expect)
+                assert (got is None and expect == dist) or \
+                    got == expect, f'counter={counter} 与旧类位级不等'

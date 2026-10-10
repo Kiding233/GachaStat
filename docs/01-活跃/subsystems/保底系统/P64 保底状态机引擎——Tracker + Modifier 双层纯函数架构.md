@@ -1176,7 +1176,22 @@ preset 工厂**接受一个形参 `pdef`**（`PityDef` 实例），签名统一�
 1. 转移（A = `scope_cards[scope]`，Q = 全池减更高稀有度，`amount = β`），稀有度级
 2. 转移（A = `featured_cards[scope]`，Q = `scope_cards[scope]`，`amount` 由第一步的份额推出），卡级
 
-第 2 步的角色与 rotating 家族的「卡级定向」是同一件事，故 soft 不需要自带该能力。**若要一个「转移量可自由取值」的卡级算子**，那是**第三个机制**，当前表达不了，须另立条目而非复用 `target_featured`。
+第 2 步与 rotating 家族的「卡级定向」**只在 A/Q 形状这一层同类**（都是「A 取卡集」），**条件与 amount 两列都不同**：rotating 的条件是 `guaranteed` / `extra_flag`（flag 门），amount 是夺取型 `p(Q)`（源组整组搬空）；而第 2 步的条件必须与第 1 步相同（soft 的 `boost > 0`，counter 驱动、不是 flag 门），amount 是「第 1 步搬进 scope 的那一份里落在非 featured 成员上的部分」。**故第 2 步既不能实例化 `RotatingModifier`，也不等同于现有任何一个 Modifier**（2026-10-11 订正：原句「是同一件事」易被读成「可复用 rotating 的零件」）。**若要一个「转移量可自由取值」的卡级算子**，那是**第三个机制**，当前表达不了，须另立条目而非复用 `target_featured`。<!-- P64-7B-GAP-REG -->
+
+**缺口登记（2026-10-11）**：上句的「须另立条目」自 2026-10-05 写下起**从未真的另立**（全篇 `第三个机制` 仅此一处，§七 的 46 块与 §六 均无对应条目）。故 7B 的实际状态不是「该能力已有替代路径」，而是「**该能力在算子族词汇里可表达，但今天没有任何零件能表达它**」。「soft 侧可删而不丢能力」的严格含义应读作前者，不读作「今天拼得出来」。
+
+**若日后重新裁决取「恢复 `soft(target_featured=true)`」支，施工面如下**（2026-10-11 查明）：
+
+| 面 | 动作 |
+|----|------|
+| 实现 | **加一个具体 Modifier 类**，不是加一个与 soft 复合的第二个零件：条件内联 `boost_pct > 0`；A = `featured_cards[scope]`；Q = 更低稀有度卡集 ∪（scope 卡集减 A）；amount = `min(boost/100, p(Q))`；A 侧形状按 §3.1.2。**接口不变**（§3.1.5.2.1）。亦可给 `SoftModifier` 加一维目标集取值。**走「两步复合」不划算**：Modifier 接口没有跨零件传增量的通道（`apply` 只回一个新 dist），第 2 步只能自己按同一公式重算（那就得自己也持有 `deltas`），与一步式实现量相同却多一次遍历 |
+| 接线 | `_preset_soft_step` 写回 `target=_target_of(pdef)` 并按 `pdef.target_featured` 选 A/Q；删掉 `create_behavior` 的类型级硬拒（`core/pity.py` 的 7B 段），改为按该字段分派；同步 `_target_of` 的消费面注释与 `SoftModifier` 的 docstring |
+| 配置与基线 | `config.toml` 的 `ssr_soft` 可写回 `target_featured = true`；**两套 golden 需再次重固化**（p79 三组 + p82 五组，共 8 份），重固化属用户裁决级动作（先例 `68770ce`） |
+| 用例面 | §六 `ISSUE-403` 与 §七 S5b 的 soft 用例由「硬拒用例」反向改回「等价性用例」（本节落地面 ⑤ 的反向） |
+| 文档面 | 本节正文（落地面 ①②③④⑤）、§3.1.2 的消费表、§3.1.5.5 的 `soft + soft` 推论表与被消除的反例行、§1.5 的 P82 结论终版表、`docs/01-活跃/subsystems/保底系统/01-理论.md` 三行（`:24` / `:45` / `:97`）全部反向回写 |
+| 裁决面 | 7B 是 2026-10-05 的用户裁决，2026-10-10 又确认过一次「维持 7B」。恢复等于推翻两次裁决，**第一步是重新裁决**，不是技术动作 |
+
+**本清单不构成待办**：它是「若重新裁决取恢复支」的施工面估算，登记在此以免下次重新推导。
 
 **收益（三条）**：
 
@@ -2813,6 +2828,7 @@ class RotatingModifier(Modifier):
   - 逐类型**批次**推进（counter 驱动 4 类一批 / 事件驱动 6 类一批）；**每批一个 commit**，失败即停在该批（回滚单元）
   - **ISSUE-403 追加（强制；2026-10-09 按裁决 7B 改写，ISSUE-002）**：counter 驱动批次须含 **`target_featured=True`** 的 `hard` 用例两条：① 目标集收窄为 featured（与旧类逐场一致）；② **该 scope 无 featured 卡时的空集回退**（目标集退回 scope 全集）。**并含 7B 硬拒用例一条**：`soft_interval` / `soft_additive` / `soft_step` 配 `target_featured=True` 时经 `create_behavior` 抛 `ConfigError`（原稿此处要求「soft 用例与旧类逐场一致」，与 7B 互斥，已改）。原稿该字段在等价性批次中零覆盖，是 §六 ISSUE-403 条唯一能落地的验收面 <!-- REVIEW-R1-FIX: ISSUE-002 -->
   - **ISSUE-001 追加（强制，2026-10-09）**：`_soft` 批次须含一条「**只写 `soft_start` / `soft_end`**（不写 `deltas`）的 `rotating_soft`」等价性用例——该形态是 `_soft_deltas_of(pdef)` 分支 ③ 的唯一显形面：若预设按 `pdef.btype` 直喂 `_expand_soft_to_deltas`，展开结果为空元组、`SoftModifier` 的 boost 恒 0、软保底静默消失，而**该批次的其余用例（写 `deltas` 或写 `increment`）测不出来**。同批补一条「只写 `soft_increment` 的 `rotating_cr_soft`」用例覆盖分支 ② <!-- REVIEW-R1-FIX: ISSUE-001 -->
+  - **7B 缺口登记（2026-10-11）**：`soft_*` 的 `target_featured` 能力自裁决 7B 起从配置面移除，而替代它的「转移量可自由取值的卡级算子」从未另立条目。本批的 soft 用例按 7B 为**硬拒用例**；若日后重新裁决取恢复支，本批与 §六 `ISSUE-403` 的 soft 用例面须一并反向改写，施工清单见 §3.2.1 的「缺口登记」段。<!-- P64-7B-GAP-REG -->
   - 验收命令：10 类逐场一致（§六 主线口径）
 - [ ] **S5c 三条强制约束专项断言**（~0.8 人时；**2026-10-10 上调**：H4 新增两条负例——只读查询不消耗随机数、掷骰失败后 flag 必须为假）｜目标文件 `tests/core/test_pity_equivalence.py`
   - **N1** 触发抽数 / **M4 did_fire 六类语义**（counter 驱动 ×1 + rotating + targeted + 三个 `_soft` 复合类型，ISSUE-102）/ **H4 短路条件下随机数消费次数**

@@ -542,11 +542,13 @@ class TestEventPresetsS43:
     def test_all_ten_presets_construct_in_engine(self):
         """全部 10 类经 `PityEngine` 构造后 `len(engine.behaviors) == 1`（§六 ISSUE-204）。
 
-        `PityEngine.__init__` 对 preset 构造失败只 `logger.warning` 后**跳过**
-        （不抛），跳过会让 `_resolve_order` / `_validate_behaviors` 在截断后的列表上
-        执行、形成「配置里写了保底、运行时该保底不存在且无可见报错」。逐类单独建
-        engine 是**唯一**能同时容纳 10 类的形态：规则 3 禁同 scope 两个事件驱动型，
-        故「一个 engine 装 10 条同 scope 保底」在任何合法配置下都不存在。
+        S4-5 之前 `PityEngine.__init__` 对 preset 构造失败只 `logger.warning` 后
+        **跳过**（不抛），跳过会让 `_resolve_order` / `_validate_behaviors` 在截断后的
+        列表上执行、形成「配置里写了保底、运行时该保底不存在且无可见报错」；S4-5 起
+        构造失败直接抛 `ConfigError`，本断言与「不抛异常」自此互为两面（抛出侧见
+        `tests/core/test_pity_validate_behaviors.py::TestEngineConstructFailure`）。
+        逐类单独建 engine 是**唯一**能同时容纳 10 类的形态：规则 3 禁同 scope 两个
+        事件驱动型，故「一个 engine 装 10 条同 scope 保底」在任何合法配置下都不存在。
         """
         for t in _ALL_TYPES:
             engine = PityEngine(pool_specs={}, pity_defs=[

@@ -140,3 +140,65 @@ class TestScopeWired:
             PityDef(name='h2', btype='hard', scope='sr', threshold=80),
         ])
         assert len(engine.behaviors) == 2
+
+
+class TestEngineConstructFailure:
+    """S4-5（ISSUE-204）：`PityEngine` 构造失败由「`logger.warning` 后跳过」改为抛 `ConfigError`。
+
+    旧形态的失效链：构造失败的那条保底被 `except Exception → logger.warning` 从
+    `self.behaviors` 里删掉，紧随其后的 `_resolve_order` / `_validate_behaviors` 于是跑在
+    **截断后**的列表上，同 scope 互斥校验（规则 2/3/4）失去语义，形成「配置里写了保底、
+    运行时该保底不存在且无可见报错」。
+    """
+
+    def test_engine_construct_failure_raises_config_error(self, monkeypatch):
+        """构造失败抛 `ConfigError`，且排序/校验**不得**在截断后的列表上执行。
+
+        失败项取 7B 类型级硬拒（`soft_*` + `target_featured=true`，`create_behavior`
+        内抛 `ConfigError`）：它与同 scope 的 `hard` 本属**互斥**组合，旧形态下该条被
+        跳过、`_validate_behaviors` 只见 `hard` 一条、静默通过。
+        """
+        import gacha_simulator.core.pity as pity_mod
+
+        calls = []
+        real_resolve = pity_mod._resolve_order
+        real_validate = pity_mod._validate_behaviors
+
+        def _spy_resolve(behaviors, rarity_rank=None):
+            calls.append(('resolve', [getattr(b, '_name', None) for b in behaviors]))
+            return real_resolve(behaviors, rarity_rank)
+
+        def _spy_validate(behaviors):
+            calls.append(('validate', [getattr(b, '_name', None) for b in behaviors]))
+            return real_validate(behaviors)
+
+        monkeypatch.setattr(pity_mod, '_resolve_order', _spy_resolve)
+        monkeypatch.setattr(pity_mod, '_validate_behaviors', _spy_validate)
+
+        with pytest.raises(ConfigError, match='bad_soft'):
+            _engine([
+                PityDef(name='ok_hard', btype='hard', scope='ssr', threshold=90),
+                PityDef(name='bad_soft', btype='soft_interval', scope='ssr',
+                        soft_start=73, soft_end=90, target_featured=True),
+            ])
+        assert calls == [], (
+            '构造失败后仍在**截断后**的列表上执行了排序/校验——旧形态下这里会拿到 '
+            '[ok_hard] 并静默通过（同 scope 互斥校验失去语义）')
+
+        # 反向：全部可构造时，两者在**完整**列表（2 条）上执行，即列表未被截断
+        _engine([
+            PityDef(name='ok_hard', btype='hard', scope='ssr', threshold=90),
+            PityDef(name='ok_rot', btype='rotating', scope='ssr'),
+        ])
+        assert [len(names) for _kind, names in calls] == [2, 2], (
+            f'合法配置下排序/校验须在完整列表上执行，实得 {calls}')
+
+    def test_engine_construct_unknown_type_raises_config_error(self):
+        """未知 `btype`（`create_behavior` 首行 `KeyError`）同样归为 `ConfigError`。
+
+        ISSUE-204 的措辞是「**任一** preset 构造失败抛 `ConfigError`」：只放行
+        `ConfigError` 会让 `KeyError` 这类失败形态以非配置错误的类型逃逸，而它的
+        成因同样是配置写错。
+        """
+        with pytest.raises(ConfigError, match='未知类型'):
+            _engine([PityDef(name='u', btype='未知类型', scope='ssr')])

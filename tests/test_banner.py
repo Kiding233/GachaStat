@@ -361,8 +361,12 @@ class TestPityQualifiedKeyBinding:
             [b],
             target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)],
             pity_enabled=True,
+            # S4-5 修正：原写 `target_featured=True`，而它是裁决 7B 的类型级硬拒
+            # （`soft_*` + `target_featured`），S4-5 之前被 `PityEngine.__init__` 的
+            # 构造兜底静默跳过——本用例于是**在没有保底的情况下**测 pool_specs。
+            # 该组合本就非法，改用带 `deltas` 的合法 soft 保底。
             pity_defs=[PityDef(name='soft', btype='soft_interval', scope='ssr',
-                               target_featured=True, pools=('b1.main',))],
+                               deltas=((73, 0.0), (17, 5.88)), pools=('b1.main',))],
         )
         env = SimulationEnvBuilder.from_config_store(store)
         # pool_specs 键空间为全限定键 {banner_id}.{pool_id}（ISSUE-005/010）
@@ -755,8 +759,10 @@ class TestWorstImpactPityEngine:
         b = _ssr_only_banner('b1')  # ssr_a featured
         store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)],
                             pity_enabled=True,
+                            # S4-5 修正：`target_featured=True` 属 7B 硬拒面（见上一用例），
+                            # 此前被构造兜底静默跳过；改用带 `deltas` 的合法 soft 保底。
                             pity_defs=[PityDef(name='soft', btype='soft_interval', scope='ssr',
-                                               target_featured=True, pools=('*',))])
+                                               deltas=((73, 0.0), (17, 5.88)), pools=('*',))])
         analyzer = WorstImpactAnalyzer([], {'ssr_a': 1}, store)
         # 2026-10-09：`_build_pity_engine` 改为收「合成好的池列表」（卡集合按池内真实
         # reward id 生成，原 ISSUE-006），故不再单独调它，改走完整装配

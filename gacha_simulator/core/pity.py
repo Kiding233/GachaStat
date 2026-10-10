@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Set
-import logging
 import random
 
 # ── P64 S1a：叶子原语层迁出至 pity_primitives（§3.1.6）──
@@ -19,8 +18,6 @@ from .pity_tracker import (  # noqa: F401
 from .pity_modifier import (  # noqa: F401
     HardModifier, Modifier, RotatingModifier, SelectedModifier, SoftModifier,
 )
-
-logger = logging.getLogger(__name__)
 
 
 
@@ -1410,8 +1407,9 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
     # `type = "hard"`，`soft_*` 一次都没有；soft 侧该形态可等价分解为
     # 「稀有度级 + 卡级」两步转移，能力不丢，故从配置面移除（详 §3.2.1）。
     # **本拒止与落地面 ②（`config.toml` 的 `ssr_soft` 删去该行）是同一条裁决的两面**：
-    # 只落拒止而不改样例配置时，`PityEngine.__init__` 的 `try/except` 会把这里的
-    # `ConfigError` 吞成 `logger.warning` 并跳过该保底，样例配置的保底**静默消失**。
+    # 只落拒止而不改样例配置时，本 `ConfigError` 会在 `PityEngine` 构造期上抛、样例
+    # 配置直接构造失败（S4-5 之前它被 `__init__` 的 `try/except` 吞成 `logger.warning`
+    # 并跳过该保底，样例配置的保底**静默消失**；该兜底已随 S4-5 删除）。
     if getattr(pdef, 'target_featured', False) and pdef.btype in _SOFT_TYPES:
         from .config_store import ConfigError
         raise ConfigError(
@@ -1729,7 +1727,7 @@ class PityEngine:
 
         # 从 PityDef 构造 behavior 实例
         self.behaviors: Dict[str, PityBehavior] = {}
-        from .config_store import PityDef as _PityDef
+        from .config_store import ConfigError, PityDef as _PityDef
 
         # 重名校验（2026-09-16 修正）：此前重名会被下面的 dict 赋值静默覆盖、
         # 只留后者，用户无从察觉，`_validate_behaviors` 的规则 1 因此永不可达。
@@ -1748,15 +1746,29 @@ class PityEngine:
             if not isinstance(pdef, _PityDef):
                 continue
             # P56：移除 skip guard——所有 10 种 type 均由 create_behavior() 处理
+            # ── P64 S4-5（ISSUE-204）：构造兜底由「logger.warning 后跳过」改为硬失败 ──
+            # 原 `except Exception → logger.warning` 会把构造失败的那条保底从
+            # `self.behaviors` 里悄悄删掉。后果不止「少一条保底」：紧随其后的
+            # `_resolve_order` / `_validate_behaviors` 于是跑在**截断后**的列表上，
+            # 同 scope 互斥校验（规则 2/3/4）失去语义，形成「配置里写了保底、运行时
+            # 该保底不存在且无可见报错」。分类为配置错误（与 `_validate_behaviors` 的
+            # 校验失败同层，§四 `core/pity.py` 行），故两级处理：
+            #   ① `create_behavior` 自己抛的 `ConfigError` 原样上抛（消息里带保底名与
+            #      成因，如 7B 的 target_featured 硬拒），不二次包装；
+            #   ② 其余异常（未知 btype 的 `KeyError`、preset 体内的 `TypeError` 等）
+            #      一并归为 `ConfigError`——ISSUE-204 的措辞是「**任一** preset 构造
+            #      失败抛 `ConfigError`」，只放行 `ConfigError` 会让其余失败形态以
+            #      非配置错误的类型逃逸；`from exc` 保留原始调用链。
             try:
                 bh = create_behavior(pdef, self._state)
-                self.behaviors[pdef.name] = bh
-            except Exception:
-                logger.warning(
-                    f"PityEngine: 跳过 behavior '{pdef.name}' (type={pdef.btype})——"
-                    f"构造失败",
-                    exc_info=True,
-                )
+            except ConfigError:
+                raise
+            except Exception as exc:
+                raise ConfigError(
+                    f"PityEngine: 保底 '{pdef.name}'（type='{pdef.btype}'）构造失败："
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            self.behaviors[pdef.name] = bh
 
         # 排序 + 校验
         ordered = _resolve_order(list(self.behaviors.values()), self._rarity_rank)
@@ -1779,8 +1791,10 @@ class PityEngine:
         }
         self._pool_order: Dict[str, List[str]] = {}
         for _pool_id, _spec in self.pool_specs.items():
-            # 构造失败的 behavior 已在上方跳过、不进 self.behaviors，
-            # 此处同样剔除（与 get_behaviors_for_pool 的 `bh is None` 守卫等价）。
+            # S4-5 起构造失败即在构造处抛错，不存在「构造失败但仍进了
+            # self.behaviors」的条目；此处的成员过滤保留为 `pity_names` 与
+            # `self.behaviors` 键集的对齐守卫（与 get_behaviors_for_pool 的
+            # `bh is None` 守卫等价）。
             self._pool_order[_pool_id] = sorted(
                 (_n for _n in _spec.pity_names if _n in self.behaviors),
                 key=lambda _n: _order_index.get(_n, len(ordered)),

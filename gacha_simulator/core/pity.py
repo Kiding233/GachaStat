@@ -38,7 +38,7 @@ def build_lifecycle(pdef) -> Lifecycle:
     一并判定；`cfg` 里两个字段都带入。
 
     旧 `create_behavior` 的 `lifecycle_kwargs` 段（`LifecycleConfig(**kwargs)`）
-    是这两个字段此前的唯一转换点，随 S4-4 删除——同一转换不得留两处。
+    是这两个字段此前的转换点，已随 S4-4 删除：同一转换不得留两处。
     """
     cfg = LifecycleConfig(
         deactivate_on_early_hit=bool(getattr(pdef, 'deactivate_on_early_hit', False)),
@@ -1501,14 +1501,14 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
                 params['guaranteed_init'] = True
         if getattr(pdef, 'fate_points_init', 0):
                 params['fate_points_init'] = pdef.fate_points_init
-    # 生命周期参数——LifecycleConfig 跨 type 共享
-    lifecycle_kwargs = {}
-    if getattr(pdef, 'deactivate_on_early_hit', False):
-        lifecycle_kwargs['deactivate_on_early_hit'] = True
-    if getattr(pdef, 'depends_on', None):
-        lifecycle_kwargs['depends_on'] = pdef.depends_on
-    if lifecycle_kwargs:
-        params['lifecycle'] = LifecycleConfig(**lifecycle_kwargs)
+    # ── P64 S4-4：旧 `lifecycle_kwargs` 段已删除（§3.1.3 / ISSUE-301）──
+    # `pdef.deactivate_on_early_hit` / `pdef.depends_on`（连同退役维的
+    # `pdef.max_triggers`）到 Lifecycle 对象的转换**只有一处**：模块级
+    # `build_lifecycle(pdef)`，由各 preset 工厂的 `lifecycle=` 键消费。
+    # 删除时机：S4-2 / S4-3 之后 10 条 registry 条目已全部 preset 化，旧类兼容
+    # 分支在 registry 上已无入口（只剩测试注入的合成条目），故此处不再注入
+    # `LifecycleConfig`。留着即「同一转换两处」，而两处各留一半时的失效模式
+    # 没有对照实现可发现。本分支的 `params` 组装段整体随「发布前一次性移除旧类」删除。
 
     return cls(name=pdef.name, state=state, scope=scope, **params)
 

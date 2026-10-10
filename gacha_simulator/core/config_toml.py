@@ -702,9 +702,10 @@ def legal_reset_values(rarity_rank_map: dict) -> set:
 # `rotating_cr` 缺 `cr_state_probs`、四个 init 键与 `reset` / `pools` /
 # `lifecycle` / `target_featured` 均不在其中，照抄会把合法键报成未知。
 #
-# **扩表编辑点只有三处**：S4-4 的 `max_triggers` 入 `_PITY_COMMON_KEYS`；
-# S6a 的 `rotating_inverse`、S9-3 的 `hard_exclude_owned_skip` /
-# `hard_exclude_owned_any`（键集含 `on_all_owned`）入 `_PITY_TYPE_KEYS`。
+# **扩表编辑点只有两处**：S6a 的 `rotating_inverse`、S9-3 的
+# `hard_exclude_owned_skip` / `hard_exclude_owned_any`（键集含 `on_all_owned`）
+# 入 `_PITY_TYPE_KEYS`。（原「三处」中的 S4-4 之 `max_triggers` 已于 2026-10-11
+# 落地，见 `_PITY_COMMON_KEYS`。）
 # 写侧产出按本表过滤，故扩表后写侧自动跟随，无需第二处编辑。
 
 # 跨类型的通用键（任何 btype 均合法）。
@@ -717,6 +718,9 @@ _PITY_COMMON_KEYS = frozenset({
     'priority',
     # 生命周期（嵌套键形态见 _PITY_TYPE_KEYS 的 lifecycle.* 项）
     'lifecycle',
+    # 触发次数上限（ISSUE-032，S4-4；非默认才写回）。跨 type 通用：它是
+    # `build_lifecycle` 退役维的配置来源，与驱动类型无关（§3.1.3）。
+    'max_triggers',
     # 四个初始状态键
     'counter_init', 'guaranteed_init', 'fate_points_init', 'selected_card_init',
 })
@@ -910,6 +914,24 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
                 f"与 reset='never' 行为不可区分"
             )
 
+        # 触发次数上限（ISSUE-032 / §3.1.3 的退役维）：0 = 不限，负值抛 ConfigError。
+        # 负值若不拒，`build_lifecycle` 的 `_n > 0` 判据会把它静默当成 0：「触发
+        # 上限」变成「不限」，与配置者写的字面意思相反且无任何信号。
+        # 非整数一并拒：字符串取值会让 `_n > 0` 抛 `TypeError`，而该异常被
+        # `PityEngine.__init__` 的构造兜底吞成 `logger.warning`、整条保底静默消失；
+        # bool 是 `int` 的子类（`max_triggers = true` 会被静默当成 1），故显式排除。
+        max_triggers = p.get('max_triggers', 0)
+        if isinstance(max_triggers, bool) or not isinstance(max_triggers, int):
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 max_triggers="
+                f"{max_triggers!r} 不是整数（0 = 不限，须为非负整数）"
+            )
+        if max_triggers < 0:
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 max_triggers={max_triggers} 是负值"
+                f"（0 = 不限，须为非负整数）。负值会让「触发次数上限」静默变成「不限」"
+            )
+
         # 解析 deltas / 语法糖参数
         deltas = None
         soft_start = p.get('start')
@@ -970,6 +992,8 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), list) else (p.get('pools', '*'),),
             deactivate_on_early_hit=deactivate_on_early_hit,
             depends_on=depends_on,
+            # ISSUE-032（§3.1.3 退役维）：与 `depends_on` 正交，0 = 不限。
+            max_triggers=max_triggers,
             reset=reset,
             # G5（§3.6）：管道排序键的显式覆盖入口。缺省 0 = 不覆盖 type 顺序。
             priority=p.get('priority', 0),
@@ -2013,6 +2037,11 @@ def _pitydef_to_toml(p) -> dict:
     # 与「缺键」在解析侧等价，故丢失无任何报错）。非默认才写（round-trip 纪律）。
     if p.priority:
         entry['priority'] = p.priority
+    # ISSUE-032（S4-4）：触发次数上限。与 `priority` 同为「非默认才写」的标量，
+    # 同属条件式逐字段书写的漏写面：不补这一行，「GUI 加载 → 保存」一次即把手写的
+    # `max_triggers` 抹掉（缺键与 0 在解析侧等价，丢失无任何报错；ISSUE-923 先例）。
+    if p.max_triggers:
+        entry['max_triggers'] = p.max_triggers
 
     # 语法糖参数（写出直观形式，前提是它能还原出同一份 deltas；否则写 deltas）
     if p.btype in _SOFT_SUFFIX_TYPES and p.deltas is None and (

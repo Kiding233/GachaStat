@@ -594,7 +594,8 @@ def _all_fields_non_default_pitydef():
         soft_deltas=((74, 0.0), (16, 6.25)), cr_counter_threshold=3,
         cr_base_rate=0.018, cr_state_probs=(0.0, 0.0, 0.0, 1.0), fate_threshold=1,
         switch_allowed=False, switch_resets_progress=False, pools=('test_pool.main',),
-        deactivate_on_early_hit=True, depends_on='other', reset='featured', priority=5,
+        deactivate_on_early_hit=True, depends_on='other', max_triggers=2,
+        reset='featured', priority=5,
     )
 
 
@@ -613,6 +614,7 @@ def _all_fields_non_default_pitydef():
 # `lifecycle` 也不是字段（嵌套键各自映射到 `deactivate_on_early_hit` / `depends_on`）。
 _PITY_KEY_TO_FIELD = {
     'priority': ('priority', 5),
+    'max_triggers': ('max_triggers', 2),
     'target_featured': ('target_featured', True),
     'reset': ('reset', 'featured'),
     'pools': ('pools', ('test_pool.main',)),
@@ -742,6 +744,9 @@ class TestPityKeyContract:
 
         assert 'priority' in _PITY_COMMON_KEYS, (
             'priority 由 S4b 落地且要求 round-trip 写回，缺它即拒收刚写出的合法配置')
+        assert 'max_triggers' in _PITY_COMMON_KEYS, (
+            'max_triggers 由 S4-4 落地且要求 round-trip 写回（ISSUE-032）：'
+            '不入契约表时，读侧的未声明键硬拒会把刚写出的合法配置判为未知键')
         for btype, keys in _PITY_TYPE_KEYS.items():
             flat = {k for k in keys if not k.startswith('lifecycle.')}
             assert not (flat & _PITY_COMMON_KEYS), (btype, flat & _PITY_COMMON_KEYS)
@@ -1014,3 +1019,119 @@ class TestPriorityTomlRoundTrip:
                 assert getattr(got, f.name) is None, f.name
         assert got.switch_allowed is True and got.switch_resets_progress is True
         assert got.deltas == ((74, 0.0), (16, 6.25))
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4-4：`PityDef.max_triggers` 的 TOML 往返与退役维接线（ISSUE-032）
+# ══════════════════════════════════════════════════════════════════
+# `max_triggers`（0 = 不限）是 §3.1.3 退役维 `AfterN(N)` 的配置来源、与 `depends_on`
+# （激活维）正交。本组钉住三件事：
+#   ① 解析 + round-trip（非默认写回、默认不写、闭环保留）；
+#   ② 负值与非整数在加载期硬拒（负值若放行会被 `_n > 0` 静默当成 0）；
+#   ③ 配置面到 `build_lifecycle` 的接线（TOML → `PityDef` → `FiniteActive` /
+#      `DependentFiniteActive`）：只测 `build_lifecycle` 时该键的配置入口可整体失踪
+#      而用例全绿。
+
+class TestMaxTriggersTomlRoundTrip:
+    """`max_triggers` 的 TOML 往返：解析、非默认写回、默认不写。"""
+
+    def test_writeback_emits_non_default(self):
+        from gacha_simulator.core.config_toml import _pitydef_to_toml
+        from gacha_simulator.core.config_store import PityDef
+
+        assert _pitydef_to_toml(PityDef(name='x', max_triggers=2))['max_triggers'] == 2
+
+    def test_writeback_omits_default(self):
+        """默认 0 不写出该键（round-trip 纪律：缺键与 0 在解析侧等价）。"""
+        from gacha_simulator.core.config_toml import _pitydef_to_toml
+        from gacha_simulator.core.config_store import PityDef
+
+        assert 'max_triggers' not in _pitydef_to_toml(PityDef(name='x'))
+        assert 'max_triggers' not in _pitydef_to_toml(
+            PityDef(name='x', max_triggers=0))
+
+    def test_parse_from_toml(self):
+        toml = _BASE_TOML + _pity_section('hard', 'p1', threshold=90,
+                                          max_triggers=2)
+        store, path = _write_and_load(toml)
+        try:
+            assert store.pity.pities[0].max_triggers == 2
+        finally:
+            os.unlink(path)
+
+    def test_parse_missing_key_defaults_to_zero(self):
+        toml = _BASE_TOML + _pity_section('hard', 'p1', threshold=90)
+        store, path = _write_and_load(toml)
+        try:
+            assert store.pity.pities[0].max_triggers == 0
+        finally:
+            os.unlink(path)
+
+    def test_save_load_closed_loop_preserves_max_triggers(self):
+        """「写盘 → 重载」闭环：手写的 `max_triggers = 2` 经 save / load 后不变。
+
+        写侧是条件式逐字段书写，漏写回时该键被静默抹掉（缺键与 0 在解析侧等价），
+        故本用例同时断言**字面量落了盘**。
+        """
+        toml = _BASE_TOML + _pity_section('hard', 'p1', threshold=90,
+                                          max_triggers=2)
+        store, path = _write_and_load(toml)
+        try:
+            store2 = _roundtrip(store, path)
+            with open(path, encoding='utf-8') as f:
+                assert 'max_triggers = 2' in f.read(), (
+                    '写回漏了该键，「GUI 加载 → 保存」一次即抹掉')
+            assert store2.pity.pities[0].max_triggers == 2
+        finally:
+            os.unlink(path)
+
+    def test_negative_rejected(self):
+        """⑦ `max_triggers = -1` 抛 `ConfigError`（不静默当 0）。"""
+        toml = _BASE_TOML + _pity_section('hard', 'p1', threshold=90,
+                                          max_triggers=-1)
+        with pytest.raises(ConfigError, match='max_triggers'):
+            _write_and_load(toml)
+
+    @pytest.mark.parametrize('literal', ['"2"', 'true', '1.5'])
+    def test_non_integer_rejected(self, literal):
+        """非整数取值硬拒：字符串会让 `_n > 0` 抛 `TypeError`（被构造兜底吞掉）。"""
+        toml = (_BASE_TOML +
+                '[[pity]]\nname = "p1"\ntype = "hard"\nscope = "ssr"\n'
+                f'threshold = 90\nmax_triggers = {literal}\n')
+        with pytest.raises(ConfigError, match='max_triggers'):
+            _write_and_load(toml)
+
+    def test_toml_to_lifecycle_wiring(self):
+        """③ 配置面接线：TOML → `PityDef` → `build_lifecycle` 的四组合。
+
+        只测 `build_lifecycle` 时，`PityDef.max_triggers` 的解析 / 写回可整体失踪
+        而用例全绿（`build_lifecycle` 用 `getattr` 兜底），故本用例从 TOML 起跑。
+        """
+        from gacha_simulator.core.pity import build_lifecycle
+        from gacha_simulator.core.pity_tracker import (AlwaysActive,
+                                                       DependentActive,
+                                                       DependentFiniteActive,
+                                                       FiniteActive)
+
+        toml = (_BASE_TOML +
+                _pity_section('hard', 'plain', threshold=90) +
+                _pity_section('hard', 'welfare', threshold=90, max_triggers=2) +
+                _pity_section('hard', 'dep', threshold=90) +
+                '[pity.lifecycle]\ndepends_on = "welfare"\n' +
+                _pity_section('hard', 'dep_finite', threshold=90,
+                              max_triggers=3) +
+                '[pity.lifecycle]\ndepends_on = "welfare"\n')
+        store, path = _write_and_load(toml)
+        try:
+            got = {p.name: build_lifecycle(p) for p in store.pity.pities}
+        finally:
+            os.unlink(path)
+
+        assert isinstance(got['plain'], AlwaysActive)
+        assert isinstance(got['welfare'], FiniteActive)
+        assert got['welfare']._max_triggers == 2
+        assert got['welfare'].state_keys() == ('triggers',)
+        assert isinstance(got['dep'], DependentActive)
+        assert isinstance(got['dep_finite'], DependentFiniteActive)
+        assert got['dep_finite']._max_triggers == 3
+        assert got['plain'].state_keys() == ()

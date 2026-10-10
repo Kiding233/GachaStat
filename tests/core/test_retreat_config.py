@@ -381,6 +381,7 @@ def _all_fields_non_default() -> dict:
         'pools': ('pool_3.main',),
         'deactivate_on_early_hit': True,
         'depends_on': 'other',
+        'max_triggers': 2,
         'reset': 'featured',
         'priority': 5,
     }

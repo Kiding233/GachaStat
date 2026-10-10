@@ -63,6 +63,15 @@ _FAKE_UNKNOWN_KEY = '_s4_1_fake_unknown_key'
 _FAKE_NO_LIFECYCLE = '_s4_1_fake_no_lifecycle'
 _FAKE_BAD_PRESET = '_s4_1_fake_bad_preset'
 _FAKE_LEGACY_NONE = '_s4_1_fake_legacy_none'
+_FAKE_LEGACY_PROBE = '_s4_4_fake_legacy_probe'
+
+
+class _LegacyKwargsProbe(HardPityBehavior):
+    """记录 `create_behavior` 传给旧类分支的构造实参名（S4-4 的 `lifecycle` 键防线）。"""
+
+    def __init__(self, **kw):
+        self.received_kwargs = set(kw)
+        super().__init__(**kw)
 
 
 @pytest.fixture
@@ -227,6 +236,31 @@ class TestCreateBehaviorPresetBranch:
         assert not isinstance(bh, Pity), '旧分支不得返回骨架 Pity'
         assert isinstance(bh, HardPityBehavior)
         assert bh._btype == _FAKE_LEGACY_NONE
+
+    def test_legacy_branch_no_longer_injects_lifecycle(self, registry_entries):
+        """S4-4：旧 `lifecycle_kwargs` 段已删除，旧类分支不再注入 `LifecycleConfig`。
+
+        `deactivate_on_early_hit` / `depends_on`（连同退役维的 `max_triggers`）到
+        Lifecycle 对象的转换**只有一处**：模块级 `build_lifecycle(pdef)`，经 preset
+        分支的 `lifecycle=` 键消费（§3.1.3 / ISSUE-301）。旧类分支若仍注入，即构成
+        第二个转换点，而两处各留一半时的失效模式（两类配置静默失效）没有对照实现
+        可发现。
+
+        **必须走真实构造路径**：只断言 `build_lifecycle` 的产出测不出这段代码是否
+        仍然存在。探测类记录 `create_behavior` 传给旧类的构造实参名。
+        """
+        registry_entries(_FAKE_LEGACY_PROBE, _entry(**{'class': _LegacyKwargsProbe}))
+        bh = create_behavior(
+            PityDef(name='s44l', btype=_FAKE_LEGACY_PROBE,
+                    deactivate_on_early_hit=True, depends_on='other',
+                    max_triggers=2),
+            PityState())
+        # 反向断言在前：分支未执行时下面的「不含」可因 `received_kwargs` 为空而假绿
+        assert {'name', 'state', 'scope', 'btype'} <= bh.received_kwargs, (
+            bh.received_kwargs)
+        assert 'lifecycle' not in bh.received_kwargs, (
+            '旧类分支仍在注入 LifecycleConfig，与 preset 分支的 build_lifecycle '
+            '构成第二转换点（§3.1.3：同一转换不得留两处）')
 
     def test_preset_branch_passes_priority_and_pools(self, registry_entries):
         """preset 分支透传 `priority` / `pools`（S4-1 审查 low：原无断言覆盖）。
@@ -807,3 +841,55 @@ class TestAuditBreak8ExportRetirement:
         import gacha_simulator.core as core_pkg
         missing = [n for n in core_pkg.__all__ if not hasattr(core_pkg, n)]
         assert missing == [], f'__all__ 含无法解析的名字（re-export 悬空）：{missing}'
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4-4：10 个 preset 的 `lifecycle` 键接线（§六 ISSUE-301 / ISSUE-032）
+# ══════════════════════════════════════════════════════════════════
+# `lifecycle` 键的取值为 **Lifecycle 对象**（不是 `LifecycleConfig` 参数袋），由
+# `build_lifecycle(pdef)` 按 §3.1.3 的两个正交维度产出。本组按**四组合取值表**
+# 逐 btype 断言类型与两维字段的保真：只断言「键存在」（S4-2 / S4-3 已有）时，
+# 键里的对象接错类、或两维之一被吞（`depends_on` 非空即忽略 `max_triggers` 的
+# 旧写法）都测不出来。
+
+_LIFECYCLE_FOUR_COMBINATIONS = [
+    (None, 0, 'AlwaysActive'),
+    (None, 2, 'FiniteActive'),
+    ('src', 0, 'DependentActive'),
+    ('src', 3, 'DependentFiniteActive'),
+]
+
+
+@pytest.mark.parametrize('btype', sorted(BEHAVIOR_REGISTRY))
+@pytest.mark.parametrize('depends_on, max_triggers, want', _LIFECYCLE_FOUR_COMBINATIONS)
+def test_preset_lifecycle_matches_four_combination_table(
+        btype, depends_on, max_triggers, want):
+    """`Pity._lifecycle` 按 §3.1.3 的四组合表产出（逐 btype × 逐组合）。"""
+    pdef = PityDef(name='s44_lc', btype=btype, depends_on=depends_on,
+                   max_triggers=max_triggers)
+    bh = create_behavior(pdef, PityState())
+
+    assert isinstance(bh, Pity), f'{btype} 未走 preset 分支'
+    assert type(bh._lifecycle).__name__ == want, (
+        f'{btype}（depends_on={depends_on!r}, max_triggers={max_triggers}）'
+        f'→ {type(bh._lifecycle).__name__}，期望 {want}（§3.1.3 四组合表）')
+    # 两维**独立**取值：`depends_on` 非空不吞 `max_triggers`（2026-09-28 修正）
+    assert bh._lifecycle.depends_on == depends_on
+    expect_keys = ('triggers',) if max_triggers > 0 else ()
+    assert bh._lifecycle.state_keys() == expect_keys
+
+
+@pytest.mark.parametrize('btype', sorted(BEHAVIOR_REGISTRY))
+def test_preset_lifecycle_carries_deactivate_on_early_hit(btype):
+    """§六 ISSUE-301 ②：`deactivate_on_early_hit` 一路带入，**不得恒 False**。
+
+    `create_behavior` 是配置面唯一的装配入口，故逐 btype 走真实构造；只在
+    `build_lifecycle` 层断言时，「preset 返回的 dict 里该对象被换成别的实例」
+    这一失效模式不可见。
+    """
+    off = create_behavior(PityDef(name='s44_off', btype=btype), PityState())
+    on = create_behavior(
+        PityDef(name='s44_on', btype=btype, deactivate_on_early_hit=True),
+        PityState())
+    assert off._lifecycle.deactivate_on_early_hit is False
+    assert on._lifecycle.deactivate_on_early_hit is True

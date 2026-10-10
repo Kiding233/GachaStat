@@ -188,6 +188,12 @@ class PityDef:
     # ── 生命周期 ──
     deactivate_on_early_hit: bool = False
     depends_on: Optional[str] = None
+    # 触发次数上限（0 = 不限，零值约定与 MilestoneDef.max_triggers 一致）。
+    # 它是 §3.1.3 退役维 `AfterN(N)` 的配置来源，与 `depends_on`（激活维）
+    # **正交**：两者同时配置时 `build_lifecycle` 产出 `DependentFiniteActive`，
+    # 不存在覆盖关系（§3.1.3 的四组合表）。旧 `deactivate_on_early_hit` 是它在
+    # N=1 时的特例，且不计数。负值由 `config_toml._build_pity` 拒收。
+    max_triggers: int = 0
     # ── 重置条件 ──
     reset: str = ''                            # '' → scope fallback
     # ── 管道顺序（G5 / §3.6） ──

@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>敏感性扫描 · 方案甲（GUI / PyQt6）</title>
+
+<!-- 独立演示页：不接 Python、不并入任何既有界面。
+     本页仿 Qt6 Fusion 风格（依据 main_window.py:673 的 app.setStyle('Fusion')
+     与 analysis_panel.py 的布局约定：QSplitter[280,920] + 左栏方法清单 +
+     右栏结果块 + add_config_row 的 label/控件成对行）。 -->
+
+<style>
+:root{
+  /* Fusion 调色，取自 main.py 的 QProxyStyle 覆写色与 gui/ 中散落的 QSS */
+  --win:#f0f0f0; --base:#ffffff; --alt:#f7f7f7; --result-bg:#f5f5f5;
+  --text:#202020; --text-dim:#787878; --text-dis:#b4b4b4;
+  --border:#adadad; --border-soft:#d0d0d0;
+  --hl:#0078d7; --hl-soft:#e5f1fb; --row-hover:#d6e8f5; --sel:#308cc6;
+  --ok:#2e7d32; --warn:#b26a00; --danger:#c62828; --purple:#6941c6;
+  --mono:"Consolas","Courier New",monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  font:12px "Segoe UI","Microsoft YaHei",sans-serif;color:var(--text);
+  background:var(--win);overflow:hidden;
+}
+#app{height:100vh;display:flex;flex-direction:column}
+
+/* ---------- 菜单栏 / 工具栏 / 标签行 ---------- */
+.menubar{height:26px;display:flex;align-items:center;gap:1px;padding:0 6px;
+  background:var(--win);border-bottom:1px solid var(--border-soft)}
+.mbtn{padding:2px 9px;border-radius:3px;cursor:default}
+.mbtn:hover{background:var(--hl-soft)}
+.brand{font-weight:700;color:var(--hl);margin-right:12px;letter-spacing:.3px}
+
+.toolbar{height:34px;display:flex;align-items:center;gap:6px;padding:0 8px;
+  background:var(--win);border-bottom:1px solid var(--border-soft)}
+.spacer{flex:1}
+
+/* Fusion 按钮 */
+.btn{font:12px "Segoe UI","Microsoft YaHei",sans-serif;color:var(--text);
+  background:linear-gradient(#fcfcfc,#ececec);
+  border:1px solid var(--border);border-radius:3px;
+  padding:3px 14px;min-height:18px;cursor:default}
+.btn:hover{background:linear-gradient(#f6fbff,#e5f1fb);border-color:#3c7fb1}
+.btn:active{background:#dcdcdc}
+.btn[disabled]{color:var(--text-dis);background:#f5f5f5;border-color:#d5d5d5}
+.btn.pri{background:linear-gradient(#f0f8ff,#dceafa);border-color:#6aa6d8}
+.btn.pri:hover{background:linear-gradient(#e5f4ff,#cfe6fb)}
+
+/* 标签行（QTabWidget 顶部标签） */
+.tabbar{display:flex;align-items:flex-end;padding:5px 8px 0;gap:2px;
+  background:var(--win);border-bottom:1px solid var(--border-soft)}
+.tab{font-size:12px;padding:4px 15px;border:1px solid transparent;border-bottom:0;
+  border-radius:3px 3px 0 0;color:var(--text);cursor:default}
+.tab:hover{background:#e8f0f8}
+.tab.on{background:var(--win);border-color:var(--border-soft);
+  border-bottom:1px solid var(--win);margin-bottom:-1px;font-weight:600}
+
+/* ---------- 主体：QSplitter[280, 920] ---------- */
+.split{flex:1;min-height:0;display:flex}
+.left{flex:0 0 288px;min-width:288px;background:var(--win);
+  border-right:1px solid var(--border-soft);overflow:auto;padding:4px}
+.right{flex:1;min-width:0;background:var(--result-bg);overflow:auto;padding:8px}
+
+/* Fusion 分组框（QGroupBox） */
+.gb{border:1px solid var(--border-soft);border-radius:4px;
+  padding:10px 9px 9px;margin:12px 2px 8px;position:relative}
+.gb>legend{position:absolute;top:-8px;left:9px;background:var(--win);
+  padding:0 4px;font-size:12px;color:var(--text)}
+
+.crow{display:flex;align-items:center;gap:5px;margin-bottom:4px}
+.crow>label{font-size:11px;color:var(--text);white-space:nowrap}
+
+/* Fusion 控件 */
+.combo{display:inline-flex;align-items:center;justify-content:space-between;
+  background:var(--base);border:1px solid var(--border);border-radius:3px;
+  padding:2px 5px 2px 6px;min-height:20px;font-size:12px;min-width:112px;
+  cursor:default;gap:10px}
+.combo:hover{border-color:#3c7fb1}
+.combo i{width:0;height:0;border-left:4px solid transparent;
+  border-right:4px solid transparent;border-top:5px solid #4a4a4a}
+.combo.small{min-width:78px;font-size:11px;min-height:18px}
+
+.spin{display:inline-flex;align-items:center;background:var(--base);
+  border:1px solid var(--border);border-radius:3px;min-height:20px;overflow:hidden}
+.spin input{border:0;outline:0;width:62px;padding:2px 6px;font:12px inherit;
+  background:transparent;color:var(--text)}
+.spin .arr{display:flex;flex-direction:column;border-left:1px solid var(--border-soft);
+  width:15px;align-self:stretch}
+.spin .arr span{flex:1;display:flex;align-items:center;justify-content:center;
+  font-size:6px;color:#4a4a4a;background:linear-gradient(#fdfdfd,#efefef);cursor:default}
+.spin .arr span:hover{background:#e5f1fb}
+
+.cb{display:inline-flex;align-items:center;gap:6px;cursor:default;font-size:12px}
+.cb em{width:13px;height:13px;border:1px solid var(--border);border-radius:2px;
+  background:var(--base);display:inline-block;position:relative;flex:0 0 auto}
+.cb.on em{background:var(--hl);border-color:var(--hl)}
+.cb.on em::after{content:"";position:absolute;left:3px;top:0;width:3px;height:7px;
+  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+
+.radio{display:inline-flex;align-items:center;gap:5px;cursor:default;font-size:12px}
+.radio em{width:13px;height:13px;border:1px solid var(--border);border-radius:50%;
+  background:var(--base);display:inline-block;position:relative;flex:0 0 auto}
+.radio.on em::after{content:"";position:absolute;left:3px;top:3px;width:5px;height:5px;
+  border-radius:50%;background:var(--hl)}
+
+.tgl{border:0;background:transparent;font-size:9px;color:var(--text);
+  width:16px;height:16px;cursor:default;padding:0;flex:0 0 auto}
+.tgl:hover{background:#e5f1fb;border-radius:2px}
+
+/* 分析项（AnalysisItemWidget：QFrame StyledPanel） */
+.aitem{border:1px solid var(--border-soft);border-radius:3px;background:var(--win);
+  margin:0 2px 3px}
+.aitem-h{display:flex;align-items:center;gap:4px;padding:4px 6px}
+.aitem-cfg{padding:4px 8px 7px 28px;display:flex;flex-direction:column;gap:3px}
+.cat{font-size:11px;color:#888;padding:6px 4px 2px}
+
+/* 结果块 */
+.rblock{border:1px solid var(--border-soft);border-radius:3px;background:var(--base);
+  margin-bottom:12px}
+.rblock-h{display:flex;align-items:center;gap:8px;padding:5px 9px;
+  border-bottom:1px solid #e8e8e8;background:linear-gradient(#fdfdfd,#f4f4f4)}
+.rblock-h b{font-size:12px}
+.rblock-b{padding:8px 9px}
+.shape{font-size:10px;padding:0 6px;border-radius:8px;line-height:15px}
+.shape.sync{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.shape.disp{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.switch{font-size:10px;border:1px solid var(--border);border-radius:9px;
+  padding:1px 8px;background:var(--base);color:var(--text-dim);cursor:default}
+.switch:hover{background:#f2f6fb;color:var(--text)}
+.tmeta{font-size:10px;color:var(--text-dim)}
+.hint{color:#999;font-size:12px;text-align:center;padding:48px}
+
+/* 摘要条（规格收起态） */
+.summary{display:flex;align-items:center;gap:8px;padding:5px 8px;
+  background:#fafbfd;border:1px solid #e4e8ee;border-radius:3px;margin-bottom:8px}
+.summary .kv{font-size:11px;color:var(--text-dim)}
+.summary .kv b{color:var(--text);font-weight:600}
+.summary .go{margin-left:auto}
+
+/* 数字行 */
+.stats{display:flex;flex-wrap:wrap;gap:16px;padding:6px 2px 2px;font-size:11px}
+.stats b{font-weight:600}
+.stats .k{color:var(--text-dim)}
+
+/* 进度条 */
+.bar{height:14px;border:1px solid var(--border);border-radius:3px;background:var(--base);
+  overflow:hidden;position:relative}
+.bar i{display:block;height:100%;background:linear-gradient(#9ed0f5,#5aa9e6);width:60%}
+.bar span{position:absolute;inset:0;text-align:center;font-size:10px;line-height:12px}
+
+/* 状态栏 */
+.statusbar{height:22px;display:flex;align-items:center;padding:0 9px;font-size:11px;
+  color:var(--text-dim);background:var(--win);border-top:1px solid var(--border-soft)}
+
+/* ---------- 模态对话框（表达式列表编辑器） ---------- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.18);display:none;
+  align-items:center;justify-content:center;z-index:50}
+.scrim.on{display:flex}
+.dlg{width:660px;background:var(--win);border:1px solid var(--border);border-radius:4px;
+  box-shadow:0 8px 28px rgba(0,0,0,.28);overflow:hidden}
+.dlg-h{height:28px;display:flex;align-items:center;padding:0 8px;font-weight:600;
+  background:linear-gradient(#fbfbfb,#eef0f2);border-bottom:1px solid var(--border-soft)}
+.dlg-h .x{margin-left:auto;width:20px;height:18px;text-align:center;line-height:17px;
+  border:1px solid transparent;border-radius:3px;cursor:default}
+.dlg-h .x:hover{background:#e81123;color:#fff;border-color:#c50f1f}
+.dlg-b{padding:10px 12px;background:var(--win)}
+.dlg-f{padding:8px 12px;display:flex;gap:8px;justify-content:flex-end;
+  background:var(--win);border-top:1px solid var(--border-soft)}
+
+/* Fusion 表格 */
+table.qt{width:100%;border-collapse:collapse;background:var(--base);font-size:11px;
+  border:1px solid var(--border-soft)}
+table.qt th{background:linear-gradient(#fbfbfb,#eef0f2);border:1px solid var(--border-soft);
+  padding:3px 7px;font-weight:600;text-align:left;color:var(--text)}
+table.qt td{border:1px solid #e8e8e8;padding:2px 6px}
+table.qt tr:hover td{background:#f4f9fd}
+table.qt td.act{text-align:center;cursor:default;color:var(--danger);width:26px}
+table.qt input{border:0;outline:0;background:transparent;font:11px inherit;
+  color:var(--text);width:100%}
+.ok-line{font-size:11px;color:var(--ok);margin-top:8px}
+.legend-line{display:flex;gap:14px;font-size:10px;color:var(--text-dim);
+  padding:4px 2px 0;flex-wrap:wrap}
+.legend-line i{display:inline-block;width:16px;height:8px;margin-right:4px;
+  vertical-align:-1px;border:1px solid #bbb}
+
+/* ---------- demo 专用：状态切换条 ---------- */
+.demobar{position:fixed;right:12px;bottom:34px;z-index:60;background:#fffbe8;
+  border:1px dashed #d9b441;border-radius:5px;padding:6px 8px;
+  box-shadow:0 3px 12px rgba(0,0,0,.12);display:flex;gap:5px;align-items:center}
+.demobar .dl{font-size:10px;color:#8a6d1f;margin-right:2px}
+.demobar button{font:11px "Segoe UI","Microsoft YaHei",sans-serif;cursor:pointer;
+  border:1px solid #d9b441;background:#fff;color:#6b5410;border-radius:3px;
+  padding:2px 7px}
+.demobar button.on{background:#d9b441;color:#fff;font-weight:600}
+.demo-tag{font-size:10px;color:#8a6d1f;border:1px dashed #d9b441;border-radius:9px;
+  padding:0 7px;line-height:15px;margin-left:8px}
+
+/* 状态可见性 */
+.s-e,.s-d{display:none}
+body[data-state="s1"] .s-e,
+body[data-state="s2"] .s-e,
+body[data-state="s3"] .s-e,
+body[data-state="s4"] .s-d,
+body[data-state="s5"] .s-d{display:block}
+.s-e-inline,.s-d-inline{display:none}
+body[data-state="s1"] .s-e-inline,
+body[data-state="s2"] .s-e-inline,
+body[data-state="s3"] .s-e-inline,
+body[data-state="s4"] .s-d-inline,
+body[data-state="s5"] .s-d-inline{display:flex}
+.hide{display:none !important}
+</style>
+</head>
+<body data-state="s1">
+<div id="app">
+
+  <!-- 菜单栏 -->
+  <div class="menubar">
+    <span class="brand">GachaStat</span>
+    <span class="mbtn">文件</span><span class="mbtn">编辑</span>
+    <span class="mbtn">视图</span><span class="mbtn">工具</span><span class="mbtn">帮助</span>
+    <span class="spacer"></span>
+    <span class="demo-tag">演示页 · 数据全假</span>
+  </div>
+
+  <!-- 工具栏 -->
+  <div class="toolbar">
+    <button class="btn">运行模拟</button>
+    <button class="btn">停止</button>
+    <span style="width:1px;height:20px;background:var(--border-soft);margin:0 4px"></span>
+    <button class="btn">重载配置</button>
+    <button class="btn">保存配置</button>
+    <span class="spacer"></span>
+    <span class="tmeta">当前配置文件：config.toml</span>
+  </div>
+
+  <!-- 标签行（11 个 tag，与 main.py / config_panel.left_tabs 同名同序的示意） -->
+  <div class="tabbar">
+    <span class="tab">配置</span><span class="tab">卡池管理</span><span class="tab">保底</span>
+    <span class="tab">里程碑</span><span class="tab">资源</span><span class="tab">任务</span>
+    <span class="tab">数据集</span><span class="tab">模拟</span>
+    <span class="tab on">分析</span><span class="tab">对比</span><span class="tab">关于</span>
+  </div>
+
+  <div class="split">
+
+    <!-- ============ 左栏：方法清单（QSplitter 左，280 宽） ============ -->
+    <div class="left">
+      <div class="crow" style="margin:2px 2px 6px">
+        <button class="btn" style="padding:2px 10px">全选</button>
+        <button class="btn" style="padding:2px 10px">全不选</button>
+      </div>
+
+      <fieldset class="gb"><legend>全局参数</legend>
+        <div class="crow"><label>风险α:</label>
+          <span class="spin"><input value="0.05"><span class="arr"><span>▲</span><span>▼</span></span></span>
+        </div>
+        <div class="crow"><label>置信水平:</label>
+          <span class="spin"><input value="0.95"><span class="arr"><span>▲</span><span>▼</span></span></span>
+        </div>
+      </fieldset>
+
+      <div class="cat">分布</div>
+      <div class="aitem"><div class="aitem-h">
+        <button class="tgl">▶</button>
+        <span class="cb on"><em></em>GDR 分布</span></div></div>
+      <div class="aitem"><div class="aitem-h">
+        <button class="tgl">▶</button>
+        <span class="cb on"><em></em>成功率分析</span></div></div>
+
+      <div class="cat">敏感性</div>
+
+      <!-- 复算项：状态 1~3 展开 -->
+      <div class="aitem">
+        <div class="aitem-h">
+          <button class="tgl">▼</button>
+          <span class="cb on"><em></em>敏感性扫描（复算）</span>
+        </div>
+        <div class="aitem-cfg">
+          <div class="crow"><label>参数来源:</label>
+            <span class="combo">分析口径<i></i></span></div>
+          <div class="crow"><label>字段:</label>
+            <span class="combo">GDR 阈值<i></i></span></div>
+          <div class="crow" style="margin-top:2px">
+            <span class="radio on"><em></em>数值栅格</span>
+            <span class="radio"><em></em>枚举</span>
+          </div>
+          <div class="crow">
+            <span class="radio"><em></em>变换库</span>
+            <span class="radio"><em></em>表达式列表</span>
+          </div>
+          <div class="crow"><label>区间:</label>
+            <span class="spin"><input value="0.75"><span class="arr"><span>▲</span><span>▼</span></span></span>
+            <label style="padding:0 2px">→</label>
+            <span class="spin"><input value="0.95"><span class="arr"><span>▲</span><span>▼</span></span></span>
+            <label style="padding-left:6px">步长:</label>
+            <span class="spin" style="min-width:0"><input value="0.01" style="width:48px"><span class="arr"><span>▲</span><span>▼</span></span></span>
+          </div>
+          <div class="crow"><label style="color:var(--text-dim);font-size:10px">
+            预览：12 个扫描点　0.75 0.76 0.77 … 0.95</label></div>
+        </div>
+      </div>
+
+      <!-- 派发项：状态 4~5 展开 -->
+      <div class="aitem">
+        <div class="aitem-h">
+          <button class="tgl">▼</button>
+          <span class="cb on"><em></em>敏感性扫描（派发）</span>
+        </div>
+        <div class="aitem-cfg">
+          <div class="crow"><label>参数来源:</label>
+            <span class="combo">保底<i></i></span></div>
+          <div class="crow"><label>对象:</label>
+            <span class="combo">SSR 硬保底<i></i></span></div>
+          <div class="crow"><label>字段:</label>
+            <span class="combo">threshold<i></i></span></div>
+          <div class="crow" style="margin-top:2px">
+            <span class="radio on"><em></em>数值栅格</span>
+            <span class="radio"><em></em>枚举</span>
+            <span class="radio"><em></em>表达式列表</span>
+          </div>
+          <div class="crow"><label>区间:</label>
+            <span class="spin"><input value="70"><span class="arr"><span>▲</span><span>▼</span></span></span>
+            <label style="padding:0 2px">→</label>
+            <span class="spin"><input value="90"><span class="arr"><span>▲</span><span>▼</span></span></span>
+            <label style="padding-left:6px">步长:</label>
+            <span class="spin"><input value="5" style="width:44px"><span class="arr"><span>▲</span><span>▼</span></span></span>
+          </div>
+          <div class="crow"><label style="color:var(--text-dim);font-size:10px">
+            预览：5 个扫描点　70 75 80 85 90　（已按 btype=hard 过滤字段）</label></div>
+          <div class="crow" style="margin-top:4px"><label>批次名:</label>
+            <span class="combo" style="min-width:150px">保底阈值扫描 A<i></i></span></div>
+          <div class="crow"><label style="color:var(--text-dim);font-size:10px">
+            产出：5 条子配置 ＋ 5 个数据集，落在本锚点下</label></div>
+        </div>
+      </div>
+
+      <div class="cat">风险与尾部</div>
+      <div class="aitem"><div class="aitem-h">
+        <button class="tgl">▶</button><span class="cb"><em></em>VaR / CVaR</span></div></div>
+      <div class="aitem"><div class="aitem-h">
+        <button class="tgl">▶</button><span class="cb"><em></em>脆弱性分析</span></div></div>
+    </div>
+
+    <!-- ============ 右栏：结果块（QSplitter 右，920 宽） ============ -->
+    <div class="right">
+
+      <!-- 状态 1：规格已填，尚未运行 -->
+      <div class="rblock" id="blk-empty">
+        <div class="rblock-h"><b>敏感性扫描（复算）</b>
+          <span class="shape sync">即时分析</span></div>
+        <div class="rblock-b">
+          <div class="hint">规格已就绪，点左栏的「运行分析」即可出图。<br>
+            <span style="font-size:11px">12 个扫描点 · 同一批样本重算 · 预计 &lt; 1 秒</span></div>
+        </div>
+      </div>
+
+      <!-- 状态 2 / 3：结果块 -->
+      <div class="rblock" id="blk-result">
+        <div class="rblock-h">
+          <b>敏感性扫描（复算）</b>
+          <span class="shape sync">即时分析</span>
+          <span style="margin-left:auto"></span>
+          <button class="switch">看表格</button>
+        </div>
+        <div class="rblock-b">
+
+          <!-- 规格摘要：收起态一行 -->
+          <div class="summary">
+            <button class="tgl">▶</button>
+            <span class="kv">扫描规格</span>
+            <span class="kv">GDR 阈值 <b>0.75 → 0.95</b>　步长 <b>0.01</b>　（<b>12</b> 点）</span>
+            <button class="btn go" style="padding:1px 10px">改</button>
+          </div>
+
+          <!-- 三行子图 -->
+          <div id="chart3"></div>
+
+          <!-- 数字行 -->
+          <div class="stats">
+            <span><span class="k">翻转点</span> <b>0.885</b> <span class="k">[0.878, 0.893]</span></span>
+            <span><span class="k">μ*</span> <b>0.421</b></span>
+            <span><span class="k">σ</span> <b>0.108</b></span>
+            <span><span class="k">μ</span> <b>−0.397</b></span>
+          </div>
+          <div class="legend-line">
+            <span><i style="background:rgba(31,119,180,0.25)"></i>同时置信带（双侧 95%）</span>
+            <span><i style="background:rgba(200,50,50,0.25)"></i>说不准地带</span>
+            <span><i style="background:#e8f5e9"></i>结论成立域</span>
+            <span><i style="background:#666"></i>τ 判据线</span>
+          </div>
+
+          <!-- 方法自身的参数（与扫描规格分开） -->
+          <div class="crow" style="margin-top:12px;gap:14px;flex-wrap:wrap">
+            <span class="crow" style="margin:0"><label>同时带档位:</label>
+              <span class="combo small">双侧 95%<i></i></span></span>
+            <span class="cb"><em></em>强制单调（PAVA）</span>
+            <span class="cb on"><em></em>跳变点检测</span>
+          </div>
+          <div class="crow"><label style="font-size:10px;color:var(--text-dim)">
+            勾选「强制单调」时，本次结果不可用作单调性判据</label></div>
+
+        </div>
+      </div>
+
+      <!-- 状态 4 / 5：派发块 -->
+      <div class="rblock s-d" id="blk-disp">
+        <div class="rblock-h">
+          <b>敏感性扫描（派发）</b>
+          <span class="shape disp">需派发模拟</span>
+        </div>
+        <div class="rblock-b">
+          <div class="summary">
+            <button class="tgl">▶</button>
+            <span class="kv">扫描规格</span>
+            <span class="kv">保底 · SSR 硬保底 · <b>threshold</b>
+              <b>70 → 90</b>　步长 <b>5</b>　（<b>5</b> 点）</span>
+            <button class="btn go" style="padding:1px 10px">改</button>
+          </div>
+
+          <!-- 状态 4：运行中 -->
+          <div class="s-d-inline" style="flex-direction:column;gap:8px;align-items:stretch">
+            <div class="bar"><i style="width:60%"></i><span>3 / 5</span></div>
+            <div class="crow" style="gap:12px">
+              <span class="tmeta">批次「保底阈值扫描 A」</span>
+              <span class="tmeta">已用 42s</span>
+              <span class="spacer"></span>
+              <button class="btn" style="padding:1px 10px">取消</button>
+            </div>
+            <div class="tmeta" style="font-family:var(--mono)">
+              sub-070 ✓　sub-075 ✓　sub-080 ✓　sub-085 …　sub-090 …
+            </div>
+          </div>
+
+          <!-- 状态 5：已完成 -->
+          <div class="s-d-inline" style="flex-direction:column;gap:10px;align-items:stretch">
+            <div id="chart3d"></div>
+            <div class="stats">
+              <span><span class="k">翻转点</span> <b>82.0</b> <span class="k">[80.5, 83.5]</span></span>
+              <span><span class="k">μ*</span> <b>0.018 / 抽</b></span>
+              <span><span class="k">σ</span> <b>0.006</b></span>
+              <span><span class="k">μ</span> <b>0.017</b></span>
+            </div>
+            <div class="crow" style="gap:8px">
+              <span class="tmeta">产物：5 个数据集（批次「保底阈值扫描 A」）</span>
+              <span class="spacer"></span>
+              <button class="btn" style="padding:1px 10px">切到该数据集 ▾</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="statusbar" id="status">就绪</div>
+</div>
+
+<!-- ============ 模态：表达式列表编辑器（状态 3） ============ -->
+<div class="scrim" id="scrim">
+  <div class="dlg">
+    <div class="dlg-h">编辑扫描列表<span class="x">✕</span></div>
+    <div class="dlg-b">
+      <table class="qt">
+        <thead><tr>
+          <th style="width:110px">type</th><th style="width:110px">threshold</th>
+          <th style="width:90px">scope</th><th style="width:110px">pools</th>
+          <th style="width:70px">max_triggers</th><th></th>
+        </tr></thead>
+        <tbody>
+          <tr><td><input value="hard"></td><td><input value="70"></td>
+            <td><input value="ssr"></td><td><input value="*"></td>
+            <td><input value="0"></td><td class="act">✕</td></tr>
+          <tr><td><input value="hard"></td><td><input value="80"></td>
+            <td><input value="ssr"></td><td><input value="*"></td>
+            <td><input value="0"></td><td class="act">✕</td></tr>
+          <tr><td><input value="hard"></td><td><input value="90"></td>
+            <td><input value="ssr"></td><td><input value="*"></td>
+            <td><input value="0"></td><td class="act">✕</td></tr>
+          <tr><td><input value="soft_interval"></td><td><input value=""></td>
+            <td><input value="ssr"></td><td><input value="*"></td>
+            <td><input value="0"></td><td class="act">✕</td></tr>
+        </tbody>
+      </table>
+      <div class="crow" style="margin-top:8px">
+        <button class="btn" style="padding:1px 10px">＋ 添加一行</button>
+        <span class="spacer"></span>
+        <span class="tmeta">每行是一条完整子配置；系统不解释语义，只逐行校验后照跑</span>
+      </div>
+      <div class="ok-line">✓ 校验通过：4 行，与 <span style="font-family:var(--mono)">_pity_declared_keys(btype)</span> 逐行比对无未知键</div>
+    </div>
+    <div class="dlg-f">
+      <button class="btn">取消</button>
+      <button class="btn pri">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- demo 状态切换条 -->
+<div class="demobar">
+  <span class="dl">demo</span>
+  <button data-s="s1" class="on">① 规格未运行</button>
+  <button data-s="s2">② 已出图</button>
+  <button data-s="s3">③ 表达式列表</button>
+  <button data-s="s4">④ 派发运行中</button>
+  <button data-s="s5">⑤ 派发完成</button>
+</div>
+
+<script src="chart3.js"></script>
+<script>
+/* 三行子图：渲染器与示例数据都在共享的 chart3.js 里（两案同源，保证风格统一） */
+drawChart3(document.getElementById('chart3'), demoDataRecompute());
+drawChart3(document.getElementById('chart3d'), demoDataDispatch());
+
+/* ---- demo 状态切换 ---- */
+const bar = document.querySelector('.demobar');
+const scrim = document.getElementById('scrim');
+const status = document.getElementById('status');
+const TEXT = {
+  s1: '就绪 · 规格已填，等待运行',
+  s2: '分析完成 · 12 个扫描点 · 用时 0.31s',
+  s3: '编辑扫描列表（模态）',
+  s4: '任务运行中 · 保底阈值扫描 A · 3/5',
+  s5: '任务完成 · 产出 5 条子配置 ＋ 5 个数据集'
+};
+bar.addEventListener('click', e => {
+  const b = e.target.closest('button[data-s]');
+  if (!b) return;
+  const s = b.dataset.s;
+  document.body.dataset.state = s;
+  [...bar.querySelectorAll('button')].forEach(x => x.classList.toggle('on', x === b));
+  status.textContent = TEXT[s];
+  scrim.classList.toggle('on', s === 's3');
+  const empty = document.getElementById('blk-empty');
+  const res = document.getElementById('blk-result');
+  empty.classList.toggle('hide', s === 's2' || s === 's3');
+  res.classList.toggle('hide', !(s === 's2' || s === 's3'));
+});
+scrim.addEventListener('click', e => { if (e.target === scrim) scrim.classList.remove('on'); });
+/* 初始态：规格未运行，右栏给提示 */
+document.getElementById('blk-empty').classList.remove('hide');
+</script>
+</body>
+</html>

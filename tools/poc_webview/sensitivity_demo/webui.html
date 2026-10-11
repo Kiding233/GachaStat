@@ -1,0 +1,890 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>敏感性扫描 · 方案乙（WebUI）</title>
+
+<!-- 独立演示页：不接 Python、不并入 layout_demo/index.html。
+     本页沿用 layout_demo 的惯例：Vue 3 ＋ Element Plus ＋ 本地 libs/，
+     同一套 :root 变量与同一套分析页类名（anchor-bar / an-tabrow / an-split /
+     an-side / an-main / an-res / pform / tmeta / vsw）。
+     三行子图渲染器与配色走共享的 chart3.js，与方案甲同源。 -->
+
+<link rel="stylesheet" href="../layout_demo/libs/ep.min.css">
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --line-strong:#d0d5dd;
+  /* 探针里被引用却从未定义的三项，此处补上（值取与用法相符的近似色） */
+  --result:#fafbfd; --line2:#eef1f5; --muted:#5a6272;
+  --ink:#1f2430; --ink-2:#5a6272; --ink-3:#8b93a3;
+  --accent:#1976d2; --accent-soft:#e8f1fb;
+  --ok:#2e7d32; --warn:#b26a00; --danger:#c62828; --purple:#6941c6;
+  --radius:6px;
+}
+*{box-sizing:border-box}
+[v-cloak]{display:none}
+html,body{height:100%;margin:0}
+body{
+  font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-size:13px;color:var(--ink);background:var(--bg);overflow:hidden;
+}
+#app{height:100vh;display:flex;flex-direction:column}
+
+/* ---------- 顶部 ---------- */
+.menu-bar{height:34px;display:flex;align-items:center;gap:2px;padding:0 10px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{font-weight:700;font-size:14px;color:var(--accent);margin-right:14px;
+  letter-spacing:.3px}
+.menu-btn{padding:4px 10px;border-radius:4px;color:var(--ink-2);cursor:pointer}
+.menu-btn:hover{background:var(--bg);color:var(--ink)}
+.spacer{flex:1}
+.demo-tag{font-size:11px;color:var(--ink-3);border:1px dashed var(--line-strong);
+  border-radius:10px;padding:1px 8px;margin-left:12px}
+
+.tool-bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 10px;
+  background:var(--panel);border-bottom:1px solid var(--line);position:relative}
+.tb-sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+.tmeta{font-size:10px;color:var(--ink-3)}
+.run-anchor{position:relative}
+.split-btn{display:inline-flex;border-radius:4px;overflow:hidden;
+  border:1px solid #1565c0}
+.sb-main{border:0;background:var(--accent);color:#fff;font:inherit;font-size:12px;
+  padding:5px 12px;cursor:pointer}
+.sb-caret{border:0;border-left:1px solid #1565c0;background:var(--accent);color:#fff;
+  font-size:10px;padding:0 8px;cursor:pointer}
+.tb-badge{display:inline-block;margin-left:5px;background:var(--danger);color:#fff;
+  border-radius:9px;font-size:10px;padding:0 5px;line-height:14px}
+
+/* ---------- 主体：左树 ＋ 右页 ---------- */
+.app-body{flex:1;min-height:0;display:flex}
+.side{flex:0 0 286px;min-width:286px;display:flex;flex-direction:column;
+  background:var(--panel);border-right:1px solid var(--line)}
+.side-top{flex:1;min-height:0;display:flex;flex-direction:column}
+.side-bottom{height:150px;flex:0 0 150px;display:flex;flex-direction:column;
+  border-top:2px solid var(--line)}
+.side-head{height:30px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 10px;font-size:12px;font-weight:600;color:var(--ink-2);
+  background:linear-gradient(#fbfcfd,#f4f6f9);border-bottom:1px solid var(--line)}
+.side-scroll{flex:1;min-height:0;overflow:auto;padding:4px}
+.batch-hint{font-size:10px;color:var(--warn);padding:2px 0 0 6px}
+
+.main-col{flex:1;min-width:0;overflow:auto;padding:12px 14px}
+
+/* ---------- 分析页（沿用探针类名） ---------- */
+.anchor-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 12px;background:var(--accent-soft);border-bottom:1px solid #d3e3f5;
+  border-radius:var(--radius) var(--radius) 0 0}
+.anchor-bar .lbl{font-size:12px;color:var(--ink-2)}
+.anchor-bar b{font-size:13px;color:var(--accent)}
+.anchor-hint{font-size:10px;color:var(--ink-3);margin-left:auto}
+
+.an-tabrow{display:flex;flex-wrap:wrap;padding-top:5px;border-bottom:1px solid var(--line);
+  margin-top:6px}
+.an-tab{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);
+  border-bottom:0;background:var(--result);border-radius:2px 2px 0 0;padding:5px 9px;
+  margin:0 -1px -1px 0;font:inherit;font-size:12px;color:var(--muted);cursor:pointer;
+  white-space:nowrap}
+.an-tab:hover{background:#eef1f5}
+.an-tab.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-bottom:1px solid var(--panel);position:relative;z-index:1}
+.an-tab .cnt{font-size:10px;color:var(--ink-3);background:var(--bg);border-radius:8px;
+  padding:0 5px;line-height:15px}
+.an-tab.on .cnt{background:var(--accent-soft);color:var(--accent)}
+
+.an-pane{padding-top:12px}
+.an-split{display:flex;gap:12px;align-items:flex-start}
+.an-side{flex:0 0 238px;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);overflow:hidden;position:sticky;top:0}
+.an-side-h{display:flex;align-items:center;justify-content:space-between;
+  padding:6px 10px;background:#fafbfd;border-bottom:1px solid var(--line);
+  font-size:12px;font-weight:600;color:var(--ink-2)}
+.an-side-h .n{font-size:10px;color:var(--ink-3);font-weight:400}
+.an-list{padding:4px}
+.an-it{display:flex;align-items:center;gap:6px;width:100%;border:0;background:transparent;
+  font:inherit;font-size:12px;color:var(--ink-2);cursor:pointer;text-align:left;
+  padding:6px 8px;border-radius:3px;border-left:2px solid transparent}
+.an-it:hover{background:#f4f7fb}
+.an-it.on{background:var(--accent-soft);color:var(--ink);font-weight:600;
+  border-left-color:var(--accent)}
+.an-it .an-nm::before{content:"○";font-size:8px;color:var(--ink-3);
+  margin-right:6px;vertical-align:1px}
+.an-it.main .an-nm::before{content:"●";color:var(--accent)}
+.an-cb{flex:0 0 auto;width:11px;height:11px;border:1px solid var(--line-strong);
+  border-radius:2px;background:var(--panel);position:relative}
+.an-cb.on{background:var(--accent);border-color:var(--accent)}
+.an-cb.on::after{content:"";position:absolute;left:2.5px;top:0.5px;width:3px;height:6px;
+  border:solid #fff;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.an-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.an-bd{flex:0 0 auto;font-size:9px;line-height:13px;padding:0 4px;border-radius:7px}
+.an-bd.s{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.an-bd.d{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.an-tip{margin:0;padding:6px 10px 8px;font-size:10px;color:var(--ink-3);
+  border-top:1px solid var(--line2)}
+.an-main{flex:1;min-width:0}
+.an-res{border:1px solid var(--line);border-radius:var(--radius);background:#fff;
+  overflow:hidden}
+.an-res + .an-res{margin-top:12px}
+.an-res-h{display:flex;align-items:center;gap:9px;padding:8px 11px;
+  border-bottom:1px solid var(--line);background:#fafbfd}
+.an-res-h b{font-size:13px}
+.an-res-b{padding:12px}
+.vsw{font:inherit;font-size:10px;cursor:pointer;border:1px solid var(--line);
+  border-radius:9px;padding:1px 8px;background:var(--panel);color:var(--ink-2);
+  margin-left:8px;white-space:nowrap}
+.vsw:hover{background:#f2f6fb;color:var(--ink)}
+.vsw.on{background:var(--accent-soft);border-color:#c7ddf5;color:var(--accent);
+  font-weight:600}
+
+/* ---------- 扫描规格表 ---------- */
+.spectable{width:100%;border-collapse:collapse;border:1px solid var(--line);
+  border-radius:var(--radius);overflow:hidden;font-size:12px}
+.spectable th{background:#fafbfd;border-bottom:1px solid var(--line);padding:6px 9px;
+  text-align:left;font-weight:600;font-size:11px;color:var(--ink-2)}
+.spectable td{border-bottom:1px solid var(--line2);padding:5px 9px;vertical-align:middle}
+.spectable tr:last-child td{border-bottom:0}
+.spectable tr:hover td{background:#fafcfe}
+.spectable .act{width:30px;text-align:center;color:var(--ink-3);cursor:pointer}
+.spectable .act:hover{color:var(--danger)}
+.rangeline{display:flex;align-items:center;gap:5px;white-space:nowrap}
+.rangeline .el-input-number{width:76px}
+.col-add{padding:7px 9px}
+.col-add button{font:inherit;font-size:11px;border:1px dashed var(--line-strong);
+  background:transparent;color:var(--ink-2);border-radius:4px;padding:3px 10px;
+  cursor:pointer;width:100%}
+.col-add button:hover{border-color:var(--accent);color:var(--accent);
+  background:var(--accent-soft)}
+
+/* 表达式列表：行下方内联展开，不弹窗 */
+.expr-wrap{margin-top:8px;border:1px solid var(--line);border-radius:var(--radius);
+  background:#fcfdfe;overflow:hidden}
+.expr-h{display:flex;align-items:center;gap:8px;padding:6px 10px;
+  border-bottom:1px solid var(--line2);font-size:11px;color:var(--ink-2)}
+.expr-b{padding:8px 10px}
+.expr-b table{width:100%;border-collapse:collapse;font-size:11px;background:#fff;
+  border:1px solid var(--line2);border-radius:4px;overflow:hidden}
+.expr-b th{background:#f7f9fc;border-bottom:1px solid var(--line2);padding:4px 8px;
+  text-align:left;font-weight:600;color:var(--ink-2)}
+.expr-b td{border-bottom:1px solid var(--line2);padding:3px 6px}
+.expr-b tr:last-child td{border-bottom:0}
+.expr-b td input{border:0;outline:0;background:transparent;font:inherit;width:100%;
+  color:var(--ink)}
+.expr-b td.rm{width:26px;text-align:center;color:var(--ink-3);cursor:pointer}
+.expr-b td.rm:hover{color:var(--danger)}
+.ok-line{font-size:11px;color:var(--ok);margin-top:7px}
+
+/* ---------- 数字行 / 摘要 ---------- */
+.summary{display:flex;align-items:center;gap:8px;padding:6px 9px;
+  background:#fafbfd;border:1px solid var(--line2);border-radius:var(--radius);
+  margin-bottom:10px;font-size:11px;color:var(--ink-3)}
+.summary b{color:var(--ink);font-weight:600}
+.summary .go{margin-left:auto}
+.stats{display:flex;flex-wrap:wrap;gap:18px;padding:8px 2px 2px;font-size:12px}
+.stats .k{color:var(--ink-3);font-size:11px}
+.legend-line{display:flex;gap:16px;font-size:10px;color:var(--ink-3);padding:5px 2px 0;
+  flex-wrap:wrap}
+.legend-line i{display:inline-block;width:16px;height:8px;margin-right:4px;
+  vertical-align:-1px;border:1px solid #bbb;border-radius:2px}
+
+/* 方法自身的参数（与扫描规格分开） */
+.mrow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  margin-top:14px;padding-top:10px;border-top:1px dashed var(--line)}
+.mrow .el-checkbox{margin-right:0}
+.mnote{font-size:10px;color:var(--ink-3);margin-top:4px}
+
+/* 派发块 */
+.dform{display:flex;flex-direction:column;gap:9px}
+.dbar{height:15px;border:1px solid var(--line);border-radius:8px;background:#fff;
+  overflow:hidden;position:relative}
+.dbar i{display:block;height:100%;background:linear-gradient(90deg,#7fb0d8,#1976d2)}
+.dbar span{position:absolute;inset:0;text-align:center;font-size:10px;line-height:13px;
+  color:var(--ink-2)}
+.prod{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--ink-3);
+  padding:7px 9px;background:#fafcfe;border:1px solid var(--line2);border-radius:4px}
+.prod b{color:var(--ink)}
+
+/* ---------- 任务抽屉 ---------- */
+.drawer{position:fixed;left:0;right:0;top:0;z-index:40;background:var(--panel);
+  border-bottom:1px solid var(--line-strong);
+  box-shadow:0 8px 24px rgba(20,30,50,.12);
+  transform:translateY(-100%);transition:transform .28s cubic-bezier(.25,.8,.35,1)}
+.drawer.open{transform:translateY(0)}
+.drawer-h{height:42px;display:flex;align-items:center;gap:12px;padding:0 14px;
+  border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
+.drawer-b{padding:12px 14px;display:flex;gap:16px}
+.drawer-b .tbl{flex:1;min-width:0}
+.drawer-b table{width:100%;border-collapse:collapse;font-size:12px}
+.drawer-b th{text-align:left;font-size:11px;color:var(--ink-3);font-weight:400;
+  border-bottom:1px solid var(--line);padding:5px 8px}
+.drawer-b td{padding:6px 8px;border-bottom:1px solid var(--line2)}
+.drawer-b tr:last-child td{border-bottom:0}
+.st-done{color:var(--ok)} .st-run{color:var(--accent)} .st-fail{color:var(--danger)}
+.drawer-b .res{flex:0 0 250px;border-left:1px solid var(--line);padding-left:16px;
+  font-size:11px;color:var(--ink-2);line-height:2}
+.mini{height:9px;border-radius:5px;background:#eef1f5;overflow:hidden;width:110px;
+  display:inline-block;vertical-align:-1px}
+.mini i{display:block;height:100%;background:var(--accent)}
+
+/* ---------- demo 专用状态条 ---------- */
+.demobar{position:fixed;right:12px;bottom:12px;z-index:60;background:#fffbe8;
+  border:1px dashed #d9b441;border-radius:5px;padding:6px 8px;display:flex;
+  gap:5px;align-items:center;box-shadow:0 3px 12px rgba(0,0,0,.12)}
+.demobar .dl{font-size:10px;color:#8a6d1f;margin-right:2px}
+.demobar button{font:11px inherit;cursor:pointer;border:1px solid #d9b441;
+  background:#fff;color:#6b5410;border-radius:3px;padding:2px 7px}
+.demobar button.on{background:#d9b441;color:#fff;font-weight:600}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- 菜单栏 -->
+  <div class="menu-bar">
+    <span class="brand">GachaStat</span>
+    <span class="menu-btn">文件</span>
+    <span class="menu-btn">工具</span>
+    <span class="menu-btn">帮助</span>
+    <span class="spacer"></span>
+    <span class="demo-tag">演示页 · 数据全假 · 不接后端</span>
+  </div>
+
+  <!-- 工具栏 -->
+  <div class="tool-bar">
+    <el-button size="small">新建配置</el-button>
+    <span class="tmeta">敏感性在分析页面内发起，不在工具栏</span>
+    <div class="tb-sep"></div>
+    <span class="spacer"></span>
+    <div class="run-anchor">
+      <div class="split-btn">
+        <button class="sb-main">运行模拟：{{ anchorLabel }}</button>
+        <button class="sb-caret">▾</button>
+      </div>
+    </div>
+    <el-button size="small" @click="drawer = !drawer">
+      任务管理<span v-if="runningCount" class="tb-badge">{{ runningCount }}</span>
+    </el-button>
+  </div>
+
+  <div class="app-body">
+
+    <!-- ============ 左：工作区树 ============ -->
+    <aside class="side">
+      <div class="side-top">
+        <div class="side-head"><span>工作区</span><span class="tmeta">WORKSPACE</span></div>
+        <div class="side-scroll">
+          <el-tree :data="tree" :props="{label:'label', children:'children'}"
+                   default-expand-all :indent="14" node-key="id">
+            <template #default="{ data }">
+              <span style="display:flex;align-items:center;gap:6px">
+                <span>{{ data.label }}</span>
+                <span v-if="data.batch" class="tmeta"
+                      style="color:var(--warn)">批次</span>
+                <span v-if="data.notAnchor" class="tmeta">非锚点</span>
+              </span>
+            </template>
+          </el-tree>
+        </div>
+      </div>
+      <div class="side-bottom">
+        <div class="side-head"><span>对比任务</span></div>
+        <div class="side-scroll">
+          <div class="tmeta" style="padding:6px 8px">（本演示不涉及）</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ============ 右：分析页 ============ -->
+    <div class="main-col">
+
+      <div class="anchor-bar">
+        <span class="lbl">分析锚点</span>
+        <b>{{ anchorLabel }}</b>
+        <template v-if="!isDispatchTab">
+          <span class="lbl">数据集</span>
+          <el-select v-model="datasetId" size="small" style="width:220px">
+            <el-option v-for="d in datasetOptions" :key="d.id" :value="d.id"
+                       :label="d.label">
+              <span>{{ d.label }}</span>
+              <span class="tmeta" style="float:right">{{ d.samples }} 样本</span>
+            </el-option>
+          </el-select>
+        </template>
+        <span v-else class="lbl">本页展示派发型分析自己生成的子配置与数据集</span>
+        <span class="anchor-hint">
+          锚点固定在一级配置节点；同子树内点选不改变面板
+        </span>
+      </div>
+
+      <div class="an-tabrow">
+        <button class="an-tab" v-for="c in cats" :key="c.key"
+                :class="{on: analysisTab === c.key}" @click="analysisTab = c.key">
+          <span>{{ c.name }}</span>
+          <span class="cnt">{{ c.items.length }}</span>
+        </button>
+      </div>
+
+      <div class="an-pane" v-for="cat in cats" :key="cat.key"
+           v-show="analysisTab === cat.key">
+        <div class="an-split">
+
+          <!-- 左栏：方法清单 -->
+          <aside class="an-side">
+            <div class="an-side-h">
+              <span>{{ cat.name }}</span>
+              <span class="n">{{ pickedCount(cat) }}/{{ cat.items.length }} 项</span>
+            </div>
+            <div class="an-list">
+              <button v-for="it in cat.items" :key="it.key" class="an-it"
+                      :class="{on: picked[it.key], main: it.main}"
+                      @click="picked[it.key] = !picked[it.key]">
+                <span class="an-cb" :class="{on: picked[it.key]}"></span>
+                <span class="an-nm">{{ it.name }}</span>
+                <span class="an-bd" :class="it.shape === 'dispatch' ? 'd' : 's'">
+                  {{ it.shape === 'dispatch' ? '派发' : '即时' }}</span>
+              </button>
+            </div>
+            <p class="an-tip">可多选，选中的在右侧依序列出</p>
+          </aside>
+
+          <!-- 右栏：结果块 -->
+          <main class="an-main">
+            <div v-for="it in cat.items" :key="it.key" class="an-res"
+                 v-show="picked[it.key]">
+              <div class="an-res-h">
+                <b>{{ it.name }}</b>
+                <span class="an-bd" :class="it.shape === 'dispatch' ? 'd' : 's'">
+                  {{ it.shape === 'dispatch' ? '需派发模拟' : '即时分析' }}</span>
+                <button v-if="it.shape !== 'dispatch' && hasChart" class="vsw"
+                        style="margin-left:auto" :class="{on: tableMode}"
+                        @click="tableMode = !tableMode">
+                  {{ tableMode ? '看图形' : '看表格' }}</button>
+              </div>
+              <div class="an-res-b">
+
+                <!-- ===== 复算块 ===== -->
+                <template v-if="it.shape !== 'dispatch'">
+                  <div style="font-size:11px;color:var(--ink-3);margin-bottom:6px">
+                    扫描规格（每行一条独立的一维扫描）
+                  </div>
+                  <table class="spectable">
+                    <thead><tr>
+                      <th style="width:110px">来源</th>
+                      <th style="width:120px">对象</th>
+                      <th style="width:130px">字段</th>
+                      <th>取值</th>
+                      <th class="act"></th>
+                    </tr></thead>
+                    <tbody>
+                      <tr v-for="(s, i) in specs" :key="i">
+                        <td>
+                          <el-select v-model="s.src" size="small" style="width:100%"
+                                     @change="onSrc(s)">
+                            <el-option v-for="o in SRC" :key="o" :label="o" :value="o" />
+                          </el-select>
+                        </td>
+                        <td>
+                          <el-select v-model="s.obj" size="small" style="width:100%"
+                                     :disabled="s.src === '分析口径'">
+                            <el-option v-for="o in objOpts(s.src)" :key="o" :label="o"
+                                       :value="o" />
+                          </el-select>
+                        </td>
+                        <td>
+                          <el-select v-model="s.field" size="small" style="width:100%"
+                                     @change="onField(s)">
+                            <el-option v-for="o in fieldOpts(s)" :key="o" :label="o"
+                                       :value="o" />
+                          </el-select>
+                        </td>
+                        <td>
+                          <!-- 数值栅格 -->
+                          <div v-if="formOf(s) === 'num'" class="rangeline">
+                            <el-input-number v-model="s.from" size="small"
+                                             :controls="false" />
+                            <span class="tmeta">→</span>
+                            <el-input-number v-model="s.to" size="small"
+                                             :controls="false" />
+                            <span class="tmeta">步长</span>
+                            <el-input-number v-model="s.step" size="small"
+                                             :controls="false" style="width:62px" />
+                            <span class="tmeta">{{ pointCount(s) }} 点</span>
+                          </div>
+                          <!-- 枚举 -->
+                          <span v-else-if="formOf(s) === 'enum'"
+                                style="display:flex;flex-wrap:wrap;gap:2px 12px">
+                            <el-checkbox v-for="o in enumOpts(s)" :key="o" size="small"
+                                         v-model="s.pickedEnums" :label="o">{{ o }}
+                            </el-checkbox>
+                          </span>
+                          <!-- 变换库 -->
+                          <span v-else-if="formOf(s) === 'xform'"
+                                style="display:flex;gap:6px;align-items:center">
+                            <el-select v-model="s.xform" size="small" style="width:150px">
+                              <el-option v-for="o in XFORM" :key="o" :label="o" :value="o" />
+                            </el-select>
+                            <span class="tmeta">扫</span>
+                            <el-select v-model="s.xparam" size="small" style="width:110px">
+                              <el-option v-for="o in xparams(s)" :key="o" :label="o"
+                                         :value="o" />
+                            </el-select>
+                            <el-input-number v-model="s.xfrom" size="small"
+                                             :controls="false" style="width:70px" />
+                            <span class="tmeta">→</span>
+                            <el-input-number v-model="s.xto" size="small"
+                                             :controls="false" style="width:70px" />
+                          </span>
+                          <!-- 表达式列表：行下方内联展开 -->
+                          <span v-else style="display:flex;align-items:center;gap:8px">
+                            <span class="tmeta">表达式列表（{{ s.rows.length }} 行）</span>
+                            <button class="vsw" :class="{on: s.open}"
+                                    @click="s.open = !s.open">
+                              {{ s.open ? '收起' : '展开' }}</button>
+                          </span>
+                        </td>
+                        <td class="act" @click="specs.splice(i, 1)">✕</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div class="col-add">
+                    <button @click="addSpec">＋ 添加扫描维度</button>
+                  </div>
+
+                  <!-- 表达式列表内联展开 -->
+                  <div class="expr-wrap" v-for="(s, i) in specs" :key="'x' + i"
+                       v-show="s.open">
+                    <div class="expr-h">
+                      <b style="color:var(--ink)">表达式列表</b>
+                      <span class="tmeta">
+                        每行是一条完整子配置；系统不解释语义，只逐行校验后照跑</span>
+                      <span class="spacer"></span>
+                      <button class="vsw" @click="s.open = false">收起</button>
+                    </div>
+                    <div class="expr-b">
+                      <table>
+                        <thead><tr>
+                          <th style="width:130px">type</th>
+                          <th style="width:110px">threshold</th>
+                          <th style="width:90px">scope</th>
+                          <th style="width:100px">pools</th>
+                          <th style="width:110px">max_triggers</th>
+                          <th style="width:26px"></th>
+                        </tr></thead>
+                        <tbody>
+                          <tr v-for="(r, j) in s.rows" :key="j">
+                            <td><input v-model="r.type"></td>
+                            <td><input v-model="r.threshold"></td>
+                            <td><input v-model="r.scope"></td>
+                            <td><input v-model="r.pools"></td>
+                            <td><input v-model="r.max_triggers"></td>
+                            <td class="rm" @click="s.rows.splice(j, 1)">✕</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div style="display:flex;align-items:center;margin-top:6px">
+                        <button class="vsw" @click="s.rows.push(blankRow())">＋ 添加一行</button>
+                      </div>
+                      <div class="ok-line">
+                        ✓ 校验通过：{{ s.rows.length }} 行，与
+                        <code>_pity_declared_keys(btype)</code> 逐行比对无未知键
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 结果 -->
+                  <div v-if="hasChart">
+                    <div class="summary" style="margin-top:12px">
+                      <span>扫描规格</span>
+                      <span v-if="!tableMode">
+                        GDR 阈值 <b>0.75 → 0.95</b>　步长 <b>0.01</b>　（<b>12</b> 点）
+                      </span>
+                      <span v-else class="tmeta">表格视图</span>
+                      <button class="vsw go" style="margin-left:auto">改</button>
+                    </div>
+                    <div ref="chartRe"></div>
+                    <div class="stats">
+                      <span><span class="k">翻转点</span> <b>0.885</b>
+                        <span class="k">[0.878, 0.893]</span></span>
+                      <span><span class="k">μ*</span> <b>0.421</b></span>
+                      <span><span class="k">σ</span> <b>0.108</b></span>
+                      <span><span class="k">μ</span> <b>−0.397</b></span>
+                    </div>
+                    <div class="legend-line">
+                      <span><i style="background:rgba(31,119,180,.25)"></i>同时置信带（双侧 95%）</span>
+                      <span><i style="background:rgba(200,50,50,.25)"></i>说不准地带</span>
+                      <span><i style="background:#e8f5e9"></i>结论成立域</span>
+                      <span><i style="background:#666"></i>τ 判据线</span>
+                    </div>
+                    <div class="mrow">
+                      <span class="tmeta">同时带档位</span>
+                      <el-select v-model="ciLevel" size="small" style="width:130px">
+                        <el-option label="双侧 95%" value="双侧 95%" />
+                        <el-option label="双侧 90%" value="双侧 90%" />
+                      </el-select>
+                      <el-checkbox v-model="pava" size="small">强制单调（PAVA）</el-checkbox>
+                      <el-checkbox v-model="jump" size="small">跳变点检测</el-checkbox>
+                    </div>
+                    <div class="mnote">勾选「强制单调」时，本次结果不可用作单调性判据</div>
+                  </div>
+                </template>
+
+                <!-- ===== 派发块 ===== -->
+                <template v-else>
+                  <div style="font-size:11px;color:var(--ink-3);margin-bottom:6px">
+                    扫描规格
+                  </div>
+                  <table class="spectable">
+                    <thead><tr>
+                      <th style="width:110px">来源</th>
+                      <th style="width:150px">对象</th>
+                      <th style="width:130px">字段</th>
+                      <th>取值</th>
+                      <th class="act"></th>
+                    </tr></thead>
+                    <tbody>
+                      <tr>
+                        <td><el-select v-model="dspec.src" size="small"
+                                       style="width:100%">
+                          <el-option v-for="o in SRC" :key="o" :label="o" :value="o" />
+                        </el-select></td>
+                        <td><el-select v-model="dspec.obj" size="small"
+                                       style="width:100%">
+                          <el-option v-for="o in objOpts(dspec.src)" :key="o" :label="o"
+                                     :value="o" />
+                        </el-select></td>
+                        <td><el-select v-model="dspec.field" size="small"
+                                       style="width:100%">
+                          <el-option v-for="o in fieldOpts(dspec)" :key="o" :label="o"
+                                     :value="o" />
+                        </el-select></td>
+                        <td>
+                          <div class="rangeline">
+                            <el-input-number v-model="dspec.from" size="small"
+                                             :controls="false" />
+                            <span class="tmeta">→</span>
+                            <el-input-number v-model="dspec.to" size="small"
+                                             :controls="false" />
+                            <span class="tmeta">步长</span>
+                            <el-input-number v-model="dspec.step" size="small"
+                                             :controls="false" style="width:56px" />
+                            <span class="tmeta">{{ pointCount(dspec) }} 点</span>
+                          </div>
+                          <div class="tmeta" style="margin-top:3px">
+                            字段清单已按 btype=<b>hard</b> 过滤
+                          </div>
+                        </td>
+                        <td class="act">✕</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <div class="dform" style="margin-top:12px">
+                    <div style="display:flex;align-items:center;gap:9px">
+                      <span class="tmeta">批次名</span>
+                      <el-input v-model="batchName" size="small"
+                                style="width:190px" />
+                      <span class="spacer"></span>
+                      <el-button size="small" type="primary"
+                                 :disabled="state === 's4'">
+                        {{ state === 's4' ? '已提交' : '提交任务' }}
+                      </el-button>
+                    </div>
+
+                    <!-- 运行中 -->
+                    <template v-if="state === 's4'">
+                      <div class="dbar"><i style="width:60%"></i><span>3 / 5</span></div>
+                      <div style="display:flex;gap:14px">
+                        <span class="tmeta">批次「{{ batchName }}」</span>
+                        <span class="tmeta">已用 42s</span>
+                        <span class="spacer"></span>
+                        <button class="vsw">取消</button>
+                      </div>
+                      <div class="tmeta" style="font-family:Consolas,monospace">
+                        sub-070 ✓　sub-075 ✓　sub-080 ✓　sub-085 …　sub-090 …
+                      </div>
+                      <div class="tmeta">
+                        产出：5 条子配置 ＋ 5 个数据集，写回本锚点的子节点
+                      </div>
+                    </template>
+
+                    <!-- 已完成 -->
+                    <template v-else-if="state === 's5'">
+                      <div ref="chartDp"></div>
+                      <div class="stats">
+                        <span><span class="k">翻转点</span> <b>82.0</b>
+                          <span class="k">[80.5, 83.5]</span></span>
+                        <span><span class="k">μ*</span> <b>0.018 / 抽</b></span>
+                        <span><span class="k">σ</span> <b>0.006</b></span>
+                        <span><span class="k">μ</span> <b>0.017</b></span>
+                      </div>
+                      <div class="prod">
+                        产物：<b>5 个数据集</b>（批次「{{ batchName }}」）
+                        <span class="spacer"></span>
+                        <el-button size="small">切到该批次 ▾</el-button>
+                      </div>
+                    </template>
+                    <div v-else class="tmeta">
+                      产出：5 条子配置 ＋ 5 个数据集，写回本锚点的子节点，
+                      可在左树按批次折叠查看
+                    </div>
+                  </div>
+                </template>
+
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 任务抽屉 -->
+  <div class="drawer" :class="{open: drawer}">
+    <div class="drawer-h">
+      <span>任务管理</span>
+      <span class="tmeta">运行中 {{ runningCount }}</span>
+      <span class="spacer"></span>
+      <el-button size="small" @click="drawer = false">收起</el-button>
+    </div>
+    <div class="drawer-b">
+      <div class="tbl">
+        <table>
+          <thead><tr>
+            <th>任务</th><th>所属配置</th><th>类型</th><th>状态</th>
+            <th>进度</th><th>耗时</th><th>操作</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td>{{ batchName }}</td>
+              <td>{{ anchorLabel }}</td>
+              <td>模拟</td>
+              <td :class="state === 's4' ? 'st-run' : 'st-done'">
+                {{ state === 's4' ? '运行中' : '完成' }}</td>
+              <td>
+                <span class="mini"><i :style="{width: state === 's4' ? '60%' : '100%'}"></i></span>
+                <span class="tmeta" style="margin-left:6px">
+                  {{ state === 's4' ? '3/5' : '5/5' }}</span>
+              </td>
+              <td>{{ state === 's4' ? '42s' : '68s' }}</td>
+              <td>
+                <span class="tmeta">查看</span>
+                <span v-if="state === 's4'" class="tmeta">· 取消</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="res">
+        <div>CPU　<span class="mini" style="width:80px"><i style="width:46%"></i></span> 46%</div>
+        <div>内存 <span class="mini" style="width:80px"><i style="width:31%"></i></span> 31%</div>
+        <div>并行 worker　{{ state === 's4' ? 4 : 0 }}</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="../layout_demo/libs/vuemin.js"></script>
+<script src="../layout_demo/libs/ep.min.js"></script>
+<script src="chart3.js"></script>
+<script>
+const { createApp, ref, reactive, computed, watch, nextTick } = Vue;
+
+createApp({
+  setup() {
+    const state = ref('s1');
+    const analysisTab = ref('sensitivity');
+    const anchorLabel = ref('主配置');
+    const drawer = ref(false);
+    const datasetId = ref('scan-A-run-3');
+    const tableMode = ref(false);
+    const ciLevel = ref('双侧 95%');
+    const pava = ref(false);
+    const jump = ref(true);
+    const batchName = ref('保底阈值扫描 A');
+    const hasChart = computed(() => state.value === 's2' || state.value === 's3');
+
+    const SRC = ['分析口径', '策略', '池子', '保底', '里程碑', '资源'];
+    const XFORM = ['组缩放', '组间转移', '单卡定向', '组内形状'];
+    const OBJ = {
+      '分析口径': ['—'],
+      '策略': ['smart（智能抽卡）', 'pity_reserve（保底预留）'],
+      '池子': ['限定池 A', '常驻池'],
+      '保底': ['SSR 硬保底', 'SSR 软保底', '定轨命定'],
+      '里程碑': ['每 40 抽奖励'],
+      '资源': ['初始资源']
+    };
+    const FIELD = {
+      '分析口径': ['GDR 阈值', 'VaR α', 'desire_weights', 'card_value_weights'],
+      '策略': ['count（数值）', 'pity_threshold_pct（数值）', 'stop_on_target（布尔）'],
+      '池子': ['cost 叶子 · draw_resource', 'rewards[].probability', 'batch_size'],
+      '保底': ['threshold', 'deltas', 'max_triggers', 'switch_allowed（布尔）'],
+      '里程碑': ['threshold', 'offset'],
+      '资源': ['draw_resource', 'ticket']
+    };
+    const FORM = {
+      'GDR 阈值': 'num', 'VaR α': 'num', 'desire_weights': 'num',
+      'card_value_weights': 'num',
+      'count（数值）': 'num', 'pity_threshold_pct（数值）': 'num',
+      'stop_on_target（布尔）': 'enum',
+      'cost 叶子 · draw_resource': 'num', 'rewards[].probability': 'xform',
+      'batch_size': 'num',
+      'threshold': 'num', 'deltas': 'num', 'max_triggers': 'num',
+      'switch_allowed（布尔）': 'enum',
+      'offset': 'num', 'draw_resource': 'num', 'ticket': 'num'
+    };
+
+    const objOpts = s => OBJ[s] || ['—'];
+    const fieldOpts = s => FIELD[s.src] || [];
+    const formOf = s => s.form || FORM[s.field] || 'num';
+    const enumOpts = s => ['开', '关'];
+    const xparams = s => ['转移量', 'A 取法', 'A 侧形状'];
+    const pointCount = s => {
+      const n = Math.floor((s.to - s.from) / (s.step || 1)) + 1;
+      return n > 0 && n < 1000 ? n : 0;
+    };
+
+    const mkSpec = (src, obj, field, extra) => Object.assign({
+      src, obj, field, from: 0.75, to: 0.95, step: 0.01,
+      form: null, pickedEnums: [], xform: '组缩放', xparam: '转移量',
+      xfrom: 0.8, xto: 1.2,
+      open: false, rows: [blankRow(), blankRow(), blankRow()]
+    }, extra || {});
+
+    function blankRow() {
+      return { type: 'hard', threshold: '', scope: 'ssr', pools: '*', max_triggers: '0' };
+    }
+
+    const specs = reactive([
+      mkSpec('分析口径', '—', 'GDR 阈值'),
+      mkSpec('分析口径', '—', 'VaR α', { from: 0.01, to: 0.10, step: 0.01 })
+    ]);
+
+    // 状态 3：把第二行的取值方式切到表达式列表并展开
+    const applyState = s => {
+      // 第三态专门展示「表达式列表」这一取值形态，故第二行切成保底并改形态
+      if (s === 's3') {
+        Object.assign(specs[1], { src: '保底', obj: 'SSR 硬保底',
+          field: 'threshold', form: 'expr', open: true });
+      } else {
+        Object.assign(specs[1], { src: '分析口径', obj: '—',
+          field: 'VaR α', form: null, open: false });
+      }
+    };
+
+    const dspec = reactive(mkSpec('保底', 'SSR 硬保底', 'threshold',
+      { from: 70, to: 90, step: 5 }));
+
+    const onSrc = s => { s.obj = (OBJ[s.src] || ['—'])[0]; s.field = fieldOpts(s)[0]; };
+    const onField = s => { if (formOf(s) === 'xform') s.xparam = '转移量'; };
+    const addSpec = () => specs.push(mkSpec('分析口径', '—', 'GDR 阈值'));
+    const picked = reactive({ sens_sync: true, sens_disp: true });
+    const pickedCount = cat => cat.items.filter(i => picked[i.key]).length;
+    const isDispatchTab = computed(() => analysisTab.value === 'dispatch');
+
+    const cats = [
+      { key: 'gdr', name: '全局GDR分析', items: [
+        { key: 'gdr_dist', name: 'GDR 分布', main: true, shape: 'sync' },
+        { key: 'gdr_stat', name: 'GDR 指标统计', shape: 'sync' }]},
+      { key: 'success', name: '成功率分析', items: [
+        { key: 'success_rate', name: '成功率分析', main: true, shape: 'sync' }]},
+      { key: 'risk', name: '风险分析', items: [
+        { key: 'risk_var', name: 'VaR / CVaR', main: true, shape: 'sync' }]},
+      { key: 'time', name: '时间演化', items: [
+        { key: 'progress_band', name: '进度带', main: true, shape: 'sync' }]},
+      { key: 'per_pool', name: '每池分析', items: [
+        { key: 'per_pool', name: '逐池下钻', main: true, shape: 'sync' }]},
+      { key: 'vuln', name: '脆弱性分析', items: [
+        { key: 'vuln', name: '脆弱性分析', main: true, shape: 'sync' }]},
+      { key: 'process', name: '过程分析', items: [
+        { key: 'process', name: '事件模式', main: true, shape: 'sync' }]},
+      { key: 'worst', name: '最差影响', items: [
+        { key: 'worst', name: '最差影响分析', main: true, shape: 'dispatch' }]},
+      { key: 'interval', name: '间隔分析', items: [
+        { key: 'interval', name: '间隔分布', main: true, shape: 'sync' }]},
+      { key: 'search', name: '方案搜索', items: [
+        { key: 'search', name: '方案搜索', main: true, shape: 'dispatch' }]},
+      { key: 'sensitivity', name: '敏感性分析', items: [
+        { key: 'sens_sync', name: '敏感性扫描（复算）', main: true, shape: 'sync' },
+        { key: 'sens_disp', name: '敏感性扫描（派发）', shape: 'dispatch' }]},
+    ];
+
+    const datasetOptions = computed(() => {
+      const base = [
+        { id: 'main-run-1', label: 'main-run-1', samples: 1000 }
+      ];
+      if (hasChart.value || state.value === 's5') {
+        base.push({ id: 'scan-A-run-3', label: 'scan-A-run-3（批次：保底阈值扫描 A）',
+                    samples: 1000 });
+      }
+      return base;
+    });
+
+    const runningCount = computed(() => (state.value === 's4' ? 1 : 0));
+
+    const tree = computed(() => {
+      const node = {
+        id: 'main', label: '主配置',
+        children: [{ id: 'd1', label: 'main-run-1（1000 样本）' }]
+      };
+      if (state.value === 's5') {
+        node.children.unshift({
+          id: 'batchA', label: '派发批次：保底阈值扫描 A（5）', batch: true,
+          children: ['070', '075', '080', '085', '090'].map(v => ({
+            id: 'sub' + v, label: 'sub-' + v, notAnchor: true
+          }))
+        });
+        node.children.push({
+          id: 'd2', label: 'scan-A-run-3（1000 样本）'
+        });
+      }
+      return [node];
+    });
+
+    /* 图渲染：与方案甲同一份 chart3.js */
+    const chartRe = ref(null), chartDp = ref(null);
+    const render = () => {
+      nextTick(() => {
+        if (chartRe.value && hasChart.value) {
+          drawChart3(chartRe.value, demoDataRecompute());
+        }
+        if (chartDp.value && state.value === 's5') {
+          drawChart3(chartDp.value, demoDataDispatch());
+        }
+      });
+    };
+    watch([state, analysisTab, hasChart], render, { immediate: true });
+    watch(state, s => { applyState(s); if (s === 's4' || s === 's5') drawer.value = true; });
+
+    // 演示页状态切换入口（产品里没有这一段）
+    window.__demoSetState = s => { state.value = s; };
+
+    return {
+      state, analysisTab, anchorLabel, drawer, datasetId, tableMode, ciLevel,
+      pava, jump, batchName, hasChart, cats, picked, pickedCount, specs, dspec,
+      SRC, XFORM, objOpts, fieldOpts, formOf, enumOpts, xparams, pointCount,
+      onSrc, onField, addSpec, blankRow, datasetOptions, runningCount, tree,
+      isDispatchTab, chartRe, chartDp
+    };
+  }
+}).use(ElementPlus).mount('#app');
+
+/* demo 状态切换（仅演示页，不进产品） */
+const BAR = [
+  ['s1', '① 规格表'], ['s2', '② 已出图'], ['s3', '③ 表达式列表'],
+  ['s4', '④ 派发运行中'], ['s5', '⑤ 派发完成']
+];
+const bar = document.createElement('div');
+bar.className = 'demobar';
+bar.innerHTML = '<span class="dl">demo</span>' + BAR.map(
+  ([k, t], i) => `<button data-s="${k}" class="${i === 0 ? 'on' : ''}">${t}</button>`
+).join('');
+document.body.appendChild(bar);
+bar.addEventListener('click', e => {
+  const b = e.target.closest('button[data-s]');
+  if (!b) return;
+  window.__demoSetState(b.dataset.s);
+  [...bar.querySelectorAll('button')].forEach(x => x.classList.toggle('on', x === b));
+});
+</script>
+</body>
+</html>

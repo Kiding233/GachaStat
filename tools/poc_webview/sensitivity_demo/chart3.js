@@ -68,12 +68,18 @@
         '" height="' + f(yRow(0, 0) - yv) + '" fill="' + C.dataFill +
         '" stroke="' + C.data + '" stroke-width=".5"/>');
     });
-    var xTau = X(opt.tauPos);
+    // 行① 的横轴是**响应值**（s），不是 θ。判据线 τ 在这一轴上的位置
+    // 才是「切在第几分位」的含义；早先把分数当 θ 传给 X()，算到画布外。
+    var xTau = L + (tau - sBot) / (sTop - sBot) * plotW;
     g.push('<line x1="' + f(xTau) + '" y1="' + f(rowTop(0)) + '" x2="' + f(xTau) +
-      '" y2="' + f(yRow(0, 0)) + '" stroke="' + C.txt3 +
-      '" stroke-width="1" stroke-dasharray="4 3"/>');
-    g.push('<text x="' + f(xTau + 4) + '" y="' + f(rowTop(0) + 9) +
-      '" font-size="9" fill="' + C.txt2 + '">判据线切在第 ' + opt.tauPct + ' 分位</text>');
+      '" y2="' + f(yRow(0, 0)) + '" stroke="' + C.intervalLine +
+      '" stroke-width="1.2" stroke-dasharray="4 3"/>');
+    var tx = xTau + 4;
+    var anchor = 'start';
+    if (xTau > L + plotW * 0.62) { tx = xTau - 4; anchor = 'end'; }
+    g.push('<text x="' + f(tx) + '" y="' + f(rowTop(0) + 9) +
+      '" font-size="9" fill="' + C.txt2 + '" text-anchor="' + anchor +
+      '">τ = ' + tau + '，切在第 ' + opt.tauPct + ' 分位</text>');
     g.push('<text x="' + L + '" y="' + f(rowTop(0) - 5) + '" font-size="10" fill="' +
       C.txt2 + '">① 响应值分布（本批样本）</text>');
     g.push('<text x="' + (L - 6) + '" y="' + f(yRow(0, 1)) +
@@ -160,12 +166,12 @@
   /* ---- 复算侧示例数据：扫 GDR 阈值 0.75 → 0.95 ---- */
   global.demoDataRecompute = function () {
     var th0 = 0.75, th1 = 0.95, series = [], half = [], ciw = [], W = 880;
-    for (var i = 0; i < 12; i++) {
-      var th = th0 + (th1 - th0) * i / 11, t = i / 11;
+    for (var i = 0; i < 11; i++) {
+      var th = th0 + (th1 - th0) * i / 10, t = i / 10;
       var s = 0.955 - 0.693 / (1 + Math.exp(-(t - 0.55) * 9));
       series.push({ th: +th.toFixed(3), s: +s.toFixed(4) });
-      half.push(0.030 + 0.016 * Math.abs(t - 0.5) * 2);
-      ciw.push(0.030 + 0.014 * Math.abs(t - 0.5) * 2);
+      half.push(0.060 + 0.030 * Math.abs(t - 0.5) * 2);
+      ciw.push(0.032 + 0.026 * Math.abs(t - 0.5) * 2);
     }
     var hist = [];
     for (var j = 0; j < 14; j++) {
@@ -174,7 +180,7 @@
     }
     return {
       w: W, h: 380, th0: th0, th1: th1, tau: 0.60, series: series, half: half,
-      hist: hist, ciw: ciw, tauPos: 0.5, tauPct: 62,
+      hist: hist, ciw: ciw, tauPct: 62,
       flip: [0.878, 0.893],
       crossX: 62 + (0.885 - th0) / (th1 - th0) * (W - 62 - 18),
       sTop: 1.0, sBot: 0.0,
@@ -189,7 +195,7 @@
       var th = th0 + (th1 - th0) * i / 4, t = i / 4;
       var s = 0.30 + 0.58 / (1 + Math.exp(-(t - 0.5) * 7));
       series.push({ th: +th.toFixed(1), s: +s.toFixed(4) });
-      half.push(0.055);
+      half.push(0.085);
     }
     var hist = [];
     for (var j = 0; j < 12; j++) {
@@ -198,7 +204,7 @@
     }
     return {
       w: W, h: 380, th0: th0, th1: th1, tau: 0.60, series: series, half: half,
-      hist: hist, ciw: [0.06, 0.055, 0.05, 0.055, 0.06], tauPos: 0.5, tauPct: 58,
+      hist: hist, ciw: [0.075, 0.068, 0.062, 0.068, 0.075], tauPct: 58,
       flip: [80.5, 83.5],
       crossX: 62 + (82 - th0) / (th1 - th0) * (W - 62 - 18),
       sTop: 1.0, sBot: 0.0,

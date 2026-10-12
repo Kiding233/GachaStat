@@ -87,6 +87,11 @@ def _pity_section(btype, name, **extra):
             lines.append(f'{k} = {v}')
     return '\n'.join(lines) + '\n'
 
+#: 生命周期子表段（S6a / H3 的接受面用例共用）。单独成常量而非三处内联，
+#: 避免改一处漏两处。
+_LIFECYCLE_DOA = '\n[pity.lifecycle]\ndeactivate_on_early_hit = true\n'
+
+
 
 # ══════════════════════════════════════════════════════════════════
 # 6 种 P56 type 解析 + round-trip
@@ -234,52 +239,14 @@ class TestP56FieldParsing:
 # ══════════════════════════════════════════════════════════════════
 
 class TestP56ConfigRejection:
-    """无效 P56 配置 → ConfigError。"""
+    """无效 P56 配置 → ConfigError。
 
-    def test_deactivate_on_early_hit_rejected_for_rotating(self):
-        """deactivate_on_early_hit=true + type=rotating → ConfigError（事件驱动型不支持）。"""
-        toml = _BASE_TOML + '''[[pity]]
-name = "bad_rot"
-type = "rotating"
-scope = "ssr"
+    **P64 S6a（H3）收窄本类**：原 `test_deactivate_on_early_hit_rejected_for_rotating`
+    与 `..._for_targeted` 两条正断言（事件驱动型 + `deactivate_on_early_hit` 必抛）
+    已随拒绝分支一并删除，改写为接受面用例并移入 `TestS6aLifecycleAcceptance`。
+    保留的用例与本类名一致（确为「无效配置」）。
+    """
 
-[pity.lifecycle]
-deactivate_on_early_hit = true
-'''
-        with pytest.raises(ConfigError, match='deactivate_on_early_hit'):
-            _write_and_load(toml)
-
-    def test_deactivate_on_early_hit_rejected_for_targeted(self):
-        """deactivate_on_early_hit=true + type=targeted → ConfigError（事件驱动型不支持）。"""
-        toml = _BASE_TOML + '''[[pity]]
-name = "bad_tgt"
-type = "targeted"
-scope = "ssr"
-fate_threshold = 1
-
-[pity.lifecycle]
-deactivate_on_early_hit = true
-'''
-        with pytest.raises(ConfigError, match='deactivate_on_early_hit'):
-            _write_and_load(toml)
-
-    def test_deactivate_on_early_hit_allowed_for_soft_interval(self):
-        """deactivate_on_early_hit=true + type=soft_interval → 允许（counter 驱动型）。"""
-        toml = _BASE_TOML + '''[[pity]]
-name = "ok_soft"
-type = "soft_interval"
-scope = "ssr"
-start = 73
-end = 90
-
-[pity.lifecycle]
-deactivate_on_early_hit = true
-'''
-        store, path = _write_and_load(toml)
-        try:
-            assert store.pity.pities[0].deactivate_on_early_hit is True
-        finally:
-            os.unlink(path)
 
     def test_epitomizable_card_not_in_distribution(self):
         """epitomizable_cards 中 card_id 不在 distribution → ConfigError。"""
@@ -309,6 +276,67 @@ featured = true
 # ══════════════════════════════════════════════════════════════════
 # 新旧混用兼容
 # ══════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S6a（H3）：`deactivate_on_early_hit` 对全部类型开放
+# ══════════════════════════════════════════════════════════════════
+# P56 起 `_build_pity` 对「事件驱动型 + deactivate_on_early_hit=true」硬拒，
+# 理由是「事件驱动型没有阈值前提前命中的概念」。P64 的 Lifecycle（§3.1.3）把退役
+# 判定统一为 `should_deactivate(ctx, state, name, fired)`，第四实参 `fired` 取
+# `any(tr.did_reset(...))`（M4 统一语义，§3.1.1），对全部类型同形，故 S6a 删除
+# 该拒绝分支。**接受面只增不减**，M1 等价性口径不受影响（旧配置行为不变）。
+
+class TestS6aLifecycleAcceptance:
+    """事件驱动型 + `deactivate_on_early_hit` 的接受面与写回面（S6a / H3）。"""
+
+    @pytest.mark.parametrize('btype,extra', [
+        ('rotating', {}),
+        ('targeted', {'fate_threshold': 1}),
+        # S6a 新增类型：本行同时证明「新 type 的 `[[pity]]` 段不被契约表硬拒」
+        ('rotating_inverse', {}),
+    ])
+    def test_event_driven_accepts_deactivate_on_early_hit(self, btype, extra):
+        """不抛，且配置**真的生效**（`PityDef` 字段为 True，非静默落回默认）。
+
+        只断言「不抛」不足以覆盖：拒绝分支若被改成 `p.get(...)` 取值丢弃，
+        同样不抛而配置静默失效。故必须回读 `PityDef`。
+        """
+        toml = _BASE_TOML + _pity_section(btype, 'ok_ev', **extra)
+        toml += _LIFECYCLE_DOA
+        store, path = _write_and_load(toml)
+        try:
+            assert store.pity.pities[0].deactivate_on_early_hit is True, btype
+        finally:
+            os.unlink(path)
+
+    def test_deactivate_on_early_hit_roundtrip_for_event_driven(self):
+        """写盘 → 重载后仍为 True（写侧对事件驱动型照写、读侧照收）。
+
+        `_pitydef_to_toml` 的生命周期段是**无条件逐字段书写**（不看 btype），
+        S4c 起产出还要过键契约过滤；`lifecycle.*` 两个键对全部 btype 放行，
+        故本闭环应成立。缺本用例时，「写侧写了、读侧删了」这种半改状态不可见。
+        """
+        toml = _BASE_TOML + _pity_section('rotating', 'rt_ev')
+        toml += _LIFECYCLE_DOA
+        store, path = _write_and_load(toml)
+        try:
+            # 复用同一路径（与本文件既有 `_roundtrip(store, path)` 调用同形）
+            store2 = _roundtrip(store, path)
+            assert store2.pity.pities[0].deactivate_on_early_hit is True
+        finally:
+            os.unlink(path)
+
+    def test_deactivate_on_early_hit_allowed_for_soft_interval(self):
+        """counter 驱动型的接受面**未被 S6a 改动**（回归守卫）。"""
+        toml = _BASE_TOML + _pity_section('soft_interval', 'ok_soft',
+                                          start=73, end=90)
+        toml += _LIFECYCLE_DOA
+        store, path = _write_and_load(toml)
+        try:
+            assert store.pity.pities[0].deactivate_on_early_hit is True
+        finally:
+            os.unlink(path)
 
 class TestMixedPityCompat:
     """P56 + P55 新旧保底条目共存——不互相干扰。"""

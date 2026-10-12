@@ -42,7 +42,7 @@ from gacha_simulator.core.pity import (
     _validate_registry, create_behavior,
 )
 from gacha_simulator.core.pity_modifier import (
-    HardModifier, SelectedModifier, SoftModifier,
+    HardModifier, NonFeaturedModifier, SelectedModifier, SoftModifier,
 )
 from gacha_simulator.core.pity_primitives import (
     DrawInfo, PityContext, PityState,
@@ -485,7 +485,9 @@ class TestTargetFeaturedS42:
 
 _C43_TYPES = ('rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft',
               'targeted', 'targeted_soft')
-_ALL_TYPES = _C42_TYPES + _C43_TYPES          # 10 条目全集
+# P64 S6a：G1 反向轮换（新增机制，无旧类，故不进等价性装置的比对面）
+_C44_TYPES = ('rotating_inverse',)
+_ALL_TYPES = _C42_TYPES + _C43_TYPES + _C44_TYPES   # 11 条目全集
 _SOFT_FAMILY = ('rotating_soft', 'rotating_cr_soft', 'targeted_soft')
 
 # ── 夹具：ssr（含 featured）/ sr / r 三稀有度池（与 S1b 起的 tracker 单测同形）──
@@ -783,6 +785,171 @@ class TestRotatingCrTrackerOrder:
         assert traj_new == [1, 1, 2, 2, 3, 3, 4, 4]
         assert traj_new == traj_old, '与旧类的 cr_counter 轨迹必须逐位相同（M1 口径）'
 
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S6a：G1 `rotating_inverse`（§3.3 的三处类型注册 + 语义）
+# ══════════════════════════════════════════════════════════════════
+# G1 是**新增机制**（旧实现无对应类），故无等价性对拍面（§3.3 首段）。本组钉的是
+# ISSUE-105 的「三处注册缺一即静默失效」：`_BTYPE_ORDER`（排序档位）、
+# `_EVENT_DRIVEN_TYPES`（互斥校验的成员判据）、以及 preset 的零件构成与语义。
+# §六 的语义断言「出 UP → 下一次 SSR 必非 UP；出非 UP → 恢复基础比例」在
+# `TestRotatingInverseSemantics`。
+
+_S6A_TYPE = 'rotating_inverse'
+
+
+class TestRotatingInverseS6a:
+    """G1 的类型注册（ISSUE-105）与 preset 零件构成（§3.3）。"""
+
+    def test_registry_entry_shape(self):
+        entry = BEHAVIOR_REGISTRY[_S6A_TYPE]
+        assert entry['class'] is None
+        assert callable(entry['preset'])
+        assert entry['default_scope'] == 'ssr'
+        assert entry['params'] == {}, '本类型无类型专用 PityDef 字段'
+
+    def test_btype_order_tier_is_three(self):
+        """① `_BTYPE_ORDER['rotating_inverse'] == 3`，与 `rotating` / `targeted` 同档。
+
+        缺该键时 `_resolve_order` 的 `.get(btype, 99)` 落到 99（排全部已知类型之后）；
+        P82 接线后排序键是概率管道顺序的唯一来源，故缺键会改变它与同 scope 其它
+        保底的先后。断言**取值**而非「键存在」：档位写错（如 0）同样静默改序。
+        """
+        from gacha_simulator.core.pity import _BTYPE_ORDER
+
+        assert _BTYPE_ORDER[_S6A_TYPE] == 3
+        assert _BTYPE_ORDER[_S6A_TYPE] == _BTYPE_ORDER['rotating']
+
+    def test_event_driven_membership(self):
+        """② `_EVENT_DRIVEN_TYPES` 含本类型，故 `is_event_driven` 为真。
+
+        这是「缺 `rotating_inverse`」的**唯一捕获面**（§六 ISSUE-506 明写：③ 的
+        `is_active` 早退由骨架对全部类型无条件承担、不由本集合决定，故不构成捕获面）。
+        缺它则 `_validate_behaviors` 规则 3 失效、`rotating` 与本类型可同 scope 共存。
+        """
+        from gacha_simulator.core.pity_primitives import _EVENT_DRIVEN_TYPES
+
+        assert _S6A_TYPE in _EVENT_DRIVEN_TYPES
+        bh, _ = _fx_build(_S6A_TYPE)
+        assert bh.is_event_driven is True
+        assert bh.is_soft is False
+        assert bh.is_hard is False
+
+    def test_same_scope_with_rotating_rejected(self):
+        """② 的显形面：同 scope 配 `rotating` + `rotating_inverse` 抛 `ConfigError`。
+
+        只断言集合成员不足：规则 3 的分派依赖 `is_event_driven` 标志，标志由集合推出，
+        故「集合对了但 `_validate_behaviors` 没读它」这一失效模式只有本用例可见。
+        """
+        with pytest.raises(ConfigError):
+            PityEngine(pool_specs={}, pity_defs=[
+                PityDef(name='s6a_rot', btype='rotating', scope='ssr'),
+                PityDef(name='s6a_inv', btype=_S6A_TYPE, scope='ssr'),
+            ], state=PityState(), rarity_rank={'ssr': 0, 'sr': 1, 'r': 2})
+
+    def test_preset_part_composition(self):
+        """零件构成：`FlagTracker(forced_loss)` + `NonFeaturedModifier`，且不写 `target=`。"""
+        built = BEHAVIOR_REGISTRY[_S6A_TYPE]['preset'](
+            PityDef(name='s6a_c', btype=_S6A_TYPE, target_featured=True))
+        assert _REQUIRED_KEYS <= set(built) <= _KEY_UNIVERSE
+        tr = built['trackers']
+        assert len(tr) == 1 and isinstance(tr[0], FlagTracker)
+        assert tr[0].state_keys() == ('forced_loss',)
+        mods = built['modifiers']
+        assert len(mods) == 1 and isinstance(mods[0], NonFeaturedModifier)
+        assert mods[0].state_keys() == ('forced_loss',)
+        # 裁决 7B / ISSUE-403：本族不消费 target_featured，故无 HardModifier
+        assert not any(isinstance(m, HardModifier) for m in mods)
+        # 非 `_soft` 后缀型，不声明 X_soft 命名空间载体
+        assert not any(isinstance(t, NamespaceTracker) for t in tr)
+
+    def test_depends_on_early_return_applies(self):
+        """③ 配 `depends_on` 时 `is_active` 早退对本类型生效（§3.1.3）。
+
+        **本断言对任何类型同形**（早退由骨架无条件承担，ISSUE-506），故它不是
+        「缺 `rotating_inverse`」的捕获面，在此只为记录该行为已覆盖到新类型。
+        """
+        pdef = PityDef(name='s6a_dep', btype=_S6A_TYPE, depends_on='src')
+        bh = create_behavior(pdef, PityState())
+        base = dict(_FX_BASE)
+        ctx = PityContext(draw=_fx_draw('ssr', True), current=base, state=bh._state)
+        assert bh.before_draw(ctx) == base, '未激活时 before_draw 恒等'
+
+
+class TestRotatingInverseSemantics:
+    """§六 的 G1 语义断言：出 UP → 下一次 SSR 必非 UP；出非 UP → 恢复基础比例。"""
+
+    def test_up_forces_next_ssr_to_non_featured(self):
+        """出 UP（scope 内 featured）后，下一次 `before_draw` 的 featured 槽归零。
+
+        机制：`FlagTracker(judge='featured', hit='set', miss='clear')` 在 `after_draw`
+        置 `forced_loss`，`NonFeaturedModifier.apply` 随后把 scope 内的概率整组搬给
+        **非 featured** 一侧（A / Q 与 `RotatingModifier` 互换）。
+        """
+        bh, state = _fx_build(_S6A_TYPE)
+        base = dict(_FX_BASE)
+
+        # 初始态：无 forced_loss，before_draw 恒等
+        ctx = PityContext(draw=_fx_draw('ssr', True), current=dict(base), state=state)
+        assert bh.before_draw(ctx) == base
+
+        # 出 UP
+        ctx_up = PityContext(draw=_fx_draw('ssr', True), current=dict(base),
+                             state=state)
+        bh.after_draw(ctx_up)
+        assert state.get('fx', 'forced_loss') is True
+
+        # 下一次 SSR 必非 UP：featured 槽 0，scope 总量原样搬给非 featured
+        out = bh.before_draw(PityContext(draw=_fx_draw('ssr', True),
+                                         current=dict(base), state=state))
+        scope_total = base['ssr_featured'] + base['ssr']
+        assert out['ssr_featured'] == 0.0
+        assert out['ssr'] == pytest.approx(scope_total)
+        # scope 外不动
+        assert out['sr'] == base['sr'] and out['r'] == base['r']
+
+    def test_non_featured_restores_base_ratio(self):
+        """出非 UP 后 `forced_loss` 清位，下一次 `before_draw` 恢复基础比例。"""
+        bh, state = _fx_build(_S6A_TYPE)
+        base = dict(_FX_BASE)
+
+        bh.after_draw(PityContext(draw=_fx_draw('ssr', True), current=dict(base),
+                                  state=state))
+        assert state.get('fx', 'forced_loss') is True
+
+        # 出非 UP（scope 内、非 featured）
+        bh.after_draw(PityContext(draw=_fx_draw('ssr', False), current=dict(base),
+                                  state=state))
+        assert state.get('fx', 'forced_loss') is False
+
+        out = bh.before_draw(PityContext(draw=_fx_draw('ssr', False),
+                                         current=dict(base), state=state))
+        assert out == base, '恢复基础比例'
+
+    def test_out_of_scope_draw_does_not_touch_flag(self):
+        """出非 scope 稀有度（sr）时 `forced_loss` 整段不动（scope 门控）。
+
+        缺该门控则「出 sr 的 UP」会置位 `forced_loss`，与幻塔机制（只论 SSR）不符。
+        """
+        bh, state = _fx_build(_S6A_TYPE)
+        base = dict(_FX_BASE)
+        bh.after_draw(PityContext(draw=_fx_draw('sr', True), current=dict(base),
+                                  state=state))
+        assert state.get('fx', 'forced_loss') is None, '不得写该键'
+        out = bh.before_draw(PityContext(draw=_fx_draw('sr', True),
+                                         current=dict(base), state=state))
+        assert out == base
+
+    def test_forced_loss_flag_is_internal_not_configurable(self):
+        """`forced_loss` 的初值不由任何 `PityDef` 字段供给，恒为 `False`。
+
+        `PityDef` 无该字段，故 `flags={"forced_loss": False}` 在 truthy 规则下是
+        no-op（`Pity.__init__` 只写 truthy 值，AUDIT-BREAK-3）；缺键与 `False` 在
+        读取侧同值。本用例钉住「构造后 state 里没有该键」这一事实，防止有人给它
+        接上一个初值字段而无人察觉。
+        """
+        bh, state = _fx_build(_S6A_TYPE)
+        assert state.get('fx', 'forced_loss') is None
 
 class TestRedistributeScopeExportStillPresent:
     """`_redistribute_scope` 的导出**不属 S4-3 的删除面**（AUDIT-BREAK-8 C 项）。

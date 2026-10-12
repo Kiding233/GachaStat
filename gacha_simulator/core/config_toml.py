@@ -725,9 +725,11 @@ _PITY_COMMON_KEYS = frozenset({
     'counter_init', 'guaranteed_init', 'fate_points_init', 'selected_card_init',
 })
 
-# 嵌套键（写侧形态为 `[pity.lifecycle]` 子表）。对**全部** btype 放行：
-# `deactivate_on_early_hit=true` 配事件驱动型应由 `_build_pity` 的专条拒绝
-# （提示语「不适用于事件驱动型保底」比「未声明键」贴题），故此处不按类型收窄。
+# 嵌套键（写侧形态为 `[pity.lifecycle]` 子表）。对**全部** btype 放行。
+# **P64 S6a（H3）订正**：原注写「`deactivate_on_early_hit=true` 配事件驱动型应由
+# `_build_pity` 的专条拒绝」，该专条已随 S6a 删除（Lifecycle 统一后事件驱动型
+# 同样可配），故「对全部 btype 放行」自此不再有例外分支，理由只剩「这两个键
+# 与驱动类型无关」（`build_lifecycle` 对全部类型同形消费）。
 _PITY_LIFECYCLE_KEYS = frozenset({
     'lifecycle.deactivate_on_early_hit', 'lifecycle.depends_on',
 })
@@ -745,6 +747,9 @@ _PITY_TYPE_KEYS = {
     'hard': frozenset({'threshold'}),
     # ── 事件驱动型 ──
     'rotating': frozenset(),
+    # P64 S6a（G1）：键集同 `rotating`。本类型无类型专用 PityDef 字段
+    # （`forced_loss` 是 preset 内部标志，无对应初值字段），故只余通用键。
+    'rotating_inverse': frozenset(),
     'rotating_soft': frozenset({'start', 'end', 'increment', 'deltas'}),
     'rotating_cr': frozenset({'cr_counter_threshold', 'cr_base_rate',
                               'cr_state_probs'}),
@@ -958,14 +963,15 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
         deactivate_on_early_hit = lifecycle_raw.get('deactivate_on_early_hit', False)
         depends_on = lifecycle_raw.get('depends_on')
 
-        # P56：deactivate_on_early_hit 仅 counter 驱动型支持
-        # 事件驱动型（rotating/targeted）没有「阈值前提前命中」的概念
-        _EVENT_TYPES = _EVENT_DRIVEN_TYPES  # 模块级常量，见文件下方定义
-        if deactivate_on_early_hit and btype in _EVENT_TYPES:
-            raise ConfigError(
-                f"保底 '{name}'：deactivate_on_early_hit=true 不适用于"
-                f"事件驱动型保底（type='{btype}'）。"
-            )
+        # ── P64 S6a（H3）：事件驱动型的 deactivate_on_early_hit 拒绝分支已删除 ──
+        # P56 时该开关只对 counter 驱动型开放，理由是「事件驱动型没有阈值前提前
+        # 命中的概念」。P64 的 Lifecycle（§3.1.3）把退役判定统一为
+        # `should_deactivate(ctx, state, name, fired)`，`fired` 取
+        # `any(tr.did_reset(...))`（M4 统一语义，§3.1.1），对**全部类型同形**，
+        # 故事件驱动型自此同样可配。删除的是**配置面的拒绝**，不是引擎能力：
+        # 旧配置的接受面只增不减，M1 等价性口径不受影响。
+        # 本模块的 `_EVENT_DRIVEN_TYPES` 拷贝自此**无消费点**，按
+        # `TestDuplicatedConstants` 的「不得删」纪律保留为防漂移守卫。
 
         # 构造扁平化 PityDef
         pities.append(PityDef(
@@ -1958,14 +1964,16 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
 
 # ── 与 pity.py 重复的两组 btype 集合（各存一份，靠测试防漂移）──
 # 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas。
-# 事件驱动型：`deactivate_on_early_hit` 对其不适用（_build_pity 据此硬拒）。
+# 事件驱动型：S6a 之前 `deactivate_on_early_hit` 对其不适用（`_build_pity` 据此硬拒）；
+# H3 删除该拒绝分支后本拷贝**已无消费点**，按 `TestDuplicatedConstants` 的
+# 「不得删、也不得改内容」纪律保留（AUDIT-BREAK-10），作用退化为防漂移守卫。
 # 对应 pity.py 的 `CounterBasedBehavior._SOFT_SUFFIX_TYPES` / `._EVENT_DRIVEN_TYPES`，
 # 两者由 tests/core/test_pity_config_toml.py::TestDuplicatedConstants 钉住相等。
 # P64 S1a：pity 侧两个 `_*_TYPES` 已升为 `pity_primitives` 的模块级常量，
 # `_EVENT_DRIVEN_TYPES` 的内容按 ISSUE-105 追加了 `rotating_inverse`（G1 幻塔
 # 连中后必歪，事件驱动型），本拷贝**同批补齐**以维持等值断言——副作用只有一条：
-# S6a 之前「`rotating_inverse` + `deactivate_on_early_hit`」也走本文件的 H3 硬拒，
-# 与 S6a 之后的语义一致（该类型本就是事件驱动型）。本拷贝的消费分支到 S6a 才删。
+# S6a 之前「`rotating_inverse` + `deactivate_on_early_hit`」也走本文件的 H3 硬拒；
+# S6a 起两者都放行（语义一致，该类型本就是事件驱动型），本拷贝的消费分支已在 S6a 删除。
 _SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
 _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
                                  'rotating_cr_soft', 'targeted', 'targeted_soft',

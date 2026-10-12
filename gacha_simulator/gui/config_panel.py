@@ -2015,20 +2015,17 @@ class ConfigPanel(QWidget):
     # P55 阶段十一：保底配置 UI——BEHAVIOR_REGISTRY 元数据驱动
     # ══════════════════════════════════════════════════════════════════
 
-    # 可选的保底类型（仅已实现的 counter 驱动型）
-    _PITY_TYPES = [
-        ('soft_interval', '区间软保底'),
-        ('soft_additive', '累加软保底'),
-        ('soft_step', '分段软保底'),
-        ('hard', '硬保底'),
-        # P56 新增
-        ('rotating', '轮换保底'),
-        ('rotating_soft', '轮换+软保底'),
-        ('rotating_cr', '轮换+捕获明光'),
-        ('rotating_cr_soft', '轮换+捕获明光+软保底'),
-        ('targeted', '定轨保底'),
-        ('targeted_soft', '定轨+软保底'),
-    ]
+    # 可选的保底类型——**由 `BEHAVIOR_REGISTRY` 生成**（P64 S6a，ISSUE-929）。
+    #
+    # 改造前是硬编码的 10 项字面量列表，新增 type 必须手工追加（漏加即该类型在
+    # GUI 里不可选，而引擎侧已支持，属静默缺口）。改造后 `rotating_inverse`
+    # （S6a）与 S9-3 的两个 `hard_exclude_owned_*` 自动进入下拉。
+    #
+    # **顺序即 registry 的书写顺序，文案即 registry 的 `display_name`**：S6a 同批
+    # 把 registry 的 5 处文案与条目顺序对齐到改造前的 GUI 现值，故界面呈现零变化
+    # （`_PITY_TYPES` 的消费点有 5 处，均只按 (key, label) 取用，与顺序无关）。
+    # 先例：停止条件下的下拉同形（`STOP_CONDITION_REGISTRY` 的生成式）。
+    _PITY_TYPES = [(k, v['display_name']) for k, v in BEHAVIOR_REGISTRY.items()]
 
     # reset 下拉基础取值（G16-1）：(取值, 显示名)。只保留能给出有意义中文名的
     # 那几项，**不是**白名单本身；`_pity_reset_choices()` 会把它按
@@ -3516,7 +3513,6 @@ class ConfigPanel(QWidget):
             return
         btype = self._PITY_TYPES[idx][0]
         is_soft_step = (btype == 'soft_step')
-        is_counter = btype in ('soft_interval', 'soft_additive', 'soft_step', 'hard')
         is_cr = btype in ('rotating_cr', 'rotating_cr_soft')
 
         # deltas 表格显隐
@@ -3550,8 +3546,10 @@ class ConfigPanel(QWidget):
         if not tf_enabled:
             self.pity_target_featured_cb.setChecked(False)
 
-        # deactivate_on_early_hit 对 counter 驱动型均可用（soft/hard 均可）
-        self.pity_deactivate_cb.setEnabled(is_counter)
+        # `deactivate_on_early_hit` **对全部类型可用**（P64 S6a / H3）。
+        # P56 时此处为 `setEnabled(is_counter)`，因为 `_build_pity` 对事件驱动型
+        # 硬拒该开关；H3 删除拒绝分支后无类型限制，故不再有 enable 门控
+        # （复选框默认可用，缺省即全类型可勾选）。
 
         # ── P56：初始状态控件整行显隐（标签 + 控件） ──
         is_rotating = btype in ('rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft')

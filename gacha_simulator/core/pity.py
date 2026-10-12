@@ -16,7 +16,8 @@ from .pity_tracker import (  # noqa: F401
     StreakTracker, Tracker,
 )
 from .pity_modifier import (  # noqa: F401
-    HardModifier, Modifier, RotatingModifier, SelectedModifier, SoftModifier,
+    HardModifier, Modifier, NonFeaturedModifier, RotatingModifier,
+    SelectedModifier, SoftModifier,
 )
 
 
@@ -1009,6 +1010,38 @@ def _preset_targeted_soft(pdef):
     )
 
 
+
+# ── P64 S6a：G1 反向轮换 preset（1 类，§3.3）──
+#
+# 本类是**新增机制**（旧实现无对应类），故不进等价性装置的比对面（§3.3 首段：
+# G1 为独立 type，无旧类可对拍）；其验收面是 §六 的语义断言
+# 「出 UP → 下一次 SSR 必非 UP；出非 UP → 恢复基础比例」与三条类型注册断言。
+
+def _preset_rotating_inverse(pdef):
+    """反向轮换保底（G1，幻塔「连中必歪」）——出 UP 后下一次 SSR 必非 UP。
+
+    与 `_preset_rotating` 是**对偶**：`RotatingModifier` 把非 featured 的概率搬给
+    featured，本类经 `NonFeaturedModifier` 反向搬运（A / Q 互换，见 §3.1.2 机制表
+    第 5 行）。条件同样内联在 Modifier 的 `apply` 开头，标志为 `forced_loss`。
+
+    三条与母类型一致的纪律（同 §3.2 事件驱动族）：
+
+    ① **不写 `target=`**（ISSUE-403 / 裁决 7B）：本族一律不消费 `PityDef.target_featured`。
+    ② **`flags` 的 `forced_loss` 初值恒 `False`，且该行按 truthy 规则是 no-op**
+       （AUDIT-BREAK-3：`Pity.__init__` 仅写入 truthy 值）。保留它是为了记明
+       「本键的初值不由任何 `PityDef` 字段供给」，与 `_preset_rotating` 的
+       `guaranteed_init` 形成对照；缺键与 `False` 在读取侧同值（`view.get` 落 None）。
+    ③ **无 `NamespaceTracker`**：本类不是 `_soft` 后缀型，不声明 `X_soft` 命名空间。
+    """
+    _scope = _norm_scope(pdef)
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[FlagTracker(scope=_scope, judge="featured",
+                              hit="set", miss="clear", flag="forced_loss")],
+        modifiers=[NonFeaturedModifier(_scope)],
+        flags={"forced_loss": False},
+    )
+
 # ── P60 新增 → P55 更新：保底类型注册表（对齐 STRATEGY_REGISTRY） ──
 
 BEHAVIOR_REGISTRY: Dict[str, dict] = {
@@ -1063,9 +1096,14 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         },
         "ui_params": ["threshold"],
     },
-    # ══ P56：事件驱动型（6 种——已实现） ══
-    # ── P64 S4-3：本组六条已 preset 化（与 S4-2 的四条同形态、同原子性纪律：
+    # ══ P56：事件驱动型（6 种）+ P64 S6a 的 G1（1 种） ══
+    # ── P64 S4-3：P56 六条已 preset 化（与 S4-2 的四条同形态、同原子性纪律：
     #    `class` 置 `None` 与 `preset` 赋值必须同一条目内同时成立）──
+    #
+    # **书写顺序 = GUI 下拉顺序（S6a，ISSUE-929）**：本字典是字面量（Python 3.7+
+    # 保序），GUI 的 `_PITY_TYPES` 自 S6a 起由它生成，故顺序在此处即用户可见顺序。
+    # 顺序本身**无引擎语义**（`_resolve_order` 走 `_BTYPE_ORDER`，与字典序无关），
+    # 仅 `_validate_registry` 自检与 `create_behavior` 按键查表消费本字典。
     "rotating": {
         "class": None,
         "preset": _preset_rotating,
@@ -1073,31 +1111,30 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         "default_scope": "ssr",
         "params": {},
     },
+    # ── P64 S6a：G1 反向轮换（§3.3）──
+    # `params` 为空：本类型无类型专用 `PityDef` 字段（`forced_loss` 是 preset 内部
+    # 标志，无对应初值字段）。故 `_PITY_TYPE_KEYS` 的键集同 `rotating`（仅通用键）。
+    "rotating_inverse": {
+        "class": None,
+        "preset": _preset_rotating_inverse,
+        "display_name": "反向轮换保底（连中必歪）",
+        "default_scope": "ssr",
+        "params": {},
+    },
     "rotating_soft": {
         "class": None,
         "preset": _preset_rotating_soft,
-        "display_name": "轮换保底（带软保底）",
+        "display_name": "轮换+软保底",
         "default_scope": "ssr",
         "params": {
             "start":     {"type": "int",   "display_name": "起始抽数",   "default": 74,  "min": 1},
             "increment": {"type": "float", "display_name": "每抽增量(%)", "default": 6.0, "min": 0.1},
         },
     },
-    "targeted": {
-        "class": None,
-        "preset": _preset_targeted,
-        "display_name": "定向保底（定轨）",
-        "default_scope": "ssr",
-        "params": {
-            "fate_threshold":         {"type": "int",   "display_name": "命定值阈值",     "default": 1,    "min": 0},
-            "switch_allowed":         {"type": "bool",  "display_name": "允许中途切换",   "default": True},
-            "switch_resets_progress": {"type": "bool",  "display_name": "切换后清零进度", "default": True},
-        },
-    },
     "rotating_cr": {
         "class": None,
         "preset": _preset_rotating_cr,
-        "display_name": "轮换保底（递增概率）",
+        "display_name": "轮换+捕获明光",
         "default_scope": "ssr",
         "params": {
             "cr_counter_threshold": {"type": "int",   "display_name": "CR 计数器阈值", "default": 3,  "min": 1},
@@ -1107,7 +1144,7 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
     "rotating_cr_soft": {
         "class": None,
         "preset": _preset_rotating_cr_soft,
-        "display_name": "轮换保底·递增概率（带软保底）",
+        "display_name": "轮换+捕获明光+软保底",
         "default_scope": "ssr",
         "params": {
             "cr_counter_threshold": {"type": "int",   "display_name": "CR 计数器阈值", "default": 3,  "min": 1},
@@ -1116,10 +1153,21 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
             "increment":            {"type": "float", "display_name": "每抽增量(%)",    "default": 5.0, "min": 0.1},
         },
     },
+    "targeted": {
+        "class": None,
+        "preset": _preset_targeted,
+        "display_name": "定轨保底",
+        "default_scope": "ssr",
+        "params": {
+            "fate_threshold":         {"type": "int",   "display_name": "命定值阈值",     "default": 1,    "min": 0},
+            "switch_allowed":         {"type": "bool",  "display_name": "允许中途切换",   "default": True},
+            "switch_resets_progress": {"type": "bool",  "display_name": "切换后清零进度", "default": True},
+        },
+    },
     "targeted_soft": {
         "class": None,
         "preset": _preset_targeted_soft,
-        "display_name": "定向保底·定轨（带软保底）",
+        "display_name": "定轨+软保底",
         "default_scope": "ssr",
         "params": {
             "fate_threshold":         {"type": "int",   "display_name": "命定值阈值",     "default": 2,    "min": 0},

@@ -219,7 +219,9 @@ class TestGetConfig:
         panel = _make_panel()
         config = panel.get_config()
         pdef = config["pity"]["pities"][0]
-        assert "type" in pdef
+        # P64 S7a（ISSUE-918）：别名键 `type` 已废弃，输出改用字段名 `btype`。
+        assert "btype" in pdef
+        assert "type" not in pdef, "别名键 type 仍在输出中（改名未完成）"
         assert "scope" in pdef
         assert "params" not in pdef
         assert "target_distribution" not in pdef
@@ -319,24 +321,31 @@ class TestPityFallbackEntry:
         entry = panel.get_config()['pity']['pities'][0]
 
         assert entry['name'] == 'ssr_soft'
-        assert entry['type'] in BEHAVIOR_REGISTRY, (
-            f"兜底条目 type='{entry['type']}' 不在 BEHAVIOR_REGISTRY 内")
+        assert entry['btype'] in BEHAVIOR_REGISTRY, (
+            f"兜底条目 btype='{entry['btype']}' 不在 BEHAVIOR_REGISTRY 内")
         assert entry['reset'] in _reset_whitelist(), (
             f"兜底条目 reset='{entry['reset']}' 不在 G16 白名单内")
 
     def test_fallback_entry_start_end_from_pity_section(self, qapp):
-        """soft_start / soft_end 取自 pity.start / pity.end（不再走嵌套 params）。"""
+        """soft_start / soft_end 取自 pity.start / pity.end（不再走嵌套 params）。
+
+        **注**：`pity.start` / `pity.end`（**段级**键）与保底**条目级**的四个别名键
+        `type` / `start` / `end` / `increment`（S7a 已改名为字段名）是两回事：段级
+        键没有任何写出方（`get_config` 的 pity 段只输出 `enabled` / `pities`），只
+        作兜底条目的阈值来源，故不在 S7a 的改名面内。条目级键已全部改为字段名，
+        断言随之取 `soft_start` / `soft_end`。
+        """
         panel = _make_panel()
         panel.set_config({'pity': {'pities': [], 'start': 62, 'end': 88}})
         entry = panel.get_config()['pity']['pities'][0]
-        assert (entry['start'], entry['end']) == (62, 88)
+        assert (entry['soft_start'], entry['soft_end']) == (62, 88)
 
     def test_fallback_entry_start_end_platform_default(self, qapp):
         """pity 段未给 start/end 时落平台默认 74 / 90（原嵌套 params 下两者都丢）。"""
         panel = _make_panel()
         panel.set_config({'pity': {'pities': []}})
         entry = panel.get_config()['pity']['pities'][0]
-        assert (entry['start'], entry['end']) == (74, 90)
+        assert (entry['soft_start'], entry['soft_end']) == (74, 90)
 
     def test_fallback_entry_engine_constructs(self, qapp):
         """兜底条目可进 **PityEngine** 构造（原 type='soft' 在 create_behavior 首行 KeyError）。
@@ -703,3 +712,214 @@ class TestPriorityRoundTrip:
         save_toml(panel._store, str(toml_out))
         reloaded = load_toml(str(toml_out))
         assert [p.priority for p in reloaded.pity.pities] == [7, 0]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# P64 S7a：五处字段键表改造的验收面
+# ═══════════════════════════════════════════════════════════════════
+
+class TestS7aFieldKeyTables:
+    """`dataclasses.fields(PityDef)` 驱动的键表：下拉验收 + 预览不打印 `?`。"""
+
+    def test_pity_type_dropdown_offers_registry_types(self, qapp):
+        """新 type 自动出现在保底 type 下拉（S6a 生成式改造的验收）。
+
+        与 `tests/gui/test_config_panel_p56.py::test_s6a_rotating_inverse_auto_appears`
+        同源（那一条是 S6a 的落地面），此处按 §七 S7a 的验收命令再钉一次：断言取
+        下拉的**实际条目文本集合**，故「registry 有、下拉没 addItems」也红。
+        """
+        from gacha_simulator.core.pity import BEHAVIOR_REGISTRY
+
+        panel = _make_panel()
+        items = {panel.pity_type_combo.itemText(i)
+                 for i in range(panel.pity_type_combo.count())}
+        assert items == {v['display_name'] for v in BEHAVIOR_REGISTRY.values()}
+
+    def test_preview_shows_pity_type_not_question_mark(self, qapp):
+        """`_do_update_preview` 的保底段须打印真实类型（P64 S7a / ISSUE-918）。
+
+        `get_config` 的输出自 S7a 起用字段名 `btype`（原别名 `type`）。同文件的
+        `_do_update_preview` 若仍读 `pdef.get('type', '?')`，**不报错**，只是每条
+        保底都打印 `?`；而 `preview_text` 全库无断言，属静默失真。
+        """
+        panel = _make_panel()
+        panel.pity_list.setCurrentRow(0)
+        panel._do_update_preview()
+
+        text = panel.preview_text.text()
+        btype = panel._pity_defs[0]['btype']
+        assert f": {btype}(" in text, (
+            f"预览未打印保底类型（预期 {btype}）。实际预览：\n{text}")
+        assert ": ?(" not in text, f"预览把保底类型打印成了 ?：\n{text}"
+
+
+class TestMaxTriggersRoundTrip:
+    """`max_triggers`（ISSUE-032，S7a 新建控件）的 GUI 往返。
+
+    与 `TestPriorityRoundTrip` 同形：TOML 写非默认值 → GUI 加载 → 直接保存 →
+    重读 TOML 仍为原值。该用例是五处字段表漏改 `max_triggers` 的唯一显形面
+    （漏改不报错，保存时静默落回默认 0）。
+    """
+
+    def _panel_from_toml(self, path):
+        from gacha_simulator.core.config_toml import load_toml
+        from gacha_simulator.gui.config_panel import ConfigPanel
+
+        store = load_toml(str(path))
+        panel = ConfigPanel()
+        panel._store = store
+        panel._refresh_from_store_impl()
+        return panel
+
+    def test_max_triggers_survives_gui_round_trip(self, qapp, tmp_path):
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        seeded = load_toml(_CONFIG_TOML)
+        seeded.pity.pities[0].max_triggers = 3
+        toml_in = tmp_path / 'in.toml'
+        save_toml(seeded, str(toml_in))
+        assert 'max_triggers = 3' in toml_in.read_text(encoding='utf-8'), (
+            '前置条件不成立：输入 TOML 未带非默认 max_triggers')
+
+        panel = self._panel_from_toml(toml_in)
+        assert panel._pity_defs[0]['max_triggers'] == 3, (
+            '读侧字段表（_refresh_from_store_impl）未透传 max_triggers')
+        panel.pity_list.setCurrentRow(0)
+        assert panel.pity_max_triggers_spin.value() == 3, (
+            '控件未回填 max_triggers，用户看到的是 0，保存即抹掉原值')
+
+        panel.apply_to_store()
+        assert panel._store.pity.pities[0].max_triggers == 3, (
+            '写侧字段表（apply_to_store）未透传 max_triggers')
+        toml_out = tmp_path / 'out.toml'
+        save_toml(panel._store, str(toml_out))
+        assert load_toml(str(toml_out)).pity.pities[0].max_triggers == 3
+
+    def test_set_config_get_config_carry_max_triggers(self, qapp):
+        """字典侧往返（`set_config` → `get_config`）不得丢 `max_triggers`。"""
+        panel = _make_panel()
+        config = panel.get_config()
+        config['pity']['pities'][0]['max_triggers'] = 5
+        panel.set_config(config)
+        assert panel._pity_defs[0]['max_triggers'] == 5, (
+            'set_config 的字段表未透传 max_triggers')
+        assert panel.get_config()['pity']['pities'][0]['max_triggers'] == 5, (
+            'get_config 的输出未带 max_triggers')
+
+    def test_edited_max_triggers_is_saved(self, qapp, tmp_path):
+        """编辑控件 → 保存 → 重读 TOML 为新值。
+
+        本类其余用例都是「加载后不编辑直接保存」，故
+        `pity_max_triggers_spin.valueChanged` 的连线与
+        `_flush_pity_current_detail` 的写回**任一被删都无人报警**，须单独钉一条。
+        """
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        seeded = load_toml(_CONFIG_TOML)
+        toml_in = tmp_path / 'in.toml'
+        save_toml(seeded, str(toml_in))
+
+        panel = self._panel_from_toml(toml_in)
+        panel.pity_list.setCurrentRow(0)
+        assert panel.pity_max_triggers_spin.value() == 0, '前置：示例配置首条为默认值'
+
+        panel.pity_max_triggers_spin.setValue(4)
+        assert panel._pity_defs[0]['max_triggers'] == 4, (
+            '控件 valueChanged 未连到 flush，或该 flush 未写回 max_triggers')
+
+        panel.apply_to_store()
+        assert panel._store.pity.pities[0].max_triggers == 4, (
+            'apply_to_store 未透传 max_triggers')
+        toml_out = tmp_path / 'out.toml'
+        save_toml(panel._store, str(toml_out))
+        assert load_toml(str(toml_out)).pity.pities[0].max_triggers == 4, (
+            '编辑值未落盘')
+
+    def test_max_triggers_spin_excludes_negative(self, qapp):
+        """控件量程不含负值：负值被 `_build_pity` 硬拒，控件给出即「保存能过、重载报错」。"""
+        panel = _make_panel()
+        assert panel.pity_max_triggers_spin.minimum() == 0
+
+
+class TestPityDetailBackfillIsolation:
+    """条目切换（含首次加载）不得把上一条的初始状态字段写进当前条（P64 S7a）。
+
+    缺陷（S6b 独立审查复现，S7a 结构性修复）：`_on_pity_selected` 的回填途中任一
+    控件的 setText / setValue / setChecked 都会触发 `_flush_pity_current_detail`，
+    该 flush 从**全部**控件读值写回**本条**，而本条正是回填此刻正在读取的那个
+    dict。于是尚未回填的控件把**上一条的残留值**写进当前条，当前条后续的回填再从
+    **已被污染**的 dict 取值（取到的值与控件现值相同，故不再发信号），污染就此
+    固化并落盘，全程无任何报错。
+
+    被污染的字段实测为 counter_init / guaranteed_init / fate_points_init /
+    deactivate_on_early_hit 四个初始状态字段。本类是该修复的唯一显形面：去掉
+    `_pity_detail_backfilling` 标志位（即回填期不阻断信号）两条用例即红。
+    """
+
+    _FIELDS = ('counter_init', 'guaranteed_init', 'fate_points_init',
+               'deactivate_on_early_hit')
+
+    def _two_pities_panel(self, tmp_path):
+        """两条保底、四个初始状态字段取互不相同的非默认值，返回面板与输入 TOML。"""
+        import copy
+
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+        from gacha_simulator.gui.config_panel import ConfigPanel
+
+        seeded = load_toml(_CONFIG_TOML)
+        first = seeded.pity.pities[0]
+        first.counter_init = 7
+        first.guaranteed_init = True
+        first.fate_points_init = 4
+        first.deactivate_on_early_hit = True
+        second = copy.deepcopy(first)
+        second.name = 'second_pity'
+        second.counter_init = 2
+        second.guaranteed_init = False
+        second.fate_points_init = 1
+        second.deactivate_on_early_hit = False
+        seeded.pity.pities.append(second)
+        toml_in = tmp_path / 'two_pities.toml'
+        save_toml(seeded, str(toml_in))
+
+        store = load_toml(str(toml_in))
+        panel = ConfigPanel()
+        panel._store = store
+        panel._refresh_from_store_impl()
+        return panel, toml_in
+
+    @classmethod
+    def _snapshot(cls, pd):
+        return {k: pd[k] for k in cls._FIELDS}
+
+    def test_first_load_keeps_selected_row_init_fields(self, qapp, tmp_path):
+        """首次加载（`_refresh_from_store_impl` 内部选中第 0 条）即不得污染。"""
+        panel, _ = self._two_pities_panel(tmp_path)
+        assert self._snapshot(panel._pity_defs[0]) == {
+            'counter_init': 7, 'guaranteed_init': True,
+            'fate_points_init': 4, 'deactivate_on_early_hit': True}
+
+    def test_row_switch_keeps_current_row_init_fields(self, qapp, tmp_path):
+        """切到第 2 条后其四个字段仍是自身取值，并活过保存与重读 TOML。"""
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        panel, _ = self._two_pities_panel(tmp_path)
+        assert panel.pity_list.count() == 2
+        panel.pity_list.setCurrentRow(0)
+        panel.pity_list.setCurrentRow(1)
+
+        assert self._snapshot(panel._pity_defs[1]) == {
+            'counter_init': 2, 'guaranteed_init': False,
+            'fate_points_init': 1, 'deactivate_on_early_hit': False}
+
+        panel.apply_to_store()
+        saved = panel._store.pity.pities[1]
+        assert (saved.counter_init, saved.guaranteed_init,
+                saved.fate_points_init, saved.deactivate_on_early_hit) == (
+                    2, False, 1, False)
+        toml_out = tmp_path / 'two_pities_out.toml'
+        save_toml(panel._store, str(toml_out))
+        reloaded = load_toml(str(toml_out)).pity.pities[1]
+        assert (reloaded.counter_init, reloaded.guaranteed_init,
+                reloaded.fate_points_init, reloaded.deactivate_on_early_hit) == (
+                    2, False, 1, False)

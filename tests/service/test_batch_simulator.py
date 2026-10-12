@@ -730,7 +730,9 @@ class TestFourFamilyPickleRoundtrip:
 #:    `store.pity.pities = [...]`，不经 `config_toml._build_pity`），而
 #:    `SimulationEnvBuilder.from_config_store` **不校验 scope 是否在 `[rarities].ranks`
 #:    内**，实测以 `ssr/sr/r/x1/x2/x3/x4` 七个 scope 直设 11 个 btype 即构造成功、11 个
-#:    `Pity`、四族覆盖、且该 env 可 pickle。即「不是装不下，是没这么装」。故 ① 只解释
+#:    `Pity`、四族皆产出对象、且该 env 可 pickle（**非**「覆盖集被满足」：该 env 的
+#:    lifecycle 只到 `AlwaysActive`，modifier 缺 `NotOwnedModifier`）。即「不是装不下，
+#:    是没这么装」。故 ① 只解释
 #:    下面三个**可达但未纳入夹具**的类：`StreakTracker`（`rotating_cr` 族）、
 #:    `NonFeaturedModifier`（`rotating_inverse`，产出方 `_preset_rotating_inverse`）、
 #:    `DependentFiniteActive`（同一 `PityDef` 上同时给 `max_triggers` 与 `depends_on`）。

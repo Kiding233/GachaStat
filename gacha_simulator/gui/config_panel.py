@@ -2216,11 +2216,13 @@ class ConfigPanel(QWidget):
         self.pity_priority_spin = QSpinBox()
         self.pity_priority_spin.setRange(-999, 999)
         self.pity_priority_spin.setValue(0)
+        self.pity_priority_spin.valueChanged.connect(self._flush_pity_current_detail)
         self.pity_priority_spin.setToolTip(
             """本保底在池内的执行优先级。
-0 = 不覆盖，按保底类型默认序执行；
+0 = 中性档：与其它保底同为 0 时，按保底类型默认序（软保底 → 硬保底 →
+事件驱动）执行；
 数值越大越先执行（例：想让福利保底先于常规保底，把它设为 1）；
-负值排在默认序之后。"""
+负值排在同时作用、且同为中性档的保底之后。"""
         )
         detail_form.addRow("执行优先级(大者先):", self.pity_priority_spin)
 
@@ -2264,7 +2266,6 @@ class ConfigPanel(QWidget):
         self.pity_reset_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_target_featured_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_init_spin.valueChanged.connect(self._flush_pity_current_detail)
-        self.pity_priority_spin.valueChanged.connect(self._flush_pity_current_detail)
         self.pity_deactivate_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_guaranteed_init_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_fate_points_spin.valueChanged.connect(self._flush_pity_current_detail)
@@ -3429,8 +3430,8 @@ class ConfigPanel(QWidget):
 
         # 绑定池（P61 Ph8b：勾选表格 → patterns）
         pd['pools'] = self._read_pity_bind_patterns()
-        pd['counter_init'] = self.pity_init_spin.value()
         pd['priority'] = self.pity_priority_spin.value()
+        pd['counter_init'] = self.pity_init_spin.value()
 
         # 生命周期
         pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()

@@ -605,6 +605,41 @@ class TestPriorityRoundTrip:
         assert panel.get_config()['pity']['pities'][0]['priority'] == 9, (
             'get_config 的输出未带 priority')
 
+    def test_edited_priority_is_saved(self, qapp, tmp_path):
+        """编辑控件 → 保存 → 重读 TOML 为新值（S6b 审查 F3）。
+
+        **为什么必须单独一条**：本类其余用例全是「加载后**不编辑**直接保存」，
+        故 `_flush_pity_current_detail` 的写回、`_apply_pity_edit` 的写回、
+        `pity_priority_spin.valueChanged` 的连线**任一被删都无人报警**（审查实测：
+        三处各删一次，59 条用例全绿）。而这三处恰是 S7a 结构性改造要动的面，
+        缺本断言则改造致坏时无信号。
+
+        取值用 **-4**：同时覆盖「负值经编辑路径不被夹」这一面（与
+        `test_negative_priority_not_clamped_by_spinbox` 的加载路径互补）。
+        """
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        seeded = load_toml(_CONFIG_TOML)
+        toml_in = tmp_path / 'in.toml'
+        save_toml(seeded, str(toml_in))
+
+        panel = self._panel_from_toml(toml_in)
+        panel.pity_list.setCurrentRow(0)
+        assert panel.pity_priority_spin.value() == 0, '前置：示例配置首条为默认值'
+
+        # 走真实用户路径：setValue 触发 valueChanged → _flush_pity_current_detail
+        panel.pity_priority_spin.setValue(-4)
+        assert panel._pity_defs[0]['priority'] == -4, (
+            '控件 valueChanged 未连到 flush，或该 flush 未写回 priority')
+
+        panel.apply_to_store()
+        assert panel._store.pity.pities[0].priority == -4, (
+            'apply_to_store 未透传 priority')
+        toml_out = tmp_path / 'out.toml'
+        save_toml(panel._store, str(toml_out))
+        assert load_toml(str(toml_out)).pity.pities[0].priority == -4, (
+            '编辑值未落盘')
+
     def test_negative_priority_not_clamped_by_spinbox(self, qapp, tmp_path):
         """控件量程须容纳负值：否则 TOML 里的负 priority 经「加载 → 保存」被夹到 0。
 

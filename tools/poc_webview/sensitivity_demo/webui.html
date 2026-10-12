@@ -8,13 +8,15 @@
 <!-- 独立演示页：不接 Python、不并入 layout_demo/index.html。
      沿用 layout_demo 的惯例：Vue 3 ＋ Element Plus ＋ 本地 libs/，同一套
      :root 变量与同一套分析页类名（anchor-bar / an-tabrow / an-split /
-     an-side / an-main / tmeta / vsw）。三行子图走共享的 chart3.js，与方案甲同源。
+     an-side / an-main / an-res / pform / dform / tmeta / vsw）。
+     三行子图走共享的 chart3.js，与方案甲同源。
 
-     本轮改动（用户 2026-10-11 裁决）：
-       · 左栏上＝维度清单（六域×若干维度，静态，不随配置变）
-       · 左栏下＝规格区固定占地 ＋ 运行分析
-       · 右栏上＝结果组条（无「＋」，新建只由「运行分析」产生）
-       · 大编辑器（表达式列表）去右栏就地切换，不用弹窗
+     本轮改动（用户 2026-10-12 指出，依 工作区交互形态.md §5.5 既有裁决）：
+       · 左栏收窄到 238px，与 layout_demo 的 .an-side 同宽，只放维度清单
+       · 规格区与发起按钮从左栏移到右栏的发起块里（§5.5：派发型分析的发起入口
+         在结果块里，不在左栏、不在工具栏），沿用 .pform + .dform 的做法
+       · 右栏顺序：发起块 → 组条 → 结果块
+       · 大编辑器（表达式列表）仍在右栏就地切换，不用弹窗
        · 形态由字段类型决定，只读显示
        · 标签行只开放「敏感性分析」，其余置灰（本演示不做） -->
 
@@ -99,54 +101,59 @@ body{font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif
 .an-tab.off{color:#c3c9d4;cursor:not-allowed;background:#fafbfd}
 .tabnote{font-size:10px;color:var(--ink-3);padding:5px 2px 0}
 
-/* 分析页主体：左（维度＋规格） / 右（组条＋结果） */
+/* 分析页主体：左（维度清单） / 右（发起块 ＋ 组条 ＋ 结果）。
+   左栏与 layout_demo 的 .an-side 同构：只放清单，纯选择。
+   依据 工作区交互形态.md §5.5：派发型分析的发起入口在结果块里，
+   不在工具栏；layout_demo 亦把参数与发起放在 .an-res-b 内。
+   敏感性分析只有一个方法，但左栏装的是「可扫维度」而不是方法，
+   规格随选中的维度长出，故与 layout_demo 一样留在右侧。 */
 .an-split{display:flex;gap:12px;align-items:flex-start;margin-top:12px}
-.an-side{flex:0 0 330px;border:1px solid var(--line);border-radius:var(--radius);
-  background:var(--panel);overflow:hidden;display:flex;flex-direction:column}
+.an-side{flex:0 0 238px;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);overflow:hidden;position:sticky;top:0}
 .an-side-h{display:flex;align-items:center;justify-content:space-between;
   padding:6px 10px;background:#fafbfd;border-bottom:1px solid var(--line);
   font-size:12px;font-weight:600;color:var(--ink-2)}
-.dimwrap{max-height:330px;overflow:auto;padding:3px 4px}
-.dom{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-3);
-  padding:6px 6px 2px;font-weight:600}
-.dim{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2);
-  padding:4px 8px 4px 22px;border-radius:3px;cursor:pointer;
-  border-left:2px solid transparent}
-.dim>span:first-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;
-  text-overflow:ellipsis}
+.an-side-h .n{font-size:10px;color:var(--ink-3);font-weight:400}
+.an-list{padding:4px}
+.dom{padding:8px 8px 2px;font-size:10px;color:var(--ink-3);font-weight:600;
+  letter-spacing:.5px}
+.dim{display:flex;align-items:center;gap:6px;width:100%;border:0;background:transparent;
+  font:inherit;font-size:12px;color:var(--ink-2);cursor:pointer;text-align:left;
+  padding:5px 8px 5px 10px;border-radius:3px;border-left:2px solid transparent}
 .dim:hover{background:#f4f7fb}
 .dim.on{background:var(--accent-soft);color:var(--ink);font-weight:600;
   border-left-color:var(--accent)}
-.dim .kind{margin-left:auto;flex:0 0 auto;white-space:nowrap;font-size:9px;
+.dim .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dim .kind{flex:0 0 auto;white-space:nowrap;font-size:9px;
   line-height:13px;padding:0 5px;border-radius:7px}
 .dim .kind.s{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
 .dim .kind.d{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.an-tip{margin:0;padding:6px 10px 8px;font-size:10px;color:var(--ink-3);
+  border-top:1px solid var(--line2);line-height:1.7}
 
-.spec{border-top:2px solid var(--line);background:#fafbfd;padding:8px 10px 9px;
-  flex:0 0 236px;display:flex;flex-direction:column}
-.spec-h{font-size:11px;color:var(--ink-3);margin-bottom:7px}
-.spec-h b{color:var(--ink);font-size:12px}
-.spec-b{flex:1;min-height:0;overflow:auto}
-.spec-empty{color:var(--ink-3);font-size:11px;padding:16px 2px;text-align:center;
-  line-height:1.9}
-.frow{display:flex;align-items:center;gap:7px;margin-bottom:6px}
-.frow>label{flex:0 0 52px;font-size:11px;color:var(--ink-3);text-align:right}
-.frow .el-select,.frow .el-input-number{flex:1;min-width:0}
-.range{display:flex;align-items:center;gap:5px}
-.range .el-input-number{width:70px}
-.tagform{font-size:10px;color:var(--ink-3);border:1px solid var(--line);
-  border-radius:8px;padding:1px 7px;background:var(--panel)}
-.preview{font-size:10px;color:var(--ink-3);margin:2px 0 0 59px;line-height:1.7}
-.runrow{margin-top:8px;display:flex;gap:7px;align-items:center}
-.runbtn{flex:1}
-.repeat{font-size:10px;color:var(--warn);margin-top:6px;text-align:center}
-.enumcol{display:flex;flex-direction:column;gap:2px}
+/* 参数表单与发起区。类名取自 layout_demo，保持两页视觉一致 */
+.pform{display:flex;flex-direction:column;gap:7px;margin-bottom:12px;
+  padding:9px 10px;background:#fafbfd;border:1px solid var(--line2);border-radius:4px;
+  max-width:560px}
+.pform .pf{display:flex;align-items:center;gap:8px}
+.pform .pf>label{flex:0 0 78px;font-size:11px;color:var(--ink-3);text-align:right}
+.pform .pf>.el-select,.pform .pf>.el-input,.pform .pf>.el-input-number,
+.pform .pf>.range,.pform .pf>.pfmulti{flex:1;min-width:0}
+.pform .pfmulti{display:flex;flex-wrap:wrap;gap:2px 10px;min-width:0}
+.pform .pfmulti .el-checkbox{margin-right:0;height:22px}
+.shape{font-size:10px;line-height:16px;padding:0 6px;border-radius:8px}
+.shape.sync{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.shape.dispatch{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.dform{display:flex;flex-direction:column;gap:8px}
+.drow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.range{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.range .el-input-number{width:86px}
+.preview{font-size:10px;color:var(--ink-3);line-height:1.8}
 
 /* ---------- 右栏 ---------- */
 .an-main{flex:1;min-width:0}
-.groupbar{display:flex;align-items:center;gap:7px;padding:7px 9px;
-  border:1px solid var(--line);border-radius:var(--radius);background:#fafbfd;
-  margin-bottom:10px}
+.groupbar{display:flex;align-items:center;gap:7px;padding:7px 9px;margin:10px 0;
+  border:1px solid var(--line);border-radius:var(--radius);background:#fafbfd}
 .groupbar .gscroll{flex:1;min-width:0;display:flex;gap:6px;overflow-x:auto;
   padding-bottom:2px}
 .gchip{flex:0 0 auto;display:flex;align-items:center;gap:7px;font-size:11px;
@@ -159,6 +166,7 @@ body{font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif
 .navbtn{border:1px solid var(--line);background:var(--panel);border-radius:4px;
   width:24px;height:22px;font-size:10px;cursor:pointer;color:var(--ink-2)}
 .navbtn:hover{background:#f2f6fb}
+.navbtn.wide{width:auto;padding:0 9px}
 
 .an-res{border:1px solid var(--line);border-radius:var(--radius);background:#fff;
   overflow:hidden}
@@ -310,104 +318,124 @@ table.expr td.rm:hover{color:var(--danger)}
 
       <div class="an-split">
 
-        <!-- 左：维度清单（上，滚动） ＋ 规格区（下，固定占地） -->
+        <!-- 左：维度清单。与 layout_demo 的 .an-side 同构：纯选择，238px，
+             参数与发起都在右侧（依 工作区交互形态.md §5.5） -->
         <aside class="an-side">
-          <div class="an-side-h"><span>敏感性分析 · 选一个维度</span></div>
-          <div class="dimwrap">
+          <div class="an-side-h">
+            <span>敏感性分析 · 维度</span>
+            <span class="n">{{ DIM_COUNT }} 项</span>
+          </div>
+          <div class="an-list">
             <template v-for="d in DOMAINS" :key="d.name">
               <div class="dom">{{ d.name }}</div>
-              <div v-for="x in d.dims" :key="x.k" class="dim"
-                   :class="{ on: dim && dim.k === x.k && dim._dom === d.name }"
-                   @click="pick(d, x)">
-                <span>{{ x.k }}</span>
+              <button v-for="x in d.dims" :key="x.k" class="dim"
+                      :class="{ on: dim && dim.k === x.k && dim._dom === d.name }"
+                      @click="pick(d, x)">
+                <span class="nm">{{ x.k }}</span>
                 <span class="kind" :class="d.side === '复算' ? 's' : 'd'">{{ d.side }}</span>
-              </div>
+              </button>
             </template>
           </div>
-
-          <div class="spec">
-            <div class="spec-h" v-if="dim">规格区　<b>{{ dim._dom }} · {{ dim.k }}</b></div>
-            <div class="spec-h" v-else>规格区</div>
-            <div class="spec-b">
-              <div v-if="!dim" class="spec-empty">
-                在上面的维度清单里选一项<br>这里会长出它对应的扫描规格
-              </div>
-
-              <template v-else>
-                <div class="frow" v-for="s in dim.sel" :key="s.label">
-                  <label>{{ s.label }}</label>
-                  <el-select v-model="sel[s.label]" size="small">
-                    <el-option v-for="o in s.opts" :key="o" :label="o" :value="o" />
-                  </el-select>
-                </div>
-
-                <!-- 数值栅格 -->
-                <template v-if="dim.form === '数值栅格'">
-                  <div class="frow"><label>区间</label>
-                    <span class="range">
-                      <el-input-number v-model="def.from" size="small" :controls="false" />
-                      <span class="tmeta">→</span>
-                      <el-input-number v-model="def.to" size="small" :controls="false" />
-                    </span></div>
-                  <div class="frow"><label>步长</label>
-                    <el-input-number v-model="def.step" size="small" :controls="false"
-                                     style="flex:0 0 74px" />
-                    <span class="tagform">数值栅格</span></div>
-                  <div class="preview">→ {{ pointCount() }} 个扫描点　{{ def.from }} …
-                    {{ def.to }}{{ dim.unit ? ' ' + dim.unit : '' }}</div>
-                </template>
-
-                <!-- 枚举 -->
-                <template v-else-if="dim.form === '枚举'">
-                  <div class="frow" style="align-items:flex-start"><label>取值</label>
-                    <span class="enumcol">
-                      <el-checkbox v-for="(o, i) in dim.def.opts" :key="o" size="small"
-                                   v-model="enumPick" :label="o">{{ o }}</el-checkbox>
-                    </span></div>
-                  <div class="frow"><label></label><span class="tagform">枚举</span></div>
-                  <div class="preview">→ 已勾选 {{ enumPick.length }} 项</div>
-                </template>
-
-                <!-- 变换库 -->
-                <template v-else-if="dim.form === '变换库'">
-                  <div class="frow"><label>区间</label>
-                    <span class="range">
-                      <el-input-number v-model="def.from" size="small" :controls="false" />
-                      <span class="tmeta">→</span>
-                      <el-input-number v-model="def.to" size="small" :controls="false" />
-                    </span></div>
-                  <div class="frow"><label></label>
-                    <span class="tagform">变换库（扫「{{ sel['扫哪个参数'] }}」）</span></div>
-                  <div class="preview">→ {{ pointCount() }} 个扫描点　概率按变换改写后再跑</div>
-                </template>
-
-                <!-- 表达式列表 -->
-                <template v-else>
-                  <div class="frow"><label>列表</label>
-                    <span class="tmeta">{{ rows.length }} 行完整子配置</span></div>
-                  <div class="frow"><label></label><span class="tagform">表达式列表</span></div>
-                  <div class="frow"><label></label>
-                    <el-button size="small" @click="edit = true">在右侧编辑列表 →</el-button>
-                  </div>
-                  <div class="preview">系统不解释语义，逐行校验后照跑</div>
-                </template>
-              </template>
-            </div>
-
-            <div class="runrow">
-              <el-button class="runbtn" type="success" size="small" :disabled="!dim"
-                         @click="run">运行分析</el-button>
-              <el-button size="small">清除结果</el-button>
-            </div>
-            <div class="repeat" v-if="dim && dim._dom === '保底' && dim.k === '阈值'">
-              同规格已跑过 2 次，本次会新建第 3 组
-            </div>
-          </div>
+          <p class="an-tip">点一项选中它：规格与发起按钮在右侧。复算侧不重跑，派发侧重跑。</p>
         </aside>
 
-        <!-- 右：组条 ＋ 结果 / 编辑态 -->
+        <!-- 右：发起块 ＋ 组条 ＋ 结果 -->
         <main class="an-main">
-          <div class="groupbar">
+
+          <!-- 发起块：参数表单 ＋ 发起按钮，常驻。
+               §5.5：派发型分析的发起入口在结果块里，不在左栏、不在工具栏；
+               layout_demo 亦把参数与发起同放在 .an-res-b 内。 -->
+          <div class="an-res">
+            <div class="an-res-h">
+              <b>敏感性扫描</b>
+              <span class="shape" :class="isSync ? 'sync' : 'dispatch'">
+                {{ isSync ? '即时分析' : '需派发模拟' }}</span>
+              <span class="tmeta" v-if="dim">{{ dim._dom }} · {{ dim.k }}</span>
+              <span class="tmeta" v-else>尚未选维度</span>
+              <span class="spacer"></span>
+              <span class="tmeta" v-if="dim">{{ dim.form }}</span>
+            </div>
+            <div class="an-res-b">
+
+              <p v-if="!dim" class="preview" style="margin:0">
+                在左栏点一个维度，这里会长出它对应的扫描规格与发起按钮。</p>
+
+              <template v-else>
+                <div class="pform">
+                  <!-- 对象/字段选择器：先选「要搜什么」，所以选项是对象与字段，
+                       不是具体取值。取值由下面的区间/步长或枚举勾选决定。 -->
+                  <div class="pf" v-for="s in dim.sel" :key="s.label">
+                    <label>{{ s.label }}</label>
+                    <el-select v-model="sel[s.label]" size="small">
+                      <el-option v-for="o in s.opts" :key="o" :label="o" :value="o"></el-option>
+                    </el-select>
+                  </div>
+
+                  <!-- 数值栅格 -->
+                  <template v-if="dim.form === '数值栅格'">
+                    <div class="pf"><label>区间</label>
+                      <span class="range">
+                        <el-input-number v-model="def.from" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta">→</span>
+                        <el-input-number v-model="def.to" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta" v-if="dim.unit">单位 {{ dim.unit }}</span>
+                      </span></div>
+                    <div class="pf"><label>步长</label>
+                      <span class="range">
+                        <el-input-number v-model="def.step" size="small" :controls="false"></el-input-number>
+                      </span></div>
+                  </template>
+
+                  <!-- 枚举 -->
+                  <template v-else-if="dim.form === '枚举'">
+                    <div class="pf" style="align-items:flex-start"><label>取值</label>
+                      <span class="pfmulti">
+                        <el-checkbox v-for="o in dim.def.opts" :key="o" size="small"
+                                     v-model="enumPick" :label="o">{{ o }}</el-checkbox>
+                      </span></div>
+                  </template>
+
+                  <!-- 变换库 -->
+                  <template v-else-if="dim.form === '变换库'">
+                    <div class="pf"><label>区间</label>
+                      <span class="range">
+                        <el-input-number v-model="def.from" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta">→</span>
+                        <el-input-number v-model="def.to" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta" v-if="dim.unit">单位 {{ dim.unit }}</span>
+                      </span></div>
+                    <div class="pf"><label>扫哪个</label>
+                      <span class="preview">概率按「{{ sel['变换'] }}」改写后再跑，
+                        扫的是「{{ sel['扫哪个参数'] }}」</span></div>
+                  </template>
+
+                  <!-- 表达式列表 -->
+                  <template v-else>
+                    <div class="pf"><label>列表</label>
+                      <span class="preview">{{ rows.length }} 行完整子配置</span>
+                      <el-button size="small" @click="edit = true">编辑列表</el-button></div>
+                  </template>
+                </div>
+
+                <div class="dform">
+                  <div class="drow">
+                    <el-button type="primary" size="small" @click="run">
+                      开始敏感性扫描</el-button>
+                    <span class="tmeta">{{ runPreview }}</span>
+                  </div>
+                  <p class="preview" style="margin:0">
+                    汇合产出：N 条子配置 ＋ N 个数据集，写回本锚点的子节点，
+                    可在上方数据集选择器切换查看</p>
+                  <p class="preview" style="margin:0">
+                    每次运行都新建一组，不覆盖已有的；复算侧毫秒级，派发侧进任务队列</p>
+                </div>
+              </template>
+
+            </div>
+          </div>
+
+          <!-- 组条：只切历史结果，新建只由上面的「开始敏感性扫描」产生，故无「＋」 -->
+          <div class="groupbar" v-if="visibleGroups.length">
             <span class="tmeta">结果组</span>
             <div class="gscroll">
               <span class="gchip" v-for="g in visibleGroups" :key="g.id"
@@ -419,6 +447,7 @@ table.expr td.rm:hover{color:var(--danger)}
             </div>
             <button class="navbtn">◀</button>
             <button class="navbtn">▶</button>
+            <button class="navbtn wide">清除结果</button>
           </div>
 
           <!-- 编辑态 -->
@@ -452,16 +481,13 @@ table.expr td.rm:hover{color:var(--danger)}
             </div>
           </div>
 
-          <!-- 空态 -->
-          <div class="hint" v-else-if="!visibleGroups.length">
-            还没有结果组。<br>
-            在左栏选一个维度、填好规格，然后点「运行分析」。<br>
-            <span style="font-size:11px">每次运行都会新建一组，不会覆盖已有的；<br>
-            复算侧毫秒级，派发侧进任务队列</span>
+          <!-- 空态：维度已选但还没跑过 -->
+          <div class="hint" v-else-if="dim && !visibleGroups.length" style="padding:22px 20px">
+            还没有结果组。规格填好后点上面的「开始敏感性扫描」。
           </div>
 
           <!-- 结果 -->
-          <div class="an-res" v-else>
+          <div class="an-res" v-else-if="visibleGroups.length">
             <div class="an-res-h">
               <b>#{{ group }}　{{ isDisp ? '保底 · 阈值' : '分析口径 · GDR 阈值' }}</b>
               <span class="an-bd" :class="isDisp ? 'd' : 's'">
@@ -508,8 +534,8 @@ table.expr td.rm:hover{color:var(--danger)}
                 <div class="mrow">
                   <span class="tmeta">同时带档位</span>
                   <el-select v-model="ciLevel" size="small" style="width:130px">
-                    <el-option label="双侧 95%" value="双侧 95%" />
-                    <el-option label="双侧 90%" value="双侧 90%" />
+                    <el-option label="双侧 95%" value="双侧 95%"></el-option>
+                    <el-option label="双侧 90%" value="双侧 90%"></el-option>
                   </el-select>
                   <el-checkbox v-model="pava" size="small">强制单调（PAVA）</el-checkbox>
                   <el-checkbox v-model="jump" size="small">跳变点检测</el-checkbox>
@@ -573,7 +599,7 @@ table.expr td.rm:hover{color:var(--danger)}
 const { createApp, ref, reactive, computed, watch, nextTick } = Vue;
 
 /* 维度清单：六域 × 若干维度。静态，不随配置内容变。
-   具体对象与字段在选择维度后才出现（规格区里，按对象类型动态过滤）。 */
+   具体对象与字段在选择维度后才出现（发起块里，按对象类型动态过滤）。 */
 const DOMAINS = [
   { name: '分析口径', side: '复算', dims: [
     { k: 'GDR 阈值', form: '数值栅格', sel: [], def: { from: 0.75, to: 0.95, step: 0.02 }, unit: '' },
@@ -632,6 +658,7 @@ const DOMAINS = [
       def: { from: 10000, to: 50000, step: 5000 }, unit: '' },
   ]},
 ];
+const DIM_COUNT = DOMAINS.reduce((n, d) => n + d.dims.length, 0);
 
 const TABS = [
   { k: 'gdr', n: '全局GDR分析' }, { k: 'success', n: '成功率分析' },
@@ -686,6 +713,16 @@ createApp({
       return n > 0 && n < 1000 ? n : 0;
     };
 
+    const isSync = computed(() => !!dim.value && dim.value._side === '复算');
+    /* 发起按钮右边那行预览：随表单类型给出「会跑出什么」 */
+    const runPreview = computed(() => {
+      const d = dim.value;
+      if (!d) return '';
+      if (d.form === '枚举') return '→ 已勾选 ' + enumPick.value.length + ' 项，逐项对比';
+      if (d.form === '表达式列表') return '→ 照列表逐行跑，系统不解释语义';
+      return '→ ' + pointCount() + ' 个扫描点';
+    });
+
     const visibleGroups = computed(() =>
       (state.value === 's1' || state.value === 's2') ? [] : GROUPS);
     const isDisp = computed(() => state.value === 's4' || state.value === 's6');
@@ -702,7 +739,7 @@ createApp({
     /* 运行分析：永远新建一组，不覆盖 */
     const run = () => {
       group.value = 3;
-      state.value = (dim.value && dim.value._side === '复算') ? 's3' : 's4';
+      state.value = isSync.value ? 's3' : 's4';
     };
 
     const render = () => {
@@ -731,8 +768,9 @@ createApp({
 
     return { state, anchorLabel, drawer, datasetId, dim, sel, def, enumPick, edit,
              group, ciLevel, pava, jump, chartHost, rows, blankRow, pick, pointCount,
+             isSync, runPreview,
              visibleGroups, isDisp, runningCount, datasetOptions, run,
-             DOMAINS, TABS };
+             DOMAINS, DIM_COUNT, TABS };
   }
 }).use(ElementPlus).mount('#app');
 

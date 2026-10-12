@@ -133,15 +133,20 @@
       '" font-size="9" fill="' + C.txt3 + '" text-anchor="end">' +
       (opt.ylabel || '成功率') + '</text>');
 
-    /* ---- 行③ 每点 CI 宽度 ---- */
+    /* ---- 行③ 每点 CI 宽度 ----
+       柱子必须坐在自己那个 θ 上，与行②的采样点、底部刻度同一根竖线。
+       早先按 plotW/n 等分铺开，5 个点时整排右移了半格（刻度在 62/262/462…，
+       柱子却在 86/246/406…），与刻度对不上。 */
     var ciw = opt.ciw;
     var maxW = Math.max.apply(null, ciw);
-    var bw3 = plotW / ciw.length;
-    ciw.forEach(function (w, i) {
-      var h = (w / maxW) * 0.7;
-      var x = L + i * bw3 + bw3 * 0.15;
+    var npts = opt.series.length;
+    var stepX = npts > 1 ? (X(opt.series[1].th) - X(opt.series[0].th)) : plotW;
+    var bwid = Math.max(8, Math.min(stepX * 0.55, 64));
+    opt.series.forEach(function (p, i) {
+      var h = (ciw[i] / maxW) * 0.7;
+      var x = X(p.th) - bwid / 2;
       g.push('<rect x="' + f(x) + '" y="' + f(yRow(2, h)) + '" width="' +
-        f(bw3 * 0.7) + '" height="' + f(yRow(2, 0) - yRow(2, h)) +
+        f(bwid) + '" height="' + f(yRow(2, 0) - yRow(2, h)) +
         '" fill="rgba(31,119,180,0.30)" stroke="' + C.data + '" stroke-width=".5"/>');
     });
     g.push('<text x="' + L + '" y="' + f(rowTop(2) - 5) + '" font-size="10" fill="' +

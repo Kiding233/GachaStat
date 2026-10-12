@@ -13,8 +13,10 @@ from_config_store 的接线用例（含 getattr 容忍断言）不在此处，�
 """
 import copy
 import dataclasses
+import functools
 import os
 import pickle
+import types
 
 import pytest
 
@@ -411,3 +413,327 @@ class TestPityDefFieldPassthrough:
         # 仍全绿，而生产链路的 priority 已静默丢失。此处直接观察引擎最终收到的
         # `PityDef`：实测该突变下本行是唯一变红的断言。
         assert env.pity_engine.pity_defs['pf'].priority == 5
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S7b / §四 跨进程 pickle 约束：四族对象的 round-trip + 并行度未退化
+# ══════════════════════════════════════════════════════════════════
+# 依据：计划 §四「跨进程 pickle 约束」段。`run_batch_parallel` 用
+# `MPPool(initializer=_wk_init, initargs=(env, target_specs))` 把**整个 env**
+# 序列化给每个 worker，故 P64 的四族新对象（`Pity` / `Tracker` / `Modifier` /
+# `Lifecycle`）全部进这条 pickle 图。禁 lambda / 闭包 / 局部函数 / 不可 pickle 的
+# 第三方对象；违反时并行度**静默归零**（故障形态见下方冒烟用例的说明）。
+#
+# `InvariantChecker` 的 round-trip **不在本步**：该类由排在 S7b 之后的 S11 产出，
+# 此刻引用即 `ImportError`（pytest 收集期即红），该用例归 S11 的专属文件
+# `tests/core/test_pity_invariant_checker.py`。
+#
+# 上方 `pentry` / `_pity_dict_to_pitydef` 透传用例（S4b）与本节无关，未改动。
+
+#: 五条保底定义，拼出四族对象的**齐全覆盖**（覆盖集由
+#: `test_pickle_family_fixture_covers_every_family` 钉住）。
+#: scope 的分配受 `_validate_behaviors` 约束（每个稀有度最多一个事件驱动型）：
+#: SSR / SR 各一条 counter 驱动型与一条事件驱动型，R 留给 `rotating_soft`。
+_FAMILY_PITY_DEFS = (
+    # counter 驱动型 + AlwaysActive
+    dict(name='p_soft', btype='soft_interval', scope='ssr',
+         soft_start=74, soft_end=90, soft_increment=6.25, counter_init=2),
+    # counter 驱动型 + FiniteActive（`max_triggers` > 0）+ target_featured
+    dict(name='p_hard', btype='hard', scope='sr', threshold=10, counter_init=3,
+         max_triggers=2, target_featured=True),
+    # 事件驱动型（FlagTracker）+ deactivate_on_early_hit
+    dict(name='p_rot', btype='rotating', scope='ssr', guaranteed_init=True,
+         deactivate_on_early_hit=True),
+    # 事件驱动型（FateTracker）+ 初始定轨目标
+    dict(name='p_tgt', btype='targeted', scope='sr', fate_threshold=2,
+         selected_card_init='up_a', fate_points_init=1),
+    # `_soft` 复合型：NamespaceTracker（独立命名空间）+ 双 Modifier + DependentActive
+    dict(name='p_rotsoft', btype='rotating_soft', scope='r', soft_start=4,
+         soft_end=6, soft_increment=3.0, counter_init=1, depends_on='p_soft'),
+)
+
+#: 四族的覆盖集：夹具必须产出这些类。零件被改动后静默消失时，本组用例对该族的
+#: 检测力会归零（构造成功、断言恒真），故覆盖集本身是一条断言。
+_FAMILY_COVERAGE = {
+    'pity': {'Pity'},
+    'tracker': {'CounterTracker', 'FlagTracker', 'FateTracker', 'NamespaceTracker'},
+    'modifier': {'SoftModifier', 'HardModifier', 'RotatingModifier', 'SelectedModifier'},
+    'lifecycle': {'AlwaysActive', 'FiniteActive', 'DependentActive'},
+}
+
+_SCALAR_TYPES = (str, bytes, int, float, bool, type(None))
+_MISSING = object()
+
+
+def _family_env():
+    """构造一条四族对象齐全的 env（默认配置的池子 + 五条补上的保底定义）。"""
+    store = load_toml(CONFIG)
+    store.pity.pities = [PityDef(**d) for d in _FAMILY_PITY_DEFS]
+    env = SimulationEnvBuilder.from_config_store(store)
+    specs = {tc.card_id: tc.quantity for tc in store.target_cards}
+    return env, specs
+
+
+def _family_objects(env):
+    """从 env 的引擎里取出四族对象，按 `Pity` → 零件 的从属关系分组。"""
+    pities = list(env.pity_engine.behaviors.values())
+    return {
+        'pity': pities,
+        'tracker': [t for bh in pities for t in bh._trackers],
+        'modifier': [m for bh in pities for m in bh._modifiers],
+        'lifecycle': [bh._lifecycle for bh in pities],
+    }
+
+
+def _fingerprint(obj):
+    """把对象图折算成「结构指纹」（嵌套 tuple + 标量），逐字段相等的实现基础。
+
+    **不直接比 `==`**：四族的零件（`Counter` / `Flag`）是 dataclass，自动生成的
+    `__eq__` 会拿 `_state` 比**对象同一性**，而 round-trip 后两侧必是不同对象，故
+    `orig == back` 恒假（假红）；`Pity` / `Tracker` / `Modifier` / `Lifecycle` 未定义
+    `__eq__`，退化为同一性比较同样恒假。故按类型分派折算：
+
+    | 类型 | 折算 |
+    |------|------|
+    | 标量 / None | 原值 |
+    | dataclass（`Counter` / `Flag` / `LifecycleConfig`） | 类名 + 逐字段递归 |
+    | dict | 类名 + 逐项递归，**保插入序**（pickle 保留插入序，故保序比对同时钉住「键集与顺序都不变」） |
+    | list / tuple / set / frozenset | 容器类名 + 逐元素递归（set 无插入序，按 `repr` 排序后再比） |
+    | 其余带 `__dict__` 的对象（`Pity` / 零件 / `StateView` / `PityState`） | 类名 + 逐 `vars()` 项递归 |
+
+    未知类型**抛 `TypeError`**：新成员类型出现时必须显式补一条折算规则，否则
+    「逐字段相等」会悄悄失去检测力（退化成恒假的同一性比较，或恒真的 `repr` 比较）。
+    """
+    if isinstance(obj, _SCALAR_TYPES):
+        return obj
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return (type(obj).__qualname__,
+                tuple((f.name, _fingerprint(getattr(obj, f.name)))
+                      for f in dataclasses.fields(obj)))
+    if isinstance(obj, dict):
+        return ('dict', tuple((_fingerprint(k), _fingerprint(v)) for k, v in obj.items()))
+    if isinstance(obj, (list, tuple)):
+        return (type(obj).__name__, tuple(_fingerprint(v) for v in obj))
+    if isinstance(obj, (set, frozenset)):
+        return (type(obj).__name__, tuple(sorted((_fingerprint(v) for v in obj), key=repr)))
+    if hasattr(obj, '__dict__'):
+        return (type(obj).__qualname__,
+                tuple((k, _fingerprint(v)) for k, v in vars(obj).items()))
+    raise TypeError(
+        f'_fingerprint 不认识 {type(obj).__name__}：请补一条折算规则，'
+        f'不得退化为 == 或 repr，否则比对失去检测力'
+    )
+
+
+def _field_diffs(orig, back):
+    """回报逐字段指纹不同的字段名（只比一层），失败信息用它指出差异落在哪里。
+
+    全量比对由 `_fingerprint` 的递归负责报「有差异」，本函数负责报「差异在哪个字段」。
+    """
+    if dataclasses.is_dataclass(orig) and not isinstance(orig, type):
+        pairs = [(f.name, getattr(orig, f.name), getattr(back, f.name))
+                 for f in dataclasses.fields(orig)]
+    else:
+        pairs = [(k, v, getattr(back, k, _MISSING)) for k, v in vars(orig).items()]
+    return [name for name, a, b in pairs
+            if b is _MISSING or _fingerprint(a) != _fingerprint(b)]
+
+
+#: §四 禁令中**可由类型直接判定**的成员形态。第三方的不可 pickle 对象无法枚举，
+#: 由 round-trip 本体（pickle 是权威判据）兜住；本表负责给出可读的定位信息。
+_FORBIDDEN_TYPES = (
+    types.FunctionType,          # lambda 与 def（含闭包捕获的局部函数）
+    types.MethodType,            # 绑定方法（其 __self__ 若是局部对象即不可 pickle）
+    types.BuiltinFunctionType,   # 内建函数，按引用 pickle
+    types.ModuleType,            # 模块对象不可 pickle
+    types.CodeType,
+    types.GeneratorType,
+    functools.partial,
+)
+
+
+def _forbidden_members(obj, path, seen, out):
+    """深度优先遍历对象图，把命中 §四 禁令的成员记进 `out`（路径 + 类型名）。"""
+    if isinstance(obj, _SCALAR_TYPES) or id(obj) in seen:
+        return
+    seen.add(id(obj))
+    if isinstance(obj, _FORBIDDEN_TYPES):
+        out.append((path, type(obj).__name__))
+        return
+    if isinstance(obj, type):
+        return                       # 类对象按引用 pickle，其成员不随实例进 pickle 图
+    if dataclasses.is_dataclass(obj):
+        for f in dataclasses.fields(obj):
+            _forbidden_members(getattr(obj, f.name), f'{path}.{f.name}', seen, out)
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            _forbidden_members(v, f'{path}[{k!r}]', seen, out)
+        return
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        for i, v in enumerate(obj):
+            _forbidden_members(v, f'{path}[{i}]', seen, out)
+        return
+    if hasattr(obj, '__dict__'):
+        for k, v in vars(obj).items():
+            _forbidden_members(v, f'{path}.{k}', seen, out)
+
+
+class TestFourFamilyPickleRoundtrip:
+    """四族对象各一条 `dumps` → `loads` → 逐字段相等（§四 的验收面）。"""
+
+    def test_pickle_family_fixture_covers_every_family(self):
+        """夹具的覆盖集守卫：零件静默消失时本组用例对该族的检测力归零。"""
+        env, _ = _family_env()
+        got = {fam: {type(o).__name__ for o in objs}
+               for fam, objs in _family_objects(env).items()}
+        for fam, expected in _FAMILY_COVERAGE.items():
+            assert got[fam] == expected, (
+                f'{fam} 族的覆盖集变了（少即夹具退化、多即需补进 _FAMILY_COVERAGE）：'
+                f'{sorted(got[fam])} != {sorted(expected)}')
+
+    @pytest.mark.parametrize('family', ['pity', 'tracker', 'modifier', 'lifecycle'])
+    def test_pickle_roundtrip_family(self, family):
+        """该族每个对象经 `env` 的 round-trip 后**逐字段相等**。
+
+        比对面是**同族的第 i 个对象**（`env.pity_engine.behaviors` 的顺序在 round-trip
+        后不变，故 `zip` 逐位对应），逐字段由 `_fingerprint` 递归折算后比对。
+        """
+        env, _ = _family_env()
+        restored = pickle.loads(pickle.dumps(env))
+        before = _family_objects(env)[family]
+        after = _family_objects(restored)[family]
+        assert len(before) == len(after) > 0, (
+            f'{family} 族的对象数在 round-trip 后变了：{len(before)} → {len(after)}')
+        for orig, back in zip(before, after):
+            assert type(orig) is type(back), (
+                f'{family} 族的对象类型在 round-trip 后变了：'
+                f'{type(orig).__name__} → {type(back).__name__}')
+            if _fingerprint(orig) != _fingerprint(back):
+                raise AssertionError(
+                    f'{family} 族的 {type(orig).__name__} 在 round-trip 后字段失真：'
+                    f'字段 {_field_diffs(orig, back)} 的指纹不同')
+
+    def test_pickle_family_has_no_lambda_or_closure_member(self):
+        """§四 专项：四族对象的成员里不得有 lambda / 闭包 / 局部函数 / partial / 模块。
+
+        **与 round-trip 的分工**：round-trip 是权威判据（pickle 说了算），本扫描是
+        定位层：pickle 的报错只有一句 `Can't pickle local object`，看不出挂在哪个
+        保底的哪个零件的哪个字段，本扫描直接给出路径。两者都不可省：扫描只认类型表
+        （第三方的不可 pickle 对象它认不出），round-trip 只认能否序列化（不给路径）。
+        """
+        env, _ = _family_env()
+        offenders = []
+        for name, bh in env.pity_engine.behaviors.items():
+            _forbidden_members(bh, f'behaviors[{name!r}]', set(), offenders)
+        assert offenders == [], f'四族对象里挂了不可 pickle 的成员：{offenders}'
+
+    def test_pickle_worker_initializer_env_is_usable_and_parallelism_not_degraded(self):
+        """worker initializer 实际收到可用的 env：判据是**并行度未退化**，不是「没报错」。
+
+        **为什么「跑完了没报错」零检测力**：`run_batch_parallel` 对 MPPool 异常有三次
+        逐级降并发重试（N → N/2 → N/4），而 env 不可 pickle 时异常发生在**父进程**
+        （`initargs=(env, target_specs)` 由父进程 pickle 后才进 `Process.start()`），
+        三次全败即落到**单进程兜底**：模拟照常跑完、结果照常返回，`warnings` 里
+        **没有**任何一条能说明并行度已归零（唯一与降级相关的告警只在
+        `profile_enabled` 为真时才记）。
+
+        判据取 `BatchResult.parallel_metrics`（`collect_perf=True` 才采）：
+        `worker_count` **只在 MPPool 路径**被赋值（兜底路径保持空 dict），且取自
+        `Pool._processes` 即**最终成功那次**的进程数，`== max_workers` 同时排除
+        「落到单进程兜底」与「降并发重试后成功」两种退化；`worker_task_counts` 的键
+        是**子进程 pid**（worker 侧按 pid 落的计数文件），非空即证明 initializer 真的
+        在子进程里跑完并注入了 env，而不只是池建起来了。
+        """
+        env, specs = _family_env()
+        result = run_batch_parallel(
+            env=env, target_specs=specs, initial_resources=env.initial_resources,
+            num_simulations=4, max_workers=2, seed=2026, strategy_key='smart',
+            collect_perf=True)
+        metrics = result.parallel_metrics
+        assert metrics.get('worker_count') == 2, (
+            f'并行度退化：期望 workers=2 的 MPPool 路径，实得 worker_count='
+            f'{metrics.get("worker_count")!r}（None = 落到单进程兜底；1 = 降并发重试成功）')
+        child_pids = set(metrics.get('worker_task_counts') or {})
+        assert child_pids and str(os.getpid()) not in child_pids, (
+            f'worker 侧一个任务计数都没有（或计数落在父进程 pid 上）：{child_pids}')
+        assert len(result) == 4, f'模拟未全部产出结果：{len(result)}/4'
+        assert not [w for w in result.warnings if '次模拟失败' in w], result.warnings
+
+
+#: 注册表**全量**零件类：env 夹具受「每个稀有度最多一个事件驱动型」的约束
+#: （默认配置只有 SSR / SR / R 三个 scope），装不下全部 10 个类型，故另用
+#: `create_behavior` 直构覆盖。
+_REGISTRY_FAMILY_COVERAGE = {
+    'pity': {'Pity'},
+    'tracker': {'CounterTracker', 'FlagTracker', 'StreakTracker', 'FateTracker',
+                'NamespaceTracker'},
+    'modifier': {'HardModifier', 'SoftModifier', 'RotatingModifier',
+                 'NonFeaturedModifier', 'SelectedModifier', 'NotOwnedModifier'},
+    'lifecycle': {'AlwaysActive', 'FiniteActive', 'DependentActive',
+                  'DependentFiniteActive'},
+}
+
+#: 生命周期两个维度的四个取值组合（激活维 Always / Dependent × 退役维 Never / AfterN）。
+_LIFECYCLE_VARIANTS = ({}, {'max_triggers': 2}, {'depends_on': 'x'},
+                       {'max_triggers': 2, 'depends_on': 'x'})
+
+
+def _registry_family_objects():
+    """直构**注册表全量**的四族对象（10 个 btype + 4 个生命周期组合 + 无 preset 的类）。
+
+    `NotOwnedModifier`（S2a-2 交付）在 M1 **无 preset 产出方**（消费方是 M2 的
+    S9-3 `ForceNotOwnedModifier`），故任何 env 的 pickle 图里都不会出现它；此处直构
+    补齐，使「四族成员无禁令形态」的确认覆盖到它。
+    """
+    from gacha_simulator.core.pity import BEHAVIOR_REGISTRY, create_behavior
+    from gacha_simulator.core.pity_modifier import NotOwnedModifier
+    from gacha_simulator.core.pity_primitives import PityState
+
+    pities = [create_behavior(PityDef(name=f'x_{btype}', btype=btype), PityState())
+              for btype in BEHAVIOR_REGISTRY]
+    pities += [create_behavior(PityDef(name=f'x_lc{i}', btype='hard', **variant),
+                               PityState())
+               for i, variant in enumerate(_LIFECYCLE_VARIANTS)]
+    return {
+        'pity': pities,
+        'tracker': [t for bh in pities for t in bh._trackers],
+        'modifier': ([m for bh in pities for m in bh._modifiers]
+                     + [NotOwnedModifier('ssr', threshold=5)]),
+        'lifecycle': [bh._lifecycle for bh in pities],
+    }
+
+
+class TestRegistryWidePickleCoverage:
+    """§四 禁令与 round-trip 的**全量**覆盖面（补 env 夹具装不下的零件类）。"""
+
+    def test_pickle_registry_types_roundtrip_without_forbidden_member(self):
+        """注册表全量零件：无禁令成员 + round-trip 逐字段相等。
+
+        与 `TestFourFamilyPickleRoundtrip` 的分工：那一组走**真实 env 的 pickle 图**
+        （计划 S7b 的验收形态），本组走**注册表全量直构**，把 env 夹具因 scope 约束
+        装不下的类（`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`
+        / `NotOwnedModifier`）也纳入「无 lambda / 闭包 / 不可 pickle 成员」的确认面。
+        """
+        fams = _registry_family_objects()
+        got = {fam: {type(o).__name__ for o in objs} for fam, objs in fams.items()}
+        for fam, expected in _REGISTRY_FAMILY_COVERAGE.items():
+            assert got[fam] == expected, (
+                f'{fam} 族的全量覆盖集变了：{sorted(got[fam])} != {sorted(expected)}')
+
+        offenders = []
+        for fam, objs in fams.items():
+            for i, obj in enumerate(objs):
+                _forbidden_members(obj, f'{fam}[{i}]', set(), offenders)
+        assert offenders == [], f'四族对象里挂了不可 pickle 的成员：{offenders}'
+
+        for fam, objs in fams.items():
+            for orig in objs:
+                back = pickle.loads(pickle.dumps(orig))
+                assert type(orig) is type(back), (
+                    f'{fam} 族的对象类型在 round-trip 后变了：'
+                    f'{type(orig).__name__} → {type(back).__name__}')
+                if _fingerprint(orig) != _fingerprint(back):
+                    raise AssertionError(
+                        f'{fam} 族的 {type(orig).__name__} 在 round-trip 后字段失真：'
+                        f'字段 {_field_diffs(orig, back)} 的指纹不同')

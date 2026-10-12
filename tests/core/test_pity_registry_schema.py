@@ -541,16 +541,17 @@ class TestEventPresetsS43:
             assert callable(entry['preset']), f'{t}: preset 不可调用'
         _validate_registry()          # 显式重跑收口判据（不只靠导入期那一次）
 
-    def test_all_ten_presets_construct_in_engine(self):
-        """全部 10 类经 `PityEngine` 构造后 `len(engine.behaviors) == 1`（§六 ISSUE-204）。
+    def test_all_presets_construct_in_engine(self):
+        """全部类型（`_ALL_TYPES`，现 11 条）经 `PityEngine` 构造后 `len(engine.behaviors) == 1`（§六 ISSUE-204）。
 
         S4-5 之前 `PityEngine.__init__` 对 preset 构造失败只 `logger.warning` 后
         **跳过**（不抛），跳过会让 `_resolve_order` / `_validate_behaviors` 在截断后的
         列表上执行、形成「配置里写了保底、运行时该保底不存在且无可见报错」；S4-5 起
         构造失败直接抛 `ConfigError`，本断言与「不抛异常」自此互为两面（抛出侧见
         `tests/core/test_pity_validate_behaviors.py::TestEngineConstructFailure`）。
-        逐类单独建 engine 是**唯一**能同时容纳 10 类的形态：规则 3 禁同 scope 两个
-        事件驱动型，故「一个 engine 装 10 条同 scope 保底」在任何合法配置下都不存在。
+        逐类单独建 engine 是**唯一**能同时容纳全部类型的形态：规则 3 禁同 scope
+        两个事件驱动型，故「一个 engine 装齐全部同 scope 保底」在任何合法配置下都不
+        存在。（表述随 `_ALL_TYPES` 增长而泛化，不再写死数量：写死即下次扩表时陈旧。）
         """
         for t in _ALL_TYPES:
             engine = PityEngine(pool_specs={}, pity_defs=[
@@ -866,14 +867,27 @@ class TestRotatingInverseS6a:
     def test_depends_on_early_return_applies(self):
         """③ 配 `depends_on` 时 `is_active` 早退对本类型生效（§3.1.3）。
 
-        **本断言对任何类型同形**（早退由骨架无条件承担，ISSUE-506），故它不是
-        「缺 `rotating_inverse`」的捕获面，在此只为记录该行为已覆盖到新类型。
+        **判据用探针，不用「输出等于基础分布」**（S6a 审查 minor：原写法无判别力）。
+        `NonFeaturedModifier.apply` 在 `forced_loss` 未置位时本就 `return None`（恒等），
+        故「输出恒等」在早退被删掉时**同样成立**：审查实测删掉早退后原写法仍通过。
+        探针记录零件是否被调度，才是早退的显形面。
+        （本断言对任何类型同形，早退由骨架无条件承担，ISSUE-506，故它不是
+        「缺 `rotating_inverse`」的捕获面；在此记录该行为已覆盖到新类型。）
         """
-        pdef = PityDef(name='s6a_dep', btype=_S6A_TYPE, depends_on='src')
-        bh = create_behavior(pdef, PityState())
+        bh, state = _fx_build(_S6A_TYPE, depends_on='src')
         base = dict(_FX_BASE)
-        ctx = PityContext(draw=_fx_draw('ssr', True), current=base, state=bh._state)
-        assert bh.before_draw(ctx) == base, '未激活时 before_draw 恒等'
+        calls = []
+        _mod = bh._modifiers[0]
+        _orig_apply = _mod.apply
+
+        def _probe(ctx, view, dist, readonly):
+            calls.append(1)
+            return _orig_apply(ctx, view, dist, readonly)
+
+        _mod.apply = _probe
+        ctx = PityContext(draw=_fx_draw('ssr', True), current=base, state=state)
+        assert bh.before_draw(ctx) == base
+        assert calls == [], '未激活不得调度任何零件'
 
 
 class TestRotatingInverseSemantics:

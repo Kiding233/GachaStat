@@ -288,8 +288,14 @@ class TestFlagTrackerFlip:
         assert st.get(NAME, 'forced_loss') is False, '歪掉后退出「必歪」态'
 
     def test_flag_tracker_skip_reset_does_not_skip_flip(self):
-        """`skip_reset=True` 不跳过翻转——与旧 `RotatingBehavior.after_draw` 同构
-        （该参数对事件驱动型不可达：`deactivate_on_early_hit` 被 H3 硬拒）。"""
+        """`skip_reset=True` 不跳过翻转：本形参是 counter 家族专享的例外通道
+        （见 `Tracker.commit` 的「适用范围」段），事件驱动族一律不消费它，与旧
+        `RotatingBehavior.after_draw` 逐行同构。
+
+        **S6a 审查收口**：本用例**守的行为未变**（仍断言标志照翻），只改理由。原文
+        的理由「该参数对事件驱动型不可达（`deactivate_on_early_hit` 被 H3 硬拒）」
+        已随 S6a 删除拒绝分支而作废，此处的判据改为族属划线。
+        """
         tr, st = _flag_tracker()
         st.set(NAME, 'guaranteed', True)
         tr.commit(_ctx(rarity='ssr', is_featured=True, state=st), st, NAME,

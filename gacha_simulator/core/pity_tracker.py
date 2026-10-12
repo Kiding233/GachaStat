@@ -101,6 +101,13 @@ class Tracker:
         本次退役时，重置动作**同序判定、退役则跳过重置**（旧
         `CounterBasedBehavior.after_draw` 在 `_on_reset()` 返回 True 时提前 return
         即此语义，实测第 5 抽命中后 counter 仍为 5）。
+
+        **适用范围（S6a 审查收口，2026-10-12）**：该例外是 **counter 家族专享**。
+        依据即上句的出处（旧 `CounterBasedBehavior` 的提前 return），且旧事件驱动族
+        **无**跳过分支、其 `deactivate_on_early_hit` 由 `_build_pity` 硬拒（拒绝分支
+        已随 S6a 删除）。S6a 起事件驱动型可配该开关、退役路径**可达**，但
+        `FlagTracker` / `StreakTracker` / `FateTracker` 仍一律不消费本形参（与旧实现
+        逐行同构）。**形参在本协议上统一，语义按族分化。**
         """
         pass
 
@@ -228,10 +235,19 @@ class FlagTracker(Tracker):
     回到初始状态」）推导，而非照抄某一行；若改按「judge 命中」实现，G1 会在标记被
     **置位**时报 `did_reset=True`，与统一语义相反。
 
-    **`skip_reset` 对本 Tracker 无影响**：`deactivate_on_early_hit` 对事件驱动型由
-    `_build_pity` 硬拒（H3），故 `Pity` 传 `skip_reset=True` 的路径对事件驱动型
-    不可达；旧 `RotatingBehavior.after_draw` 亦无跳过分支。此处**不写**跳过分支，
-    以与旧实现逐行同构。
+    **`skip_reset` 对本 Tracker 无影响**：本形参是 **counter 家族专享**的例外通道
+    （依据见 `Tracker.commit` 的「适用范围」段：旧 `CounterBasedBehavior.after_draw`
+    的提前 return），事件驱动族不参与该特例。旧 `RotatingBehavior.after_draw` 亦无
+    跳过分支，故此处**不写**跳过分支，以与旧实现逐行同构。
+
+    **S6a 审查收口（F1/F2，2026-10-12）**：本段原写「`deactivate_on_early_hit` 对
+    事件驱动型由 `_build_pity` 硬拒（H3），故该路径不可达」。该前提已随 S6a 删除该
+    拒绝分支而**作废**：退役路径自此**可达**，而本 Tracker 仍不消费 `skip_reset`
+    （审查实测：`rotating` + `deactivate_on_early_hit` 出 UP 后 `_active` 转 False，
+    标志照翻）。取「不消费」一支的依据是上段的家族划线（§七 S1b/S1c 的分块理由同此：
+    CounterTracker 含「双段 N1 相位 + `skip_reset` 例外」，本类为「翻转语义 + 事件驱动
+    `did_reset`」），故属**设计内口径**而非缺口。差别仅在于该路径此前不可达、语义未被
+    任何配置触发过，现登记于计划 §七 S6a 条目与实施报告。
 
     **读 `selected_card`**：`judge='selected'` 读该键，而它**不由本 Tracker 声明**
     （写入者是策略层 `NonDrawAction`，§3.1.1 L4 例外 2），故 `state_keys()` 只含
@@ -325,8 +341,9 @@ class StreakTracker(Tracker):
     `Pity.did_fire = any(tr.did_reset(...))` 与旧 `RotatingBehavior.did_fire`
     （`rotating_cr` 经 MRO 落到的就是它）逐字一致。
 
-    **`skip_reset` 无影响**：同 `FlagTracker`（事件驱动型不可配
-    `deactivate_on_early_hit`，该路径不可达；旧实现亦无跳过分支）。
+    **`skip_reset` 无影响**：同 `FlagTracker`（counter 家族专享的例外通道，事件驱动
+    族一律不消费；旧实现亦无跳过分支）。**S6a 审查收口**：原括号里的理由「事件驱动型
+    不可配 `deactivate_on_early_hit`」已随 H3 删除而作废，行为不变（仍不消费该形参）。
     """
 
     def __init__(self, scope: str, judge: str, threshold=None, base_rate=None,
@@ -444,8 +461,8 @@ class FateTracker(Tracker):
     **`selected_card` 是读的键**：由策略层 `NonDrawAction` 写入，不进
     `state_keys()`（§3.1.1 L4 例外 2）。
 
-    **`skip_reset` 无影响**：同 `FlagTracker`（事件驱动型不可配
-    `deactivate_on_early_hit`）。
+    **`skip_reset` 无影响**：同 `FlagTracker`（counter 家族专享的例外通道，事件驱动
+    族不消费）。**S6a 审查收口**：原括号里的理由已随 H3 删除而作废，行为不变。
     """
 
     _ACTIONS = ('clear', 'accumulate')

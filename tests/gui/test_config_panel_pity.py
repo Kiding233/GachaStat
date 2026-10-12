@@ -504,7 +504,8 @@ class TestTargetFeaturedCheckboxScope:
         raise AssertionError(f'类型 {key} 不在下拉')
 
     def test_enabled_only_for_hard_family(self, qapp):
-        """`hard` 且 ssr scope 才启用；其余九类一律禁用。"""
+        """`hard` 且 ssr scope 才启用；其余类型一律禁用（逐条遍历 `_PITY_TYPES`，
+        故类型数增长时本表述无需跟着改）。"""
         panel = _make_panel()
         for key, _label in panel._PITY_TYPES:
             self._set_type(panel, key)

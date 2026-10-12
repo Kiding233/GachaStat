@@ -2175,23 +2175,30 @@ const app = createApp({
     function tblOf(k) { return !!tblMode[k]; }
     function tblFlip(k) { tblMode[k] = !tblMode[k]; }
 
-    /* 通用结果块里的示意图：稳定伪随机，按项 key 生成，切项时跟着换 */
+    /* 通用结果块里的示意图：稳定伪随机，按项 key 生成，切项时跟着换。
+       结果按 key|kind 记住：模板里是内联调用（:spec="miniSpec(...)"），
+       不记的话父组件每重渲染一次就造一个新对象，gs-chart 的深层 watcher
+       认对象身份，于是跟着重画一次。探针里有个 500ms 的进度计时器，
+       实测这样会多打出 6 次 setOption；正式版任务跑起来时同理。 */
+    const _miniCache = {};
     function miniSpec(key, kind) {
+      const ck = key + '|' + kind;
+      if (_miniCache[ck]) return _miniCache[ck];
       const a = bars(key);
       if (kind === 'line') {
-        return {
+        return (_miniCache[ck] = {
           chart_type: 'scatter', title: '', xlabel: '', ylabel: '',
           data: { traces: [{ name: '趋势', mode: 'lines', marker_color: GS.CAT[0],
             x: a.map((_, i) => i + 1), y: a.map(v => +(v * 100).toFixed(1)) }] },
           layout_hints: { sparkline: true },
-        };
+        });
       }
-      return {
+      return (_miniCache[ck] = {
         chart_type: 'bar', title: '', xlabel: '', ylabel: '',
         data: { labels: a.map((_, i) => String(i + 1)),
           values: a.map(v => +(v * 100).toFixed(1)) },
         layout_hints: { sparkline: true },
-      };
+      });
     }
 
     /* 山脊：每池一行。原来是把每行画成一条解析高斯曲线（poolCurve），

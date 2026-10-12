@@ -1269,10 +1269,15 @@
     },
     mounted: function () {
       this.draw();
-      this._ro = new ResizeObserver(this.draw);
+      var self = this;
+      /* 回调走 _onResize 而不是直接 draw，为的是两件事：
+         一是滑入动画期间容器宽度逐帧在变，不合并就会跟着逐帧全量重画；
+         二是尺寸没变也回调（字体加载、兄弟节点增删都会触发一次），那时重画纯属白做。 */
+      this._ro = new ResizeObserver(function () { self._onResize(); });
       this._ro.observe(this.$el);
     },
     beforeUnmount: function () {
+      if (this._raf) cancelAnimationFrame(this._raf);
       if (this._ro) this._ro.disconnect();
       if (this.inst && !this.inst.isDisposed()) this.inst.dispose();
       var i = instances.indexOf(this.inst);
@@ -1280,14 +1285,34 @@
     },
     watch: {
       spec: { deep: true, handler: function () { this.draw(); } },
-      height: function () { this.$nextTick(this.draw); },
+      /* height 落在根元素的行内样式上，改了尺寸 RO 必然也回调一次，
+         所以走 _onResize 而不是直接 draw：两次合并成一次。 */
+      height: function () { this.$nextTick(this._onResize); },
     },
     methods: {
+      _onResize: function () {
+        var r = this.$el ? this.$el.getBoundingClientRect() : null;
+        var w = r ? Math.round(r.width) : 0, h = r ? Math.round(r.height) : 0;
+        if (w === this._w && h === this._h) return;
+        var self = this;
+        if (this._raf) cancelAnimationFrame(this._raf);
+        this._raf = requestAnimationFrame(function () { self._raf = 0; self.draw(); });
+      },
       draw: function () {
         if (!this.$el) return;
         var el = this.$el;
-        /* 空态：不画空图框，交给父级给文案 */
-        if (!this.spec) {
+        var r = el.getBoundingClientRect();
+        this._w = Math.round(r.width); this._h = Math.round(r.height);
+        /* 零尺寸不建实例。分析页一展开会把所有专题、所有已勾选项的图都挂上来，
+           其中绝大多数在 v-show 隐藏的 pane 里（display:none → 0×0）。
+           实测一次展开：建起 21 个实例，其中 20 个的容器是 0×0；
+           setOption 调用里有 103 次打在 0×0 上，全是白做的。
+           这一下就是「展开会卡一下」的全部来源。
+           容器拿到尺寸时 ResizeObserver 会再来一次，那时才建。
+           已建过又变回 0×0 的（切走专题）一并释放，不留着吃内存。 */
+        var boxed = this._w > 0 && this._h > 0;
+        if (!boxed || !this.spec) {
+          /* 空态：不画空图框，交给父级给文案 */
           if (this.inst && !this.inst.isDisposed()) this.inst.dispose();
           this.inst = null;
           return;

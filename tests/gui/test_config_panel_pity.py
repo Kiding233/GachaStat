@@ -923,3 +923,200 @@ class TestPityDetailBackfillIsolation:
         assert (reloaded.counter_init, reloaded.guaranteed_init,
                 reloaded.fate_points_init, reloaded.deactivate_on_early_hit) == (
                     2, False, 1, False)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# P64 S7a 审查收口（F1 / F2 / F3 / F5）
+# ═══════════════════════════════════════════════════════════════════
+
+# F1 的两种 btype 参数面互不相同，故两条用例都按 btype 参数化：
+#   targeted：fate_threshold(int) / switch_allowed(bool) / switch_resets_progress(bool)
+#   rotating_cr：cr_counter_threshold(int) / cr_base_rate(float)
+# 每个参数的注册表默认值都与用例取值不同，保证回填途中确有控件发出变更信号
+# （若首个控件不发信号，flush 由后续控件触发，丢失面后移，用例仍应有判别力）。
+_S7A_DYN_CASES = [
+    ('targeted', {'fate_threshold': 2, 'switch_allowed': False,
+                  'switch_resets_progress': False}),
+    ('rotating_cr', {'cr_counter_threshold': 4, 'cr_base_rate': 12.0}),
+]
+
+
+def _two_pities_of_type(tmp_path, btype, row0_params, row1_params, tag):
+    """两条同类型保底（第 1 条取 row0_params，第 2 条取 row1_params）→ 加载面板。"""
+    from gacha_simulator.core.config_store import PityDef
+    from gacha_simulator.core.config_toml import load_toml, save_toml
+    from gacha_simulator.gui.config_panel import ConfigPanel
+
+    seeded = load_toml(_CONFIG_TOML)
+    seeded.pity.pities = [
+        PityDef(name='dyn_a', btype=btype, scope='ssr', reset='', **row0_params),
+        PityDef(name='dyn_b', btype=btype, scope='ssr', reset='', **row1_params),
+    ]
+    toml_in = tmp_path / f'{tag}.toml'
+    save_toml(seeded, str(toml_in))
+
+    store = load_toml(str(toml_in))
+    panel = ConfigPanel()
+    panel._store = store
+    panel._refresh_from_store_impl()
+    return panel, toml_in
+
+
+class TestS7aTypeChangeBackfillIsolation:
+    """F1：`_on_pity_type_changed` 的重建 + 回填也须落在标志位窗口内。
+
+    缺陷（S7a 独立审查实测）：`_on_pity_selected` 只把 `_backfill_pity_detail`
+    包进 `_pity_detail_backfilling` 窗口，紧随其后的 `_on_pity_type_changed` 末尾
+    还会再 `_build_param_widgets()` 重建一次动态控件并从条目回填，而这段运行在
+    标志位**已复位**之后。于是回填途中第一个控件发出的信号跑 flush，该 flush 从
+    全部控件读值，尚未回填的控件把刚建的 registry 默认值写进条目，后续回填再从
+    被改写的条目取值（值相同故不再发信号），默认值就此固化并落盘，全程无报错。
+    实测丢失面：`targeted` 的 switch_allowed / switch_resets_progress 由 False 变
+    True；`rotating_cr` 的 cr_base_rate 由 12.0 变 5.0。
+
+    与 `TestPityDetailBackfillIsolation` 的分工：那一条管 `_backfill_pity_detail`
+    读取的四个人工字段，本类管 `_on_pity_type_changed` 的 registry 动态参数面。
+    """
+
+    @pytest.mark.parametrize('btype,params', _S7A_DYN_CASES)
+    def test_first_load_keeps_selected_row_dynamic_params(
+            self, qapp, tmp_path, btype, params):
+        """首次加载（`_refresh_from_store_impl` 内部选中第 0 条）即不得被默认值覆盖。"""
+        panel, _ = _two_pities_of_type(tmp_path, btype, params, {}, f'first_{btype}')
+        got = {k: panel._pity_defs[0][k] for k in params}
+        assert got == params, (
+            f'首次加载后第 1 条的 {btype} 动态参数被 registry 默认值覆盖：{got}')
+
+    @pytest.mark.parametrize('btype,params', _S7A_DYN_CASES)
+    def test_row_switch_keeps_current_row_dynamic_params(
+            self, qapp, tmp_path, btype, params):
+        """切到第 2 条后其动态参数仍是自身取值，并活过保存与重读 TOML。"""
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        panel, _ = _two_pities_of_type(tmp_path, btype, {}, params, f'switch_{btype}')
+        assert panel.pity_list.count() == 2
+        panel.pity_list.setCurrentRow(0)
+        panel.pity_list.setCurrentRow(1)
+
+        got = {k: panel._pity_defs[1][k] for k in params}
+        assert got == params, (
+            f'切到第 2 条后其 {btype} 动态参数被 registry 默认值覆盖：{got}')
+
+        panel.apply_to_store()
+        saved = {k: getattr(panel._store.pity.pities[1], k) for k in params}
+        assert saved == params, f'默认值已写进 store：{saved}'
+        toml_out = tmp_path / f'switch_{btype}_out.toml'
+        save_toml(panel._store, str(toml_out))
+        reloaded = {k: getattr(load_toml(str(toml_out)).pity.pities[1], k)
+                    for k in params}
+        assert reloaded == params, f'默认值已落盘：{reloaded}'
+
+
+class TestS7aSelectedCardInitBackfill:
+    """F2：`selected_card_init` 的回填须排在 combo 填充之后。
+
+    缺陷（S7a 独立审查实测）：`_backfill_pity_detail` 对 `pity_selected_card_combo`
+    的 `findData` 早于 `_populate_selected_card_combo()`（后者只在
+    `_on_pity_type_changed` 末尾被调用）。combo 尚未填充时 `findData` 返回 -1，
+    回填不改选，随后统一 flush 把 `currentData() or None`（即空）写进条目，
+    `selected_card_init` 静默丢成 None 并落盘。同类的 `pity_depends_combo` /
+    `pity_reset_combo` 都在 findData 前先填充，本处是唯一顺序颠倒的一处。
+    """
+
+    def _panel(self, tmp_path):
+        from gacha_simulator.core.config_store import PityDef
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+        from gacha_simulator.gui.config_panel import ConfigPanel
+
+        seeded = load_toml(_CONFIG_TOML)
+        seeded.banner.banners[0].pools[0].epitomizable_cards = [
+            'limited_ssr_1', 'standard_ssr_1']
+        seeded.pity.pities = [
+            PityDef(name='tgt_a', btype='targeted', scope='ssr', reset='',
+                    selected_card_init='limited_ssr_1', fate_points_init=1),
+            PityDef(name='tgt_b', btype='targeted', scope='ssr', reset='',
+                    selected_card_init='standard_ssr_1', fate_points_init=2),
+        ]
+        toml_in = tmp_path / 'two_targeted.toml'
+        save_toml(seeded, str(toml_in))
+
+        store = load_toml(str(toml_in))
+        panel = ConfigPanel()
+        panel._store = store
+        panel._refresh_from_store_impl()
+        return panel
+
+    def test_selected_card_init_survives_load_save_reload(self, qapp, tmp_path):
+        """两条 targeted 的 `selected_card_init` 经「加载 → 直接保存 → 重读」不丢。"""
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        panel = self._panel(tmp_path)
+        assert [d['selected_card_init'] for d in panel._pity_defs] == [
+            'limited_ssr_1', 'standard_ssr_1'], (
+            '首个被选中的 targeted 条目把 selected_card_init 丢成了 None'
+            '（combo 尚未填充时 findData 返回 -1，回填未改选）')
+
+        panel.apply_to_store()
+        assert [p.selected_card_init for p in panel._store.pity.pities] == [
+            'limited_ssr_1', 'standard_ssr_1'], 'apply_to_store 未透传'
+        toml_out = tmp_path / 'two_targeted_out.toml'
+        save_toml(panel._store, str(toml_out))
+        assert [p.selected_card_init
+                for p in load_toml(str(toml_out)).pity.pities] == [
+            'limited_ssr_1', 'standard_ssr_1'], 'selected_card_init 未落盘'
+
+
+class TestS7aMaxTriggersRange:
+    """F3：`max_triggers` 控件量程须与解析侧同口径（只设下界，无小上界）。
+
+    解析侧（`config_toml._build_pity`）只拒 bool / 非 int / 负值，**无上界**。
+    控件若收成 0..9999，TOML 里的大值经「加载 → 保存」被 `setValue` 静默夹取
+    （不报错），与 priority 控件同一失效形态。
+    """
+
+    def test_large_max_triggers_not_clamped(self, qapp, tmp_path):
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+        from gacha_simulator.gui.config_panel import ConfigPanel
+
+        seeded = load_toml(_CONFIG_TOML)
+        seeded.pity.pities[0].max_triggers = 50000
+        toml_in = tmp_path / 'big_max_triggers.toml'
+        save_toml(seeded, str(toml_in))
+        assert 'max_triggers = 50000' in toml_in.read_text(encoding='utf-8'), (
+            '前置条件不成立：输入 TOML 未带大值 max_triggers')
+
+        store = load_toml(str(toml_in))
+        panel = ConfigPanel()
+        panel._store = store
+        panel._refresh_from_store_impl()
+        panel.pity_list.setCurrentRow(0)
+        assert panel.pity_max_triggers_spin.value() == 50000, (
+            '控件量程夹住了大值（setValue 静默夹取）')
+
+        panel.apply_to_store()
+        toml_out = tmp_path / 'big_max_triggers_out.toml'
+        save_toml(panel._store, str(toml_out))
+        assert load_toml(str(toml_out)).pity.pities[0].max_triggers == 50000, (
+            '大值未落盘（被夹成控件上界）')
+
+
+class TestS7aNestedLifecycleFieldPaths:
+    """F5：`_PITY_NESTED_FIELD_PATHS`（`lifecycle` 嵌套两字段）的覆盖。
+
+    该表把 config dict 的 `lifecycle.{deactivate_on_early_hit, depends_on}` 映回
+    `PityDef` 的顶层字段。审查实测：置空该表后 tests/gui 全绿，即此前零覆盖
+    （表本身工作正常，只是无断言）。
+    """
+
+    def test_set_config_reads_nested_lifecycle_fields(self, qapp):
+        panel = _make_panel()
+        config = panel.get_config()
+        config['pity']['pities'][0]['lifecycle'] = {
+            'deactivate_on_early_hit': True, 'depends_on': 'x'}
+        panel.set_config(config)
+
+        assert panel._pity_defs[0]['deactivate_on_early_hit'] is True, (
+            'set_config 未从 lifecycle.deactivate_on_early_hit 读入 PityDef')
+        assert panel._pity_defs[0]['depends_on'] == 'x', (
+            'set_config 未从 lifecycle.depends_on 读入 PityDef')
+        assert panel._store.pity.pities[0].depends_on == 'x'

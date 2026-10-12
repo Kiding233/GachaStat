@@ -41,15 +41,18 @@ from ..core.config_toml import _SOFT_SUFFIX_TYPES as _CFG_SOFT_SUFFIX_TYPES
 # `dataclasses.fields(PityDef)` 驱动，新增字段无需改任何表。
 #
 # **GUI 内部 dict 的键空间不等于 `PityDef` 的字段集**（2026-10-13 实测）：
-#   · `_pity_defs` 条目的键 = 26 个字段 − `max_triggers`（本步补上）+ registry
-#     控件名 `start` / `end` / `func`。后三者由 `_flush_pity_current_detail` 的
-#     动态控件循环写入（registry 的 `params` 用的是 TOML 键名，其中
-#     `start` / `end` / `increment` 另经 `_PARAM_TO_FIELD` 映射为
-#     `soft_start` / `soft_end` / `soft_increment`；`func` 无消费者）。
+#   · `_pity_defs` 条目的键 = 26 个字段（**含** `max_triggers`）+ 该 btype 的
+#     registry 控件名。控件名由 `_flush_pity_current_detail` 的动态控件循环写入
+#     （registry 的 `params` 用的是 TOML 键名，其中 `start` / `end` / `increment`
+#     另经 `_PARAM_TO_FIELD` 映射为 `soft_start` / `soft_end` / `soft_increment`；
+#     `func` 无消费者），故**额外键随 btype 而变、不是定值**：`soft_interval` 为
+#     {start, end, func}，`soft_additive` 与 `_soft` 后缀族为 {start, increment}，
+#     `targeted` / `rotating` / `rotating_cr` / `hard` 无额外键。首次选中某条目
+#     之前（尚未跑过 flush）条目恰为 26 个字段。
 #   · `get_config` 输出的 config dict 键 = 字段名 − `deactivate_on_early_hit` /
 #     `depends_on`（**嵌套**在 `lifecycle` 子字典下，与 TOML 的
-#     `[pity.lifecycle]` 同形）+ `lifecycle`。
-# 故三处例外在下方显式成表，不能机械套 `{f.name: getattr(o, f.name)}`。
+#     `[pity.lifecycle]` 同形）+ `lifecycle`，共 25 键。
+# 故例外在下方显式成表，不能机械套 `{f.name: getattr(o, f.name)}`。
 _PITY_FIELD_LIST = _dc_fields(PityDef)
 _PITY_FIELD_NAMES = frozenset(f.name for f in _PITY_FIELD_LIST)
 
@@ -2413,7 +2416,12 @@ class ConfigPanel(QWidget):
         # 量程不含负值：负值被 `config_toml._build_pity` 硬拒，控件若给出负值即
         # 「保存能过、重载报错」，故量程本身收在合法面内。
         self.pity_max_triggers_spin = QSpinBox()
-        self.pity_max_triggers_spin.setRange(0, 9999)
+        # P64 S7a 审查收口 F3：上界取 Qt 的 INT_MAX。解析侧
+        # （`config_toml._build_pity`）只拒 bool / 非 int / 负值，**无上界**，控件
+        # 自设小上界（原为 9999）会让 TOML 里的大值经「加载 → 保存」被 `setValue`
+        # 静默夹取，与 priority 控件量程过窄属同一失效形态。
+        # 上界必须显式写出：`QSpinBox` 的默认上界是 99，只设下界等于把量程收成 0..99。
+        self.pity_max_triggers_spin.setRange(0, 2147483647)
         self.pity_max_triggers_spin.setValue(0)
         self.pity_max_triggers_spin.valueChanged.connect(self._flush_pity_current_detail)
         self.pity_max_triggers_spin.setToolTip(
@@ -3291,7 +3299,13 @@ N > 0：触发 N 次后不再参与概率修正（与「依赖」正交，可同
         # **为何用标志位而不是逐个 blockSignals**：动态参数控件由
         # `_build_param_widgets()` 在回填**途中**新建，新建的控件无法被提前
         # blockSignals，其 `_populate_dynamic_values()` 的 setValue 照样发信号。
-        # 标志位对回填期内出现的任何控件一律生效，是结构保证而非位置依赖。
+        # 标志位对窗口期内出现的任何控件一律生效，但**窗口范围本身是正确性前提、
+        # 不是实现细节**（S7a 独立审查 F1 实测）：回填不止本方法一处，
+        # 紧随其后的 `_on_pity_type_changed` 还会再重建一次动态控件并回填，该段
+        # 原先落在窗口之外，registry 默认值即经同一条 flush 路径写进条目
+        # （`targeted` 的 switch_allowed / switch_resets_progress、`rotating_cr`
+        # 的 cr_base_rate 实测被改写）。故两条路径现均整段开窗：本方法的回填 +
+        # `_on_pity_type_changed` 的重建与回填（见该方法的注释）。
         # `try / finally` 不可省：回填途中若抛异常，标志位残留会让此后所有编辑
         # 静默不落盘（比异常本身更难排查）。
         self._pity_detail_backfilling = True
@@ -3369,6 +3383,12 @@ N > 0：触发 N 次后不再参与概率修正（与「依赖」正交，可同
         self.pity_guaranteed_init_cb.setChecked(pd.get('guaranteed_init', False))
         self.pity_fate_points_spin.setValue(pd.get('fate_points_init', 0))
         sc = pd.get('selected_card_init') or ''
+        # P64 S7a 审查收口 F2：combo 必须先填充再 findData。原实现把填充留在
+        # `_on_pity_type_changed` 末尾，首次选中某个 targeted 条目时 combo 还是空的，
+        # `findData` 返回 -1（不改选），随后统一 flush 把 `currentData() or None`
+        # （即空）写进条目，`selected_card_init` 静默丢成 None 并落盘。同类的
+        # `pity_depends_combo` / `pity_reset_combo` 都在 findData 前先填充，本处照齐。
+        self._populate_selected_card_combo()
         idx = self.pity_selected_card_combo.findData(sc)
         if idx >= 0:
             self.pity_selected_card_combo.setCurrentIndex(idx)
@@ -3690,16 +3710,35 @@ N > 0：触发 N 次后不再参与概率修正（与「依赖」正交，可同
         # P56：cr_state_probs 表格显隐
         self._pity_cr_probs_group.setVisible(is_cr)
 
-        # 动态参数重建——先 flush 保存当前值，再销毁旧控件
+        # 动态参数重建——先 flush 保存当前值，再销毁旧控件。
+        # **这一句不能包进下方的标志位窗口**：用户切类型时它要保存**旧类型**的参数
+        # （控件此刻仍是旧类型的），包进去就丢用户编辑。
         self._flush_pity_current_detail()
-        self._build_param_widgets(btype)
-        # 重建后重新填充当前选中条目的值（否则只剩默认值）
-        row = self.pity_list.currentRow()
-        if 0 <= row < len(self._pity_defs):
-            self._populate_dynamic_values(self._pity_defs[row], btype)
-            # 填充 cr_state_probs 表格
-            if is_cr:
-                self._populate_cr_probs_table(self._pity_defs[row].get('cr_state_probs'))
+        # 重建 + 回填整段包进标志位窗口（P64 S7a 审查收口 F1）：`_build_param_widgets()`
+        # 新建的控件一律是 registry 默认值，回填途中任一 setValue / setChecked 发出的
+        # 信号都会触发 `_flush_pity_current_detail`，该 flush 从**全部**控件读值写回
+        # 当前条，尚未回填的控件即把默认值写进条目，后续回填再从被改写的条目取值
+        # （取到的值与控件现值相同，故不再发信号），默认值就此固化并落盘、全程无报错。
+        # 实测丢失面（2026-10-13 独立审查）：`targeted` 的 switch_allowed /
+        # switch_resets_progress 由 False 变 True；`rotating_cr` 的 cr_base_rate
+        # 由 12.0 变 5.0。
+        # 退出时**还原进入前的取值**（而非一律置 False）：本方法可能在
+        # `_on_pity_selected` 的窗口内被重入（该窗口内若某控件未 blockSignals 而改了
+        # 类型下拉，currentIndexChanged 即回到本方法），一律置 False 会把外层窗口
+        # 一并关掉、外层余下的回填随即恢复写回。
+        _prev_backfilling = self._pity_detail_backfilling
+        self._pity_detail_backfilling = True
+        try:
+            self._build_param_widgets(btype)
+            # 重建后重新填充当前选中条目的值（否则只剩默认值）
+            row = self.pity_list.currentRow()
+            if 0 <= row < len(self._pity_defs):
+                self._populate_dynamic_values(self._pity_defs[row], btype)
+                # 填充 cr_state_probs 表格
+                if is_cr:
+                    self._populate_cr_probs_table(self._pity_defs[row].get('cr_state_probs'))
+        finally:
+            self._pity_detail_backfilling = _prev_backfilling
 
         # 联动校验：`target_featured` **只对 hard 族有效**（裁决 7B，2026-10-05）。
         # 旧式 `not (is_hard and not is_ssr_scope)` 等于「对全部非 hard 类型启用」，

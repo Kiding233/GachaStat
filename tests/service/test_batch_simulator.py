@@ -466,10 +466,15 @@ _MISSING = object()
 
 
 def _family_env():
-    """构造一条四族对象齐全的 env（默认配置的池子 + 五条补上的保底定义）。"""
+    """构造一条四族对象齐全的 env（默认配置的池子 + 五条补上的保底定义）。
+
+    构造后调 `_bind_counter_to_pickle_graph`：`Counter` 在刚构造完的对象图里
+    **不存在**（`CounterTracker._counter` 为 `None`），须显式绑一次才进 round-trip 图。
+    """
     store = load_toml(CONFIG)
     store.pity.pities = [PityDef(**d) for d in _FAMILY_PITY_DEFS]
     env = SimulationEnvBuilder.from_config_store(store)
+    _bind_counter_to_pickle_graph(env.pity_engine.behaviors.values())
     specs = {tc.card_id: tc.quantity for tc in store.target_cards}
     return env, specs
 
@@ -483,6 +488,35 @@ def _family_objects(env):
         'modifier': [m for bh in pities for m in bh._modifiers],
         'lifecycle': [bh._lifecycle for bh in pities],
     }
+
+
+def _bind_counter_to_pickle_graph(pities):
+    """把 `CounterTracker` 的 `Counter` 显式绑进对象图，返回绑定的 `Counter` 个数。
+
+    **补的是一处实质覆盖缺口**（2026-10-13 独立审查实测）：`CounterTracker._counter`
+    与 `FlagTracker._flag_ctl` 在**构造期均为 `None`**，只有抽卡入口的
+    `Pity._rebind_state` 才会调 `rebind` 绑定它们，故刚构造完的对象图里**只有 `Flag`**
+    （`Lifecycle._ns_active` 直接持有 `Flag`）、**`Counter` 一个都没有**（实测两套夹具
+    均为 `Counter=0`）。于是「`Counter` / `Flag` 是 dataclass，自动生成的 `__eq__` 会拿
+    `_state` 比同一性、故不能用 `==`」这条理由里，`Counter` 那一半**从未被行使**：
+    `Counter` 自身若获得不可 pickle 的成员，round-trip 与禁令扫描都测不出来。
+
+    此处显式调一次 `rebind`，调用形态与引擎 `_rebind_state` 对 Tracker 的调用一致
+    （`rebind(state, self._name)`，见 `core/pity.py`）。绑定用的 `PityState()` 是
+    **独立新实例**、不接 env 的 `pity_state_init`：本函数只负责让 `Counter` 出现在图里，
+    而 `Counter._state` 本身可 pickle 且指纹可折算，用哪一份 state 都不影响检测力。
+    **不得**删除本调用（缺口回归）或改绑 `None`（`Counter` 又消失）。
+    """
+    from gacha_simulator.core.pity_tracker import CounterTracker
+    from gacha_simulator.core.pity_primitives import PityState
+
+    bound = 0
+    for bh in pities:
+        for tr in bh._trackers:
+            if isinstance(tr, CounterTracker):
+                tr.rebind(PityState(), bh._name)
+                bound += 1
+    return bound
 
 
 def _fingerprint(obj):
@@ -541,14 +575,25 @@ def _field_diffs(orig, back):
 
 #: §四 禁令中**可由类型直接判定**的成员形态。第三方的不可 pickle 对象无法枚举，
 #: 由 round-trip 本体（pickle 是权威判据）兜住；本表负责给出可读的定位信息。
+#:
+#: **本表是 §四 禁令的保守超集：命中不等于违规**，须由 round-trip 复核。下列形态
+#: 实测**可 pickle**（`pickle.dumps` 均成功）却会在此假红：模块级 `def`（按引用
+#: 序列化）、可 pickle 的绑定方法（如 `'abc'.upper`）、内建函数（如 `len`）、
+#: `functools.partial`（其函数与参数都可按引用序列化时，如 `partial(int, base=2)`）。
+#: 真正无条件不可 pickle 的只有模块对象 / 代码对象 / 生成器 / **嵌套 def 与闭包**。
+#:
+#: **不为此改扫描逻辑**（如「先试 `pickle.dumps` 再剔除」）的理由：本扫描的价值在
+#: **定位层**。pickle 的报错只有一句 `Can't pickle local object`、**不含路径**，而本
+#: 扫描能给出如 `behaviors['p_soft']._trackers[0]._f` 的路径。两者不是冗余关系：
+#: 扫描认不出第三方的不可 pickle 对象，round-trip 给不出路径。
 _FORBIDDEN_TYPES = (
-    types.FunctionType,          # lambda 与 def（含闭包捕获的局部函数）
-    types.MethodType,            # 绑定方法（其 __self__ 若是局部对象即不可 pickle）
-    types.BuiltinFunctionType,   # 内建函数，按引用 pickle
+    types.FunctionType,          # lambda / 闭包 / 局部函数（模块级 def 可 pickle，假红）
+    types.MethodType,            # 绑定方法（`__self__` 不可 pickle 时才真违规）
+    types.BuiltinFunctionType,   # 内建函数（按引用 pickle，实测可 pickle）
     types.ModuleType,            # 模块对象不可 pickle
-    types.CodeType,
-    types.GeneratorType,
-    functools.partial,
+    types.CodeType,              # 代码对象不可 pickle
+    types.GeneratorType,         # 生成器不可 pickle
+    functools.partial,           # 函数与参数都可序列化时可 pickle（假红）
 )
 
 
@@ -585,12 +630,20 @@ class TestFourFamilyPickleRoundtrip:
     def test_pickle_family_fixture_covers_every_family(self):
         """夹具的覆盖集守卫：零件静默消失时本组用例对该族的检测力归零。"""
         env, _ = _family_env()
-        got = {fam: {type(o).__name__ for o in objs}
-               for fam, objs in _family_objects(env).items()}
+        fam_objs = _family_objects(env)
+        got_trackers = fam_objs['tracker']
+        got = {fam: {type(o).__name__ for o in objs} for fam, objs in fam_objs.items()}
         for fam, expected in _FAMILY_COVERAGE.items():
             assert got[fam] == expected, (
                 f'{fam} 族的覆盖集变了（少即夹具退化、多即需补进 _FAMILY_COVERAGE）：'
                 f'{sorted(got[fam])} != {sorted(expected)}')
+        # 判据：`Counter` 必须真的在 pickle 图里。`CounterTracker._counter` 构造期为
+        # `None`，靠 `_bind_counter_to_pickle_graph` 的 rebind 才出现，故本行同时是那个
+        # 绑定的存在性守卫：删掉绑定即红，`Counter` 与 `Flag` 并列的那条理由会重新只剩
+        # `Flag` 一半被行使。
+        assert [t for t in got_trackers if getattr(t, '_counter', None) is not None], (
+            '夹具图里没有已绑定的 Counter：`Counter` 与 `Flag` 并列作为「不能用 ==」的'
+            '理由时，Counter 那一半会重新变成未被行使')
 
     @pytest.mark.parametrize('family', ['pity', 'tracker', 'modifier', 'lifecycle'])
     def test_pickle_roundtrip_family(self, family):
@@ -621,6 +674,10 @@ class TestFourFamilyPickleRoundtrip:
         定位层：pickle 的报错只有一句 `Can't pickle local object`，看不出挂在哪个
         保底的哪个零件的哪个字段，本扫描直接给出路径。两者都不可省：扫描只认类型表
         （第三方的不可 pickle 对象它认不出），round-trip 只认能否序列化（不给路径）。
+
+        **本扫描是保守超集：命中不等于违规**，对若干**可 pickle** 的形态会假红
+        （模块级 `def` / 可 pickle 的绑定方法 / 内建函数 / 可序列化的 `partial`），
+        详见 `_FORBIDDEN_TYPES` 上方注释；真伪由 round-trip 复核。
         """
         env, _ = _family_env()
         offenders = []
@@ -661,9 +718,32 @@ class TestFourFamilyPickleRoundtrip:
         assert not [w for w in result.warnings if '次模拟失败' in w], result.warnings
 
 
-#: 注册表**全量**零件类：env 夹具受「每个稀有度最多一个事件驱动型」的约束
-#: （默认配置只有 SSR / SR / R 三个 scope），装不下全部 10 个类型，故另用
-#: `create_behavior` 直构覆盖。
+#: 注册表**全量**零件类：另用 `create_behavior` 直构覆盖。
+#:
+#: **为何需要本组（2026-10-13 独立审查实测订正）**：原表述称「env 夹具受『每稀有度
+#: 最多一个事件驱动型』约束装不下全部 10 个类型」，该前提**已被实测证伪**，真实理由
+#: 是下面两条：
+#:
+#: ① **夹具选型的结果，不是结构限制**：默认配置只有 SSR / SR / R 三个 scope，而
+#:    `_validate_behaviors` 限「每个稀有度最多一个事件驱动型」，11 个 btype 在三 scope
+#:    下确实装不下。但这条约束**不是结构性的**：夹具本就绕过 TOML 白名单校验（直接
+#:    `store.pity.pities = [...]`，不经 `config_toml._build_pity`），而
+#:    `SimulationEnvBuilder.from_config_store` **不校验 scope 是否在 `[rarities].ranks`
+#:    内**，实测以 `ssr/sr/r/x1/x2/x3/x4` 七个 scope 直设 11 个 btype 即构造成功、11 个
+#:    `Pity`、四族覆盖、且该 env 可 pickle。即「不是装不下，是没这么装」。故 ① 只解释
+#:    下面三个**可达但未纳入夹具**的类：`StreakTracker`（`rotating_cr` 族）、
+#:    `NonFeaturedModifier`（`rotating_inverse`，产出方 `_preset_rotating_inverse`）、
+#:    `DependentFiniteActive`（同一 `PityDef` 上同时给 `max_triggers` 与 `depends_on`）。
+#: ② **`NotOwnedModifier` 在任何 env 中都不可达**：该类在 M1 **无 preset 产出方**
+#:    （`core/pity.py` 连 import 都没有它；消费方是 M2 的 S9-3），故**只有本组**能覆盖
+#:    它。这是硬理由，不随夹具怎么选而变。
+#:
+#: **两类性质不同，不可混为一谈**：`NonFeaturedModifier` **有**产出方
+#: （`_preset_rotating_inverse`），属「env 夹具未纳入」；`NotOwnedModifier` **无**产出方，
+#: 属「任何 env 都不可达」。
+#:
+#: 覆盖的 btype 数为 **11**（`BEHAVIOR_REGISTRY` 实测 11 条，含 S6a 新增的
+#: `rotating_inverse`）。
 _REGISTRY_FAMILY_COVERAGE = {
     'pity': {'Pity'},
     'tracker': {'CounterTracker', 'FlagTracker', 'StreakTracker', 'FateTracker',
@@ -680,11 +760,16 @@ _LIFECYCLE_VARIANTS = ({}, {'max_triggers': 2}, {'depends_on': 'x'},
 
 
 def _registry_family_objects():
-    """直构**注册表全量**的四族对象（10 个 btype + 4 个生命周期组合 + 无 preset 的类）。
+    """直构**注册表全量**的四族对象（11 个 btype + 4 个生命周期组合 + 无产出方的类）。
 
-    `NotOwnedModifier`（S2a-2 交付）在 M1 **无 preset 产出方**（消费方是 M2 的
-    S9-3 `ForceNotOwnedModifier`），故任何 env 的 pickle 图里都不会出现它；此处直构
-    补齐，使「四族成员无禁令形态」的确认覆盖到它。
+    `NotOwnedModifier`（S2a-2 交付）在 M1 **无 preset 产出方**（`core/pity.py` 未 import
+    该类；消费方是 M2 的 S9-3 `ForceNotOwnedModifier`），故任何 env 的 pickle 图里都不会
+    出现它；此处直构补齐，使「四族成员无禁令形态」的确认覆盖到它。另三个
+    （`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`）属**夹具选型**
+    所致、并非不可达，两类理由见 `_REGISTRY_FAMILY_COVERAGE` 上方注释。
+
+    构造后调 `_bind_counter_to_pickle_graph`：同 env 夹具，`Counter` 不显式绑一次就
+    不在图里（`CounterTracker._counter` 构造期为 `None`）。
     """
     from gacha_simulator.core.pity import BEHAVIOR_REGISTRY, create_behavior
     from gacha_simulator.core.pity_modifier import NotOwnedModifier
@@ -695,6 +780,7 @@ def _registry_family_objects():
     pities += [create_behavior(PityDef(name=f'x_lc{i}', btype='hard', **variant),
                                PityState())
                for i, variant in enumerate(_LIFECYCLE_VARIANTS)]
+    _bind_counter_to_pickle_graph(pities)
     return {
         'pity': pities,
         'tracker': [t for bh in pities for t in bh._trackers],
@@ -705,21 +791,25 @@ def _registry_family_objects():
 
 
 class TestRegistryWidePickleCoverage:
-    """§四 禁令与 round-trip 的**全量**覆盖面（补 env 夹具装不下的零件类）。"""
+    """§四 禁令与 round-trip 的**全量**覆盖面（补 env 夹具未纳入与不可达的零件类）。"""
 
     def test_pickle_registry_types_roundtrip_without_forbidden_member(self):
         """注册表全量零件：无禁令成员 + round-trip 逐字段相等。
 
         与 `TestFourFamilyPickleRoundtrip` 的分工：那一组走**真实 env 的 pickle 图**
-        （计划 S7b 的验收形态），本组走**注册表全量直构**，把 env 夹具因 scope 约束
-        装不下的类（`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`
-        / `NotOwnedModifier`）也纳入「无 lambda / 闭包 / 不可 pickle 成员」的确认面。
+        （计划 S7b 的验收形态），本组走**注册表全量直构**，把 env 夹具未纳入的类
+        （`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`，夹具选型
+        所致）与**任何 env 都不可达**的 `NotOwnedModifier` 一并纳入「无 lambda / 闭包 /
+        不可 pickle 成员」的确认面。
         """
         fams = _registry_family_objects()
         got = {fam: {type(o).__name__ for o in objs} for fam, objs in fams.items()}
         for fam, expected in _REGISTRY_FAMILY_COVERAGE.items():
             assert got[fam] == expected, (
                 f'{fam} 族的全量覆盖集变了：{sorted(got[fam])} != {sorted(expected)}')
+        # 同 env 夹具的守卫：`Counter` 必须在图里（靠 `_bind_counter_to_pickle_graph`）。
+        assert [t for t in fams['tracker'] if getattr(t, '_counter', None) is not None], (
+            '全量组图里没有已绑定的 Counter：Counter 那一半的理由会重新未被行使')
 
         offenders = []
         for fam, objs in fams.items():

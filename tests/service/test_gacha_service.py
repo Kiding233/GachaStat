@@ -339,8 +339,13 @@ def _write_targeted_soft_config():
 
 #: 同池三条保底的配置：两条 `targeted`（跨 scope）＋一条 `hard` 作非定轨命名空间的诱饵。
 #: `epi_sr` 的 priority 故意高于 `epi_ssr`，用于钉住「同池多条 targeted 时写入落谁」。
-#: 同 scope 两条 targeted 不可构造（`_validate_behaviors` 规则 3 抛 ConfigError），
-#: 故跨 scope 是本形态的唯一可构造形态，详见 test_multi_targeted_pool_order_*。
+#: 同 **scope** 两条 targeted 不可构造（`_validate_behaviors` 规则 3 抛 ConfigError）。
+#: **订正（S6c 审查 F1）**：本条原写「故跨 scope 是本形态的唯一可构造形态」，**过宽**。
+#: `[rarities].ranks` 是**分层列表**，一层可含多个稀有度名并取**同一个 rank**，而规则 3
+#: 只禁同 scope，故「同 rank 跨 scope 的双 targeted」同样可构造，且此时 `priority` 会
+#: 翻转池内序、进而翻转 `_apply_non_draw` 的选靶。本 fixture 的三个 scope 分属三个不同
+#: rank，故 priority 不参与裁决；反例形态见
+#: `test_same_rank_cross_scope_targeted_priority_flips_target`。
 _TARGETED_MULTI_TOML = """[meta]
 version = "2.3.0"
 
@@ -545,9 +550,12 @@ def test_switch_epitomized_target_writes_selected_card():
     ps = probe['pity_state']
     assert ps is not None, '_apply_non_draw 未被调用'
     assert ps.get('epi_ssr', 'selected_card') == 'c1'
-    # 切换重置命定进度（switch_resets_progress 默认 true）。断言读**键存在性**而非
-    # `get(..., 'fate_points') == 0`：后者在「该键根本没被写入」时同样取到默认 0，
-    # 对「跳过重置写入」的回归恒绿。
+    # 切换重置命定进度（switch_resets_progress 默认 true）。断言读**键存在性**
+    # （缺键即 KeyError，报错信息直接带整个命名空间），比 `get(..., 'fate_points') == 0`
+    # 报错更直白。**订正（S6c 审查 F2）**：原注释称后者「在缺键时同样取到默认 0、
+    # 恒绿」，该因果**不成立**，`PityState.get(name, key)` 的默认值是 `None` 而非 0
+    # （`pity_primitives.py`），故旧写法在「跳过重置写入」时得 `assert None == 0`、
+    # 本就判红（审查变异 M9 实测）。两种写法都有判别力，此处取键存在性只为报错清楚。
     assert ps.data['epi_ssr']['fate_points'] == 0, ps.data['epi_ssr']
     # 落点命名空间：诱饵命名空间不容纳该写入
     assert 'selected_card' not in ps.data.get('hard90', {}), ps.data.get('hard90')
@@ -622,16 +630,17 @@ def test_apply_non_draw_direct_recognizes_both_targeted_types():
 
 
 def test_multi_targeted_pool_order_puts_rarity_before_priority():
-    """同池多条 targeted 时取哪一条：现行为取 `_pool_order` 中最靠前的那条。
+    """**本 fixture 下**，两条 targeted 分属不同 rank，故 rank 先裁决、priority 不参与。
 
     `_apply_non_draw` 取池内**第一条** targeted 保底，池内序取自 `_resolve_order` 的
     排序键 `(稀有度 rank, -priority, type order, name)`。本用例用 priority=10 的
-    `epi_sr` 对上 priority=0 的 `epi_ssr`：跨 scope 时 rank 先比较（ssr 的 rank 0
-    先于 sr 的 rank 1），故写入落 `epi_ssr`，priority 不参与该裁决。
+    `epi_sr` 对上 priority=0 的 `epi_ssr`：两者 rank 不同（0 与 1），rank 先比较，
+    故写入落 `epi_ssr`。
 
-    同 scope 两条 targeted **不可构造**（`_validate_behaviors` 规则 3：同 scope 两个
-    事件驱动型抛 ConfigError），故「两条 targeted 且 priority 不同」只有本用例这一种
-    可构造形态。结论：priority 对 `_apply_non_draw` 的选靶恒无影响。
+    **订正（S6c 审查 F1）**：本 docstring 原另有「跨 scope 是本形态的唯一可构造形态」
+    与「结论：priority 对 `_apply_non_draw` 的选靶恒无影响」两句，**均为过宽断言**，
+    已删。反例是「同 rank 跨 scope」，见
+    `test_same_rank_cross_scope_targeted_priority_flips_target`。
     """
     path = _write_targeted_multi_config()
     try:
@@ -656,6 +665,57 @@ def test_multi_targeted_pool_order_puts_rarity_before_priority():
         assert '事件驱动型' in str(ei.value), str(ei.value)
     finally:
         os.unlink(path2)
+
+
+def test_same_rank_cross_scope_targeted_priority_flips_target():
+    """**反例**：同 rank 跨 scope 的双 targeted 下，`priority` **会**翻转选靶。
+
+    形态：`[rarities].ranks = [["UR", "SSR"], ["SR"], ["R"]]`（P55 §3.3 明文示例，
+    一层多名的「平级」写法），两条 `targeted` 分别 scope `ur` / `ssr`。二者 scope
+    不同，故 `_validate_behaviors` 规则 3 **不**拒收；而 rank 相同（都在第 0 层），
+    排序键退到第二位 `-priority` 比较。
+
+    S6c 审查构造此反例，用以否定实施者「priority 对选靶恒无影响」的过宽结论：
+    `epi_ur` 的 priority=10 使其排在 `epi_ssr` 之前，`_apply_non_draw` 取第一条
+    targeted 即变成 `epi_ur`，`selected_card` 随之落进**另一个命名空间**。
+    本用例钉住的是**现状行为**（顺序决定派发），不主张它是缺陷；它的价值是让
+    「改 priority 会换命名空间」这件事有显形面。
+    """
+    toml = (_TARGETED_MULTI_TOML
+            .replace('    ["SSR"],\n', '    ["UR", "SSR"],\n', 1)
+            .replace('name = "epi_sr"', 'name = "epi_ur"', 1)
+            .replace('scope = "sr"', 'scope = "ur"', 1))
+    assert '["UR", "SSR"]' in toml and 'epi_ur' in toml, '前置：改写未生效'
+
+    fd, path = tempfile.mkstemp(suffix='.toml')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(toml)
+    try:
+        store = load_toml(path)
+        env = SimulationEnvBuilder.from_config_store(store)
+        engine = env.pity_engine
+        banners = {b.id: b for b in env.pools}
+
+        # ① 池内序：同 rank 下 priority 大者先，故 epi_ur 前置于 epi_ssr
+        order = [n for n, _ in engine.get_behaviors_for_pool('test_pool.main')]
+        assert order == ['epi_ur', 'hard90', 'epi_ssr'], order
+
+        # ② 选靶随之翻转：写入落 epi_ur，而非未分层形态下的 epi_ssr
+        svc = GachaService(
+            copy.deepcopy(env.pools), _ZeroWaitStrategy(), AllPoolsEndCondition(1.0),
+            TargetCardSet([TargetCard(card_id='c1', pool_ids=['test_pool'],
+                                      quantity_needed=1)]),
+            pity_engine=engine)
+        ps = PityState.from_dict(env.pity_state_init)
+        svc._apply_non_draw(
+            NonDrawAction(action_id='switch_epitomized_target',
+                          params={'pool_id': 'test_pool.main', 'card_id': 'c1'}),
+            banners, engine, ps)
+        assert ps.get('epi_ur', 'selected_card') == 'c1', ps.data.get('epi_ur')
+        assert ps.data.get('epi_ssr', {}).get('selected_card', 'MISSING') is None, (
+            '分层形态下不应再落 epi_ssr')
+    finally:
+        os.unlink(path)
 
 
 def test_progress_signature_covers_all_dimensions():

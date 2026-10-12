@@ -4,7 +4,15 @@
   1. NonDrawAction 构造 + repr
   2. NON_DRAW_ACTION_REGISTRY 包含正确条目
   3. InvalidActionError 构造与继承链
-  4. gacha_service._apply_non_draw() 的 switch/cancel/非法 action_id/未注册池子 四种路径
+  4. 注册表守卫与 `InvalidActionError` 的构造面。
+
+**订正（S6c 审查 F3）**：本行原写「`gacha_service._apply_non_draw()` 的
+switch/cancel/非法 action_id/未注册池子 四种路径」，但**本文件从不调用**
+`_apply_non_draw`（全文与它相关处都只在注释里，实测零调用）。`_apply_non_draw` 的
+端到端与直调覆盖在 `tests/service/test_gacha_service.py`：
+`test_switch_epitomized_target_writes_selected_card` /
+`test_cancel_epitomized_path_clears_selected_card` /
+`test_apply_non_draw_direct_recognizes_both_targeted_types`（S6c）。
 """
 
 import pytest

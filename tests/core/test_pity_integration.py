@@ -16,6 +16,8 @@ from gacha_simulator.core.pity import (
     TargetedBehavior, RotatingBehavior, HardPityBehavior,
     compute_scope_mappings,
     PoolPitySpec,
+    # P64 S6b（G5）：排序键的直测面
+    _BTYPE_ORDER, _resolve_order, create_behavior,
 )
 from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pool import Pool, Reward
@@ -513,7 +515,8 @@ class TestPoolOrderView:
     """`get_behaviors_for_pool` 消费 `PityEngine._pool_order`（独立排序视图）。
 
     接线口径（§1.5 裁决 1）：池内保底的**执行顺序**由排序键
-    `(稀有度 rank, _BTYPE_ORDER, name)` 决定，与 `PoolPitySpec.pity_names` 的 TOML
+    `(稀有度 rank, -priority, _BTYPE_ORDER, name)` 决定（priority 一位由 S6b 接入，
+    见下方 `TestPoolOrderPriority`），与 `PoolPitySpec.pity_names` 的 TOML
     书写顺序解耦；后者保持 TOML 顺序不动（`banner.draw_pity_names`
     的输出串依赖它）。本组用例直接钉住接线本身——若排序视图
     被回退为不生效（空集合 / 未被消费），此处即红，而基线快照对照
@@ -567,6 +570,123 @@ class TestPoolOrderView:
         assert engine._pool_order['p'] == ['aa_hard']
         assert [n for n, _ in engine.get_behaviors_for_pool('p')] == ['aa_hard']
 
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S6b（G5）：`priority` 参与排序键（§1.5 排序键规格 / §3.6 M3）
+# ══════════════════════════════════════════════════════════════════
+
+class TestPoolOrderPriority:
+    """`priority` 插在排序键的稀有度 rank 之后、`_BTYPE_ORDER` 之前。
+
+    方向**数值大者先执行**（排序键取 `-priority`），0 = 不覆盖 type 顺序。
+    本组用例钉住 §六 G5 priority 的两条断言：
+      ① 显式 priority 覆盖 type 顺序（`test_explicit_priority_overrides_type_order`）；
+      ② 全 0 时排序结果与「只按 `(rank, _BTYPE_ORDER, name)` 排」逐位相同
+         （`test_all_zero_priority_matches_default_order`）。
+    两条断言的载体都是 `_resolve_order` 的**产出顺序**；消费链路另由
+    `test_priority_reaches_pool_order_view` 覆盖（`_resolve_order` → `_pool_order`
+    → `get_behaviors_for_pool` → 三个调度入口）。
+    """
+
+    @staticmethod
+    def _behaviors(pity_defs):
+        """按 PityDef 造 behavior 实例（直测 `_resolve_order` 用，不经引擎）。"""
+        state = PityState()
+        return [create_behavior(pd, state) for pd in pity_defs]
+
+    @staticmethod
+    def _make_engine(pity_names, pity_defs, rarity_rank):
+        spec = PoolPitySpec(pity_names=list(pity_names))
+        return PityEngine(
+            pool_specs={'p': spec}, pity_defs=list(pity_defs),
+            state=PityState(), rarity_rank=rarity_rank,
+        )
+
+    def test_explicit_priority_overrides_type_order(self):
+        """断言 ①：priority 大者先执行，与 type 默认序相反时同样生效。
+
+        取 `hard`（`_BTYPE_ORDER`=1）与 `rotating`（=3）：默认序是 hard 先。
+        给 `rotating` 显式 `priority=5` 后它必须排到 hard 之前。
+        **去掉排序键里的负号，或把 priority 一位从排序键里删掉，本用例即红**
+        （两种退化下 hard 都会回到首位）。
+        """
+        defs = [
+            PityDef(name='aa_hard', btype='hard', scope='ssr', threshold=90),
+            PityDef(name='zz_rot', btype='rotating', scope='ssr', priority=5),
+        ]
+        ordered = self._behaviors(defs)
+        assert [b._name for b in _resolve_order(ordered, {'ssr': 0})] == [
+            'zz_rot', 'aa_hard'], (
+            'priority=5 的 rotating 未覆盖 _BTYPE_ORDER（默认序 hard=1 先于 rotating=3）')
+        # 前置条件：默认序确与期望相反（否则本用例无判别力）
+        assert _BTYPE_ORDER['hard'] < _BTYPE_ORDER['rotating']
+        assert [b._name for b in sorted(
+            ordered,
+            key=lambda b: (0, _BTYPE_ORDER[b._btype], b._name))] == ['aa_hard', 'zz_rot']
+
+    def test_negative_priority_runs_after_type_order(self):
+        """方向的下半段：负 priority 排在默认序**之后**（GUI 量程含负值即为此）。"""
+        defs = [
+            PityDef(name='aa_hard', btype='hard', scope='ssr', threshold=90,
+                    priority=-1),
+            PityDef(name='zz_rot', btype='rotating', scope='ssr'),
+        ]
+        assert [b._name for b in _resolve_order(self._behaviors(defs), {'ssr': 0})] == [
+            'zz_rot', 'aa_hard']
+
+    def test_all_zero_priority_matches_default_order(self):
+        """断言 ②：全 0 时排序结果与「只按 `(rank, _BTYPE_ORDER, name)` 排」逐位相同。
+
+        样本刻意混合两个 scope、四种 btype，且传入顺序与两种排序都不一致，
+        逐位比较（不是集合比较）。
+        """
+        defs = [
+            PityDef(name='zz_rot', btype='rotating', scope='ssr'),
+            PityDef(name='bb_hard', btype='hard', scope='ssr', threshold=90),
+            PityDef(name='aa_sr_hard', btype='hard', scope='sr', threshold=10),
+            PityDef(name='cc_soft', btype='soft_interval', scope='ssr',
+                    soft_start=73, soft_end=90),
+        ]
+        rank = {'ssr': 0, 'sr': 1}
+        behaviors = self._behaviors(defs)
+        assert all(b._priority == 0 for b in behaviors), '样本须全部 priority=0'
+        got = [b._name for b in _resolve_order(behaviors, rank)]
+        want = [b._name for b in sorted(
+            behaviors, key=lambda b: (rank[b._scope], _BTYPE_ORDER[b._btype], b._name))]
+        assert got == want
+        # 期望序本身须含跨 scope 与同 scope 两类比较，否则退化为常数断言
+        assert got == ['cc_soft', 'bb_hard', 'zz_rot', 'aa_sr_hard']
+
+    def test_missing_priority_attribute_falls_back_to_zero(self):
+        """旧类实例（无 `_priority` 属性）按 0 参与排序，不抛 `AttributeError`。
+
+        `create_behavior` 保留着旧类兼容分支（GATE-5，保留到发布前），
+        故 `_resolve_order` 的取值必须走 `getattr(bh, '_priority', 0)` 兜底。
+        桩对象即旧类形态的代理（只有 `_name` / `_btype` / `_scope` 三个属性）。
+        """
+        class _LegacyStub:
+            def __init__(self, name, btype, scope):
+                self._name, self._btype, self._scope = name, btype, scope
+
+        stubs = [_LegacyStub('zz_rot', 'rotating', 'ssr'),
+                 _LegacyStub('aa_hard', 'hard', 'ssr')]
+        assert [s._name for s in _resolve_order(stubs, {'ssr': 0})] == ['aa_hard', 'zz_rot']
+
+    def test_priority_reaches_pool_order_view(self):
+        """消费链路：`_resolve_order` → `_pool_order` → `get_behaviors_for_pool`。
+
+        池内执行顺序取自独立排序视图，故 priority 经该链路生效；
+        `PoolPitySpec.pity_names` 保持 TOML 书写顺序不动。
+        """
+        defs = [
+            PityDef(name='aa_hard', btype='hard', scope='ssr', threshold=90),
+            PityDef(name='zz_rot', btype='rotating', scope='ssr', priority=5),
+        ]
+        engine = self._make_engine(['aa_hard', 'zz_rot'], defs, {'ssr': 0})
+
+        assert engine._pool_order['p'] == ['zz_rot', 'aa_hard']
+        assert [n for n, _ in engine.get_behaviors_for_pool('p')] == ['zz_rot', 'aa_hard']
+        assert engine.pool_specs['p'].pity_names == ['aa_hard', 'zz_rot']
 
 # ══════════════════════════════════════════════════════════════════
 # P82-2：接线基线固化 + 等价对照（P64 §1.5 / §七 P82-2）

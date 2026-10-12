@@ -2209,6 +2209,21 @@ class ConfigPanel(QWidget):
         self.pity_init_spin.setValue(0)
         detail_form.addRow("初始水位:", self.pity_init_spin)
 
+        # ── P64 S6b（G5）：池内多条保底同时作用时的执行顺序覆盖 ──
+        # 语义：0 = 不覆盖（按类型默认序，与未接线时逐位相同）；**数值越大越先执行**，
+        # 负值即排在默认序之后。量程含负值，否则 TOML 里手写的负 priority 经
+        # 「加载 → 保存」会被 setValue 夹到 0（静默改写用户配置）。
+        self.pity_priority_spin = QSpinBox()
+        self.pity_priority_spin.setRange(-999, 999)
+        self.pity_priority_spin.setValue(0)
+        self.pity_priority_spin.setToolTip(
+            """本保底在池内的执行优先级。
+0 = 不覆盖，按保底类型默认序执行；
+数值越大越先执行（例：想让福利保底先于常规保底，把它设为 1）；
+负值排在默认序之后。"""
+        )
+        detail_form.addRow("执行优先级(大者先):", self.pity_priority_spin)
+
         # ── P56：初始状态（rotating / targeted 家族） ──
         self.pity_guaranteed_init_cb = QCheckBox("初始处于大保底状态")
         self.pity_guaranteed_init_cb.setVisible(False)
@@ -2249,6 +2264,7 @@ class ConfigPanel(QWidget):
         self.pity_reset_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_target_featured_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_init_spin.valueChanged.connect(self._flush_pity_current_detail)
+        self.pity_priority_spin.valueChanged.connect(self._flush_pity_current_detail)
         self.pity_deactivate_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_guaranteed_init_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_fate_points_spin.valueChanged.connect(self._flush_pity_current_detail)
@@ -3022,6 +3038,7 @@ class ConfigPanel(QWidget):
             'deltas': None,
             'threshold': None,
             'counter_init': 0,
+            'priority': 0,
             'guaranteed_init': False,
             'fate_points_init': 0,
             'selected_card_init': None,
@@ -3074,6 +3091,16 @@ class ConfigPanel(QWidget):
         self.pity_type_combo.blockSignals(True)
         self.pity_scope_combo.blockSignals(True)
         self.pity_reset_combo.blockSignals(True)
+
+        # P64 S6b（G5）：priority 控件须排在**所有会赋值的前面**回填。本方法后续任一
+        # 控件（target_featured / 动态参数 / counter_init …）的 setValue/setChecked
+        # 都会触发 `_flush_pity_current_detail`，而该 flush 从**全部**控件读值写回本条；
+        # priority 控件若此时仍是上一条的残留值，本条目的 priority 就被旧值覆盖
+        # （实测：回填排在 counter_init 之后时，切换条目即把 priority 写成上一条的
+        # 值、保存即固化）。回填自身阻断信号，避免给上述 flush 新增触发点。
+        self.pity_priority_spin.blockSignals(True)
+        self.pity_priority_spin.setValue(pd.get('priority', 0))
+        self.pity_priority_spin.blockSignals(False)
 
         self.pity_name_edit.setText(pd.get('name', ''))
 
@@ -3403,6 +3430,7 @@ class ConfigPanel(QWidget):
         # 绑定池（P61 Ph8b：勾选表格 → patterns）
         pd['pools'] = self._read_pity_bind_patterns()
         pd['counter_init'] = self.pity_init_spin.value()
+        pd['priority'] = self.pity_priority_spin.value()
 
         # 生命周期
         pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
@@ -3488,6 +3516,7 @@ class ConfigPanel(QWidget):
         # 绑定池（P61 Ph8b：勾选表格 → patterns）
         pd['pools'] = self._read_pity_bind_patterns()
         pd['counter_init'] = self.pity_init_spin.value()
+        pd['priority'] = self.pity_priority_spin.value()
 
         # 生命周期
         pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
@@ -6457,6 +6486,7 @@ class ConfigPanel(QWidget):
                     'deltas': pd.get('deltas'),
                     'threshold': pd.get('threshold'),
                     'counter_init': pd.get('counter_init', 0),
+                    'priority': pd.get('priority', 0),
                     'start': pd.get('soft_start'),
                     'end': pd.get('soft_end'),
                     'increment': pd.get('soft_increment'),
@@ -6698,6 +6728,7 @@ class ConfigPanel(QWidget):
                 pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), (list, tuple)) else (pd.get('pools', '*'),),
                 deactivate_on_early_hit=(pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
                 depends_on=(pd.get('lifecycle') or {}).get('depends_on'),
+                priority=pd.get('priority', 0),
             ))
             # 同步到 _pity_defs UI 内部格式
             self._pity_defs.append({
@@ -6708,6 +6739,7 @@ class ConfigPanel(QWidget):
                 'deltas': pd.get('deltas'),
                 'threshold': pd.get('threshold'),
                 'counter_init': pd.get('counter_init', 0),
+                'priority': pd.get('priority', 0),
                 'soft_start': pd.get('start'),
                 'soft_end': pd.get('end'),
                 'soft_increment': pd.get('increment'),
@@ -7317,6 +7349,7 @@ class ConfigPanel(QWidget):
                 pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), list) else (pd.get('pools', '*'),) if isinstance(pd.get('pools'), str) else pd.get('pools', ('*',)),
                 deactivate_on_early_hit=pd.get('deactivate_on_early_hit', False),
                 depends_on=pd.get('depends_on'),
+                priority=pd.get('priority', 0),
             ))
         store.pity.pities = pities
 
@@ -7574,6 +7607,7 @@ class ConfigPanel(QWidget):
                 'deltas': getattr(p, 'deltas', None),
                 'threshold': getattr(p, 'threshold', None),
                 'counter_init': getattr(p, 'counter_init', 0),
+                'priority': getattr(p, 'priority', 0),
                 'soft_start': getattr(p, 'soft_start', None),
                 'soft_end': getattr(p, 'soft_end', None),
                 'soft_increment': getattr(p, 'soft_increment', None),

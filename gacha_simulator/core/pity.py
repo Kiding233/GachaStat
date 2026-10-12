@@ -1586,19 +1586,31 @@ _BTYPE_ORDER = {
 
 
 def _resolve_order(behaviors, rarity_rank=None):
-    """按稀有度层级→type 优先级排序 behavior 列表。
+    """按稀有度层级→priority→type 优先级→name 排序 behavior 列表。
 
     P55 §3.3：高稀有度先执行（rank 值小→优先级高），同稀有度内
     counter_soft → counter_hard → event_driven_soft → event_driven_hard。
     同优先级按 name 字母序（确定性）。
+
+    **P64 S6b（G5，§1.5 排序键规格）**：`priority` 插在稀有度 rank 之后、
+    `_BTYPE_ORDER` 之前，即排序键为 `(rank, -priority, order, name)`。
+    方向取「**数值大者先执行**」（故对 priority 取负后交给 sorted 升序），
+    依据两条：
+      ① 字段名直译即「优先级」，手册 3.4 节把该需求写作「福利保底和常规保底的
+         优先级交互」，期望 `hard` 先于 `targeted`，即优先级高者先执行；
+      ② 全部 priority 为 0 时 `-0 == 0`，排序结果与接线后的默认序逐位相同，
+         故取此方向不引入回归（方向本身不影响「全 0 退化为默认序」这一要求）。
+    `getattr(bh, '_priority', 0)` 兜底：`create_behavior` 保留着旧类兼容分支
+    （见 GATE-5），旧类实例没有该属性，缺属性即按默认 0 参与排序。
     """
     if rarity_rank is None:
         rarity_rank = {}
     def _sort_key(bh):
         scope = getattr(bh, '_scope', '')
         rank = rarity_rank.get(scope, 99)
+        priority = -getattr(bh, '_priority', 0)
         order = _BTYPE_ORDER.get(getattr(bh, '_btype', ''), 99)
-        return (rank, order, getattr(bh, '_name', ''))
+        return (rank, priority, order, getattr(bh, '_name', ''))
     return sorted(behaviors, key=_sort_key)
 
 
@@ -1832,7 +1844,7 @@ class PityEngine:
         # 兼有第二职责（`banner.draw_pity_names` 用 `','.join(pity_names)` 生成
         # 输出串，字面顺序会进 golden 快照），故不动它；本视图只承载「谁先执行」。
         # 池内序 = 全局排序（ordered）在池成员上的子序：排序键（稀有度 rank
-        # → _BTYPE_ORDER → name）只依赖 behavior 自身属性、与池无关，
+        # → priority → _BTYPE_ORDER → name）只依赖 behavior 自身属性、与池无关，
         # 故子序即该池按同一排序键的结果。
         _order_index: Dict[str, int] = {
             getattr(bh, '_name', ''): _i for _i, bh in enumerate(ordered)

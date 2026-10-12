@@ -529,3 +529,142 @@ class TestTargetFeaturedCheckboxScope:
             '勾选残留被写进 _pity_defs，保存即产出 7B 违规配置')
         pity0 = panel.get_config()['pity']['pities'][0]
         assert not pity0.get('target_featured'), 'get_config 仍带 target_featured'
+
+
+# ═══════════════════════════════════════════════════════════════════
+# P64 S6b（G5）：`priority` 的 GUI 往返（§六 G5 验收第三项）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestPriorityRoundTrip:
+    """TOML 写非默认 `priority` → GUI 加载 → 直接保存 → 重读 TOML 仍为原值。
+
+    本用例是 GUI 逐字段键表（`_refresh_from_store_impl` 读侧 / `apply_to_store`
+    写侧 / `set_config` 字典侧 / `get_config` 输出侧）漏改 `priority` 的**唯一
+    显形面**：漏改不报错、保存时静默落回默认 0（手写的 priority 被抹掉）。
+    链路上任一环缺该键，本用例即红。
+    """
+
+    def _panel_from_toml(self, path):
+        from gacha_simulator.core.config_toml import load_toml
+        from gacha_simulator.gui.config_panel import ConfigPanel
+
+        store = load_toml(str(path))
+        panel = ConfigPanel()
+        panel._store = store
+        panel._refresh_from_store_impl()
+        return panel
+
+    def test_priority_survives_gui_round_trip(self, qapp, tmp_path):
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        # 1) 造一份带非默认 priority 的 TOML（真实写盘路径产出）
+        seeded = load_toml(_CONFIG_TOML)
+        seeded.pity.pities[0].priority = 7
+        toml_in = tmp_path / 'in.toml'
+        save_toml(seeded, str(toml_in))
+        assert 'priority = 7' in toml_in.read_text(encoding='utf-8'), (
+            '前置条件不成立：输入 TOML 未带非默认 priority')
+
+        # 2) GUI 加载：内存态与控件都必须拿到 7
+        panel = self._panel_from_toml(toml_in)
+        assert panel._pity_defs[0]['priority'] == 7, (
+            '读侧字段表（_refresh_from_store_impl）未透传 priority')
+        panel.pity_list.setCurrentRow(0)
+        assert panel.pity_priority_spin.value() == 7, (
+            '控件未回填 priority，用户看到的是 0，保存即抹掉原值')
+
+        # 3) 不做任何编辑，直接保存
+        panel.apply_to_store()
+        assert panel._store.pity.pities[0].priority == 7, (
+            '写侧字段表（apply_to_store）未透传 priority')
+        toml_out = tmp_path / 'out.toml'
+        save_toml(panel._store, str(toml_out))
+
+        # 4) 重读 TOML：键仍为原值
+        reloaded = load_toml(str(toml_out))
+        assert reloaded.pity.pities[0].priority == 7
+
+    def test_set_config_get_config_carry_priority(self, qapp):
+        """字典侧往返（`set_config` → `get_config`）：同样不得丢 priority。
+
+        钉住两处独立于上一条（读 / 写侧字段表）的接线：
+        ① `set_config` 的 `PityDef(...)` 构造（config dict → store）；② `get_config`
+        的输出 dict（导出 / 预览面）。
+        **注意**：`set_config` 的 `_pity_defs` 字段表**不在**本用例的判别面上——
+        `set_config` 结尾调用 `refresh_from_store()`，`_pity_defs` 随即被
+        `_refresh_from_store_impl` 按 store 重建（实测：删掉该表里的 `priority`
+        本用例仍绿，判别力只来自上面两处）。该表照样补键，是为与 S7a 的
+        dataclass 驱动改造同形、且防将来去掉那次 refresh。
+        """
+        panel = _make_panel()
+        config = panel.get_config()
+        config['pity']['pities'][0]['priority'] = 9
+        panel.set_config(config)
+        assert panel._pity_defs[0]['priority'] == 9, (
+            'set_config 的字段表未透传 priority')
+        assert panel.get_config()['pity']['pities'][0]['priority'] == 9, (
+            'get_config 的输出未带 priority')
+
+    def test_negative_priority_not_clamped_by_spinbox(self, qapp, tmp_path):
+        """控件量程须容纳负值：否则 TOML 里的负 priority 经「加载 → 保存」被夹到 0。
+
+        `setValue` 对超量程值是**静默夹取**（不报错），故这是一条无报错的数据损坏路径：
+        量程收成 0..N 即必红。
+        """
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        seeded = load_toml(_CONFIG_TOML)
+        seeded.pity.pities[0].priority = -3
+        toml_in = tmp_path / 'in.toml'
+        save_toml(seeded, str(toml_in))
+        panel = self._panel_from_toml(toml_in)
+        panel.pity_list.setCurrentRow(0)
+        assert panel.pity_priority_spin.value() == -3, '负 priority 被控件夹住'
+        panel.apply_to_store()
+        toml_out = tmp_path / 'out.toml'
+        save_toml(panel._store, str(toml_out))
+        assert load_toml(str(toml_out)).pity.pities[0].priority == -3
+
+    def test_row_switch_does_not_clobber_priority(self, qapp, tmp_path):
+        """切换条目不得把本条目的 `priority` 写成上一条的残留值。
+
+        机制：`_on_pity_selected` 中任一后续控件的 `setValue` / `setChecked` 都会触发
+        `_flush_pity_current_detail`，而该 flush 从**全部**控件读值写回本条目；
+        priority 控件若尚未回填，本条目的值即被上一条的残留值覆盖，保存即固化。
+        故回填须排在其他控件之前（本用例是该排布的**唯一显形面**：
+        排到后面时无任何报错，只是静默改写两条保底的配置）。
+        """
+        import copy
+
+        from gacha_simulator.core.config_toml import load_toml, save_toml
+
+        seeded = load_toml(_CONFIG_TOML)
+        first = seeded.pity.pities[0]
+        first.priority = 7
+        second = copy.deepcopy(first)
+        second.name = 'second_pity'
+        second.priority = 0
+        # 让 counter_init 两行取值不同：它保证切换时确有控件发出变更信号，
+        # 即真正走到「flush 从全部控件读值」这一步（否则本用例无判别力）
+        second.counter_init = 5
+        seeded.pity.pities.append(second)
+
+        toml_in = tmp_path / 'two_pities.toml'
+        save_toml(seeded, str(toml_in))
+        panel = self._panel_from_toml(toml_in)
+        assert panel.pity_list.count() == 2
+
+        panel.pity_list.setCurrentRow(0)
+        assert panel.pity_priority_spin.value() == 7
+        panel.pity_list.setCurrentRow(1)
+        assert panel._pity_defs[1]['priority'] == 0, (
+            '切到第 2 条时其 priority 被上一条的 7 覆盖（控件回填排在了其他控件之后）')
+        assert panel.pity_priority_spin.value() == 0
+        panel.pity_list.setCurrentRow(0)
+        assert panel._pity_defs[0]['priority'] == 7
+
+        panel.apply_to_store()
+        toml_out = tmp_path / 'two_pities_out.toml'
+        save_toml(panel._store, str(toml_out))
+        reloaded = load_toml(str(toml_out))
+        assert [p.priority for p in reloaded.pity.pities] == [7, 0]

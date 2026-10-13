@@ -31,7 +31,11 @@
 守的是 `create_behavior` 的**旧类兼容分支**（保留到发布前，见 GATE-5），与
 `_validate_registry()` 的过渡判据不是同一条代码路径，故不随收口删除。
 """
+import hashlib
 import inspect
+import json
+import struct
+from pathlib import Path
 
 import pytest
 
@@ -51,6 +55,54 @@ from gacha_simulator.core.pity_tracker import (
     AlwaysActive, CounterTracker, FateTracker, FlagTracker, NamespaceTracker,
     StreakTracker,
 )
+
+
+# ══════════════════════════════════════════════════════════════════
+# S7e：等价性装置 golden（旧类下线后仍可断言的对照结果）
+# ══════════════════════════════════════════════════════════════════
+# 本文件的**唯一**等价性对照点是 `test_order_contract_pinned_semantically`
+# （新骨架装配的 `Pity` 与旧 `RotatingCRBehavior` 的 `cr_counter` 轨迹逐位相同），
+# 其对照结果固化在 `tests/fixtures/p64_s7e_golden.json`（字段含义见该文件
+# `_format` 段）。断言一律用**严格 `==`**、不用 `approx`：golden 存的是 JSON
+# 原生数，CPython 的 json 写侧用 `float.__repr__`、读侧用正确舍入的 `float()`。
+#
+# 本文件其余的 `HardPityBehavior` 引用（`_LegacyKwargsProbe` 子类、legacy 分支的
+# 注入条目）是**旧类兼容分支的守卫**（`create_behavior` 的 legacy 分支），随该分支
+# 一并删除，**不属等价性装置**，故不做 golden。
+_GOLDEN_PATH = Path(__file__).resolve().parents[1] / 'fixtures' / 'p64_s7e_golden.json'
+_GOLDEN = json.loads(_GOLDEN_PATH.read_text(encoding='utf-8'))['cases']
+
+
+def _bits(node):
+    """golden 数值载荷的规范位串（float 取 IEEE-754 双精度位模式）。"""
+    if isinstance(node, dict):
+        return '{' + ','.join(f'{k}={_bits(node[k])}' for k in sorted(node)) + '}'
+    if isinstance(node, list):
+        return '[' + ','.join(_bits(v) for v in node) + ']'
+    if isinstance(node, float):
+        return struct.pack('<d', node).hex()
+    return repr(node)
+
+
+def _golden(case_id):
+    """取一条 golden 用例；先校验数值载荷与位摘要一致（防手改小数未同步）。"""
+    case = _GOLDEN[case_id]
+    got = hashlib.sha256(_bits(case['expected']).encode('utf-8')).hexdigest()
+    assert got == case['bits_sha256'], (
+        f'{case_id}：golden 数值载荷与位摘要不符（小数被改写或精度丢失）')
+    return case
+
+
+def test_golden_cr_counter_trajectory_is_not_a_constant():
+    """反空转自检：golden 的轨迹覆盖 1..4 四档，不是「全 0」这类退化常量。
+
+    顺序契约失效（`FlagTracker` 排到 `StreakTracker` 前面）时该轨迹退化为全 0，
+    故「四档齐全」正是本 golden 的判别力所在。
+    """
+    exp = _golden('registry.order_contract.cr_counter_trajectory')['expected']
+    assert len(exp) == 8
+    assert sorted(set(exp)) == [1, 2, 3, 4], '轨迹未覆盖 1..4 四档（疑似退化为常量）'
+    assert exp == [1, 1, 2, 2, 3, 3, 4, 4]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -760,8 +812,15 @@ class TestRotatingCrTrackerOrder:
         +1」、偶数位即「命中当轮由抽前 `guaranteed` 短路、计数不动」——两者都要求
         `StreakTracker.commit` 读到的是**抽前**的 `guaranteed`（块报告的牙齿实测：
         顺序对调后该轨迹退化为全 0）。
+
+        S7e：对照结果同时固化在 golden（生产侧与旧类侧都必须等于它），旧类下线后
+        只删「构造旧类并对照」的那一段，golden 断言保留。
         """
         from gacha_simulator.core.pity import RotatingCRBehavior
+
+        golden = _golden('registry.order_contract.cr_counter_trajectory')
+        assert [list(s) for s in self._CR_SEQ] == golden['input']['seq'], \
+            '输入漂移：抽卡序列与 golden 不同'
 
         bh, state = _fx_build('rotating_cr', cr_counter_threshold=3,
                               cr_state_probs=[0.0, 0.0, 0.0, 1.0])
@@ -783,7 +842,10 @@ class TestRotatingCrTrackerOrder:
             traj_new.append(state.get('fx', 'cr_counter', 0))
             traj_old.append(old_state.get('fx', 'cr_counter', 0))
 
+        # 行内字面量（S7e 前本文件唯一的期望值载体）与 golden 同值，保留不动
         assert traj_new == [1, 1, 2, 2, 3, 3, 4, 4]
+        assert traj_new == golden['expected'], '生产侧轨迹与 golden 不等'
+        assert traj_old == golden['expected'], '旧类侧轨迹与 golden 不等'
         assert traj_new == traj_old, '与旧类的 cr_counter 轨迹必须逐位相同（M1 口径）'
 
 

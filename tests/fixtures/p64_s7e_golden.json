@@ -1,0 +1,1011 @@
+{
+  "_format": {
+    "plan": "P64",
+    "block": "S7e 等价性装置 golden 固化",
+    "purpose": "三个测试文件里「新实现 vs 旧行为类逐位相等」的对照点，在旧类存活期把对照结果固化为本文件；旧类删除时只删「构造旧类并对照」的代码段，保留对 golden 的断言。",
+    "generated_by": "一次性生成器（P64 S7e 实施期：旧实现侧取值并当场核对生产侧相等）",
+    "case_schema": {
+      "description": "人类可读：这条 golden 是哪个用例、什么对照",
+      "input": "该对照的输入（分布 / 计数器 / 序列 / 种子 / 阈值），供人核对，不参与断言",
+      "expected": "期望输出。分布型载荷形如 {\"returns_none\": bool, \"effective\": {槽位: 概率}}；轨迹型载荷为整数数组或「键 -> 整数数组」映射",
+      "bits_sha256": "expected 数值载荷的位摘要（float 按 IEEE-754 双精度位模式参与），用例读取时校验，防「手改小数未同步摘要」的静默精度损失",
+      "note": "可选，记录该条的特殊约定或退化情形"
+    },
+    "exactness": "expected 里的数一律是 JSON 原生数。CPython 的 json 序列化用 float.__repr__（最短且可往返的十进制）、反序列化用正确舍入的 float()，故 float(repr(x)) == x 位级成立；用例一律用严格 == 断言，不得改用 approx。"
+  },
+  "cases": {
+    "modifier.hard.target_scope": {
+      "description": "旧 HardPityBehavior(target_featured=False)._compute_probabilities(ctx, 5) 与 HardModifier(target='scope').apply(..., counter=5) 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.013,
+          "ssr": 0.007,
+          "sr": 0.11,
+          "r": 0.87
+        },
+        "counter": 5,
+        "threshold": 5,
+        "target_featured": false,
+        "target": "scope",
+        "scope": "ssr"
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.6,
+          "ssr": 0.4,
+          "sr": 0.0,
+          "r": 0.0
+        }
+      },
+      "bits_sha256": "99540169dc2ff056d57a1510c84fb2f77394722d1220a2891a03e6a14a94c4b2"
+    },
+    "modifier.hard.target_featured": {
+      "description": "旧 HardPityBehavior(target_featured=True)._compute_probabilities(ctx, 5) 与 HardModifier(target='featured').apply(..., counter=5) 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.013,
+          "ssr": 0.007,
+          "sr": 0.11,
+          "r": 0.87
+        },
+        "counter": 5,
+        "threshold": 5,
+        "target_featured": true,
+        "target": "featured",
+        "scope": "ssr"
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 1.0,
+          "ssr": 0.0,
+          "sr": 0.0,
+          "r": 0.0
+        }
+      },
+      "bits_sha256": "012afa835efa5a8fb69ee1b7e00568c0b8dee29defe48612aea073c589a6897c"
+    },
+    "modifier.soft.per_counter": {
+      "description": "旧 SoftStepBehavior(deltas=((4,0.0),(6,5.0)))._compute_probabilities 与 SoftModifier(同 deltas).apply 在 counter 取 0/4/5/10/40 上的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.013,
+          "ssr": 0.007,
+          "sr": 0.11,
+          "r": 0.87
+        },
+        "deltas": [
+          [
+            4,
+            0.0
+          ],
+          [
+            6,
+            5.0
+          ]
+        ],
+        "counters": [
+          0,
+          4,
+          5,
+          10,
+          40
+        ],
+        "scope": "ssr"
+      },
+      "expected": {
+        "0": {
+          "returns_none": true,
+          "effective": {
+            "ssr_featured": 0.013,
+            "ssr": 0.007,
+            "sr": 0.11,
+            "r": 0.87
+          }
+        },
+        "4": {
+          "returns_none": true,
+          "effective": {
+            "ssr_featured": 0.013,
+            "ssr": 0.007,
+            "sr": 0.11,
+            "r": 0.87
+          }
+        },
+        "5": {
+          "returns_none": false,
+          "effective": {
+            "ssr_featured": 0.045500000000000006,
+            "ssr": 0.024500000000000004,
+            "sr": 0.1043877551020408,
+            "r": 0.8256122448979591
+          }
+        },
+        "10": {
+          "returns_none": false,
+          "effective": {
+            "ssr_featured": 0.208,
+            "ssr": 0.112,
+            "sr": 0.0763265306122449,
+            "r": 0.6036734693877551
+          }
+        },
+        "40": {
+          "returns_none": false,
+          "effective": {
+            "ssr_featured": 0.65,
+            "ssr": 0.35000000000000003,
+            "sr": 0.0,
+            "r": 0.0
+          }
+        }
+      },
+      "bits_sha256": "b9f59a4cfc0aa20394e45476cdf5ddc4e66b44976450255822849c72ba56136b",
+      "note": "counter=0/4 段增量 0 时生产侧返回 None（恒等）、旧类返回输入分布；returns_none 记生产侧契约，effective 记有效输出"
+    },
+    "modifier.rotating.guaranteed": {
+      "description": "旧 RotatingBehavior.before_draw（guaranteed 分支）与 RotatingModifier.apply(view.guaranteed=True) 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.013,
+          "ssr": 0.007,
+          "sr": 0.11,
+          "r": 0.87
+        },
+        "scope": "ssr",
+        "state": {
+          "guaranteed": true
+        }
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.02,
+          "ssr": 0.0,
+          "sr": 0.11,
+          "r": 0.87
+        }
+      },
+      "bits_sha256": "36ee9445de296bfe2c8862c811a5d4620722590b2e65115600d0fc8fda991add"
+    },
+    "modifier.selected.guaranteed": {
+      "description": "旧 TargetedBehavior.before_draw（定轨 + guaranteed 分支）与 SelectedModifier(tau=1).apply 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.013,
+          "ssr": 0.007,
+          "sr": 0.11,
+          "r": 0.87
+        },
+        "scope": "ssr",
+        "state": {
+          "selected_card": "ssr_up",
+          "guaranteed": true
+        },
+        "tau": 1
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.02,
+          "ssr": 0.0,
+          "sr": 0.11,
+          "r": 0.87
+        }
+      },
+      "bits_sha256": "36ee9445de296bfe2c8862c811a5d4620722590b2e65115600d0fc8fda991add"
+    },
+    "modifier.randomised.hard.ssr.target_featured=False": {
+      "description": "随机分布（seed=20261010，scope=ssr、target_featured=False 轮）下 HardPityBehavior 与 HardModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.18567594526117717,
+          "ssr": 0.35104966872830706,
+          "sr": 0.022364500625642564,
+          "r": 0.4409098853848732
+        },
+        "scope": "ssr",
+        "counter": 5,
+        "threshold": 5,
+        "target_featured": false,
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.6,
+          "ssr": 0.4,
+          "sr": 0.0,
+          "r": 0.0
+        }
+      },
+      "bits_sha256": "99540169dc2ff056d57a1510c84fb2f77394722d1220a2891a03e6a14a94c4b2"
+    },
+    "modifier.randomised.hard.ssr.target_featured=True": {
+      "description": "随机分布（seed=20261010，scope=ssr、target_featured=True 轮）下 HardPityBehavior 与 HardModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.15657119938607267,
+          "ssr": 0.2444313856965154,
+          "sr": 0.21719694995963246,
+          "r": 0.3818004649577796
+        },
+        "scope": "ssr",
+        "counter": 5,
+        "threshold": 5,
+        "target_featured": true,
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 1.0,
+          "ssr": 0.0,
+          "sr": 0.0,
+          "r": 0.0
+        }
+      },
+      "bits_sha256": "012afa835efa5a8fb69ee1b7e00568c0b8dee29defe48612aea073c589a6897c"
+    },
+    "modifier.randomised.soft.ssr.counter=0": {
+      "description": "随机分布（seed=20261010，scope=ssr、counter=0 轮）下 SoftStepBehavior 与 SoftModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.09617479237789414,
+          "ssr": 0.2175366628368591,
+          "sr": 0.25102473637950057,
+          "r": 0.4352638084057462
+        },
+        "scope": "ssr",
+        "counter": 0,
+        "deltas": [
+          [
+            4,
+            0.0
+          ],
+          [
+            6,
+            5.0
+          ]
+        ],
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": true,
+        "effective": {
+          "ssr_featured": 0.09617479237789414,
+          "ssr": 0.2175366628368591,
+          "sr": 0.25102473637950057,
+          "r": 0.4352638084057462
+        }
+      },
+      "bits_sha256": "45d963c2b8e52a7fbde88da3293c03ae7359392a66f68c001c0f5f01233d4238"
+    },
+    "modifier.randomised.soft.ssr.counter=4": {
+      "description": "随机分布（seed=20261010，scope=ssr、counter=4 轮）下 SoftStepBehavior 与 SoftModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.3175445387386442,
+          "ssr": 0.20271037606234357,
+          "sr": 0.3743064917022474,
+          "r": 0.10543859349676489
+        },
+        "scope": "ssr",
+        "counter": 4,
+        "deltas": [
+          [
+            4,
+            0.0
+          ],
+          [
+            6,
+            5.0
+          ]
+        ],
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": true,
+        "effective": {
+          "ssr_featured": 0.3175445387386442,
+          "ssr": 0.20271037606234357,
+          "sr": 0.3743064917022474,
+          "r": 0.10543859349676489
+        }
+      },
+      "bits_sha256": "4f18bf192b8523a55befc164b10859abb6aebf6e47f16646dd8a0fc0378652a3"
+    },
+    "modifier.randomised.soft.ssr.counter=7": {
+      "description": "随机分布（seed=20261010，scope=ssr、counter=7 轮）下 SoftStepBehavior 与 SoftModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.16580782738467562,
+          "ssr": 0.1436742566067213,
+          "sr": 0.3639833252585091,
+          "r": 0.32653459075009406
+        },
+        "scope": "ssr",
+        "counter": 7,
+        "deltas": [
+          [
+            4,
+            0.0
+          ],
+          [
+            6,
+            5.0
+          ]
+        ],
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.2461716849202631,
+          "ssr": 0.2133103990711338,
+          "sr": 0.2849158636865256,
+          "r": 0.25560205232207756
+        }
+      },
+      "bits_sha256": "07c75362a5c3d92e8cba8d7c114ecb0fc6a12296166831bd02420ad09d18004b"
+    },
+    "modifier.randomised.hard.sr.target_featured=False": {
+      "description": "随机分布（seed=20261010，scope=sr、target_featured=False 轮）下 HardPityBehavior 与 HardModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.051287478970808674,
+          "ssr": 0.1919471258416549,
+          "sr": 0.5195423965129673,
+          "r": 0.23722299867456917
+        },
+        "scope": "sr",
+        "counter": 5,
+        "threshold": 5,
+        "target_featured": false,
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.051287478970808674,
+          "ssr": 0.1919471258416549,
+          "sr": 1.0,
+          "r": 0.0
+        }
+      },
+      "bits_sha256": "9ab6fcb03669acbcbc16fed6b1ff7f58b78334a0127dab8382fc70f5be7b02ed"
+    },
+    "modifier.randomised.hard.sr.target_featured=True": {
+      "description": "随机分布（seed=20261010，scope=sr、target_featured=True 轮）下 HardPityBehavior 与 HardModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.33637285983226894,
+          "ssr": 0.22702934363996055,
+          "sr": 0.06789658003431229,
+          "r": 0.3687012164934583
+        },
+        "scope": "sr",
+        "counter": 5,
+        "threshold": 5,
+        "target_featured": true,
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.33637285983226894,
+          "ssr": 0.22702934363996055,
+          "sr": 1.0,
+          "r": 0.0
+        }
+      },
+      "bits_sha256": "9912c5b235e419a02b413fe3374386202f13e5279e27ea44b949afe6bf19927d"
+    },
+    "modifier.randomised.soft.sr.counter=0": {
+      "description": "随机分布（seed=20261010，scope=sr、counter=0 轮）下 SoftStepBehavior 与 SoftModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.24749704326661373,
+          "ssr": 0.4322655771248658,
+          "sr": 0.24088404408454905,
+          "r": 0.07935333552397135
+        },
+        "scope": "sr",
+        "counter": 0,
+        "deltas": [
+          [
+            4,
+            0.0
+          ],
+          [
+            6,
+            5.0
+          ]
+        ],
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": true,
+        "effective": {
+          "ssr_featured": 0.24749704326661373,
+          "ssr": 0.4322655771248658,
+          "sr": 0.24088404408454905,
+          "r": 0.07935333552397135
+        }
+      },
+      "bits_sha256": "5af285f809e22ffed0946c6f23dc3c7ed1db0be64549f908a21887be83b74f35"
+    },
+    "modifier.randomised.soft.sr.counter=4": {
+      "description": "随机分布（seed=20261010，scope=sr、counter=4 轮）下 SoftStepBehavior 与 SoftModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.2379443437554192,
+          "ssr": 0.3119019731419566,
+          "sr": 0.3175388067231573,
+          "r": 0.13261487637946678
+        },
+        "scope": "sr",
+        "counter": 4,
+        "deltas": [
+          [
+            4,
+            0.0
+          ],
+          [
+            6,
+            5.0
+          ]
+        ],
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": true,
+        "effective": {
+          "ssr_featured": 0.2379443437554192,
+          "ssr": 0.3119019731419566,
+          "sr": 0.3175388067231573,
+          "r": 0.13261487637946678
+        }
+      },
+      "bits_sha256": "0ca1a8d4141a1f7a664c81fca849aaa41c5abc51c0e8221fa082496e2c45a650"
+    },
+    "modifier.randomised.soft.sr.counter=7": {
+      "description": "随机分布（seed=20261010，scope=sr、counter=7 轮）下 SoftStepBehavior 与 SoftModifier 的逐位对照结果",
+      "input": {
+        "dist": {
+          "ssr_featured": 0.28964747847941225,
+          "ssr": 0.19985569297579342,
+          "sr": 0.2874025605528723,
+          "r": 0.223094267991922
+        },
+        "scope": "sr",
+        "counter": 7,
+        "deltas": [
+          [
+            4,
+            0.0
+          ],
+          [
+            6,
+            5.0
+          ]
+        ],
+        "rng_seed": 20261010
+      },
+      "expected": {
+        "returns_none": false,
+        "effective": {
+          "ssr_featured": 0.28964747847941225,
+          "ssr": 0.19985569297579342,
+          "sr": 0.4374025605528723,
+          "r": 0.07309426799192201
+        }
+      },
+      "bits_sha256": "7322cb903ab8a94003ba1286187704f4fd498cac88d913e2fbbfa9ced3787064"
+    },
+    "tracker.random_consumption": {
+      "description": "旧 RotatingCRBehavior.before_draw 与 StreakTracker.prepare 在 9 组条件（含 4 条「不掷」路径）下的随机数消费次数逐条对照结果",
+      "input": {
+        "cases": [
+          [
+            false,
+            false,
+            0,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "state_prob=0 → 不掷"
+          ],
+          [
+            false,
+            false,
+            1,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "state_prob=0 → 不掷"
+          ],
+          [
+            false,
+            false,
+            3,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "idx 命中 1.0 → 确定性，不掷"
+          ],
+          [
+            false,
+            false,
+            9,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.75,
+              1.0
+            ],
+            "下标裁剪到 3 → 确定性，不掷"
+          ],
+          [
+            false,
+            false,
+            2,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.75,
+              1.0
+            ],
+            "state_prob=0.75 → 掷 1 次"
+          ],
+          [
+            false,
+            false,
+            0,
+            0.018,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "base_rate 掷 1 次（失败）"
+          ],
+          [
+            false,
+            false,
+            0,
+            0.018,
+            [],
+            "空表 → idx=-1，仅 base_rate 掷"
+          ],
+          [
+            true,
+            false,
+            0,
+            0.018,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "guaranteed → 不掷"
+          ],
+          [
+            false,
+            true,
+            0,
+            0.018,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "readonly → 不掷"
+          ]
+        ],
+        "counter_threshold": 3,
+        "scope": "ssr",
+        "fake_random_returns": 0.5
+      },
+      "expected": [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0
+      ],
+      "bits_sha256": "ccb8020e71c2829177fe31d38810993e70f70df2b6e121953b4411be6366dc09"
+    },
+    "tracker.cr_counter_trajectory": {
+      "description": "15 抽序列下旧 RotatingCRBehavior 与 StreakTracker+FlagTracker 的 cr_counter 轨迹逐位对照结果（逐种子）",
+      "input": {
+        "seeds": [
+          1,
+          7,
+          42
+        ],
+        "seq": [
+          [
+            "ssr",
+            false
+          ],
+          [
+            "sr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "sr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ]
+        ],
+        "cr_counter_threshold": 3,
+        "cr_base_rate": 0.018,
+        "cr_state_probs": [
+          0.0,
+          0.0,
+          0.75,
+          1.0
+        ]
+      },
+      "expected": {
+        "1": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4
+        ],
+        "7": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4
+        ],
+        "42": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4
+        ]
+      },
+      "bits_sha256": "ae9348b4ed09c30141e52f36845e152eba18c51c18bb9e232c73fe52e6782dc9"
+    },
+    "tracker.fate_trajectory.selected": {
+      "description": "12 抽序列（已定轨 up_card）下旧 TargetedBehavior.after_draw 与 FateTracker.commit 的四键轨迹逐位对照结果",
+      "input": {
+        "seq": [
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "sr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "sr",
+            "other"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "other"
+          ]
+        ],
+        "selected_card": "up_card",
+        "keys": [
+          "fate_points",
+          "losses",
+          "guaranteed",
+          "lost_rotating"
+        ],
+        "fate_threshold": 2,
+        "tracker_kw": {
+          "scope": "ssr",
+          "judge": "selected",
+          "hit": "clear",
+          "miss": "accumulate"
+        }
+      },
+      "expected": [
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          0,
+          0,
+          false,
+          false
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          2,
+          2,
+          true,
+          true
+        ],
+        [
+          2,
+          2,
+          true,
+          true
+        ],
+        [
+          3,
+          3,
+          true,
+          true
+        ],
+        [
+          0,
+          0,
+          false,
+          false
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          2,
+          2,
+          true,
+          true
+        ],
+        [
+          0,
+          0,
+          false,
+          false
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ]
+      ],
+      "bits_sha256": "8d582a100c1fd77813f8a507cbca6f09c4f85c0c38f39d05693fd279c15cc200"
+    },
+    "tracker.fate_trajectory.unselected": {
+      "description": "未定轨（selected_card=None）时单抽后旧 TargetedBehavior.after_draw 与 FateTracker.commit 的四键对照结果（两侧同为空状态）",
+      "input": {
+        "seq": [
+          [
+            "ssr",
+            "any"
+          ]
+        ],
+        "selected_card": null,
+        "keys": [
+          "fate_points",
+          "losses",
+          "guaranteed",
+          "lost_rotating"
+        ],
+        "fate_threshold": 2
+      },
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "bits_sha256": "1c10b03518fff8fc374a20bbf5107c66496656bec0662d6c6db123d4a898f121",
+      "note": "本组四键全为默认 0（「整段不动」），golden 输出是常量；判别力在「未被写入」而非数值差异"
+    },
+    "registry.order_contract.cr_counter_trajectory": {
+      "description": "「出 ssr 未命中 / 出 ssr 命中」交替四轮下，create_behavior 装配的 Pity 与旧 RotatingCRBehavior 的 cr_counter 轨迹逐位对照结果（StreakTracker 在前、FlagTracker 在后的顺序契约）",
+      "input": {
+        "seq": [
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ]
+        ],
+        "btype": "rotating_cr",
+        "cr_counter_threshold": 3,
+        "cr_state_probs": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "base_probabilities": {
+          "ssr_featured": 0.006,
+          "ssr": 0.004,
+          "sr": 0.05,
+          "r": 0.94
+        }
+      },
+      "expected": [
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+        4,
+        4
+      ],
+      "bits_sha256": "a9562b5a6d0157c57d66f5c2a5fccf963dc5720759e06ad88ce3d3d022e89795"
+    }
+  }
+}

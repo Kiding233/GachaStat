@@ -22,13 +22,24 @@
 
 **M1 形态的位级对照**：`HardModifier` / `SoftModifier` 的 M1 形态是「沿用旧实现」
 （§3.9 过渡期纪律 / §3.9.5 的 `Σ(p + δ) ≠ 1` 行：目标集绝对赋值 + 更高稀有度豁免），
-本文件末尾两条用例直接对旧 `HardPityBehavior` / `SoftStepBehavior` 做逐位比对
+本文件的六条 `*_matches_old_class` 用例直接对旧 `HardPityBehavior` /
+`SoftStepBehavior` / `RotatingBehavior` / `TargetedBehavior` 做逐位比对
 （断言用**严格 `==`**、非 `pytest.approx`：两侧算式逐字同源、求和顺序亦一致，
 故 1e-6 以下的回归也必须钉住），
-钉住该形态（§六 S1–S5 口径的单元级前置；旧类随发布前一次性移除时这两条同批删除）。
+钉住该形态（§六 S1–S5 口径的单元级前置）。
+
+**S7e 等价性装置 golden 固化**：旧类随发布前一次性移除时，这些用例的**断言对象**
+（旧实现）会一并消失。故六条用例的对照结果已固化到
+`tests/fixtures/p64_s7e_golden.json`，用例改为「**旧类侧与生产侧都等于 golden**」。
+删除旧类时只删「构造旧类并对照」的那一段（含 `expect == ...` 一侧），
+对 golden 的断言保留，位级判据不随旧类下线而失传。
 """
 
+import hashlib
+import json
 import random
+import struct
+from pathlib import Path
 
 import pytest
 
@@ -40,6 +51,51 @@ from gacha_simulator.core.pity_modifier import (
     SelectedModifier, SoftModifier, _lower_rarities,
 )
 from gacha_simulator.core.pity_primitives import DrawInfo, PityContext, PityState
+
+# ══════════════════════════════════════════════════════════════════
+# S7e：等价性装置 golden（旧类下线后仍可断言的对照结果）
+# ══════════════════════════════════════════════════════════════════
+# 「新 Modifier 与旧类逐位相等」的对照结果固化在
+# `tests/fixtures/p64_s7e_golden.json`（字段含义见该文件 `_format` 段）。
+# 断言一律用**严格 `==`**、不用 `approx`：golden 存的是 JSON 原生数，
+# CPython 的 json 写侧用 `float.__repr__`（最短可往返十进制）、读侧用正确舍入的
+# `float()`，故数值位级往返无损，1e-6 以下的回归仍能被钉住。
+_GOLDEN_PATH = Path(__file__).resolve().parents[1] / 'fixtures' / 'p64_s7e_golden.json'
+_GOLDEN = json.loads(_GOLDEN_PATH.read_text(encoding='utf-8'))['cases']
+
+
+def _bits(node):
+    """golden 数值载荷的规范位串（float 取 IEEE-754 双精度位模式）。"""
+    if isinstance(node, dict):
+        return '{' + ','.join(f'{k}={_bits(node[k])}' for k in sorted(node)) + '}'
+    if isinstance(node, list):
+        return '[' + ','.join(_bits(v) for v in node) + ']'
+    if isinstance(node, float):
+        return struct.pack('<d', node).hex()
+    return repr(node)
+
+
+def _golden(case_id):
+    """取一条 golden 用例；先校验数值载荷与位摘要一致（防手改小数未同步）。"""
+    case = _GOLDEN[case_id]
+    got = hashlib.sha256(_bits(case['expected']).encode('utf-8')).hexdigest()
+    assert got == case['bits_sha256'], (
+        f'{case_id}：golden 数值载荷与位摘要不符（小数被改写或精度丢失）')
+    return case
+
+
+def _assert_matches_golden(exp, got, expect, dist, label):
+    """两侧都须等于 golden：`got` = 生产侧、`expect` = 旧类侧。
+
+    `exp['returns_none']` 记的是**生产侧**契约（旧类在恒等时返回输入分布而非
+    `None`），故两侧各自折算「有效输出」后比对。
+    """
+    assert (got is None) == exp['returns_none'], f'{label}：None 契约与 golden 不符'
+    assert (got if got is not None else dict(dist)) == exp['effective'], \
+        f'{label}：生产侧与 golden 位级不等'
+    assert (expect if expect is not None else dict(dist)) == exp['effective'], \
+        f'{label}：旧类侧与 golden 位级不等'
+
 
 SCOPE = 'ssr'
 NAME = 'ssr_hard'
@@ -207,9 +263,13 @@ class TestHardModifier:
                                threshold=5, target_featured=False)
         new = HardModifier(SCOPE, threshold=5, target='scope')
 
+        golden = _golden('modifier.hard.target_scope')
+        assert dist == golden['input']['dist'], '输入漂移：与 golden 记的分布不同'
+
         expect = old._compute_probabilities(ctx, 5)
         got = new.apply(ctx, _view(5), dist, False)
         assert got == expect, '位级对照：严格相等（非 approx）'
+        _assert_matches_golden(golden['expected'], got, expect, dist, 'target=scope')
 
     def test_hard_modifier_target_featured_matches_old_class(self):
         """M1 位级对照：`target='featured'` 与旧 `HardPityBehavior(target_featured=True)` 逐位相等。"""
@@ -219,9 +279,13 @@ class TestHardModifier:
                                threshold=5, target_featured=True)
         new = HardModifier(SCOPE, threshold=5, target='featured')
 
+        golden = _golden('modifier.hard.target_featured')
+        assert dist == golden['input']['dist'], '输入漂移：与 golden 记的分布不同'
+
         expect = old._compute_probabilities(ctx, 5)
         got = new.apply(ctx, _view(5), dist, False)
         assert got == expect, '位级对照：严格相等（非 approx）'
+        _assert_matches_golden(golden['expected'], got, expect, dist, 'target=featured')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -274,11 +338,18 @@ class TestSoftModifier:
                                deltas=self.DELTAS)
         new = SoftModifier(SCOPE, self.DELTAS)
 
+        golden = _golden('modifier.soft.per_counter')
+        assert dist == golden['input']['dist'], '输入漂移：与 golden 记的分布不同'
+        assert [list(d) for d in self.DELTAS] == golden['input']['deltas'], \
+            '输入漂移：deltas 段表与 golden 不同'
+
         for counter in (0, 4, 5, 10, 40):
             expect = old._compute_probabilities(ctx, counter)
             got = new.apply(ctx, _view(counter), dist, False)
             assert (got is None and expect == dist) or \
                 got == expect, f'counter={counter} 与旧类位级不等'
+            _assert_matches_golden(golden['expected'][str(counter)], got, expect,
+                                   dist, f'counter={counter}')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -313,7 +384,12 @@ def _random_dist(rng):
 
 
 class TestRandomisedEquivalence:
-    """随机分布下的 M1 位级对照（固定种子，防「只在基准分布上巧合相等」）。"""
+    """随机分布下的 M1 位级对照（固定种子，防「只在基准分布上巧合相等」）。
+
+    **RNG 消费顺序是输入的一部分**：逐 scope 先取 2 条 hard 分布、再取 3 条 soft
+    分布，两个 scope 共 10 条。改动循环顺序即改输入，golden 里的 `input.dist`
+    断言会立刻报出「输入漂移」。
+    """
 
     def test_hard_and_soft_match_old_classes_on_random_dists(self):
         rng = random.Random(20261010)
@@ -325,8 +401,13 @@ class TestRandomisedEquivalence:
                                          threshold=5, target_featured=tf)
                 new_h = HardModifier(scope, threshold=5,
                                      target='featured' if tf else 'scope')
-                assert new_h.apply(ctx, _view(5), dist, False) == \
-                    old_h._compute_probabilities(ctx, 5), '位级对照：严格相等（非 approx）'
+                label = f'{scope}/target_featured={tf}'
+                golden = _golden(f'modifier.randomised.hard.{scope}.target_featured={tf}')
+                assert dist == golden['input']['dist'], f'{label}：输入漂移（随机分布与 golden 不同）'
+                expect = old_h._compute_probabilities(ctx, 5)
+                got = new_h.apply(ctx, _view(5), dist, False)
+                assert got == expect, '位级对照：严格相等（非 approx）'
+                _assert_matches_golden(golden['expected'], got, expect, dist, label)
 
             for counter in (0, 4, 7):
                 dist = _random_dist(rng)
@@ -334,10 +415,45 @@ class TestRandomisedEquivalence:
                 old_s = SoftStepBehavior(NAME, ctx.state, scope=scope, btype='soft_step',
                                          deltas=TestSoftModifier.DELTAS)
                 new_s = SoftModifier(scope, TestSoftModifier.DELTAS)
+                label = f'{scope}/counter={counter}'
+                golden = _golden(f'modifier.randomised.soft.{scope}.counter={counter}')
+                assert dist == golden['input']['dist'], f'{label}：输入漂移（随机分布与 golden 不同）'
                 expect = old_s._compute_probabilities(ctx, counter)
                 got = new_s.apply(ctx, _view(counter), dist, False)
                 assert (got is None and expect == dist) or \
-                    got == expect, f'counter={counter} 与旧类位级不等'
+                    got == expect, f'{label} 与旧类位级不等'
+                _assert_matches_golden(golden['expected'], got, expect, dist, label)
+
+
+def test_golden_equivalence_expectations_are_not_constants():
+    """反空转自检：本文件的 golden 不是「与输入无关的常量」或「全零」的空断言。
+
+    三条带判别力的证据：
+    ① `hard.sr.*` 两条的 `ssr` 槽（更高稀有度豁免，M1 形态）**等于输入分布里的
+       同槽值**，且两条之间不同 → 期望值确实随输入变化；
+    ② `soft.*.counter=7` 的 `effective` **不等于**输入分布 → 该轮确实发生了转移，
+       不是把输入原样回抄；
+    ③ 基线与随机两组互不相同 → 不是「只在基准分布上巧合相等」。
+    **如实登记**：`modifier.randomised.hard.ssr.*` 两条的 `effective`（0.6/0.4 与
+    1.0/0.0）与输入分布无关——M1 的 hard 形态是「A 侧按声明权重绝对赋值」，取值只
+    由 `target` 决定，ssr 轮又没有更高稀有度可豁免，故那一对随机抽样的输入不进结果。
+    """
+    exempt = _golden('modifier.randomised.hard.sr.target_featured=False')
+    other = _golden('modifier.randomised.hard.sr.target_featured=True')
+    assert exempt['expected']['effective']['ssr'] == \
+        exempt['input']['dist']['ssr'], '豁免槽的期望值应等于输入分布的同槽值'
+    assert other['expected']['effective']['ssr'] == other['input']['dist']['ssr']
+    assert exempt['expected']['effective'] != other['expected']['effective'], \
+        'golden 期望值与输入无关（疑似退化常量）'
+
+    boosted = _golden('modifier.randomised.soft.ssr.counter=7')
+    assert boosted['expected']['effective'] != boosted['input']['dist'], \
+        'counter=7 轮的期望值等于输入（转移未发生）'
+    assert boosted['expected']['returns_none'] is False
+
+    baseline = _golden('modifier.hard.target_scope')['expected']['effective']
+    assert baseline != exempt['expected']['effective'], '基线与随机两组期望值雷同'
+
 
 # ══════════════════════════════════════════════════════════════════
 # S2a-2：目标集语义族（§3.1.2 机制表第 4/5/6/7 行）
@@ -468,9 +584,13 @@ class TestRotatingModifier:
         old = RotatingBehavior(NAME, ctx.state, scope=SCOPE)
         new = RotatingModifier(SCOPE)
 
+        golden = _golden('modifier.rotating.guaranteed')
+        assert dist == golden['input']['dist'], '输入漂移：与 golden 记的分布不同'
+
         expect = old.before_draw(ctx)
         got = new.apply(ctx, _View(guaranteed=True), dist, False)
         assert got == expect, '位级对照：严格相等（非 approx）'
+        _assert_matches_golden(golden['expected'], got, expect, dist, 'guaranteed 分支')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -607,9 +727,13 @@ class TestSelectedModifier:
         old = TargetedBehavior(NAME, ctx.state, scope=SCOPE, fate_threshold=1)
         new = SelectedModifier(SCOPE, tau=1)
 
+        golden = _golden('modifier.selected.guaranteed')
+        assert dist == golden['input']['dist'], '输入漂移：与 golden 记的分布不同'
+
         expect = old.before_draw(ctx)
         got = new.apply(ctx, _View(selected_card='ssr_up', guaranteed=True), dist, False)
         assert got == expect, '位级对照：严格相等（非 approx）'
+        _assert_matches_golden(golden['expected'], got, expect, dist, '定轨 + guaranteed')
 
 
 # ══════════════════════════════════════════════════════════════════

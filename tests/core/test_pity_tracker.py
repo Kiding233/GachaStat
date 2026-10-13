@@ -13,12 +13,76 @@
    `'featured'` 分支保留**无 scope 门控**的不对称。
 """
 
+import hashlib
+import json
+import struct
+from pathlib import Path
+
 from gacha_simulator.core.pity_primitives import DrawInfo, PityContext, PityState
 from gacha_simulator.core.pity_tracker import (
     AlwaysActive, CounterTracker, DependentActive, DependentFiniteActive,
     FateTracker, FiniteActive, FlagTracker, Lifecycle, NamespaceTracker,
     StreakTracker, Tracker,
 )
+
+# ══════════════════════════════════════════════════════════════════
+# S7e：等价性装置 golden（旧类下线后仍可断言的对照结果）
+# ══════════════════════════════════════════════════════════════════
+# 本文件里四条「与旧行为类逐位相同」的对照（随机数消费次数、`cr_counter` 轨迹、
+# 定轨四键轨迹两条）的对照结果固化在 `tests/fixtures/p64_s7e_golden.json`
+# （字段含义见该文件 `_format` 段）。断言一律用**严格 `==`**、不用 `approx`：
+# golden 存的是 JSON 原生数，CPython 的 json 写侧用 `float.__repr__`、读侧用正确
+# 舍入的 `float()`，故数值位级往返无损。旧类删除时只删「构造旧类并对照」的代码段
+# （含 `old_traj == ...` 一侧），对 golden 的断言保留。
+_GOLDEN_PATH = Path(__file__).resolve().parents[1] / 'fixtures' / 'p64_s7e_golden.json'
+_GOLDEN = json.loads(_GOLDEN_PATH.read_text(encoding='utf-8'))['cases']
+
+
+def _bits(node):
+    """golden 数值载荷的规范位串（float 取 IEEE-754 双精度位模式）。"""
+    if isinstance(node, dict):
+        return '{' + ','.join(f'{k}={_bits(node[k])}' for k in sorted(node)) + '}'
+    if isinstance(node, list):
+        return '[' + ','.join(_bits(v) for v in node) + ']'
+    if isinstance(node, float):
+        return struct.pack('<d', node).hex()
+    return repr(node)
+
+
+def _golden(case_id):
+    """取一条 golden 用例；先校验数值载荷与位摘要一致（防手改小数未同步）。"""
+    case = _GOLDEN[case_id]
+    got = hashlib.sha256(_bits(case['expected']).encode('utf-8')).hexdigest()
+    assert got == case['bits_sha256'], (
+        f'{case_id}：golden 数值载荷与位摘要不符（小数被改写或精度丢失）')
+    return case
+
+
+def test_golden_equivalence_expectations_are_not_constants():
+    """反空转自检：本文件的 golden 载荷不是全零常量、也不是逐输入雷同的假对照。
+
+    **如实登记两处退化**（是发现，不是缺陷）：
+    - `tracker.cr_counter_trajectory`：三个种子给出**同一条**轨迹——`cr_counter`
+      的推进只由 `(rarity, is_featured)` 决定，随机掷骰结果不进该键（实测五个种子
+      1/7/42/999/123456 轨迹一致）。故本条的判别力来自「1..4 的阶梯形态」，
+      种子维度对它是**不变量**。
+    - `tracker.fate_trajectory.unselected`：四键全为默认 0（「整段不动」），
+      判别力在「未被写入」而非数值差异。
+    """
+    counts = _golden('tracker.random_consumption')['expected']
+    assert set(counts) == {0, 1}, '「不掷」与「掷 1 次」两类须并存（当前全同即退化）'
+
+    per_seed = _golden('tracker.cr_counter_trajectory')['expected']
+    assert len(per_seed) == 3
+    assert all(len(set(traj)) == 4 for traj in per_seed.values()), \
+        '轨迹须覆盖 1..4 四档（顺序契约失效时退化为全 0）'
+
+    selected = _golden('tracker.fate_trajectory.selected')['expected']
+    assert len({tuple(row) for row in selected}) > 1, '定轨轨迹不许是常量'
+
+    unselected = _golden('tracker.fate_trajectory.unselected')['expected']
+    assert set(unselected) == {0}, '未定轨那条登记为常量（判别力在「未被写入」）'
+
 
 NAME = 'ssr_hard'
 SCOPE = 'ssr'
@@ -546,7 +610,13 @@ class TestStreakTrackerH4RandomConsumption:
         import random as _random
         from gacha_simulator.core.pity import RotatingCRBehavior
 
-        for guaranteed, readonly, counter, base_rate, probs, why in self.CASES:
+        golden = _golden('tracker.random_consumption')
+        assert [list(row) for row in self.CASES] == golden['input']['cases'], \
+            '输入漂移：条件表与 golden 不同'
+        counts = golden['expected']
+
+        for idx, (guaranteed, readonly, counter, base_rate, probs, why) in \
+                enumerate(self.CASES):
             calls = {'n': 0}
 
             def fake_random():
@@ -583,9 +653,16 @@ class TestStreakTrackerH4RandomConsumption:
                 f'（guaranteed={guaranteed} readonly={readonly} counter={counter} '
                 f'base_rate={base_rate} probs={probs}）'
             )
+            assert old_n == counts[idx], f'{why}：旧实现消费次数与 golden 不等'
+            assert new_n == counts[idx], f'{why}：新实现消费次数与 golden 不等'
 
     def test_cr_counter_trajectory_matches_old_behavior(self, monkeypatch):
-        """15 抽序列下 `cr_counter` 轨迹与旧实现逐位相同（含 `was_guaranteed` 读点）。"""
+        """15 抽序列下 `cr_counter` 轨迹与旧实现逐位相同（含 `was_guaranteed` 读点）。
+
+        **S7e 如实登记**：本条的 golden 对三个种子给出**同一条**轨迹——`cr_counter`
+        只由 `(rarity, is_featured)` 驱动，随机掷骰结果不进该键。故种子循环是保留
+        既有形态，判别力来自「1..4 阶梯」而非种子差异。
+        """
         import random as _random
         from gacha_simulator.core.pity import RotatingCRBehavior
 
@@ -598,6 +675,11 @@ class TestStreakTrackerH4RandomConsumption:
                ('ssr', False), ('ssr', True), ('ssr', False), ('sr', True),
                ('ssr', False), ('ssr', False), ('ssr', True), ('ssr', False),
                ('ssr', False), ('ssr', False), ('ssr', True)]
+
+        golden = _golden('tracker.cr_counter_trajectory')
+        assert [list(s) for s in seq] == golden['input']['seq'], \
+            '输入漂移：抽卡序列与 golden 不同'
+        assert list(golden['input']['seeds']) == [1, 7, 42], '输入漂移：种子表与 golden 不同'
 
         for seed in (1, 7, 42):
             old_st = PityState()
@@ -629,6 +711,9 @@ class TestStreakTrackerH4RandomConsumption:
                 new_traj.append(new_st.get('cr', 'cr_counter', 0))
 
             assert old_traj == new_traj, f'seed={seed}：旧 {old_traj} 新 {new_traj}'
+            exp = golden['expected'][str(seed)]
+            assert old_traj == exp, f'seed={seed}：旧实现轨迹与 golden 不等'
+            assert new_traj == exp, f'seed={seed}：新实现轨迹与 golden 不等'
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -798,6 +883,12 @@ class TestFateTrackerProtocol:
                ('ssr', 'other'), ('ssr', 'up_card'), ('ssr', 'other'),
                ('ssr', 'other'), ('ssr', 'up_card'), ('ssr', 'other')]
 
+        golden = _golden('tracker.fate_trajectory.selected')
+        assert [list(s) for s in seq] == golden['input']['seq'], \
+            '输入漂移：抽卡序列与 golden 不同'
+        assert list(golden['input']['keys']) == list(FATE_KEYS), \
+            '输入漂移：四键与 golden 不同'
+
         old_st = PityState()
         old = TargetedBehavior('tg', old_st, scope=SCOPE, fate_threshold=2)
         old_st.set('tg', 'selected_card', 'up_card')
@@ -816,10 +907,14 @@ class TestFateTrackerProtocol:
             new_traj.append(tuple(new_st.get('tg', k, 0) for k in FATE_KEYS))
 
         assert old_traj == new_traj, f'旧 {old_traj}\n新 {new_traj}'
+        assert [list(t) for t in old_traj] == golden['expected'], '旧类侧轨迹与 golden 不等'
+        assert [list(t) for t in new_traj] == golden['expected'], '生产侧轨迹与 golden 不等'
 
     def test_fate_tracker_trajectory_matches_old_when_not_selected(self):
         """未定轨（`selected_card=None`）时两侧轨迹同为「整段不动」。"""
         from gacha_simulator.core.pity import TargetedBehavior
+
+        golden = _golden('tracker.fate_trajectory.unselected')
 
         old_st = PityState()
         old = TargetedBehavior('tg', old_st, scope=SCOPE, fate_threshold=2)
@@ -834,6 +929,10 @@ class TestFateTrackerProtocol:
 
         for k in FATE_KEYS:
             assert old_st.get('tg', k, 0) == new_st.get('tg', k, 0), k
+        assert [old_st.get('tg', k, 0) for k in FATE_KEYS] == golden['expected'], \
+            '旧类侧与 golden 不等'
+        assert [new_st.get('tg', k, 0) for k in FATE_KEYS] == golden['expected'], \
+            '生产侧与 golden 不等'
         assert new_st.get('tg', 'fate_points', 0) == 0
 
 

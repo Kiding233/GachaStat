@@ -1456,12 +1456,18 @@ class TestS5bCounterDrivenBatch:
     def test_issue403_hard_target_featured_empty_featured_falls_back_to_scope(self):
         """ISSUE-403 ②：该 scope **无 featured 卡**时目标集回退 scope 全集。
 
-        取 `sr` 作 scope（`DEFAULT_CARDS` 里 `sr` 只有非 featured 的 `sr1`）。两条
-        断言：① 与旧类逐场一致（对齐旧 `featured_slots.get(scope, scope_slots)`
-        的回退）；② 回退**真的发生**：同 scope 上 `tf=True` 与 `tf=False` 的两侧
-        分布逐位相同，因为目标集都等于 scope 全集。缺回退时
-        `HardModifier._target_keys()` 给空集、`apply` 走 `if not A: return None`
-        恒等，而旧侧仍做绝对赋值，①即红。
+        取 `sr` 作 scope（`DEFAULT_CARDS` 里 `sr` 只有非 featured 的 `sr1`）。断言面是
+        「回退**真的发生**」：同 scope 上 `tf=True` 与 `tf=False` 的两侧分布逐位相同
+        （目标集都等于 scope 全集）。缺回退时 `HardModifier._target_cards()` 给空集、
+        `compute_delta` 走 `if not A: return None` 恒等，而另一侧照常转移，该断言即红。
+
+        **S8-2 起本用例不再断言「与旧类逐场一致」**：`hard(scope='sr')` 正是 §六 差异
+        归因清单 (a) 登记的配置（`scope` 低于最高稀有度）——M1 的 F 型是「绝对赋值 +
+        更高稀有度豁免」（实测 `{ssr_featured: 0.2, ssr: 0.2, sr: 1.0, r: 0.0}`、
+        Σ = 1.4），S8 是「A 收下 p(Q)、更高稀有度不写增量」（`{f1: 0.2, s1: 0.2,
+        sr1: 0.6, r1: 0.0}`、Σ = 1.0），两侧**本就不等价**（最大差 0.4，非回归）。
+        跨侧等价性对本配置不成立，故本用例只做**同侧**自比（两条配置的分布相同 +
+        两侧各自的回退事实）。
 
         另覆盖旧实现回退分支的**缺键形态**：`featured_slots` 连该 scope 的键都没有
         （走 `.get(scope, scope_slots)` 的缺省参数），结果同为 scope 全集。

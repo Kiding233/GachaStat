@@ -26,8 +26,14 @@ class DrawInfo:
     该字段按调用路径两种口径并存（`banner.draw` 传槽位级聚合结果、`strategy.py`
     传卡级），S8-2 起两个填充点（`core/banner.py` 的 `draw` 与 `core/strategy.py`
     的 `get_pity_probabilities`）一律传卡级，与 Modifier 链的 A / Q（卡集合）同
-    键空间。**该口径是声明式的**：本字段无类型级约束，填错只会在
-    `transfer_linear` 的 `sum(dist[c] for c in Q)` 处显形。
+    键空间。**该口径是声明式的**：本字段无类型级约束，其唯一消费面是
+    `transfer_linear(..., shape='declared', weights=...)`（`shape='current'` 分支
+    完全不读它，填错无任何影响；空表 / `None` 会被 `not weights` 守卫报
+    `ValueError`，**非空而键错位**的表不触发该守卫）。键空间错位的失效形态是
+    **静默恒等**而非报错：`weights.get(c, 0.0)` 对 A 内每卡取 0 → `w(A) <= 0`
+    → 助手返回 `None` → 生产骨架跳过 `_apply_delta`，分布原样输出、无任何提示
+    （正是本项目反复登记要消除的形态）。`KeyError` 只在 **`dist`** 的键空间错位
+    时触发（`transfer_linear` 首行的 `sum(dist[c] for c in Q)`），与本字段无关。
 
     `scope_slots` / `featured_slots` / `card_to_slot` 仍是槽位级，只服务保留到
     发布前的旧保底类与等价性装置（ISSUE-901），新卡级管道不读它们。

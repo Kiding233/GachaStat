@@ -228,6 +228,33 @@ class TestApplyDelta:
         assert _apply_delta(dist, delta) == {'a': 1.0, 'b': 0.0}
         assert _apply_delta(dist, delta) == {c: dist[c] + delta[c] for c in dist}
 
+    def test_skeleton_normalizes_unbalanced_delta_from_custom_modifier(self):
+        """**生产骨架的归一化兜底**（S8-4 审查 F1）：调用点不得退化为裸 `p + δ`。
+
+        上面四条驱动的是 `_apply_delta` **本体**，而 `Pity.before_draw` 内循环的
+        调用点此前无用例覆盖：把该处的 `_apply_delta(out, d)` 换成裸 `p + δ`，全量
+        测试仍全绿（转移族恒配平，`Σ(p + δ)` 与 1 的偏差只有 1 ULP，落在各处
+        1e-12 容差内），即「函数本体有面、生产调用点无面」。故本用例驱动**真实
+        骨架**配一个**返回不配平 δ 的自定义 Modifier**（只给 `ssr_up` 加 0.1、
+        不给任何卡减量，使 `Σ(p + δ) = 1.1`）：去掉调用点归一化即红。
+        """
+        class _UnbalancedMod(Modifier):
+            def compute_delta(self, view, dist, ctx):
+                return {'ssr_up': 0.1}
+
+        pity = Pity(name='p', state=PityState(), scope=SCOPE, btype='hard',
+                    trackers=[], modifiers=[_UnbalancedMod()],
+                    lifecycle=AlwaysActive())
+        out = pity.before_draw(_ctx())
+
+        delta = {'ssr_up': 0.1}
+        expected = {c: BASE[c] + delta.get(c, 0.0) for c in BASE}
+        total = sum(expected.values())
+        assert total == pytest.approx(1.1), '夹具须确实不配平（否则本用例无验收面）'
+        for c in BASE:
+            assert out[c] == pytest.approx(expected[c] / total, abs=1e-12), c
+        assert sum(out.values()) == pytest.approx(1.0, abs=1e-12)
+
 
 class TestNamespaceViewDispatch:
     """ISSUE-407 / ISSUE-505：遍历点经 `self._view_for(mod)` 取 view（S8-1 强制）。"""

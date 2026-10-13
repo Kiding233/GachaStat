@@ -130,7 +130,7 @@ class TestTargetedPity:
 
         **S8 起断言面是单卡**（§六 的「S8 单卡定向」条）：卡级管道下
         `SelectedModifier` 的 A = `(selected,)`，故定轨卡拿到整个 scope 的量，
-        **另一张 featured 卡（f2）也归零**——这是 S8 相对旧实现（同槽位平摊 50/50）
+        **另一张 featured 卡（f2）也归零**：这是 S8 相对旧实现（同槽位平摊 50/50）
         的语义提升，原断言只看槽位、看不见这一层。
         """
         pity = _make(state, 'targeted', 'test_tgt', fate_threshold=0)

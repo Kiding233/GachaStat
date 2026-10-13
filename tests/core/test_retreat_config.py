@@ -454,7 +454,7 @@ def test_truncate_copies_rarity_rank():
 def test_truncated_env_soft_pity_is_not_identity():
     """截断 env 的软保底必须真的改动分布（漏拷 `rarity_rank` 时恒等）。
 
-    **S8-2 起管道是卡级**（§3.9.1）：基础分布改由池内**卡 id** 构造——原写
+    **S8-2 起管道是卡级**（§3.9.1）：基础分布改由池内**卡 id** 构造，原写
     `base={'ssr': 0.02, 'r': 0.98}` 是槽位级键，卡级管道下 `transfer_linear`
     取 `dist[c]`（c 为卡 id）会直接 `KeyError`（**不是静默恒等**，这是 S8 键空间
     纪律的显形面）。实测（真实 config.toml、`from_pool_id='pool_c1'`、counter=90、
@@ -487,5 +487,5 @@ def test_truncated_env_soft_pity_is_not_identity():
     ssr_before = sum(base[c] for c in ssr_cards)
     ssr_after = sum(out[c] for c in ssr_cards)
     assert ssr_after > ssr_before, (
-        f"截断路径的软保底恒等（SSR 卡集小计仍为 {ssr_after}）——"
+        f"截断路径的软保底恒等（SSR 卡集小计仍为 {ssr_after}）："
         f"`rarity_rank` 未随截断复制")

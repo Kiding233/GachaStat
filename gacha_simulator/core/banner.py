@@ -224,7 +224,7 @@ class Banner:
             reward = pool.draw()
         else:
             pity_spec = pity_engine.get_spec(qualified_key)
-            # S8-2（§3.9.1 的目标路径）：**卡级管道**——`probabilities` 是池内真实分布
+            # S8-2（§3.9.1 的目标路径）：**卡级管道**，`probabilities` 是池内真实分布
             # `{card_id: p}`，直接进 `before_draw`，其返回值直接喂 `_apply_probabilities`。
             # 净删除三件：`aggregate_probs_by_rarity` 调用（卡级 → 槽位级聚合）、整个
             # `scale_factors` 还原段（含 `infer_rarity_from_spec` 的槽位反查）、以及

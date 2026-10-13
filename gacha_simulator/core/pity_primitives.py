@@ -41,7 +41,7 @@ class PityContext:
 
     **`readonly` 是 S8 / M2 的查询标记**（§3.9.6 的「处置（两期）②」）：`True` 表示
     本次调度是只读查询（`PityEngine.get_probabilities` → `Pity.before_draw(readonly=True)`），
-    不是真实抽卡。它是 `readonly` 形参从 Modifier 面废除后的落点——按 §3.1.2 的
+    不是真实抽卡。它是 `readonly` 形参从 Modifier 面废除后的落点：按 §3.1.2 的
     「新机制需要新的静态事实时**加字段、不改签名**」，而不是给 `compute_delta()` 加形参。
     写入者是 `Pity.before_draw` 的首行（唯一的 readonly 入口透传点），消费面当前一处：
     `RotatingModifier` 据此抑制 `extra_flag`（复刻旧 `RotatingCRBehavior` 的只读查询
@@ -178,7 +178,7 @@ _EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
 # ── 概率代数（P64 S8：卡级增量管道的两个本原函数，§3.9.2 / §3.9.4）──
 #
 # 两者都是**纯函数、只依赖标准库**，故住叶子层（§3.1.6）：
-# - `_apply_delta` 的消费面有两处且分居两层——编排层的 `Pity.before_draw` 内循环
+# - `_apply_delta` 的消费面有两处且分居两层：编排层的 `Pity.before_draw` 内循环
 #   （§3.1.4 骨架）与**实现层** `pity_modifier.Modifier.apply` 的默认实现（§3.14.3）。
 #   实现层**不得 import `pity.py`**（§3.1.6 的单向依赖，双向 import 即循环），故它
 #   只能住叶子层：放 `pity.py` 会让基类只能走函数内惰性 import（本项目已把
@@ -192,7 +192,7 @@ _EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
 def _apply_delta(dist: Dict[str, float], d: Dict[str, float]) -> Dict[str, float]:
     """把增量向量 `d` 作用到分布 `dist` 上并**归一化**（§3.9.2 的框架级归一化）。
 
-    `out = {c: dist[c] + d.get(c, 0.0) for c in dist}`——只遍历 `dist` 的键，故
+    `out = {c: dist[c] + d.get(c, 0.0) for c in dist}`：只遍历 `dist` 的键，故
     **`d` 里多出来的键不参与输出**（增量向量按稀疏给出：未列出的卡 δ = 0）；
     归一化 `Σ(out) <= 0` 时返回原 `dist`（该行是退化保护，§3.9.5 的「归一化后
     总量 ≤ 0」行）。
@@ -239,7 +239,7 @@ def transfer_linear(dist: Dict[str, float], A, Q, amount: float,
     「来源二」在冲突配置下由此生效）。
 
     `dist` 与 `A` / `Q` 的键空间必须一致（S8 起都是**卡级**，D20）；键不一致时
-    此处直接 `KeyError` 而非静默恒等——静默恒等会让全部保底无声失效，而报错能
+    此处直接 `KeyError` 而非静默恒等：静默恒等会让全部保底无声失效，而报错能
     在首次抽卡就暴露键空间错位。
     """
     pQ = sum(dist[c] for c in Q)
@@ -268,7 +268,7 @@ def transfer_linear(dist: Dict[str, float], A, Q, amount: float,
         # `sum(dist[c] for c in Q)`，本函数内同式同序），故两者**位级相等**；
         # 此时「源组归零」（§3.9.5 的 `p(Q) == amount` 行）要求 Q 侧增量的量值与
         # `dist[c]` 精确抵消，而先乘后除的写法会留下 1 ULP 的**负**残值
-        # （实测 `dist[c] = pQ = amount = 0.4` 得 `-5.55e-17`）——它会被 §3.12.1 的
+        # （实测 `dist[c] = pQ = amount = 0.4` 得 `-5.55e-17`）：它会被 §3.12.1 的
         # 非负性判据判为违规（`not (v >= 0)`），也会让 `pool.draw` 的累积权重
         # 出现极小的非单调段。先除后乘在该形态下给出精确 0.0。
         d[c] = d.get(c, 0.0) - amount * (dist[c] / pQ)

@@ -551,7 +551,7 @@ _FX_CARD_TO_SLOT = {'up': 'ssr_featured', 'std': 'ssr', 'sr1': 'sr', 'r1': 'r'}
 #: 基础分布是**卡级**（S8 起管道为卡级，D20 / §3.9.1）：键即卡 id，取值与池内声明
 #: 概率同值。槽位三字段仍留在 `DrawInfo` 里（ISSUE-901：旧保底类与等价性装置仍读
 #: 它们，删除点推迟到「发布前一次性移除旧保底类」的 commit），但它们**不是**卡级
-#: 管道的键空间——用槽位名做 `current` 会让 `transfer_linear` 在 `dist[c]` 处
+#: 管道的键空间：用槽位名做 `current` 会让 `transfer_linear` 在 `dist[c]` 处
 #: `KeyError`（这是键空间错位的显形面，不是静默恒等）。
 _FX_BASE = {'up': 0.006, 'std': 0.004, 'sr1': 0.05, 'r1': 0.94}
 
@@ -946,7 +946,7 @@ class TestRotatingInverseS6a:
         calls = []
         _mod = bh._modifiers[0]
         # S8-1 起骨架调 `compute_delta`（`apply` 收敛为基类默认实现），故探针必须包在
-        # `compute_delta` 上——仍包 `apply` 会让探针永不触发、本用例退化为恒真
+        # `compute_delta` 上：仍包 `apply` 会让探针永不触发、本用例退化为恒真
         # （「未激活不得调度任何零件」在激活分支上也无判别力）。
         _orig_delta = _mod.compute_delta
 

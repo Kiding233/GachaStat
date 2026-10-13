@@ -233,8 +233,8 @@ class Pool:
 #
 # **S8-2 起本组只剩 `aggregate_probs_by_rarity` 一个函数，且它已无生产消费者**
 # （`banner.draw` 改走卡级管道，§3.9.1）：`infer_rarity_from_spec` 已随本步删除
-# （ISSUE-504：它的三类消费者——本函数内部的两次调用、`banner.draw` 的
-# `scale_factors` 还原段、导出面——在 S8-2 / S8-4 逐个消失后即零消费者）。本函数
+# （ISSUE-504：它的三类消费者：本函数内部的两次调用、`banner.draw` 的
+# `scale_factors` 还原段、导出面：在 S8-2 / S8-4 逐个消失后即零消费者）。本函数
 # 本体与其导出随 **S8-4** 删除；在那之前它仍被两个测试文件消费（`tests/core/test_pool.py`
 # 与 `tests/core/test_worst_impact.py` 的对齐用例），故其内部反查改由下方就地构建的
 # `rarity_of` 承担（与旧函数同源：唯一来源是 `scope_cards`，大小写归一，查不到即不写）。
@@ -261,7 +261,7 @@ def aggregate_probs_by_rarity(pool: 'Pool', pity_spec) -> Dict[str, float]:
                 if cid not in featured_ids:
                     rarity_cache[cid] = rarity
 
-    # card_id（小写）→ rarity（小写）的全量反查表——S8-2 起就地构建，取代已删除的
+    # card_id（小写）→ rarity（小写）的全量反查表：S8-2 起就地构建，取代已删除的
     # `infer_rarity_from_spec`（ISSUE-504）。**只认 `scope_cards`、无兜底猜测**，
     # 与该函数被删前的行为逐条相同（原稿的两级回退已于 2026-10-09 删除）。
     rarity_of: Dict[str, str] = {}

@@ -834,7 +834,7 @@ def _to_slot_space(dist: Dict[str, float], slot_of: Dict[str, str]) -> Dict[str,
 
     S8 起两侧的分布键空间不同（旧类槽位级 / 新骨架卡级），故比对前把新侧投影到
     旧侧的键空间。投影是**求和**（不是按声明权重展开）：它不引入任何假设，代价是
-    组内结构在槽位分辨率下不可见——本装置的两个池形**每个槽位恰含一张卡**（投影
+    组内结构在槽位分辨率下不可见：本装置的两个池形**每个槽位恰含一张卡**（投影
     即双射），故该代价为零；组内结构（如 S8 的单卡定向）由 S8-6 的卡级对比组覆盖。
     """
     out: Dict[str, float] = {}
@@ -1402,11 +1402,11 @@ class TestS5bCounterDrivenBatch:
     @pytest.mark.parametrize('make', [c[1] for c in COUNTER_BATCH],
                              ids=[c[0] for c in COUNTER_BATCH])
     def test_batch_equivalence_within_s8_tolerance(self, make):
-        """counter 驱动 4 型的等价性——**容差取 §六 的 S8 口径 1e-12**。
+        """counter 驱动 4 型的等价性：**容差取 §六 的 S8 口径 1e-12**。
 
         S8 前本用例取 `EXACT`（位级一致），理由是「两侧同为绝对赋值、算式逐字同源」；
         S8 起新侧改为**卡级增量**（A 加 `p(Q)`、Q 减 `p(Q)`），与旧侧的槽位级
-        「除再乘往返」不再逐位同源，故按 §六 的 S8 口径取 `FLOAT_ORDER`（1e-12）——
+        「除再乘往返」不再逐位同源，故按 §六 的 S8 口径取 `FLOAT_ORDER`（1e-12）：
         该数值即 S8 与 S5 产物对比所用，非本用例新造。**状态快照仍按位级比对**
         （`SnapshotPolicy`，不随本改动放宽）。
         """
@@ -1462,7 +1462,7 @@ class TestS5bCounterDrivenBatch:
         `compute_delta` 走 `if not A: return None` 恒等，而另一侧照常转移，该断言即红。
 
         **S8-2 起本用例不再断言「与旧类逐场一致」**：`hard(scope='sr')` 正是 §六 差异
-        归因清单 (a) 登记的配置（`scope` 低于最高稀有度）——M1 的 F 型是「绝对赋值 +
+        归因清单 (a) 登记的配置（`scope` 低于最高稀有度）：M1 的 F 型是「绝对赋值 +
         更高稀有度豁免」（实测 `{ssr_featured: 0.2, ssr: 0.2, sr: 1.0, r: 0.0}`、
         Σ = 1.4），S8 是「A 收下 p(Q)、更高稀有度不写增量」（`{f1: 0.2, s1: 0.2,
         sr1: 0.6, r1: 0.0}`、Σ = 1.0），两侧**本就不等价**（最大差 0.4，非回归）。
@@ -1553,7 +1553,7 @@ class TestS8CardLevelCrossBlock:
     §七 的 ⚠ 段要求三块同一个 commit 落地，理由是**任一中间态都是键空间错位窗口**：
     `_apply_delta` 的 `d.get(c, 0.0)` 把「未在增量向量里出现的键」当作恒等 0.0，
     于是增量键与 `dist` 键不匹配时**不报错**，只让全部保底静默退化为恒等。该段同时
-    要求补一条跨块断言，使该形态在 CI 期即暴露——本类即该断言。
+    要求补一条跨块断言，使该形态在 CI 期即暴露：本类即该断言。
 
     判据三条（缺一即可能假绿）：
 
@@ -1610,7 +1610,7 @@ class TestS8CardLevelCrossBlock:
         """非空转守卫：上面那条参数化在**两侧都非恒等**的前提下才成立。
 
         构造一个「新侧恒等」的对照（把阈值抬到序列长度之外）：跨块断言此时应当
-        自己报出「空转」，而不是静默通过——这正是 S8 的静默退化（增量键错位 →
+        自己报出「空转」，而不是静默通过：这正是 S8 的静默退化（增量键错位 →
         全部保底恒等）在 CI 期要暴露的形态。
         """
         shape = _default_shape()
@@ -1621,7 +1621,7 @@ class TestS8CardLevelCrossBlock:
         assert not report.new.changed_beyond_ulp, (
             '本对照的前提是「新侧恒等」（阈值超出序列长度）')
         assert report.is_equivalent(), (
-            '两侧同为恒等时分布仍逐元素一致——「一致」不构成等价性证据，'
+            '两侧同为恒等时分布仍逐元素一致：「一致」不构成等价性证据，'
             '故上面那条断言必须并列 `changed_beyond_ulp` 守卫')
 
 
@@ -2333,7 +2333,7 @@ class TestS5cM4DidFire:
         """
         # `DEFAULT_CARDS` 的 sr 槽只有 `sr1`（0.051）；加一张 featured 的 SR 卡时
         # **必须从同一份质量里拆**（`sr1` 0.001 + `sr_feat` 0.05 = 0.051），否则池的
-        # 基础分布 Σ = 1.05——S8 起 `_apply_delta` 对**整份分布**归一化，会把未被任何
+        # 基础分布 Σ = 1.05：S8 起 `_apply_delta` 对**整份分布**归一化，会把未被任何
         # 算子触碰的卡也整体缩放（实测差 1.9e-2），两侧因此不等价。生产路径不受此
         # 影响：真实 config.toml 的每个池 `Σ p = 1`（已实测）。
         gate_shape = make_pool_shape(

@@ -265,7 +265,7 @@ def test_synthetic_pool_specs_satisfy_alignment_invariants():
     **S8-2 改写（ISSUE-504）**：原第 ③ 条用 `pool.infer_rarity_from_spec`（A 实现）
     逐卡比对，该函数已随其最后一批消费者删除（`banner.draw` 的 `scale_factors`
     还原段与 `aggregate_probs_by_rarity` 的内部调用），故第 ③ 条改为**直接查
-    `scope_cards` 的反查表**——这正是被删函数当年的唯一判据来源，断言内容
+    `scope_cards` 的反查表**：这正是被删函数当年的唯一判据来源，断言内容
     （池内每张卡都查得到、且与它声明的稀有度一致）不变。
     """
     cfg = _wi_config()

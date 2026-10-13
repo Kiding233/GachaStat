@@ -86,7 +86,7 @@ def _ctx(dist=None, readonly=False, **kw):
 
 
 class _View:
-    """状态视图的最小替身——各机制只经 `view.get(key, default)` 读状态。"""
+    """状态视图的最小替身：各机制只经 `view.get(key, default)` 读状态。"""
 
     def __init__(self, **kw):
         self._d = kw
@@ -148,7 +148,7 @@ class TestModifierBase:
         §3.9.2 的基类代码块把 `compute_delta` 写成只有 docstring 的接口声明
         （等价于返回 `None`），但那样「漏写该方法的子类」会静默恒等（机制不生效、
         不报错），与本计划一律按阻塞级处理的失效模式同类。故基类实现体抛
-        `NotImplementedError` 且带类名——六个机制全部覆写它，生产路径零影响。
+        `NotImplementedError` 且带类名：六个机制全部覆写它，生产路径零影响。
         """
         with pytest.raises(NotImplementedError) as excinfo:
             Modifier().compute_delta(_View(), dict(BASE), _ctx())
@@ -221,7 +221,7 @@ class TestApplyDelta:
 
         归一化因子恰为 1.0（`Σδ = 0`），故除法不得扰动任何一位（§3.1.5.2.1 的
         「框架归一化退化为恒等」）。判据写成对 `p + δ` 的**严格相等**，而不是对输入
-        分布相等——配平增量本身会移动质量，输入分布不是它的不动点。
+        分布相等：配平增量本身会移动质量，输入分布不是它的不动点。
         """
         dist = {'a': 0.25, 'b': 0.75}
         delta = {'a': 0.75, 'b': -0.75}
@@ -396,7 +396,7 @@ class TestSoftModifier:
     DELTAS = ((4, 0.0), (6, 5.0))       # 前 4 抽不增，第 5 抽起每抽 +5%
 
     def test_boost_is_percentage_points_not_scaled_by_pq(self):
-        """`amount = boost%(counter) / 100`——目标组概率**增加** boost 个百分点，
+        """`amount = boost%(counter) / 100`：目标组概率**增加** boost 个百分点，
         **不得再乘 `p(Q)`**（§3.4.1 修正 ①）。
 
         反例口径 `amount = boost/100 · p(Q)` 在 `p(Q) = 0.99` 时给 0.0495，与 0.05
@@ -508,7 +508,7 @@ class TestRotatingModifier:
         （§3.9.6 的「处置（两期）②」的 M2 落点：抑制依据是 `ctx.readonly` 查询标记，
         不再是 Modifier 形参）。
 
-        反向断言：去掉该抑制（或把标记读成永远 False）时第二条必红——「查询不体现
+        反向断言：去掉该抑制（或把标记读成永远 False）时第二条必红：「查询不体现
         CR 拦截」是旧 `RotatingCRBehavior` 的既定语义，策略层的概率查询依赖它。
         """
         mod = RotatingModifier(SCOPE, extra_flag='cr_intercepted')
@@ -575,7 +575,7 @@ class TestSelectedModifier:
         """**S8 单卡定向**（§六）：A = `(selected,)`，**同 scope 的另一张 featured 卡也归零**。
 
         判别性：A 若写成「全部 featured」，两张 UP 卡会按声明权重各得 0.5；本断言
-        要求定轨卡独得 1.0、兄弟 UP 卡为 0——这正是 S8 相对旧实现（同槽位平摊
+        要求定轨卡独得 1.0、兄弟 UP 卡为 0：这正是 S8 相对旧实现（同槽位平摊
         50/50）的语义提升。
         """
         ctx = self._two_up_ctx()

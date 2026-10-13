@@ -10,14 +10,14 @@ Modifier 是 **pure 函数**：`(State, BaseDistribution) -> Distribution`。**�
 实现 `compute_delta(view, dist, ctx) -> 增量向量`，`apply` 收敛为基类的唯一默认实现
 （`_apply_delta(dist, self.compute_delta(...) or {})`），骨架逐项调用 `compute_delta`。
 **`compute_delta` 的三参是定稿**（2026-10-08 用户裁决），`readonly` 随「Modifier 是
-pure 函数」从本族签名废除——查询标记改由 `PityContext.readonly` 字段承载（§3.9.6 的
+pure 函数」从本族签名废除：查询标记改由 `PityContext.readonly` 字段承载（§3.9.6 的
 「处置（两期）②」按 §3.1.2 的「加字段、不改签名」落地）。
 
 **分布空间（D20，S8 已切换）**：`dist` 是**卡级**（池内 `{card_id: p}`），A / Q 两列
 直接是**卡集合**（§3.1.2 的 A/Q 列即卡集合，S8 前那条 `card_to_slot` 投影通道已随
 M1 槽位法一并消失）。**键空间错位不会静默**：`transfer_linear` 对 A / Q 内的卡直接
 `dist[c]` 取值，错位即 `KeyError`（若改用 `.get(c, 0.0)` 兜底，全部保底会无声退化为
-恒等——正是 §七 S8-1/S8-2/S8-3 原子单元警告所针对的形态）。
+恒等：正是 §七 S8-1/S8-2/S8-3 原子单元警告所针对的形态）。
 
 **依赖方向（§3.1.6，强制）**：本模块**单向**依赖 `pity_primitives`，
 **不 import `pity.py`**——`pity.py` 反向依赖本模块（preset 工厂、`Pity` 骨架），
@@ -62,7 +62,7 @@ def _lower_rarities(ctx: PityContext, scope: str) -> tuple:
 
 
 def _cards(*groups) -> tuple:
-    """把若干卡集合串成一个**保序去重**的元组——A / Q 两列的规范化入口。
+    """把若干卡集合串成一个**保序去重**的元组：A / Q 两列的规范化入口。
 
     去重不是形式主义：一张卡在 Q 内出现两次会让 `transfer_linear` 对它扣两次
     减量（产出负概率），在 A 内出现两次会让它拿到双份增量（`Σδ ≠ 0`）。正常
@@ -82,7 +82,7 @@ def _cards(*groups) -> tuple:
 # ══════════════════════════════════════════════════════════════════
 
 class Modifier:
-    """Modifier 协议——`compute_delta` 是本族唯一必写的方法，`apply` / `rebind` 由本基类提供。
+    """Modifier 协议：`compute_delta` 是本族唯一必写的方法，`apply` / `rebind` 由本基类提供。
 
     默认实现即协议对「无状态零件」的定义；子类只覆写自己真正承担的方法。
     """
@@ -138,7 +138,7 @@ class Modifier:
     def apply(self, ctx: PityContext, view, dist: Dict[str, float],
               readonly: bool) -> Dict[str, float]:
         r"""**S8 起的正式默认实现**（§3.9.2 / §3.14.3）：把本 Modifier 的增量向量
-        作用到分布并归一化——`_apply_delta(dist, self.compute_delta(view, dist, ctx) or {})`。
+        作用到分布并归一化：`_apply_delta(dist, self.compute_delta(view, dist, ctx) or {})`。
 
         **`apply` 自此不是每个 Modifier 的必写方法**：各 Modifier 覆写的是
         `compute_delta()`，本方法是全族唯一的 `apply` 定义（M1 期的占位实现
@@ -157,7 +157,7 @@ class Modifier:
 # ══════════════════════════════════════════════════════════════════
 
 class HardModifier(Modifier):
-    r"""硬保底（F 语义）——`counter >= threshold` 时把源组概率整组搬给目标集。
+    r"""硬保底（F 语义）：`counter >= threshold` 时把源组概率整组搬给目标集。
 
     §3.1.2 机制表的**两行**由 `target` 承载（`target_featured` 的选择子，取值由
     `_target_of(pdef)` 产出，§3.1.4 ISSUE-403）：
@@ -229,7 +229,7 @@ class HardModifier(Modifier):
 
 
 class SoftModifier(Modifier):
-    r"""软保底（B 语义）——`boost > 0` 时把源组的 `boost` 个百分点搬给 scope。
+    r"""软保底（B 语义）：`boost > 0` 时把源组的 `boost` 个百分点搬给 scope。
 
     | 项 | 取值（§3.1.2 机制表第 3 行） |
     |----|------------------------------|
@@ -336,7 +336,7 @@ class RotatingModifier(Modifier):
     掷骰移回 `before_draw` 的 `prepare` 相位，只读查询会走到 `prepare` 的 `readonly`
     早退分支，于是 `cr_intercepted` 读到的是**上一次非只读调用**留下的 flag（差一抽）。
     M2 起 `readonly` 从 Modifier 签名废除，抑制依据改读 `ctx.readonly`（查询标记字段，
-    `Pity.before_draw` 首行按其实参写入）——语义与 M1 的 `readonly` 形参逐条相同：
+    `Pity.before_draw` 首行按其实参写入）：语义与 M1 的 `readonly` 形参逐条相同：
     **查询不体现拦截**（复刻旧 `RotatingCRBehavior` 的只读语义）。`guaranteed` 不受
     只读标记影响（旧类同样无条件读它）。
     """
@@ -451,7 +451,7 @@ class SelectedModifier(Modifier):
        且未配 `selected_card_init`）正是「出金必是 UP、UP 内按声明权重分配」的既定配置
        形态。§3.1.2 机制表的 `A = (selected,)` 描述的是**定轨已设置**的常规分支。
        判据是「选中卡落在 **featured 集**内」（不是「落在 scope 内」）：旧
-       `_resolve_selected_slots` 只在 featured 槽里认目标——选中一张 scope 内的
+       `_resolve_selected_slots` 只在 featured 槽里认目标：选中一张 scope 内的
        非 featured 卡时，它会返回**第一个 featured 槽**（按槽位名反查稀有度、
        命中即返回该槽），而不是把该标准卡当目标。故本类的 `A` 取
        `(sel,) if sel in featured else featured`，与旧实现逐条对齐。

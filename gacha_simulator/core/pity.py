@@ -479,7 +479,7 @@ class HardPityBehavior(CounterBasedBehavior):
 # **S8 处置（ISSUE-502，强制）**：本函数**本体保留**，与叶子层的卡级助手
 # `transfer_linear`（`pity_primitives.py`，§3.9.4）并存。理由：本模块内仍有 4 处
 # 调用点，全部位于**按 GATE-5 要保留到发布前的旧类体内**（`RotatingBehavior` /
-# `RotatingCRBehavior._force_featured` / `TargetedBehavior` 两处）——删函数本体即
+# `RotatingCRBehavior._force_featured` / `TargetedBehavior` 两处）：删函数本体即
 # `NameError`（模块级名字在**调用时**解析，导入期与 ruff 都不报错），而 S5a 等价性
 # 装置与 S8-6 的「对 S5 产物容差 1e-12」正是拿这些旧类当基准。
 # 故 S8 只**新增**卡级 `transfer_linear` 并让新骨架改用它（`Pity.before_draw` 经
@@ -2236,7 +2236,7 @@ class PityEngine:
         """从 reward_id 推断稀有度（大小写归一化）。
 
         **S8-2 起本方法是「卡 id → 稀有度」这条规则的唯一实现**：原先 `pool.py` 里
-        还有一份（喂**概率**路径——`banner.draw` 的 `scale_factors` 还原段与
+        还有一份（喂**概率**路径：`banner.draw` 的 `scale_factors` 还原段与
         `aggregate_probs_by_rarity`），两者的判定顺序曾不同（本方法先查 `ssr_ids`、
         那份先查 `scope_cards`），并因此漂移出缺陷 12。S8-2 把概率路径改为卡级直传
         后那份零消费者、随 ISSUE-504 删除，故「两处实现必须同答」这一守卫形态

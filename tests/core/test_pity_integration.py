@@ -219,7 +219,7 @@ class TestMultiPityCoordination:
         在那个池上 hard 的「100%」是旧槽位级绝对赋值的产物）。故本用例补一张 R 卡
         作取源面，并把 `rarity_rank` 的方向修正为「rank 小 = 稀有度更高」
         （旧稿写 `{'ssr': 3, ...}`，会让 `_lower_rarities` 恒返空集、
-        `transfer_linear` 因 `p(Q) = 0` 静默恒等——**本用例正是被这条掩盖的**）。
+        `transfer_linear` 因 `p(Q) = 0` 静默恒等：**本用例正是被这条掩盖的**）。
         """
         state = PityState()
 
@@ -254,7 +254,7 @@ class TestMultiPityCoordination:
         )
         base = {'f1': 0.006, 's1': 0.004, 'r1': 0.99}
 
-        # 初始——小保底（rotating 未置位）、未到硬保底阈值 → 恒等
+        # 初始：小保底（rotating 未置位）、未到硬保底阈值 → 恒等
         probs = engine.before_draw('test_pool', state, dict(base))
         assert probs == base
 
@@ -380,12 +380,12 @@ class TestRarityInferenceGuards:
     的内部调用；`banner.draw` 改走卡级直传后，概率路径不再需要「卡 id → 稀有度」
     的反查），故「两处实现漂移」这一缺陷形态**在结构上不再存在**（缺陷 12 的根因
     即 A 单方面漂移）。本类保留的是**剩下的那一份实现**的守卫：B 的答案必须等于
-    池内每张卡声明的稀有度，且两条支撑它的不变量成立——不变量破了，B 就会答错
+    池内每张卡声明的稀有度，且两条支撑它的不变量成立：不变量破了，B 就会答错
     （而不是「与另一份实现分歧」）。
 
     判据的两条不变量（真实配置全量扫描，实测 8 banner × 各池 152 张卡逐卡成立）：
 
-    ① `ssr_ids ⊆ scope_cards['ssr']`（需要的是「查得到」而非「相等」——
+    ① `ssr_ids ⊆ scope_cards['ssr']`（需要的是「查得到」而非「相等」：
        `batch_simulator` 建 `ssr_ids` 时排除 `_no_card`，等号会在合法配置上误红）；
     ② `featured_ids ⊆ scope_cards`。
     '''

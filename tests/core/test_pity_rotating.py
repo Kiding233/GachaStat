@@ -75,7 +75,7 @@ def base_ctx(state):
 
 @pytest.fixture
 def slot_ctx(state):
-    """**槽位级**上下文的独立夹具——只服务 `TestRedistributeScope`。
+    """**槽位级**上下文的独立夹具：只服务 `TestRedistributeScope`。
 
     `_redistribute_scope` 是 M1 的槽位级函数，按 ISSUE-502 **保留至「发布前一次性
     移除旧保底类」的 commit**（其 4 处调用点全在旧类体内），故它的单测继续在槽位
@@ -544,7 +544,7 @@ class TestTransferLinear:
         | `Σδ == 0` | 转移族配平（§3.1.5.2.1），框架归一化退化为恒等 |
 
         **判别性**：把 `declared` 写成 `current`（或反之）会让第 1 / 2 条断言之一转红
-        ——本夹具的当前比例（1:7）与声明权重（3:1）刻意不同。
+        ：本夹具的当前比例（1:7）与声明权重（3:1）刻意不同。
         """
         dist = {'a1': 0.01, 'a2': 0.07, 'q1': 0.02, 'q2': 0.90}
         weights = {'a1': 0.75, 'a2': 0.25, 'q1': 0.5, 'q2': 0.5}

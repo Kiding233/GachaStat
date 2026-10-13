@@ -138,11 +138,11 @@ class _ProbeTracker(Tracker):
 
 
 class _ProbeModifier(Modifier):
-    """Modifier 探针——记录调用与收到的 view 命名空间。
+    """Modifier 探针：记录调用与收到的 view 命名空间。
 
     **S8-1 起探针挂在 `compute_delta` 上**（骨架改调该方法；`apply` 收敛为基类默认
     实现、在生产路径上无消费者），`readonly` 不再是本方法的形参，改经
-    `ctx.readonly`（查询标记字段，§3.9.6 的「处置（两期）②」）读取——故本探针顺带
+    `ctx.readonly`（查询标记字段，§3.9.6 的「处置（两期）②」）读取：故本探针顺带
     把「只读标记透传至 Modifier 相位」钉在同一处。
     """
 
@@ -543,7 +543,7 @@ class _RecordingState(PityState):
 
 
 class _NsProbeModifier(Modifier):
-    """命名空间 Modifier 探针——记录每次 `compute_delta` 收到的 view 的命名空间与所绑 state。
+    """命名空间 Modifier 探针：记录每次 `compute_delta` 收到的 view 的命名空间与所绑 state。
 
     **S8-1 起探针挂在 `compute_delta` 上**（同 `_ProbeModifier` 的理由：骨架改调该
     方法，挂 `apply` 的探针永不触发、断言退化为恒真）。

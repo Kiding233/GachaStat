@@ -7,7 +7,7 @@ from gacha_simulator.core.pool import (
 # `infer_rarity_from_spec` 的两条用例随函数本体删除（S8-2 / ISSUE-504）：该函数的
 # 三类消费者（`banner.draw` 的 `scale_factors` 还原段、`aggregate_probs_by_rarity`
 # 的内部调用、导出面）在 S8-2 / S8-4 逐个消失后它零消费者，故定义与用例同批删。
-# **覆盖不缩水**：它当年守的两件事各有别的承载面——
+# **覆盖不缩水**：它当年守的两件事各有别的承载面：
 # ① 「SR / R 卡必须能认出自己的稀有度」（缺陷 12 的根因）：由下方
 #    `test_aggregate_puts_sr_featured_in_its_own_slot` 覆盖（聚合侧写对槽位），
 #    并由 `PityEngine._infer_rarity` 的守卫用例（`test_pity_integration.py` 的

@@ -73,7 +73,7 @@ aware_shape`）按新语义重写，`_exempted_mass` / `_assert_scope_aware_tota
 M1 的「豁免」在增量形式下的对应物是 §3.9.5 的「U 外的卡逐位不变」：`hard(scope='sr')`
 的 A = sr 卡、Q = 更低稀有度卡，**更高稀有度的卡既不进 A 也不进 Q**，故其 δ 为 0、
 取值逐位保留。本文件保留一条并列断言（`test_f_step_leaves_higher_rarity_unwritten`）
-把该结构钉住——Σ 式（现为恒等 `Σp = 1`）对「豁免/保留被整体破坏」不敏感：把更高
+把该结构钉住：Σ 式（现为恒等 `Σp = 1`）对「豁免/保留被整体破坏」不敏感：把更高
 稀有度的质量搬走再重新归一化，Σ 仍是 1，只有该结构式能拦下它。
 
 
@@ -865,7 +865,7 @@ def _declared_allowed(run: _Run) -> set:
 # ══════════════════════════════════════════════════════════════════
 
 class TestNormalizationInvariant:
-    """§3.12.1 归一性行——**S8 起的恒等口径**：每个触发的步、每次抽卡的管道输出
+    """§3.12.1 归一性行：**S8 起的恒等口径**（每个触发的步、每次抽卡的管道输出
     都 `Σp = 1`（改写记录见模块 docstring 的「归一性的口径已完成里程碑切换」段）。"""
 
     @pytest.mark.parametrize('combo', _COMBOS, ids=_IDS_ALL)
@@ -874,7 +874,7 @@ class TestNormalizationInvariant:
 
         M1 期的 scope 感知式对 F 步另取 `1 + Σp(豁免槽位)`；S8 起 F 步是配平转移
         （A 加 `p(Q)`、Q 减 `p(Q)`，`Σδ = 0`），框架归一化退化为恒等，故本式对
-        **全部**机制同形——「F 步是个例外」这件事在 M2 不复存在。
+        **全部**机制同形：「F 步是个例外」这件事在 M2 不复存在。
         """
         run = _trace(combo)
         for step in run.fired_steps():
@@ -926,7 +926,7 @@ class TestNormalizationInvariant:
         这是 M1 的「豁免」在增量形式下的对应物（§3.9.5 的「U 外的卡逐位不变」）：
         A = scope 卡集、Q = 更低稀有度卡集，更高稀有度的卡**既不在 A 也不在 Q**，
         故其 δ 为 0、输出逐位等于输入。**为什么该结构式必须与 Σ 式并存**：Σ 式
-        （现为恒等 `Σp = 1`）对「把更高稀有度的质量搬走再重新归一化」不敏感——
+        （现为恒等 `Σp = 1`）对「把更高稀有度的质量搬走再重新归一化」不敏感：
         那仍然归一，只有本式能拦下它。**豁免集写死为「比 scope 高的稀有度卡」**
         （由 `combo.shape.rarity_rank` 与 `scope_cards` 独立算出，不读生产助手：
         读助手会让期望值与生产值同向偏移，故障时双双失明）。
@@ -961,7 +961,7 @@ class TestNormalizationInvariant:
 
     @pytest.mark.parametrize('combo', _COMBOS, ids=_IDS_ALL)
     def test_pipeline_total_is_one_for_every_combo(self, combo):
-        """**全部**组合的管道输出 `Σp = 1`（含 F 型组合——M1 期这一支取
+        """**全部**组合的管道输出 `Σp = 1`（含 F 型组合：M1 期这一支取
         `1 + Σp(最后一次 F 步的豁免槽位)`，S8 起两支持平）。"""
         run = _trace(combo)
         for index, dist in enumerate(run.probs):
@@ -976,7 +976,7 @@ class TestNormalizationInvariant:
         故 Σ = 1、ssr 卡逐位保留。
 
         **定点断言的角色**：`higher` 集由 `scope_cards` / `rarity_rank` **独立算出**
-        （写死为「ssr 的两张卡」这一事实），不读任何生产助手——助手自身坏掉时期望值
+        （写死为「ssr 的两张卡」这一事实），不读任何生产助手：助手自身坏掉时期望值
         会与生产值同向偏移，只有独立算出的字面集能钉住它。
         """
         combo = _FIXED_COMBOS['hard_below_top']
@@ -1382,7 +1382,7 @@ class TestConcentratingPairDegeneracy:
         # **S8 起第二步是「不触发」**：第一步已把 scope 总量全部搬进目标集，第二步的
         # 源组（scope 内非目标卡）已归零 → `transfer_linear` 的 `p(Q) <= 0` 守卫命中、
         # 返回 `None`（恒等）。M1 期它算出的是一个**恒零的 δ**（「按声明权重重分配」
-        # 在目标集已满时退化为恒等）——两者行为等价（都是恒等映射），S8 的形态更强：
+        # 在目标集已满时退化为恒等）：两者行为等价（都是恒等映射），S8 的形态更强：
         # 它不再需要「第二个零件的 δ 恰好恒零」这一额外解释（§3.9.5 的 `p(Q) == 0`
         # 行就是它的依据）。
         assert second.delta is None or all(v == 0.0 for v in second.delta.values()), (

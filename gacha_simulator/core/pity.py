@@ -1253,7 +1253,8 @@ class Pity(PityBehavior):
 
     1. 收集零件声明的命名空间（`trackers` / `modifiers` / `lifecycle` 的 `namespace`
        属性去 `None`）；
-    2. 汇总三族声明键集 `_declared_keys`（S10-2 / S11 的唯一输入；本步只汇总、不校验）；
+    2. 汇总三族声明键集 `_declared_keys`（S10-2 / S11 的唯一输入）并跑 S10-2 的
+       两条构造期判据（§3.12.2，非法组合抛 `ConfigError`，先于任何 state 写入）；
     3. `Lifecycle.initialize(state, name, namespaces)`——写初始 `_active`。**须先于
        `_view` 创建**：`initialize` 只写 state、不依赖 view；
     4. 建默认 view（`self._name`）与零件命名空间 view（`self._ns_views`）；
@@ -1308,6 +1309,12 @@ class Pity(PityBehavior):
             'modifiers': tuple(k for _p in modifiers for k in _p.state_keys()),
             'lifecycle': tuple(lifecycle.state_keys()),
         }
+
+        # S10-2（§3.12.2）：两条合法组合判据的**检查点**。数据是 per-Pity 的
+        # （`_declared_keys` 由本保底三族给出），无需引擎上下文，故落在本构造器。
+        # 位置须在 `Lifecycle.initialize` **之前**：非法组合在此抛 `ConfigError`，
+        # 不留半写的 state（`initialize` 与 `flags` / `counters` 消费都会写 state）。
+        _check_declared_keys(self._declared_keys, name)
 
         # ISSUE-202 / ISSUE-407：构造期写入初始 `_active` 的**唯一归属方法**。漏掉即
         # 非 `depends_on` 保底 `_active` 恒 False、`before_draw` / `after_draw` 首行
@@ -1668,6 +1675,69 @@ def _validate_behaviors(behaviors):
             scope_soft[key] = name
 
 
+#: 判据 2 的**白名单**（§3.12.2）：由零件之外的层写入、**无任何零件声明它**的键。
+#: `selected_card` 的写入者是策略层的 `NonDrawAction`
+#: （`service/gacha_service.py` 的 `switch_epitomized_target` / `cancel_epitomized_path`
+#: 两条路径），而 `FateTracker` 与 `SelectedModifier` 都会读它；不留白名单则
+#: `targeted` 族全部合法配置在构造期被判为「引用不存在的键」。
+#: 该键的初始化路径亦独立于零件声明（§3.1.1 的 L4 例外 2：无条件注入，`sc` 为
+#: `None` 也写）。
+_EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
+
+
+def _check_declared_keys(declared_keys, name):
+    """S10-2 的两条构造期判据（§3.12.2 第 1 / 第 2 条），与 `_validate_behaviors` 同层。
+
+    **输入是 `Pity._declared_keys`（ISSUE-501）**，即三族 `state_keys()` 的汇总，
+    由 §3.1.4 骨架写入。本函数**不自行推断声明集**（那会让 §3.12.1 / §3.12.2 /
+    §3.13 三处各有一套口径），只做两条判据的检查本体。
+
+    判据 1（同键被两个 Tracker 声明）：比对 `declared_keys['trackers']` 内的重复。
+    两个 Tracker 写同一个键时，后写者覆盖先写者，计数器的归属不再唯一，
+    且**不报错**（读取侧只看到一个值）。
+
+    判据 2（Modifier 引用不存在的键）：「存在」的口径 = 该键在 **Tracker ∪
+    Lifecycle** 的 `state_keys()` 并集内，另加 `_EXTERNAL_STATE_KEYS` 白名单。
+    比对集 = `declared_keys['modifiers']`（各 Modifier **自己**的声明集，§3.14 条件
+    内联后读键一律落在这一处，故键名拼错在此处被构造期拦下）。
+
+    **不含 Tracker 自身的读键**：判据 2 的文本只约束 Modifier（§3.12.2），
+    而 `FateTracker` 对 `selected_card` 的读取属 §3.1.1 的 L4 例外 2
+    （Tracker 允许读「不由自己声明的键」）。
+
+    两处均抛 `ConfigError`（配置错误，与 `_validate_behaviors` 的规则 2/3/4 同类；
+    不用 `ValueError`，后者在本库专用于「编程错误」面的重名判定）。
+    """
+    from .config_store import ConfigError
+
+    # ── 判据 1：同一键被两个 Tracker 声明（§3.12.2 第 1 条）──
+    seen: set = set()
+    duplicated: List[str] = []
+    for key in declared_keys['trackers']:
+        if key in seen and key not in duplicated:
+            duplicated.append(key)
+        seen.add(key)
+    if duplicated:
+        raise ConfigError(
+            f"保底 '{name}' 的 Tracker 声明集存在重复键 "
+            f"{sorted(duplicated)}：同一状态键不得被两个 Tracker 声明"
+            f"（§3.12.2 判据 1）：后写者会覆盖先写者的计数，且不报错"
+        )
+
+    # ── 判据 2：Modifier 引用不存在的状态键（§3.12.2 第 2 条）──
+    available = (set(declared_keys['trackers'])
+                 | set(declared_keys['lifecycle'])
+                 | _EXTERNAL_STATE_KEYS)
+    unknown = sorted({k for k in declared_keys['modifiers'] if k not in available})
+    if unknown:
+        raise ConfigError(
+            f"保底 '{name}' 的 Modifier 引用了不存在的状态键 {unknown}"
+            f"（§3.12.2 判据 2）：「存在」的口径是 Tracker ∪ Lifecycle 的声明集"
+            f"（另加白名单 {sorted(_EXTERNAL_STATE_KEYS)}）；"
+            f"当前可用的键为 {sorted(available)}"
+        )
+
+
 def _build_pity_state_init(pity_defs, counter_init_overrides=None):
     """从 PityDef 列表构造初始 PityState。
 
@@ -1891,7 +1961,25 @@ class PityEngine:
         return self.pity_defs.get(name)
 
     def _build_activation_graph(self, behaviors):
-        """解析 depends_on 关系 -> {source_name: [dependent_name, ...]}。"""
+        """解析 depends_on 关系 -> {source_name: [dependent_name, ...]}。
+
+        **S10-2（§3.12.2 第 3 条）：成环检测为新增能力。** 本函数此前只校验
+        `depends_on` 指向的名字存在（`dep not in all_names` 那一支），**不做环检测**，
+        故 `A depends_on B` + `B depends_on A` 会被静默接受：激活传播在
+        `PityEngine.after_draw` 里沿环反复置位，`DependentActive` 的保底互相激活、
+        退役计数（`triggers`）随传播次数漂移，且**不报错**。自环
+        （`A depends_on A`）同属此列。故在图建好后立即查环，成环抛 `ConfigError`。
+
+        图的方向是「被依赖方 -> 依赖它的保底」（激活传播方向），与 `depends_on`
+        的指向相反；有向图成环与边的整体反向无关，故在本图上查环与在
+        `depends_on` 关系上查环等价。
+
+        环检测用**三色迭代 DFS**（`None` = 未访问 / `_GRAY` = 在栈上 / `_BLACK` =
+        已出栈）：再次遇到灰节点即成环，此时栈上的那一段就是环路径（取其自该
+        灰节点起的后缀，再补上灰节点本身闭合）。用迭代而非递归：依赖链长度由
+        配置决定，递归版在深链上有 `RecursionError` 风险，而该异常会被
+        `PityEngine.__init__` 的构造兜底归类为 `ConfigError`（S4-5），错误信息失真。
+        """
         import warnings
         all_names = {bh._name for bh in behaviors if hasattr(bh, '_name')}
         _bh_by_name = {bh._name: bh for bh in behaviors if hasattr(bh, '_name')}
@@ -1914,6 +2002,40 @@ class PityEngine:
                     if '*' not in src_pools and '*' not in dst_pools:
                         if not (src_pools & dst_pools):
                             warnings.warn(f"「{name}」的 depends_on 指向「{dep}」，但双方 pools 无交集")
+
+        # ── S10-2：depends_on 成环检测（§3.12.2 第 3 条，新增能力）──
+        _GRAY = 1
+        _BLACK = 2
+        color: Dict[str, int] = {}
+        for start in graph:
+            if start in color:
+                continue
+            color[start] = _GRAY
+            # 栈元素 = (节点, 未展开的子节点列表)；`pop()` 即按逆序展开
+            stack: List[tuple] = [(start, list(graph.get(start, ())))]
+            while stack:
+                node, children = stack[-1]
+                if not children:
+                    color[node] = _BLACK
+                    stack.pop()
+                    continue
+                child = children.pop()
+                state = color.get(child)
+                if state == _GRAY:
+                    from .config_store import ConfigError
+                    path = [n for n, _ in stack]
+                    # 栈序是「激活传播」方向，反转后即 `depends_on` 的指向
+                    # （图边 u -> v 的语义是「v 依赖 u」），故报错串读作
+                    # 「前者依赖后者」，与用户配置里的写法同向。
+                    cycle = list(reversed(path[path.index(child):] + [child]))
+                    raise ConfigError(
+                        f"depends_on 成环：{' -> '.join(cycle)}"
+                        f"（读作「前者依赖后者」）：互相依赖的保底无法确定"
+                        f"激活顺序，激活传播会沿环反复置位（§3.12.2 判据 3）"
+                    )
+                if state is None:
+                    color[child] = _GRAY
+                    stack.append((child, list(graph.get(child, ()))))
         return graph
 
     # ── 策略层查询接口（保留旧方法签名兼容） ──

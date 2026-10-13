@@ -97,9 +97,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pytest
 
-from gacha_simulator.core.pity import Pity
+from gacha_simulator.core.config_store import ConfigError, PityDef
+from gacha_simulator.core.pity import Pity, PityEngine
 from gacha_simulator.core.pity_modifier import (
     HardModifier,
+    Modifier,
     NonFeaturedModifier,
     NotOwnedModifier,
     RotatingModifier,
@@ -1434,3 +1436,108 @@ _FIXED_COMBOS: Dict[str, _Combo] = {
         flags={'guaranteed': True}, counters={'fate_points': 0},
         selected_card='ssr_up'),
 }
+
+
+# ══════════════════════════════════════════════════════════════════
+# 十四、S10-2：三条合法组合判据的构造期拒收（§3.12.2）
+# ══════════════════════════════════════════════════════════════════
+#
+# 本段是 S10-2 的用例面（与 S10-1 同文件、按 `-k "illegal or cycle"` 过滤）。
+# 三条判据的**检查本体**落在生产代码：判据 1 / 判据 2 在 `Pity.__init__`
+# （`_check_declared_keys`，输入是 `Pity._declared_keys`，ISSUE-501），判据 3
+# （`depends_on` 成环）在 `PityEngine._build_activation_graph`。三者一律抛
+# `ConfigError`（配置错误），**不是** `ValueError`。
+#
+# **命名约束（GATE-6 测试策略）**：验收命令的过滤词 `illegal` / `cycle` 必须落在
+# 用例名内，且命中项**恰好三条**。故承载本段的类名与同文件其他类名一律不含
+# 这两个词（`-k` 是子串匹配、且匹配面含类名与模块名），否则会连带命中无关用例。
+
+class _TypoKeyModifier(Modifier):
+    """键名拼错的 Modifier：`state_keys()` 申报一个不存在的键 `'countr'`。
+
+    生产零件的键集由构造形参固定，拼错只在**新写的** Modifier 里出现，故本用例
+    以桩件复现该形态（§3.13 的状态层判据正是为「把 `'counter'` 拼成 `'countr'`」
+    这类静默失效设的）。
+    """
+
+    def state_keys(self):
+        return ('countr',)
+
+
+class TestCombinationCriteriaConstruction:
+    """§3.12.2 三条判据各一条负例，均在**构造期**抛 `ConfigError`。"""
+
+    def test_illegal_duplicate_key_across_trackers(self):
+        """判据 1：同一键被两个 Tracker 声明（§3.12.2 第 1 条）。
+
+        两个 `CounterTracker` 都写 `counter`：后写者覆盖先写者的计数，而读取侧
+        只看到一个值、**不报错**。检查点是 `Pity.__init__`（数据是 per-Pity 的）。
+        """
+        with pytest.raises(ConfigError, match='重复键'):
+            Pity(
+                name=_PITY_NAME, state=PityState(), scope='ssr',
+                btype='soft_step',
+                trackers=[CounterTracker(scope='ssr', init=0),
+                          CounterTracker(scope='ssr', init=0)],
+                modifiers=[SoftModifier('ssr', deltas=((2, 0.0), (3, 30.0)))],
+            )
+
+    def test_illegal_unknown_key_in_modifier(self):
+        """判据 2：Modifier 引用不存在的状态键（§3.12.2 第 2 条）。
+
+        「存在」的口径 = Tracker ∪ Lifecycle 的 `state_keys()` 并集（另加
+        `selected_card` 白名单）。比对集是 Modifier **自己**的声明集，故两形态
+        都在此被拦下：① 生产零件的读键无供给方；② 键名拼错（`'countr'`）。
+        """
+        # ① 生产零件：`SoftModifier` 读 `counter`，而本保底无任何 Tracker 声明它
+        with pytest.raises(ConfigError, match='不存在的状态键'):
+            Pity(
+                name=_PITY_NAME, state=PityState(), scope='ssr',
+                btype='soft_step',
+                trackers=[],
+                modifiers=[SoftModifier('ssr', deltas=((2, 0.0), (3, 30.0)))],
+            )
+
+        # ② 键名拼错：`counter` 有供给方，仅申报名错一格（`'countr'`）
+        with pytest.raises(ConfigError, match='不存在的状态键'):
+            Pity(
+                name=_PITY_NAME, state=PityState(), scope='ssr',
+                btype='soft_step',
+                trackers=[CounterTracker(scope='ssr', init=0)],
+                modifiers=[_TypoKeyModifier()],
+            )
+
+    def test_cycle_depends_on(self):
+        """判据 3：`depends_on` 成环（§3.12.2 第 3 条，**新增能力**）。
+
+        本块之前 `_build_activation_graph` 只校验「指向的名字存在」，不做环检测，
+        故互依配置被静默接受。两个 `PityDef` 的 `btype` 取不同值，使
+        `_validate_behaviors` 的规则 4（同 scope 同 btype 双 soft）不先抛错，
+        从而把抛错归因钉死在成环检测上。
+        """
+        def _engine(defs):
+            return PityEngine(pool_specs={}, pity_defs=defs, state=PityState(),
+                              rarity_rank={'ssr': 0})
+
+        with pytest.raises(ConfigError, match='成环'):
+            _engine([
+                PityDef(name='cyc_a', btype='soft_interval', scope='ssr',
+                        soft_start=73, soft_end=90, depends_on='cyc_b'),
+                PityDef(name='cyc_b', btype='soft_additive', scope='ssr',
+                        soft_start=70, soft_increment=6, depends_on='cyc_a'),
+            ])
+
+        # 自环（`A depends_on A`）同属此列
+        with pytest.raises(ConfigError, match='成环'):
+            _engine([PityDef(name='cyc_self', btype='soft_interval', scope='ssr',
+                             soft_start=73, soft_end=90, depends_on='cyc_self')])
+
+        # 非恒真守卫：无环的依赖链**不得**被判为成环（否则「检出成环」这一半
+        # 无法与「一律拒收 depends_on」区分）
+        engine = _engine([
+            PityDef(name='cyc_src', btype='soft_interval', scope='ssr',
+                    soft_start=73, soft_end=90),
+            PityDef(name='cyc_dst', btype='soft_additive', scope='ssr',
+                    soft_start=70, soft_increment=6, depends_on='cyc_src'),
+        ])
+        assert engine._activation_graph == {'cyc_src': ['cyc_dst']}

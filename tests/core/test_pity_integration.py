@@ -66,32 +66,46 @@ class TestSelectedTargetResolution:
 
     @staticmethod
     def _ctx(state, current=None):
+        # 两个**互不相同**的 featured 槽（P64 S7d 审查收口）：单槽夹具下
+        # 「A = 定轨卡所在槽」与「A = 全部 featured 槽」产出同值、判别力为零；
+        # 拆成两槽后，定轨 f1 时 `ssr_featured_a` 独得 scope 总量（0.015）、
+        # `ssr_featured_b` 归零，与「两槽均分（各 0.0075）」可区分。
         draw = DrawInfo(
             pool_id='p1', pool_instance_id='p1_0',
             reward_id='', reward_rarity='', is_featured=False,
             scope_cards={'ssr': ('f1', 'f2', 's1')},
             featured_cards={'ssr': ('f1', 'f2')},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured',
+            scope_slots={'ssr': ('ssr_featured_a', 'ssr_featured_b', 'ssr_standard')},
+            featured_slots={'ssr': ('ssr_featured_a', 'ssr_featured_b')},
+            card_to_slot={'f1': 'ssr_featured_a', 'f2': 'ssr_featured_b',
                           's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
+            base_probabilities={'ssr_featured_a': 0.005, 'ssr_featured_b': 0.005,
+                                'ssr_standard': 0.005},
             rarity_rank={'ssr': 3},
         )
         return PityContext(
             draw=draw,
-            current=dict(current or {'ssr_featured': 0.005, 'ssr_standard': 0.005}),
+            current=dict(current or {'ssr_featured_a': 0.005, 'ssr_featured_b': 0.005,
+                                     'ssr_standard': 0.005}),
             state=state,
         )
 
     def test_selected_card_located_via_card_to_slot(self):
-        """selected 在 card_to_slot 中 → A 列落在其投影槽位（scope 总量全给该槽）。"""
+        """selected 在 card_to_slot 中 → A 列落在其投影槽位（scope 总量全给该槽）。
+
+        **本用例是「定轨卡定位」的判别面（P64 S7d 审查收口）**：把
+        `SelectedModifier.apply` 的 `A = selected_keys or featured` 变异为
+        `A = featured`（完全忽略定轨卡）时，本用例必红。判别点：
+        `ssr_featured_a` 应为 scope 总量 `0.015`（定轨 f1 独得），变异后 A 退化为
+        `('ssr_featured_a', 'ssr_featured_b')`、两槽均分为 `0.0075`。
+        """
         state = PityState()
         pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=0)
         state.set('tgt', 'selected_card', 'f1')
 
         out = pity.before_draw(self._ctx(state))
-        assert out['ssr_featured'] == pytest.approx(0.01)
+        assert out['ssr_featured_a'] == pytest.approx(0.015)   # 定轨槽独得 scope 总量
+        assert out['ssr_featured_b'] == pytest.approx(0.0)     # 兄弟 featured 槽被搬空
         assert out['ssr_standard'] == pytest.approx(0.0)
 
     def test_unresolvable_selection_falls_back_to_all_featured(self):
@@ -108,17 +122,23 @@ class TestSelectedTargetResolution:
         state.set('tgt', 'selected_card', 's1')   # 非 featured 卡
 
         out = pity.before_draw(self._ctx(state))
-        assert out['ssr_featured'] == pytest.approx(0.01)
+        assert out['ssr_featured_a'] == pytest.approx(0.0075)  # 回退到全部 featured → 两槽均分
+        assert out['ssr_featured_b'] == pytest.approx(0.0075)
         assert out['ssr_standard'] == pytest.approx(0.0)
 
     def test_selected_none_returns_all_featured(self):
-        """selected=None → A 列 = 全部 featured 槽（经 `guaranteed` 分支触发）。"""
+        """selected=None → A 列 = 全部 featured 槽（经 `guaranteed` 分支触发）。
+
+        **两个 featured 槽都分到概率**，即「复数语义」的判别面（旧夹具
+        `featured_slots={'ssr': ('ssr_featured', 'ssr_featured2')}` 的等价恢复）。
+        """
         state = PityState()
         pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=1)
         state.set('tgt', 'guaranteed', True)      # selected_card 保持未设置
 
         out = pity.before_draw(self._ctx(state))
-        assert out['ssr_featured'] == pytest.approx(0.01)
+        assert out['ssr_featured_a'] == pytest.approx(0.0075)
+        assert out['ssr_featured_b'] == pytest.approx(0.0075)
         assert out['ssr_standard'] == pytest.approx(0.0)
 
 

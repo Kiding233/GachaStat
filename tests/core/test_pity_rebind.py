@@ -41,6 +41,15 @@ def _make(a, name, btype, **pdef_kwargs):
 
 
 def _soft(a, name='t'):
+    """软保底夹具——经生产同源的 `soft_start` / `soft_end` 语法糖声明爬升段。
+
+    **与改造前的差异（P64 S7d 审查记录项，本文件无断言依赖）**：旧夹具显式传
+    `deltas=((73, 0.0), (17, 5.88))`（前 73 抽无加成、第 74 抽起每抽 5.88），本夹具
+    经 `_soft_deltas_of` 展开为 `((72, 0.0), (18, 5.5556))`（第 73 抽起爬升、第 90
+    抽到 100%）。两者**不等价**（爬升起点差 1 抽、斜率不同），但本文件无任何断言读取
+    `deltas`，且新写法走的是生产同源的语法糖展开路径（正是 S7d 改造的目的），
+    故保持现状并在此记录差异。
+    """
     return _make(a, name, 'soft_interval', soft_start=73, soft_end=90, reset='ssr')
 
 
@@ -387,13 +396,19 @@ class TestNonSnapshotState:
         a = PityState()
         bh = _soft(a)                 # 构造期写 _active=True 到 a
         non_snapshot = PityState()    # 独立空 state，非阶段 3 快照来源
+        # P64 S7d 审查收口（选项 a）：counter 预置到**爬升段**（本夹具 deltas 首段
+        # 72 抽 boost=0）。不预置时 counter=0 → boost 恒 0 → active 与 inactive 的
+        # 输出同值，「概率不被调整」这条断言无判别力（删掉 is_active 早退它仍通过）。
+        # 预置 80 后 advance 一步即入爬升段（81 → boost 50%），早退与否在概率上可判。
+        non_snapshot.set('t', 'counter', 80)
         bh._rebind_state(non_snapshot)
         assert bh._lifecycle.is_active(non_snapshot, 't') is False, \
             '非快照缺 _active → 默认 False → 首行早退'
         # 早退的可观测后果：概率不被调整、计数不推进
         ctx = self._ctx(non_snapshot)
         assert bh.before_draw(ctx) == ctx.current
-        assert non_snapshot.get('t', 'counter', 0) == 0
+        assert non_snapshot.get('t', 'counter', 0) == 80, \
+            '早退跳过 advance → 计数停在预置值（不推进）'
         # 阶段 3 快照（含构造期 _active=True）恢复后生效
         snap = PityState()
         snap.set('t', '_active', True)

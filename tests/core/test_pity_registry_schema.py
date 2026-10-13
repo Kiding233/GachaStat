@@ -1035,17 +1035,41 @@ class TestRotatingInverseSemantics:
         bh, state = _fx_build(_S6A_TYPE)
         assert state.get('fx', 'forced_loss') is None
 
-class TestRedistributeScopeExportStillPresent:
-    """`_redistribute_scope` 的导出**不属 S4-3 的删除面**（AUDIT-BREAK-8 C 项）。
+class TestS8DeletionFaceRetiredFromPackageFace:
+    """S8-4 的删除面从 `gacha_simulator.core` 的公共面退役（AUDIT-BREAK-8 C 项）。
 
-    该符号随 **S8-4** 删（它是 S8 的替换对象）；S4-3 只删 10 个旧行为类 +
-    `SoftPityMixin`。误删会使 S8 前的 `tests/core/test_pity_rotating.py` 导入即失败。
+    原类名 `TestRedistributeScopeExportStillPresent`，断言的是「导出**仍在**」——
+    那是 S4-3 时点的口径（该符号当时不属 S4-3 的删除面，误删会让
+    `tests/core/test_pity_rotating.py` 导入即失败）。**S8-4 反转该断言**：三个符号
+    的消费者链均已断（`banner.draw` 改走卡级管道，§3.9.1），故它们既不在 `__all__`、
+    也不作为本包属性存在（与下方 S4-3 对 10 个旧行为类的退役断言同形）。
+
+    **三个符号的形态不同、必须分别钉**：
+    - `aggregate_probs_by_rarity` / `infer_rarity_from_spec`：**函数本体已删**
+      （S8-4 / S8-2，ISSUE-504），故 `gacha_simulator.core.pool` 里也不得再有它们；
+    - `_redistribute_scope`：**只是从本包公共面退役**，函数本体仍在 `pity.py`
+      （ISSUE-502：4 处旧类调用点仍要用它，随 GATE-5 末条「发布前一次性移除旧保底类」
+      一并删），故 `gacha_simulator.core.pity._redistribute_scope` 必须仍可调用。
+      这一正一反两条，正是「删导出」与「删本体」的分界。
     """
 
-    def test_redistribute_scope_exported_knowingly(self):
+    def test_s8_deleted_symbols_retired_from_package_face(self):
         import gacha_simulator.core as core_pkg
-        assert '_redistribute_scope' in core_pkg.__all__
-        assert callable(core_pkg._redistribute_scope)
+        import gacha_simulator.core.pool as pool_mod
+        for name in ('aggregate_probs_by_rarity', 'infer_rarity_from_spec',
+                     '_redistribute_scope'):
+            assert name not in core_pkg.__all__, \
+                f'{name} 仍在 core.__all__（S8-4 的删除面未清）'
+            assert not hasattr(core_pkg, name), \
+                f'{name} 仍是 core 的属性（只删 import 的残留）'
+        # 两个被删函数的本体也已消失（否则「导出已删、本体仍在」是死代码形态）
+        assert not hasattr(pool_mod, 'aggregate_probs_by_rarity')
+        assert not hasattr(pool_mod, 'infer_rarity_from_spec')
+
+    def test_redistribute_scope_body_survives_until_release(self):
+        """`_redistribute_scope` 只是从公共面退役：本体仍在 `core.pity`（ISSUE-502）。"""
+        from gacha_simulator.core.pity import _redistribute_scope
+        assert callable(_redistribute_scope)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1053,7 +1077,8 @@ class TestRedistributeScopeExportStillPresent:
 # ══════════════════════════════════════════════════════════════════
 
 # 随 S4-3 从 `gacha_simulator.core` 的公共面退役的 11 个符号。
-# **不含** `_redistribute_scope`：它的导出随 S8-4 删（AUDIT-BREAK-8 的 C 项）。
+# **不含** `_redistribute_scope`：它的导出随 **S8-4** 删（AUDIT-BREAK-8 的 C 项，
+# 见上方 `TestS8DeletionFaceRetiredFromPackageFace`），两个时点不得混为一事。
 _RETIRED_EXPORTS = (
     'SoftStepBehavior', 'CounterBasedBehavior', 'HardPityBehavior',
     'RotatingBehavior', 'RotatingSoftBehavior', 'RotatingCRBehavior',

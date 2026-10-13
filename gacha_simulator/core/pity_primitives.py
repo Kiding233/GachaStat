@@ -20,7 +20,18 @@ from typing import Any, Dict, Optional
 
 @dataclass(frozen=True)
 class DrawInfo:
-    """抽卡上下文中不可变的部分——本次抽卡的静态事实。"""
+    """抽卡上下文中不可变的部分——本次抽卡的静态事实。
+
+    **`base_probabilities` 的口径是卡级 `{card_id: p}`（P64 S8，§3.9.3）**：S8 前
+    该字段按调用路径两种口径并存（`banner.draw` 传槽位级聚合结果、`strategy.py`
+    传卡级），S8-2 起两个填充点（`core/banner.py` 的 `draw` 与 `core/strategy.py`
+    的 `get_pity_probabilities`）一律传卡级，与 Modifier 链的 A / Q（卡集合）同
+    键空间。**该口径是声明式的**：本字段无类型级约束，填错只会在
+    `transfer_linear` 的 `sum(dist[c] for c in Q)` 处显形。
+
+    `scope_slots` / `featured_slots` / `card_to_slot` 仍是槽位级，只服务保留到
+    发布前的旧保底类与等价性装置（ISSUE-901），新卡级管道不读它们。
+    """
     pool_id: str
     pool_instance_id: str
     reward_id: str

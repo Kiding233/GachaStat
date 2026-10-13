@@ -160,24 +160,47 @@ def _wi_config():
     return WorstImpactAnalyzer([], {}, store).prepare_simulation_config(50000.0)
 
 
-def test_synthetic_pool_aggregate_conserves_probability():
-    """虚拟池的槽位级聚合不得静默丢卡。
+def test_synthetic_pool_card_level_pipe_neither_drops_nor_invents_cards():
+    """虚拟池的卡级管道不得静默丢卡、也不得引入槽位键。
 
-    `_build_pity_engine` 曾用**原始**卡 id 建 `scope_cards` / `featured_cards`
-    （`limited_ssr_2`），而合成池里是重命名后的 `_wi_featured_{i}`。于是
-    `aggregate_probs_by_rarity` 认不出池内绝大多数卡属于哪个槽位，把它们丢弃，
-    只剩 `{'ssr': 0.004}`（池内 99.6% 的概率凭空消失）。
+    **S8-4 改写（ISSUE-504 / §3.9.3）**：原用例 `test_synthetic_pool_aggregate_
+    conserves_probability` 断言的是**槽位级聚合**的守恒——`_build_pity_engine` 曾用
+    **原始**卡 id 建 `scope_cards` / `featured_cards`（`limited_ssr_2`），而合成池里
+    是重命名后的 `_wi_featured_{i}`，于是 `aggregate_probs_by_rarity` 认不出池内绝大
+    多数卡属于哪个槽位、把它们丢弃（只剩 `{'ssr': 0.004}`，池内 99.6% 的概率凭空
+    消失）。**S8-2 起「卡级 → 槽位级聚合」这一步在生产上不存在**（`banner.draw`
+    卡级直传），故本用例改钉同一风险的**卡级形态**，断言内容不变（不得丢卡）：
+    管道输出的键集必须与池内 reward id 逐一相同，且归一化后 Σ = 1。
+
+    这同时是「对齐不变量」在管道侧的同源守卫：卡集合若与池内 id 对不上，
+    `transfer_linear` 的 `sum(dist[c] for c in Q)` 会直接抛 `KeyError`（而不是像
+    聚合那样静默丢卡），故本用例失败时的症状是异常而非断言——两者都由本行覆盖。
+
+    **counter 预置 85（同 `test_synthetic_pool_pity_actually_fires`）**：不预置则
+    `ssr_soft` 在爬升起点不触发、`before_draw` 恒等返回，本条的三项断言全部空转
+    （恒等输入必然键集相同、Σ 恒为 1）。末条的「非空转守卫」正是为此。
     """
-    from gacha_simulator.core.pool import aggregate_probs_by_rarity
+    from gacha_simulator.core.pity import PityState
+
     cfg = _wi_config()
     banner, engine = cfg['pools'][0], cfg['pity_engine']
     pool = banner.pools['main']
-    spec = engine.get_spec(f'{banner.id}.main')
+    key = f'{banner.id}.main'
+    spec = engine.get_spec(key)
+    assert spec is not None, '本配置应把保底绑到虚拟池'
 
-    pool_total = sum(p for _, p in pool.rewards)
-    agg = aggregate_probs_by_rarity(pool, spec)
-    assert abs(sum(agg.values()) - pool_total) < 1e-12, \
-        f'聚合丢了概率：聚合和 {sum(agg.values())} vs 池内 {pool_total}；agg={agg}'
+    probs = {r.id: p for r, p in pool.rewards}
+    state = PityState.from_dict(cfg['pity_state_init'])
+    state.set(spec.pity_names[0], 'counter', 85)   # 软保底爬升中段，必触发
+    out = engine.before_draw(key, state, probs)
+
+    assert set(out) == set(probs), (
+        f'卡级管道改了键集：多出 {sorted(set(out) - set(probs))}、'
+        f'丢掉 {sorted(set(probs) - set(out))}'
+    )
+    assert abs(sum(out.values()) - 1.0) < 1e-12, \
+        f'Σ = {sum(out.values())}（卡级管道未归一）'
+    assert out != probs, '保底未改动分布（本用例的键集 / 归一断言随之空转）'
 
 
 def test_synthetic_pool_pity_actually_fires():

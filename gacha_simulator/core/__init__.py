@@ -1,6 +1,6 @@
 from .result_types import CompactResult
 from .collector import SimulationCollector, CompactCollector
-from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, aggregate_probs_by_rarity  # ← P61（Ph1）；`infer_rarity_from_spec` 随 S8-2 删（ISSUE-504）
+from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string  # ← P61（Ph1）；`infer_rarity_from_spec` 随 S8-2 删、`aggregate_probs_by_rarity` 随 S8-4 删（ISSUE-504）
 from .notifier import Notifier
 from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
 from .banner import Banner, DrawOutcome, TransitionRule, TransitionPreview  # ← P61（Ph1c）
@@ -17,8 +17,8 @@ from .pity import (
     # preset 化在本包公共面上退役（本包内已无 registry 入口，留着只会诱惑新代码
     # 继续用旧类）。**旧类本体保留到发布前**（GATE-5），故
     # `from gacha_simulator.core.pity import HardPityBehavior` 不受影响；
-    # `_redistribute_scope` 的导出随 S8-4 删（其替换对象是 S8 的卡级管道）。
-    _redistribute_scope,
+    # `_redistribute_scope` 的导出已随 S8-4 删（其替换对象是 S8 的卡级管道），
+    # **函数本体保留在 `pity.py`**（ISSUE-502）：4 处旧类调用点仍在用它。
 )
 from .milestone import MilestoneEngine, MilestoneDef, MilestoneConfig, register_milestone_engine  # P58
 from .config_store import SelectVoucherDef  # P78
@@ -99,12 +99,10 @@ __all__ = [
     'CompactResult',
     'SimulationCollector', 'CompactCollector',
     'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
-    'aggregate_probs_by_rarity',
-    # `infer_rarity_from_spec` 的条目随 S8-2 删（ISSUE-504）：函数本体已随其最后一批
-    # 消费者消失，import 与 `__all__` 必须同批改（只删一处即 ImportError 或留下指向
-    # 已删符号的 re-export）。原计划把本条归 S8-4，见 §七 S8-2 的登记，实测该切分
-    # 不可执行（定义在 S8-2 删、导出留到 S8-4 会让 `import gacha_simulator.core` 在
-    # 中间态直接 ImportError）。
+    # `infer_rarity_from_spec` 的条目随 S8-2 删（ISSUE-504）、`aggregate_probs_by_rarity`
+    # 的条目随 S8-4 删（ISSUE-504 / §3.9.3）：两者的消费者链均已断（`banner.draw` 的
+    # `scale_factors` 还原段与聚合调用），import 与 `__all__` 必须同批改（只删一处即
+    # ImportError 或留下指向已删符号的 re-export）。
     'Notifier',
     'OverflowBand', 'match_overflow_bands', 'expand_sugar_to_bands',
     'Banner', 'DrawOutcome', 'TransitionRule', 'TransitionPreview',
@@ -116,9 +114,10 @@ __all__ = [
     'DrawInfo', 'PityContext', 'Counter', 'Flag', 'LifecycleConfig',
     'BEHAVIOR_REGISTRY', 'create_behavior',
     'compute_scope_mappings',
-    # 10 个旧行为类 + `SoftPityMixin` 的条目随 import 同批删除（AUDIT-BREAK-8：
-    # 只删 import 会留 `NameError`、只删 `__all__` 会留下指向已删符号的 re-export）
-    '_redistribute_scope',
+    # 10 个旧行为类 + `SoftPityMixin` + `_redistribute_scope` 的条目随 import 同批删除
+    # （AUDIT-BREAK-8：只删 import 会留 `NameError`、只删 `__all__` 会留下指向已删符号的
+    # re-export）。**`_redistribute_scope` 只是从本包公共面退役**：函数本体仍在
+    # `pity.py`（ISSUE-502，随 GATE-5 末条「发布前一次性移除旧保底类」的 commit 才删）。
     'MilestoneEngine', 'MilestoneDef', 'MilestoneConfig', 'register_milestone_engine',
     'SelectVoucherDef',
     'ResourceLifecycle', 'ResourceLifecycleConfig', 'resolve_expire_time',

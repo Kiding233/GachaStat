@@ -19,6 +19,9 @@ from .pity_modifier import (  # noqa: F401
     HardModifier, Modifier, NonFeaturedModifier, RotatingModifier,
     SelectedModifier, SoftModifier,
 )
+# P64 S11（ISSUE-003）：校验层由编排层**单向**引用——本模块 import 它，它不 import
+# 本模块（checker 的 `engine` 一律经实参传入），故不成环。类的定义归 `core/invariants.py`。
+from .invariants import InvariantChecker
 
 
 
@@ -1851,9 +1854,18 @@ class PityEngine:
     def __init__(self, pool_specs: Dict[str, PoolPitySpec],
                  pity_defs,  # List[PityDef]（P55 扁平化定义列表）
                  rarity_rank: Dict[str, int] = None,
-                 state: 'PityState' = None):
+                 state: 'PityState' = None,
+                 invariants: 'Optional[InvariantChecker]' = None):
         self.pool_specs = pool_specs
         self._rarity_rank = rarity_rank or {}
+
+        # ── P64 S11（ISSUE-003 / ISSUE-945）：不变式校验器的挂载层 ──
+        # 挂在引擎上（不是模块级全局、不是 `Pity`、不是 `env` 的新字段）的理由是它
+        # 随 `env.pity_engine` 进每条并行路径的 pickle 图，spawn worker 自动继承该
+        # 设置。`invariants=None`（默认）即**生产关闭态**：连实例都不建，两处调用点
+        # 的首行守卫 `is not None` 直接短路，零开销、零行为变更。`enabled=True` 只能
+        # 由测试夹具产出。
+        self._invariants = invariants
 
         self.pity_defs = {p.name: p for p in pity_defs} if pity_defs else {}
         self._state = state
@@ -2147,6 +2159,11 @@ class PityEngine:
             if new_probs is not None:
                 ctx.current = new_probs
 
+        # ── P64 S11（ISSUE-003）：分布层的唯一调用点——「该池的全部保底跑完、
+        #    返回值之前」（§3.13 的「调用点与构造源」段固定此位置）──
+        if self._invariants is not None:
+            self._invariants.check_after_before_draw(pool_id, ctx.current, self)
+
         return ctx.current
 
     def after_draw(self, pool_id: str, state: PityState, reward_id: str):
@@ -2179,6 +2196,11 @@ class PityEngine:
             if bh.did_fire(ctx):
                 for dep_name in self._activation_graph.get(bh._name, []):
                     state.set(dep_name, "_active", True)
+
+        # ── P64 S11（ISSUE-003）：状态层 + 生命周期层的唯一调用点——「该池的全部
+        #    保底跑完、返回值之前」（§3.13 的「调用点与构造源」段固定此位置）──
+        if self._invariants is not None:
+            self._invariants.check_after_after_draw(pool_id, state, self)
 
     def _infer_rarity(self, reward_id: str, spec: PoolPitySpec) -> str:
         """从 reward_id 推断稀有度（大小写归一化）。

@@ -58,8 +58,13 @@ Tracker / Modifier / Lifecycle 三族实例。组合不经 registry、不走 `cr
    的断言单独覆盖（「两步串联的输出 == 第一步的输出」），而不是让不变式去判它。
 3. **集中型零件须落在有 featured 卡的 (池形, scope) 上**（`scope='sr'` 且池形为
    `std` 时换用 `wide`）。理由：目标集恒空的零件整场不触发（§3.9.5 的空目标集
-   边界），组合面会退化成「装了零件但从不生效」；空目标集这一边界本身仍由
-   `seed101` 那类组合覆盖。该纪律只改池形，不改零件参数。
+   边界），组合面会退化成「装了零件但从不生效」。**该边界不在本文件的组合面内**：
+   全组合面扫描（2026-10-13）显示 `rotating` / `rotating_cr` / `selected` /
+   `not_owned` 在两种池形两种 scope 下静态目标集均非空，本纪律的换池形恰好排除了
+   唯一可能为空的 `(std, sr)` 情形（`seed101` 那类组合的未触发步全部来自 counter
+   阈值未达，不是空目标集路径）；该边界由
+   `tests/core/test_pity_modifier.py::TestRotatingModifier::test_rotating_modifier_empty_featured_returns_none`
+   覆盖。该纪律只改池形，不改零件参数。
 
 **该「δ 恒零」是实测而非推断**（2026-10-13）：先按 §3.12.1 的字面式实现，随机
 组合跑红后定位到 `FlagTracker(guaranteed) + RotatingModifier + SelectedModifier`
@@ -174,8 +179,11 @@ STANDARD_SHAPE = _Shape(
 )
 
 #: 宽池形：`sr` 也有 featured 卡（`compute_scope_mappings` 对「两级都有 UP」的池子
-#: 的产出）。它使 `sr` 上的三个目标集语义 Modifier 与 `hard(target='featured')`
-#: 从「恒不触发」变为可触发，是组合面覆盖的必要一支。
+#: 的产出）。它使 `sr` 上的四个目标集语义 Modifier（`rotating` / `rotating_cr` /
+#: `selected` / `not_owned`）从「恒不触发」变为可触发（实测 2026-10-13：这四者在
+#: `(std, sr)` 下 `apply` 恒返回 `None`），是组合面覆盖 `sr` 触发面的必要一支。
+#: `hard(target='featured')` 不在此列：其 A 在 featured 为空时回退 scope 全集
+#: （§3.1.2 机制表第 2 行），在 `(std, sr)` 下照常触发。
 WIDE_SHAPE = _Shape(
     label='wide',
     rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
@@ -524,8 +532,10 @@ def _random_combo(seed: int) -> _Combo:
     # ── 生成纪律 3：集中型零件的目标集是 scope 的 featured 卡集，若该 (池形, scope)
     #    无 featured 卡则目标集恒空、该零件结构性不触发（§3.9.5 的空目标集边界），
     #    组合面会退化成「装了个零件但从不生效」。故此处把池形换成有 featured 卡的
-    #    宽池形。空目标集这一边界本身仍由 `seed101` 那类组合覆盖（`hard` 不在此列：
-    #    它的 `target='scope'` 形态目标集是 scope 全卡集，与本纪律无关）。
+    #    宽池形。该边界因此**不在本文件的组合面内**（扫描结果与覆盖它的用例见
+    #    模块 docstring 的生成纪律 3）。`hard(target='featured')` 同属集中型
+    #    （`_hard_part` 的 `concentrating` 判据），但它的 A 取「空 featured 回退
+    #    scope 全集」（§3.1.2 机制表第 2 行），故不存在目标集为空的情形。
     if scope == 'sr' and not shape.featured_cards.get('sr') \
             and any(p.concentrating for p in modifiers):
         shape = WIDE_SHAPE
@@ -925,6 +935,14 @@ class TestNormalizationInvariant:
         r: 0.0}`、Σ = 1.009），本用例的池形与基础分布取 `STANDARD_SHAPE`，故具体
         数值不同、**结构相同**：目标集（sr）绝对赋值到 1.0、更低稀有度（r）归零、
         更高稀有度（ssr 两槽）原值保留。
+
+        **`exempted == {'ssr', 'ssr_featured'}` 这条定点断言的角色**（2026-10-13）：
+        归一性的加项与被豁免槽位集都取自生产同源助手 `_higher_rarity_keys`，故该
+        助手自身坏掉时，期望值与生产值同向偏移，随机面上的 Σ 式与「豁免槽位保留
+        原值」式**双双失明**（实测：令该助手恒返回空元组后，261 条里只有本用例与
+        `test_space_covers_three_families_and_both_shapes` 的覆盖守卫变红）。本断言
+        用**写死的字面集**钉住豁免集，是该故障模式在随机面之外的唯一拦截点，不得
+        改写成「与 `_higher_rarity_keys` 的返回值比对」（那会让它与故障同向偏移）。
         """
         combo = _FIXED_COMBOS['hard_below_top']
         run = _trace(combo)
@@ -1059,6 +1077,13 @@ class TestDeclaredStateKeysInvariant:
         `deactivate` 的退役动作写入，而 `Lifecycle.state_keys()` 只声明 `triggers`
         （§3.1.3）；§3.13 的「生命周期」行给该键另设白名单（构造期初始写入 / 引擎
         激活传播 / 本保底退役动作），不在 S10-1 状态键行的覆盖范围内，故显式排除。
+
+        **已登记的覆盖盲区**（2026-10-13）：排除 `_active` 后，**默认命名空间**下的
+        `_active` 写入不再受任何限制性断言约束（零件命名空间下的由
+        `test_part_namespace_writes_are_only_active` 管）。排除该键本身是必要的
+        （`AlwaysActive` / `FiniteActive` 的 `initialize` 会往两个命名空间写
+        `_active`，而 `state_keys()` 只声明 `triggers`），代价是「往默认命名空间写
+        `_active`」这一形态不被本组断言拦截，此处登记备查。
         """
         run = _trace(combo)
         allowed = _declared_allowed(run)
@@ -1157,7 +1182,11 @@ class TestDeterminismInvariant:
         """同 Pity 对象连跑两场（各带新账本、开工态取自初始快照）→ 逐位相同。
 
         这是 worker 内「同一 engine 连跑 N 场」的真实形态，也是「对象内计数跨模拟
-        泄漏」这一缺陷型的唯一观测面（零件对象在 worker 内复用）。
+        泄漏」这一缺陷型的观测面（零件对象在 worker 内复用）。**它不是该缺陷型的
+        唯一观测面**：`_COMBOS` 在模块导入期生成一次、`_Part.instance` 被全文件
+        共享，故 `test_same_seed_fresh_pity_bit_identical` 的「各自新建 Pity」同样
+        复用同一批 Tracker 对象。实测（2026-10-13）：令 `CounterTracker.rebind`
+        缓存一个跨场递增的计数后，本条 8 例失败、那条 7 例失败，两处一起变红。
         """
         first, second = _run_combo_twice_reusing_pity(combo)
         _assert_runs_identical(first, second, f'[{combo.label}] 同对象两场')
@@ -1254,9 +1283,12 @@ class TestCombinationSpaceCoverage:
         """每个目录零件在组合面上都**实际触发过**至少一步（防「装而不生效」）。
 
         这是五条不变式的**非空转守卫**：某个零件整场不触发时，它对应的不变式断言
-        在该组合上恒真（例如目标集恒空的 `not_owned`）。零件在单个组合里可以因
-        边界条件（空目标集 / 阈值未达 / 全部已拥有）不触发，但不得在整个组合面上
-        一次都不触发，否则那条不变式对该零件无判别力。
+        在该组合上恒真（例如 `seed111` 的 `selected`：条件未成立，整场未触发）。
+        零件在单个组合里可以因边界条件（条件未成立 / 计数档位未达阈值）不触发，
+        但不得在整个组合面上一次都不触发，否则那条不变式对该零件无判别力。
+        **「目标集恒空」与「全部已拥有」不构成本文件的未触发原因**：全组合面扫描
+        （2026-10-13）显示无零件因这两条路径不触发（组合面里唯一的 `not_owned`
+        组合其 `owned` 为空集），详见模块 docstring 的生成纪律 3。
         """
         fired_keys = {s.part_key for c in _COMBOS for s in _trace(c).fired_steps()}
         missing = set(_MODIFIER_SPECS) - fired_keys

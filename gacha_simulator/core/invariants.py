@@ -32,13 +32,27 @@
 逐层指派入口，该分工是本模块的定稿）。增量层**不复用**这两个入口的理由见 §3.13
 的「增量层的入口与调用点」段：两个入口的第二实参只有分布，取不到该步的 δ；故它
 自带第三个入口，由 `_apply_delta()` 内部在 `p` 与 `δ` 同时在手处调用。
+
+**四层覆盖边界（S11 审查收口，2026-10-13，逐条实测）**：
+
+- **观测点只有 `before_draw` / `after_draw` 两处**：`PityEngine.get_probabilities`
+  （只读查询入口，被 `core/strategy.py` 调用）**不经过任何一层**，故该路径上的
+  概率输出与状态**完全不在判据面内**。
+- **状态层与生命周期层只在 `after_draw` 之后观测**：`before_draw` 入口只看分布；
+  抽内的中间态（一次抽卡内多次 `advance` / `commit`）只有末值可见。
+- **四层里最松的是生命周期层**：白名单取 `engine.behaviors` 的**全集**（激活传播
+  的目标可以是别的池的保底，故不能只限本池），比「本保底的退役动作」宽，故
+  「错误的写入方写进一个**合法的**保底命名空间」不被拦截（详见
+  `_check_active_whitelist` 的 docstring）。
+- **`InvariantError` 在并行路径上会被吞**（异常语义与失败可见性）：详见
+  `InvariantError` 的 docstring 使用约束段。
 """
 
 from dataclasses import dataclass
 from typing import Dict, Mapping, Sequence, Tuple
 
 from .pity_modifier import HardModifier, NotOwnedModifier, _higher_rarity_keys
-from .pity_primitives import DrawInfo
+from .pity_primitives import DrawInfo, _EXTERNAL_STATE_KEYS
 
 
 #: 概率断言容差（§3.12.1 归一性行的「容差 1e-12」）。
@@ -48,18 +62,30 @@ TOL = 1e-12
 #: **绝对赋值 + 更高稀有度豁免**（§3.9 过渡期纪律）的两类实现者。集合与 S10-1 的
 #: `kind == 'f'` 一致：`tests/core/test_pity_invariants.py` 的 `_MODIFIER_SPECS` 把
 #: `hard` 与 `not_owned` 都标为 `'f'`（两者共用 `_higher_rarity_keys`）。
+#:
+#: **未触达分支（S11 审查收口，2026-10-13）**：`NotOwnedModifier` 在全库**没有任何
+#: preset 构造它**（`gacha_simulator/` 内零个 `NotOwnedModifier(...)` 调用点，
+#: 只有类定义本身），故 `_exemption_options` 的豁免分支在**真实配置**下只被
+#: `HardModifier` 走过：11 个 registry 类型的假警报扫描与组合扫描都覆盖不到本集合
+#: 的第二类：它的行为面只在 `tests/core/test_pity_modifier.py` 的单零件用例与
+#: S10-1 的合成组合里有证据，**preset 面为零**。「本项在真实配置下是否成立」属
+#: **未验证面**，不因那两条扫描通过而成立。
 _EXEMPTION_PART_TYPES = (HardModifier, NotOwnedModifier)
 
-#: 声明集之外的**外部写入键**白名单。内容与 `core/pity.py` 的 `_EXTERNAL_STATE_KEYS`
-#: 逐元素相同（§3.1.1 的 L4 例外 2：`selected_card` 由策略层 `NonDrawAction` 与
-#: `_build_pity_state_init` 写入、**无任何零件声明它**，而 `FateTracker` /
-#: `SelectedModifier` 会读它）。
+#: 声明集之外的**外部写入键**白名单（§3.1.1 的 L4 例外 2：`selected_card` 由策略层
+#: `NonDrawAction` 与 `_build_pity_state_init` 写入、**无任何零件声明它**，而
+#: `FateTracker` / `SelectedModifier` 会读它）。
 #:
-#: **为什么在此重写一份而非引用**：本模块受 §3.13 的「不 import `pity`」约束
-#: （`pity.py` 单向 import 本模块，反向 import 即成环），而该常量住在编排层。
-#: 漂移由 `tests/core/test_pity_invariant_checker.py` 的
-#: `test_external_state_keys_mirror_matches_engine` 逐元素拦截（不是靠人眼）。
-_EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
+#: **一处声明（S11 审查收口 F3，2026-10-13）**：常量与它存在的理由都住在叶子层
+#: `core/pity_primitives.py`，本模块与编排层 `core/pity.py` 都从那里取**同一
+#: 对象**（本行即该 import）。原先本模块**重写了一份**（内容相等、对象不同），
+#: 靠 `test_external_state_keys_mirror_matches_engine` 逐元素拦漂移；下沉后那条
+#: 守卫退化为「同一对象自比」的恒真断言，已由改判**身份**（`is`，而非 `==`）
+#: 的 `test_external_state_keys_has_a_single_declaration` 取代。身份判据更严：
+#: 连「又抄一份内容相同的副本」也拦得住，而相等判据拦不住。
+#:
+#: 引用叶子层**不违反**「不 import `pity`」约束（§3.13）：`pity_primitives` /
+#: `pity_modifier` 是叶子层与实现层，编排层单向依赖它们，本模块亦然，不成环。
 
 #: 生命周期层的键（§3.13 生命周期行）——三处写入方之外的写入即违规。
 _ACTIVE_KEY = '_active'
@@ -68,9 +94,25 @@ _ACTIVE_KEY = '_active'
 class InvariantError(Exception):
     """不变式破坏——校验器抛出的**唯一**异常类型。
 
-    不继承 `ConfigError`（那是配置错误，构造期由 S10-2 / `_validate_behaviors` 抛）
-    也不继承 `ValueError`（本库用它标「编程错误」面的重名判定）；本类是**运行期
-    自洽性**失败，语义独立，且不落在任何 `except` 兜底分支的捕获面内。
+    **类型选择的理由（两条）**：不继承 `ConfigError`（那是配置错误，构造期由
+    S10-2 / `_validate_behaviors` 抛）也不继承 `ValueError`（本库用它标「编程错误」
+    面的重名判定）；本类是**运行期自洽性**失败，语义独立（与那两类的处置路径也不同：
+    配置错误在构造期就得挡下，本类是运行中的状态自洽性）。
+
+    **使用约束（S11 审查收口 F1，2026-10-13，必读）**：本类**会**落进兜底 `except`
+    的捕获面内。`service/batch_simulator.py` 的三处 `try` 包装
+    （worker 侧 `_wk_run_single`、`run_batch_parallel` 的 `workers<=1` 顺序分支、
+    同函数的 `mp_failed` 单进程兜底，合计覆盖 4 个 `_run_single` 调用点）一律写
+    `except Exception`，故**走 `run_batch_parallel` / 并行路径时，不变式破坏表现为
+    静默的失败计数**（父进程汇总成「N/M 次模拟失败」，写进 `BatchResult.warnings`），
+    **不向调用方抛异常**；要看到本异常本身，必须走非并行入口（直接调
+    `PityEngine.before_draw` / `after_draw`，异常自这两个调用点抛给调用方）。
+
+    这条约束的前提（三处包装均为 catch-all）由
+    `tests/core/test_pity_invariant_checker.py::TestErrorTypeAndSwallow` 的 AST 判据
+    钉住：包装若收窄到不含 `Exception`，该用例转红，提示同批订正本段。**该形态是
+    「§六 的等价性 harness 注入 `enabled=True`」的真实陷阱**：harness 若走并行路径
+    且只断言「未抛异常」，不变式破坏会被吞成失败计数而假绿。
     """
 
 
@@ -133,6 +175,13 @@ class InvariantChecker:
 
         调用点：`PityEngine.after_draw` 的「该池的全部保底跑完、返回值之前」。
         两层都在 per-call `state` 上判，故不依赖 `pool_specs` 是否有本池。
+
+        **观测点与覆盖边界（S11 审查收口 F7/F8，2026-10-13）**：本入口只在
+        `after_draw` 之后观测一次，故抽内的中间态（同一次抽卡内多次 `advance` /
+        `commit`）不可见；`PityEngine.get_probabilities`（只读查询入口）**不调用
+        本入口也不调用分布层入口**，该路径完全不在四层判据内。四层之中本入口
+        携带的生命周期层最松（白名单取 `engine.behaviors` 全集），详见
+        `_check_active_whitelist` 的 docstring。
         """
         if not self.enabled:
             return
@@ -205,10 +254,29 @@ class InvariantChecker:
         `soft(scope='ssr')`（后者 rank 更小、先执行）连跑 6 抽，输出 Σ 依次为
         1.209 / 1.409 / …，逐抽等于 `1 + Σp(ssr 两槽)`，无假警报。
 
-        **已登记的盲区**（实参面所限，不是疏漏）：F 触发了但豁免被整体丢掉（豁免
-        槽位归零）时 `Σp` 退化为 `1`，落进第一分支而被接受。该形态在**步级**由 S10-1
-        的 `test_f_step_exemption_keeps_original_values`（豁免槽位逐位保留原值）拦截
-        ——本入口按定义看不到步，故该盲区由那里覆盖。
+        **已登记的盲区（两条，方向相反；都是实参面所限，不是疏漏）**：
+
+        1. **F 触发了但豁免被整体丢掉**（豁免槽位归零）时 `Σp` 退化为 `1`，落进
+           第一分支而被接受。该形态在**步级**由 S10-1 的
+           `test_f_step_exemption_keeps_original_values`（豁免槽位逐位保留原值）
+           拦截；本入口按定义看不到步，故该盲区由那里覆盖。
+        2. **对偶方向（S11 审查 2026-10-13 实测）**：F **未**触发（真期望
+           `Σ = 1.0`）时，把 `Σ` 人为抬到 `1 + m`（`m` = 该 F 零件豁免槽位上的
+           质量，实测 1.009 恰等于豁免量）**被接受**。原因是取值集是**无条件
+           析取**：F 零件的选项**不附带「该零件本抽必须已触发」的前提**，故它同时
+           为「真触发」与「未触发但 Σ 被抬到同一量」两态背书。本层看不到触发与否，
+           该区分只能落在步级判据上。已由
+           `test_f_not_fired_but_raised_to_exemption_mass_is_accepted` 把「接受」
+           钉成已知行为：将来收紧取值集时该用例转红，提醒同批改写本段。
+
+        **复现纪律（S11 审查的方法学警告，2026-10-13）**：复现第 1 条盲区**不得**
+        用「把 `_higher_rarity_keys` 换成空元组」的写法：该助手经 from-import 进
+        `tests/core/test_pity_invariants.py`（S10-1）**与本层**两侧，把它换掉会让
+        「截获判据」与「被测对象」**同向失明**、结果假绿（看似盲区、实则判据也瞎了）。
+        正确复现是**保住助手、只丢豁免**（手工把豁免槽位上的质量清掉）。同理，若
+        「改助手本身」成为真故障，S10-1 的豁免类用例**挡不住**（其期望值与生产值
+        同源）；这正是 `tests/core/test_pity_invariant_checker.py` 的 `_EXEMPT`
+        写死字面量的理由。
         """
         names = [name for name, _bh in pities]
         label = _names_label(names)
@@ -246,11 +314,24 @@ class InvariantChecker:
         - **保底命名空间**（`Pity._name`）：键 ⊆ 三族声明集 ∪ `_active` ∪ 外部白名单。
           `_active` 属生命周期层（由 `Lifecycle.initialize` / 激活传播 / 退役动作写），
           `Lifecycle.state_keys()` 只声明 `triggers`，故该键另设白名单（§3.13 生命周期行）。
-        - **零件命名空间**（`X_soft` 等，`Pity._namespaces`）：键 ⊆ `_active`。
+        - **零件命名空间**（`X_soft` 等，`Pity._namespaces`）：键 ⊆ **该命名空间的
+          声明键集** ∪ `_active`，声明集**从零件派生**（S11 审查收口 F5，见下段）。
           `NamespaceTracker.state_keys()` 为空元组（§3.1.1），该命名空间的 `_active`
-          由 `Lifecycle.initialize` 的推广作用域写入（ISSUE-407），故除它之外任何
-          键都属「写进未声明键」（与 S10-1 的
+          由 `Lifecycle.initialize` 的推广作用域写入（ISSUE-407），故 `X_soft` 类
+          命名空间下除它之外任何键都属「写进未声明键」（与 S10-1 的
           `test_part_namespace_writes_are_only_active` 同口径）。
+
+        **零件命名空间的声明集从零件派生，不写死 `{_active}`（F5，2026-10-13）**：
+        原先此处把允许集写死为 `{_active}`（等价于「该命名空间的声明集恒为空」），
+        只在「零件命名空间 ≠ 保底命名空间、且其零件是 `NamespaceTracker`」的形态下
+        正确。**退化形态 `NamespaceTracker(namespace=<保底名>)` 下该判据对合法配置
+        假警报**（它与保底命名空间本就是同一份 `state.data[<保底名>]`，其中的 `counter`
+        等三族声明键是合法的）：审查 2026-10-13 实测复现（`Pity(name='p',
+        trackers=[CounterTracker('sr'), NamespaceTracker('p')])` → `[状态层]
+        保底 'p' 键 ['counter']`）。preset 一律用 `f'{name}_soft'`，故生产当前
+        不可达，但那是**同一个类换个实参**的巧合而非保证。现行判据：命名空间与
+        保底同名时取三族并集，否则取「声明了该命名空间的零件」的 `state_keys()`
+        并集（`X_soft` 下仍只许 `{_active}`，口径不变）。
 
         **旧类兼容分支**（无 `_declared_keys` 的 behavior）无声明集可比，跳过。
         """
@@ -272,13 +353,32 @@ class InvariantChecker:
                     f"（§3.12.1 状态键合法行 / ISSUE-501：声明集取自 "
                     f"`Pity._declared_keys`）")
             for part_ns in (getattr(bh, '_namespaces', ()) or ()):
+                # F5：允许集**从声明集派生**，不写死 `{_ACTIVE_KEY}`（理由见 docstring
+                # 的「零件命名空间的声明集从零件派生」段）。同名退化形态下该命名空间
+                # 就是保底命名空间，故直接复用 `allowed`（三族并集 + 外部白名单），
+                # 否则取「声明了该命名空间的零件」的 `state_keys()` 并集。
+                if part_ns == name:
+                    part_allowed = set(allowed)
+                else:
+                    part_allowed = {_ACTIVE_KEY}
+                    for _group in (
+                        getattr(bh, '_trackers', None) or (),
+                        getattr(bh, '_modifiers', None) or (),
+                        (getattr(bh, '_lifecycle', None),),
+                    ):
+                        for _part in _group:
+                            if _part is None:
+                                continue
+                            if getattr(_part, 'namespace', None) == part_ns:
+                                part_allowed.update(_part.state_keys())
                 foreign = sorted(k for k in (state.data.get(part_ns) or {})
-                                 if k != _ACTIVE_KEY)
+                                 if k not in part_allowed)
                 if foreign:
                     raise InvariantError(
                         f"[状态层] 保底 '{name}' 键 {foreign!r}：期望 零件命名空间 "
-                        f"'{part_ns}' 内只有生命周期层的 {_ACTIVE_KEY!r}"
-                        f"（`NamespaceTracker.state_keys()` 为空集）；"
+                        f"'{part_ns}' 内只有该命名空间的声明键集 ∪ {_ACTIVE_KEY!r}"
+                        f"（= {sorted(part_allowed)}；`NamespaceTracker.state_keys()` "
+                        f"为空集，故 `X_soft` 只许 {_ACTIVE_KEY!r}）；"
                         f"实际 该命名空间出现 {foreign!r}"
                         f"（§3.12.1 状态键合法行 / ISSUE-407）")
 
@@ -294,6 +394,25 @@ class InvariantChecker:
 
         记忆按 `state` 对象身份隔离（见 `__init__` 的说明）；本入口只被
         `after_draw` 调用，故观测点是「每次抽后」。
+
+        **已知的判据边界（S11 审查收口 (C)，2026-10-13，四类）**：
+
+        1. **只判「本池保底命名空间」内的键**：零件命名空间（`X_soft`）里的计数器
+           完全不判。今天不存在这类计数器（`NamespaceTracker` 不声明任何键），属
+           **结构性盲面**（该面当前无对象），不是漏网；将来某零件在自己的命名空间内
+           放计数器，本层对它失明。
+        2. **非 `int` 数值被静默跳过**：`float` 型计数器（若将来出现）既不参与判据、
+           也不产生任何提示。
+        3. **「重置 = 归零」是当前三类计数器的实现事实，不是结构保证（活耦合）**：
+           逐处核对 `CounterTracker.commit` / `FateTracker.commit` /
+           `StreakTracker.commit` 的重置动作都是 `Counter.reset()`（写 0），故
+           「下降且非 0 即破坏」今天是准的。但「重置」在语义上不必然归零，一旦出现
+           「重置到非零」的语义，**合法重置会被本条误报为破坏**。最近的活边界是
+           计划 §六 G16 第 1 条登记的候选（「保底触发时归零」：把 *永不重置* 的
+           计数器改成 *触发时重置*，即给本判据引入一种**新的重置来源**）。G16-2
+           落地时须同批复核本判据的「什么算合法下降」。
+        4. **同一抽内先升后降不可见**：观测点是「每次抽后」，故抽内多次
+           `advance` / `commit` 只有末值进入记忆（判据看不到抽内轨迹）。
         """
         if self._counter_state is not state:
             self._counter_state = state
@@ -327,6 +446,14 @@ class InvariantChecker:
         会对**每条**非 `depends_on` 保底在构造期写 `_active=True` 报假警报。
 
         白名单外的写入实测形态：`state.set('某个非保底命名空间', '_active', True)`。
+
+        **判据的宽度（S11 审查收口 F8，2026-10-13）**：白名单取 `engine.behaviors`
+        的**全集**（各保底命名空间 ∪ 各零件命名空间），比「本保底的退役动作」宽得多，
+        故本层是四层里最松的一层：**「错误的写入方写进一个合法的保底命名空间」不被
+        拦截**（例如引擎外的代码往别的池的保底里写 `_active=False`，只要该命名空间
+        在白名单内即通过）。单池判据反而做不到这一点：激活传播的目标可以是别的池的
+        保底，收窄到「本池」会对合法形态假警报（`test_engine_activation_propagation_is_whitelisted`
+        即该形态）。故本层的判据面只覆盖「命名空间不在白名单内」与「值不是 bool」两条。
         """
         allowed = set()
         for name, bh in (getattr(engine, 'behaviors', None) or {}).items():
@@ -371,6 +498,21 @@ def _exemption_options(spec, dist: Mapping[str, float], engine,
       时给出不可达的期望值（实测形态：`hard(scope='sr')` 与 `hard(scope='r')` 同池、
       后者阈值未到，输出 Σ = 1.009，而并集式 `E = {ssr 槽} ∪ {ssr 槽, sr 槽}` 给出
       1 + 1.009 = 2.009 的假警报）。
+
+    **ISSUE-903（S11 审查收口 F2，2026-10-13，M2 的反转义务，强制）**：本函数的
+    F 零件选项（`1 + m`）**只对 M1 的槽位级管道成立**。S8 起 `_apply_delta`
+    （§3.9.2）无条件归一化，且转移族恒有 `Σδ = 0` 使其退化为恒等，故 S8 起管道
+    输出恒有 `Σp ≡ 1`（§3.9.5）；届时本选项对**合法配置**抛假警报（ISSUE-903 的
+    反向失配：M1 与本式相符、M2 与之相悖，两个里程碑的期望值相反）。**S8 起此处
+    须把 F 零件选项整体移除、只留 `1.0`**：`_EXEMPTION_PART_TYPES` 的遍历、
+    `_DrawProbe` 的构造与 `_higher_rarity_keys` 的调用同批删除，`options` 退化为
+    单元素列表（`_check_distribution` 的判据随之成为恒等断言 `Σp = 1`，其 docstring
+    的「有限取值集取一」段与本条同批改写；`tests/core/test_pity_invariant_checker.py`
+    的分布层正例与 `tests/core/test_pity_invariants.py` 的三处断言也按 S8-6 ⑤
+    同步改写）。该义务由
+    `test_issue_903_f_part_options_track_pipeline_normalization` 作**里程碑绊线**
+    机械把守：它以「真管道的输出 Σ 是否已归一化」为判据（不扫 S8 的实现符号），
+    S8 落地而本选项未删即转红。
 
     **豁免集与 S10-1 共用同一生产助手**：`_higher_rarity_keys`（`pity_modifier.py`
     模块级，`HardModifier` / `NotOwnedModifier` 共用）是豁免集的唯一实现，S10-1 的

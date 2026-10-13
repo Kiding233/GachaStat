@@ -144,7 +144,26 @@ _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'targeted', 'targeted_soft',
                                  'rotating_cr', 'rotating_cr_soft', 'rotating_soft',
                                  'rotating_inverse'})
 
+# ── 外部写入键白名单（S11 审查收口 F3：自编排层下沉，一处声明）──
+#: 三族声明集之外的**外部写入键**白名单。消费面两处：`Pity._check_declared_keys`
+#: 的判据 2（§3.12.2 构造期）与 `InvariantChecker._check_declared_state` 的状态层
+#: （§3.13 运行期）。
+#:
+#: 键的来历：`selected_card` 由**零件之外的层**写入（策略层的 `NonDrawAction`
+#: （`service/gacha_service.py` 的 `switch_epitomized_target` / `cancel_epitomized_path`
+#: 两条路径）与 `_build_pity_state_init`；**无任何零件声明它**，而 `FateTracker`
+#: 与 `SelectedModifier` 都会读它，且该键的初始化路径独立于零件声明（§3.1.1 的
+#: L4 例外 2：无条件注入，`sc` 为 `None` 也写）。不留白名单则 `targeted` 族的
+#: 全部合法配置在**构造期**被判为「引用不存在的键」、在**运行期**被状态层判为
+#: 「未声明键」。
+#:
+#: **放在叶子层的理由**：`core/pity.py` 与 `core/invariants.py` 两个消费模块
+#: **都已 import 本层**，故两处取到的是**同一对象**：不需要镜像副本、不需要
+#: 逐元素漂移守卫、也不需要函数内惰性 import（§3.14.2 的「一处声明」纪律）。
+#: 本模块只依赖标准库（§3.1.6），不因此引入任何依赖方向问题。
+_EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
+
 __all__ = [
     'Counter', 'Flag', 'DrawInfo', 'PityContext', 'LifecycleConfig', 'PityState',
-    '_SOFT_TYPES', '_HARD_TYPES', '_EVENT_DRIVEN_TYPES',
+    '_SOFT_TYPES', '_HARD_TYPES', '_EVENT_DRIVEN_TYPES', '_EXTERNAL_STATE_KEYS',
 ]

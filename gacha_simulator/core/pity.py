@@ -8,7 +8,7 @@ import random
 # （`Pity` 骨架不继承 CounterBasedBehavior，S3-1 起需要）。
 from .pity_primitives import (  # noqa: F401
     Counter, Flag, DrawInfo, PityContext, LifecycleConfig, PityState,
-    _SOFT_TYPES, _HARD_TYPES, _EVENT_DRIVEN_TYPES,
+    _SOFT_TYPES, _HARD_TYPES, _EVENT_DRIVEN_TYPES, _EXTERNAL_STATE_KEYS,
 )
 from .pity_tracker import (  # noqa: F401
     AlwaysActive, CounterTracker, DependentActive, DependentFiniteActive,
@@ -1679,13 +1679,13 @@ def _validate_behaviors(behaviors):
 
 
 #: 判据 2 的**白名单**（§3.12.2）：由零件之外的层写入、**无任何零件声明它**的键。
-#: `selected_card` 的写入者是策略层的 `NonDrawAction`
-#: （`service/gacha_service.py` 的 `switch_epitomized_target` / `cancel_epitomized_path`
-#: 两条路径），而 `FateTracker` 与 `SelectedModifier` 都会读它；不留白名单则
-#: `targeted` 族全部合法配置在构造期被判为「引用不存在的键」。
-#: 该键的初始化路径亦独立于零件声明（§3.1.1 的 L4 例外 2：无条件注入，`sc` 为
-#: `None` 也写）。
-_EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
+#: 不留白名单则 `targeted` 族全部合法配置在构造期被判为「引用不存在的键」。
+#:
+#: **声明与理由都在叶子层**（`core/pity_primitives.py`，S11 审查收口 F3 的下沉）：
+#: 本模块与 `core/invariants.py` 都从那里取**同一对象**，故「两处声明 + 逐元素守卫」
+#: 的镜像面不复存在；本文件顶部对该常量的 import 即 re-export，既有导入路径
+#: （`from gacha_simulator.core.pity import _EXTERNAL_STATE_KEYS`）不变。
+#: 白名单的键来历与理由（写入方 / 读取方 / §3.1.1 的 L4 例外 2）见叶子层该常量的段。
 
 
 def _check_declared_keys(declared_keys, name):

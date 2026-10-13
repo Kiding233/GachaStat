@@ -548,7 +548,12 @@ _FX_FEATURED_CARDS = {'ssr': ('up',)}
 _FX_SCOPE_SLOTS = {'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr',), 'r': ('r',)}
 _FX_FEATURED_SLOTS = {'ssr': ('ssr_featured',), 'sr': ('sr',), 'r': ('r',)}
 _FX_CARD_TO_SLOT = {'up': 'ssr_featured', 'std': 'ssr', 'sr1': 'sr', 'r1': 'r'}
-_FX_BASE = {'ssr_featured': 0.006, 'ssr': 0.004, 'sr': 0.05, 'r': 0.94}
+#: 基础分布是**卡级**（S8 起管道为卡级，D20 / §3.9.1）：键即卡 id，取值与池内声明
+#: 概率同值。槽位三字段仍留在 `DrawInfo` 里（ISSUE-901：旧保底类与等价性装置仍读
+#: 它们，删除点推迟到「发布前一次性移除旧保底类」的 commit），但它们**不是**卡级
+#: 管道的键空间——用槽位名做 `current` 会让 `transfer_linear` 在 `dist[c]` 处
+#: `KeyError`（这是键空间错位的显形面，不是静默恒等）。
+_FX_BASE = {'up': 0.006, 'std': 0.004, 'sr1': 0.05, 'r1': 0.94}
 
 
 def _fx_draw(rarity='ssr', featured=False):
@@ -940,13 +945,16 @@ class TestRotatingInverseS6a:
         base = dict(_FX_BASE)
         calls = []
         _mod = bh._modifiers[0]
-        _orig_apply = _mod.apply
+        # S8-1 起骨架调 `compute_delta`（`apply` 收敛为基类默认实现），故探针必须包在
+        # `compute_delta` 上——仍包 `apply` 会让探针永不触发、本用例退化为恒真
+        # （「未激活不得调度任何零件」在激活分支上也无判别力）。
+        _orig_delta = _mod.compute_delta
 
-        def _probe(ctx, view, dist, readonly):
+        def _probe(view, dist, ctx):
             calls.append(1)
-            return _orig_apply(ctx, view, dist, readonly)
+            return _orig_delta(view, dist, ctx)
 
-        _mod.apply = _probe
+        _mod.compute_delta = _probe
         ctx = PityContext(draw=_fx_draw('ssr', True), current=base, state=state)
         assert bh.before_draw(ctx) == base
         assert calls == [], '未激活不得调度任何零件'
@@ -975,14 +983,14 @@ class TestRotatingInverseSemantics:
         bh.after_draw(ctx_up)
         assert state.get('fx', 'forced_loss') is True
 
-        # 下一次 SSR 必非 UP：featured 槽 0，scope 总量原样搬给非 featured
+        # 下一次 SSR 必非 UP：featured 卡归零，scope 总量原样搬给非 featured（卡级）
         out = bh.before_draw(PityContext(draw=_fx_draw('ssr', True),
                                          current=dict(base), state=state))
-        scope_total = base['ssr_featured'] + base['ssr']
-        assert out['ssr_featured'] == 0.0
-        assert out['ssr'] == pytest.approx(scope_total)
+        scope_total = base['up'] + base['std']
+        assert out['up'] == 0.0
+        assert out['std'] == pytest.approx(scope_total)
         # scope 外不动
-        assert out['sr'] == base['sr'] and out['r'] == base['r']
+        assert out['sr1'] == base['sr1'] and out['r1'] == base['r1']
 
     def test_non_featured_restores_base_ratio(self):
         """出非 UP 后 `forced_loss` 清位，下一次 `before_draw` 恢复基础比例。"""

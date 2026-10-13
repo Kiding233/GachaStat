@@ -258,11 +258,16 @@ def test_synthetic_pool_card_level_sum_is_one_when_pity_fires():
 def test_synthetic_pool_specs_satisfy_alignment_invariants():
     """每个虚拟池的 spec 都必须满足两条不变量（构造期保证的根因守卫）。
 
-    不变量成立时，两份「卡 id → 稀有度」实现对池内每张卡必然同答（见
-    `test_pity_integration.TestRarityInferenceConsistency`）；反过来说，这两条
-    不变量被破坏就是本类缺陷的根因。
+    不变量成立时，「卡 id → 稀有度」的推断（S8 起唯一实现是
+    `PityEngine._infer_rarity`，喂状态路径）对池内每张卡必然答对；反过来说，
+    这两条不变量被破坏就是本类缺陷的根因。
+
+    **S8-2 改写（ISSUE-504）**：原第 ③ 条用 `pool.infer_rarity_from_spec`（A 实现）
+    逐卡比对，该函数已随其最后一批消费者删除（`banner.draw` 的 `scale_factors`
+    还原段与 `aggregate_probs_by_rarity` 的内部调用），故第 ③ 条改为**直接查
+    `scope_cards` 的反查表**——这正是被删函数当年的唯一判据来源，断言内容
+    （池内每张卡都查得到、且与它声明的稀有度一致）不变。
     """
-    from gacha_simulator.core.pool import infer_rarity_from_spec
     cfg = _wi_config()
     engine = cfg['pity_engine']
     checked = 0
@@ -282,11 +287,14 @@ def test_synthetic_pool_specs_satisfy_alignment_invariants():
         assert {c.lower() for c in spec.featured_ids} <= all_sc, \
             f'{banner.id}: featured_ids 不在 scope_cards 内'
         # ③ 池内每张卡都查得到，且与它的真实稀有度一致
+        card_rarity = {c.lower(): r.lower()
+                       for r, cs in spec.scope_cards.items() for c in cs}
         pool = banner.pools['main']
         for rwd, _ in pool.rewards:
             real = (rwd.extra_info.get('rarity') or '').lower() or None
-            assert infer_rarity_from_spec(rwd.id, spec) == real, \
-                f'{rwd.id} @ {banner.id}: 推断 {infer_rarity_from_spec(rwd.id, spec)!r} vs 真实 {real!r}'
+            got = card_rarity.get(rwd.id.lower())
+            assert got == real, \
+                f'{rwd.id} @ {banner.id}: 查得 {got!r} vs 真实 {real!r}'
             checked += 1
     assert checked > 0, '未扫到任何卡——本测试无验收面'
 
@@ -294,14 +302,16 @@ def test_synthetic_pool_specs_satisfy_alignment_invariants():
 def test_synthetic_pool_pity_moves_mass_into_featured_slot():
     """保底生效后，质量必须是从低稀有度槽搬进 scope 槽（证明方向，不只是「有变化」）。
 
-    **目标集口径（2026-10-10，S4-2 随裁决 7B 改写）**：本用例原断言「搬进
-    `ssr_featured`（限定槽）、从 `ssr`（普通槽）取」，那是样例配置
+    **目标集口径（2026-10-10，S4-2 随裁决 7B 改写；S8-2 迁到卡级）**：本用例原断言
+    「搬进 `ssr_featured`（限定槽）、从 `ssr`（普通槽）取」，那是样例配置
     `config.toml` 的 `ssr_soft` 带 `target_featured = true` 时的形态。裁决 7B
     （2026-10-05）把 `soft_*` + `target_featured = true` 定为 `ConfigError`
     （soft 的目标集恒为 scope 全集，该形态可等价分解为「稀有度级 + 卡级」两步
-    转移），样例配置随之删去该行，故本用例改断言**方向**：质量自低稀有度槽搬入
-    **SSR 槽的并集**（`ssr` + `ssr_featured`），低稀有度侧一律下降。
-    断言目的（「方向而非仅『有变化』」）不变，变的只是目标集口径。
+    转移），样例配置随之删去该行，故本用例改断言**方向**：质量自低稀有度卡搬入
+    **SSR 卡集**（`spec.scope_cards['ssr']`），低稀有度侧一律下降。
+    **S8-2 起管道是卡级**（§3.9.1），故断言面由槽位名换成卡 id（原写 `scope_slots`
+    的槽名，卡级管道下 `dist` 的键里根本没有它们）。断言目的（「方向而非仅
+    『有变化』」）不变，变的只是目标集口径与键空间。
     """
     from gacha_simulator.core.pity import PityState
     from gacha_simulator.core.state import GachaState
@@ -310,7 +320,7 @@ def test_synthetic_pool_pity_moves_mass_into_featured_slot():
     banner, engine = cfg['pools'][0], cfg['pity_engine']
     pool = banner.pools['main']
     spec = engine.get_spec(f'{banner.id}.main')
-    ssr_slots = tuple(spec.scope_slots['ssr'])         # ('ssr', 'ssr_featured')
+    ssr_cards = tuple(spec.scope_cards['ssr'])
 
     seen = []
     orig = engine.before_draw
@@ -333,10 +343,10 @@ def test_synthetic_pool_pity_moves_mass_into_featured_slot():
 
     assert seen, '保底未生效——无验收面'
     before, after = seen[0]
-    lower = [s for s in before if s not in ssr_slots]
-    assert lower, '本用例需要 scope 之外的低稀有度槽作取源面'
-    assert sum(after[s] for s in ssr_slots) > sum(before[s] for s in ssr_slots), \
-        f'保底未把质量搬进 SSR 槽并集：{before} → {after}'
-    for s in lower:
-        assert after[s] < before[s], \
-            f'保底未从低稀有度槽 {s} 取质量：{before} → {after}'
+    lower = [c for c in before if c not in ssr_cards]
+    assert lower, '本用例需要 scope 之外的低稀有度卡作取源面'
+    assert sum(after[c] for c in ssr_cards) > sum(before[c] for c in ssr_cards), \
+        f'保底未把质量搬进 SSR 卡集：{before} → {after}'
+    for c in lower:
+        assert after[c] < before[c], \
+            f'保底未从低稀有度卡 {c} 取质量：{before} → {after}'

@@ -1,6 +1,6 @@
 from .result_types import CompactResult
 from .collector import SimulationCollector, CompactCollector
-from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, aggregate_probs_by_rarity, infer_rarity_from_spec  # ← P61（Ph1）
+from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, aggregate_probs_by_rarity  # ← P61（Ph1）；`infer_rarity_from_spec` 随 S8-2 删（ISSUE-504）
 from .notifier import Notifier
 from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
 from .banner import Banner, DrawOutcome, TransitionRule, TransitionPreview  # ← P61（Ph1c）
@@ -99,7 +99,12 @@ __all__ = [
     'CompactResult',
     'SimulationCollector', 'CompactCollector',
     'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
-    'aggregate_probs_by_rarity', 'infer_rarity_from_spec',
+    'aggregate_probs_by_rarity',
+    # `infer_rarity_from_spec` 的条目随 S8-2 删（ISSUE-504）：函数本体已随其最后一批
+    # 消费者消失，import 与 `__all__` 必须同批改（只删一处即 ImportError 或留下指向
+    # 已删符号的 re-export）。原计划把本条归 S8-4，见 §七 S8-2 的登记，实测该切分
+    # 不可执行（定义在 S8-2 删、导出留到 S8-4 会让 `import gacha_simulator.core` 在
+    # 中间态直接 ImportError）。
     'Notifier',
     'OverflowBand', 'match_overflow_bands', 'expand_sugar_to_bands',
     'Banner', 'DrawOutcome', 'TransitionRule', 'TransitionPreview',

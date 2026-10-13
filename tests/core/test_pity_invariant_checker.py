@@ -4,8 +4,7 @@
 两个调用点（`PityEngine.before_draw` / `after_draw` 各一行，ISSUE-003）。与
 `tests/core/test_pity_invariants.py`（S10-1）**被测对象不同**：那份文件的被测对象是
 **管道本身**（§七 S10-1 明写「两者被测对象不同，不得混用」），本文件只在需要
-「生产管道的真实输出」时借它当输入源（例如正例的 `Σ = 1.009` 由真引擎跑出来，
-不是手捏的）。
+「生产管道的真实输出」时借它当输入源（正例的分布由真引擎跑出来，不是手捏的）。
 
 **四层与本文件的用例面**（判据原文出处逐条标注在用例 docstring 内）：
 
@@ -16,11 +15,12 @@
 | 生命周期 | `check_after_after_draw` | `TestLifecycleLayer` |
 | 增量 | `check_delta`（**M1 不接调用点**） | `TestDeltaLayer` |
 
-**与 S10-1 的判据口径关系**：豁免集一律取自生产助手 `_higher_rarity_keys`
-（`pity_modifier.py` 模块级，S10-1 的 `exempted` 与生产算子的豁免循环共用它），
-**不另写一份谓词**；归一性在运行期入口取**可达取值集**（无 F 触发时 `Σp = 1`，
-各 F 零件各自的 `Σp = 1 + Σp(该零件的豁免槽位)`），与 S10-1 的管道判据同形，
-理由与被登记的盲区见 `InvariantChecker._check_distribution` 的 docstring。
+**与 S10-1 的判据口径关系（S8-2 起）**：两边的归一性判据都是**恒等断言
+`Σp = 1`**（ISSUE-903 的反转义务已落地：S8 起 `_apply_delta` 无条件归一化，M1 的
+「scope 感知式 + F 零件可达取值集」整体消失，`_exemption_options` /
+`_EXEMPTION_PART_TYPES` / `_DrawProbe` 三个符号随之删除）。理由见
+`InvariantChecker._check_distribution` 的 docstring；本文件另有一条
+`test_issue_903_reversal_is_landed` 把「机制已删、判据是恒等」这一反转钉住。
 
 **开关来源**：本文件的夹具是 `enabled=True` 的**唯一**产出源（本期不加 env 字段 /
 CLI 开关 / TOML 项）；生产路径传 `invariants=None`。
@@ -116,18 +116,26 @@ def test_ast_criterion_does_not_false_alarm_on_leaf_and_impl_layers(source):
 _POOL = 's11_pool'
 _RANK = {'ssr': 0, 'sr': 1, 'r': 2}
 
-#: 基础分布（Σ = 1.0）。`hard(scope='sr')` 触发后：目标集（sr）绝对赋值到 1.0、
-#: 更低稀有度（r）归零、更高稀有度（ssr 两槽）原值保留 —— 输出
-#: `{'ssr_featured': 0.003, 'ssr': 0.006, 'sr': 1.0, 'r': 0.0}`、**Σ = 1.009**，
-#: 与 §3.12.1 实测例（`{ssr:0.006, ssr_featured:0.003, sr:1.0, r:0.0}`，Σ = 1.009）
-#: 逐位同形（池形与 S10-1 的 `STANDARD_SHAPE` 同源）。
-_BASE = {'ssr_featured': 0.003, 'ssr': 0.006, 'sr': 0.091, 'r': 0.9}
+#: 基础分布是**卡级**（S8 起管道为卡级，D20 / §3.9.1）：键即卡 id，Σ = 1.0。
+#: `hard(scope='sr')` 触发后（S8 形态）：A = `scope_cards['sr']` 收下 `p(Q)`、
+#: Q = 更低稀有度（r）整组搬空、更高稀有度（ssr 两张卡）**不写增量即逐位保留**
+#: —— 输出 `{'ssr_up': 0.003, 'ssr_std': 0.006, 'sr_std': 0.991, 'r_std': 0.0}`、
+#: **Σ = 1**（M1 的槽位级形态是「绝对赋值 + 豁免」，输出 Σ = 1.009，见下方
+#: `TestDistributionLayer` 的改写记录）。
+_BASE = {'ssr_up': 0.003, 'ssr_std': 0.006, 'sr_std': 0.091, 'r_std': 0.9}
 
-#: 被 F 豁免的槽位集（`_higher_rarity_keys` 的返回值：rank < rank('sr') 的稀有度
-#: 之全部卡投影到槽位名）。**写死字面量**，不写成「与助手比对」，理由同 S10-1 的
-#: `test_hard_below_top_rarity_scope_aware_shape`：若助手自身坏掉，期望值与生产值
-#: 会同向偏移，只有字面集能钉住它。
-_EXEMPT = ('ssr_featured', 'ssr')
+#: **宽池形**的基础分布（`_wide_spec` 的卡集：sr 也有 UP 卡）。与 `_BASE` 的关系是
+#: 「把 sr 的那一份质量拆成两张卡」：`sr_std` 的 0.091 = `sr_up` 0.01 + `sr_std` 0.081，
+#: Σ 仍为 1.0。卡级管道下 `dist` 必须覆盖 A / Q 会用到的**每一张卡**（缺键即
+#: `KeyError`，不是静默恒等），故两种池形各配一份。
+_WIDE_BASE = {'ssr_up': 0.003, 'ssr_std': 0.006,
+              'sr_up': 0.01, 'sr_std': 0.081, 'r_std': 0.9}
+
+#: 更高稀有度的**卡集**（rank < rank('sr') 的稀有度之全部卡）。**写死字面量**，
+#: 不写成「与生产助手比对」：若生产侧的豁免集计算坏掉，期望值与生产值会同向偏移。
+#: S8 起它在断言里的角色由「被 F 豁免的槽位」变为「不写增量、逐位保留的卡」
+#: （§3.9.5 的「U 外的卡逐位不变」），判据方向相同。
+_HIGHER_CARDS = ('ssr_up', 'ssr_std')
 
 
 def _spec(pity_names=('p_hard',)) -> PoolPitySpec:
@@ -318,32 +326,40 @@ class TestSwitchCarrier:
 # ══════════════════════════════════════════════════════════════════
 
 class TestDistributionLayer:
+    """分布层判据（§3.12.1 归一性 + 非负性行）——**S8 起的恒等口径**。
+
+    本组在 S8-2 随判据本身同批改写（ISSUE-903 的反转义务，S8-6 ⑤ 的一部分提前
+    执行）：M1 的「scope 感知式 + F 零件可达取值集」整体消失，判据成为恒等断言
+    `Σp = 1`，故本组原先围绕 `Σ = 1.009` 与豁免槽位的四条用例按新语义重写（**不是
+    放宽**：`Σ ≠ 1` 从「有合法例外值」变成「一律是缺陷」，判据面反而更严）。
+    """
 
     def test_legal_hard_sr_config_no_alarm(self):
-        """**正例**（§六 S11 明列）：`hard(scope='sr')` 的合法配置、Σ = 1.009，
-        `check_after_before_draw` **不得报错**（归一性按 scope 感知口径）。
+        """**正例**（§六 S11 明列）：`hard(scope='sr')` 的合法配置、`Σ = 1`，
+        `check_after_before_draw` **不得报错**。
 
-        同时钉住「该 Σ 由生产管道跑出来」这一点：走真引擎的 `before_draw`（它内部
-        就调用本入口），断言输出与 §3.12.1 的实测形态逐位相同。
+        同时钉住「该输出由生产管道跑出来」这一点：走真引擎的 `before_draw`（它内部
+        就调用本入口），断言输出与 S8 的机制表逐条相符——A（sr 卡）收下 `p(Q)`、
+        Q（更低稀有度 r 卡）整组搬空、**更高稀有度的两张卡逐位保留**（§3.9.5 的
+        「U 外的卡逐位不变」，即 M1「豁免」在增量形式下的对应物）。
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
         probs = engine.before_draw(_POOL, state, dict(_BASE))
 
-        assert probs == {'ssr_featured': 0.003, 'ssr': 0.006, 'sr': 1.0, 'r': 0.0}, (
-            f'生产管道输出与 §3.12.1 的实测形态不符：{probs}')
-        assert sum(probs.values()) == pytest.approx(1.009, abs=invariants_mod.TOL)
+        assert probs == {'ssr_up': 0.003, 'ssr_std': 0.006,
+                         'sr_std': 0.991, 'r_std': 0.0}, (
+            f'生产管道输出与 S8 机制表不符：{probs}')
+        for c in _HIGHER_CARDS:
+            assert probs[c] == _BASE[c], f'更高稀有度卡 {c} 须逐位保留'
+        assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
         # 显式再走一次入口（不依赖引擎调用的间接性）
         checker.check_after_before_draw(_POOL, probs, engine)
 
     def test_f_not_fired_total_one_is_accepted(self):
-        """无 F 参与的抽次：`Σp = 1` 必须被接受。
+        """无 F 参与的抽次：`Σp = 1` 必须被接受（S8 起这是**唯一**合法取值）。
 
-        §3.12.1 归一性行的例外条以「**参与本次** `before_draw` 的算子含 F 型」为
-        前提，S10-1 的同名管道判据也分两支（`if not fired_f: Σ == 1`）。本用例即该
-        分支的运行期守卫：`threshold=99` 使 F 全程不触发，输出 Σ = 1.0，而豁免槽位
-        上仍持有 0.009 的质量——若本层写成单式 `Σp = 1 + Σp(豁免槽位)`，本条必红
-        （对合法配置的假警报，正是 ISSUE-011 要消除的形态）。
+        `threshold=99` 使 F 全程不触发，输出即基础分布、Σ = 1.0。
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker, threshold=99)
@@ -351,30 +367,27 @@ class TestDistributionLayer:
         assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
         checker.check_after_before_draw(_POOL, probs, engine)
 
-    def test_f_not_fired_but_raised_to_exemption_mass_is_accepted(self):
-        """**已登记的盲区（对偶方向）**（S11 审查 2026-10-13 实测）：F **未**触发
-        （真期望 `Σ = 1.0`）时，把 `Σ` 人为抬到 **1.009**（恰等于该 F 零件的豁免量）
-        **被接受**：取值集是无条件析取，F 零件的选项**不附带「该零件本抽必须已
-        触发」的前提**。
+    def test_total_raised_to_former_exemption_mass_now_raises(self):
+        """**旧盲区的反转（S8 起）**：把 Σ 抬到 **1.009**（M1 的合法期望值、
+        恰等于旧「豁免量」）**必须抛错**。
 
-        与上一条用例是同一盲区的两个方向：那里是「F 触发了、豁免被丢掉」而 `Σ`
-        退化为 1 被接受，这里是「F 没触发、`Σ` 被抬到豁免量」被接受。两者都源于
-        「本层看不到触发与否」，只能由步级判据区分。
-
-        本用例把「接受」钉成**已知且接受**的行为（写法同 S10-1 的「已登记的覆盖
-        盲区」）：将来若把取值集收紧到「按本抽是否真有 F 参与取式」，本用例转红，
-        提醒同批改写 `_check_distribution` 的盲区段。
+        M1 期该形态是**已登记的盲区**（取值集无条件析取、F 零件选项不附带「本抽
+        已触发」的前提，故「未触发但 Σ 被抬到同一量」被接受）。S8 起判据是恒等
+        断言，该形态成为明确的违规——本用例把这条反转钉住，使「判据退回 M1 的
+        取值集形态」在测试期即失败。
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker, threshold=99)
         probs = engine.before_draw(_POOL, state, dict(_BASE))
         assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
 
-        # 把豁免槽位上的质量（0.009）搬到 `r`：Σ = 1.009，恰等于 F 零件选项的期望值
         broken = dict(probs)
-        broken['r'] = broken['r'] + sum(probs.get(k, 0.0) for k in _EXEMPT)
+        broken['r_std'] = broken['r_std'] + sum(probs.get(c, 0.0)
+                                                for c in _HIGHER_CARDS)
         assert sum(broken.values()) == pytest.approx(1.009, abs=invariants_mod.TOL)
-        checker.check_after_before_draw(_POOL, broken, engine)   # 不抛：已登记的盲区
+        with pytest.raises(InvariantError) as excinfo:
+            checker.check_after_before_draw(_POOL, broken, engine)
+        _assert_three_elements(str(excinfo.value), 'p_hard', "'Σp'")
 
     def test_negative_probability_raises(self):
         """**负例 ①**（§六 S11）：人为把一个卡概率改为负值 → 必须抛错，且异常信息
@@ -384,60 +397,56 @@ class TestDistributionLayer:
         probs = engine.before_draw(_POOL, state, dict(_BASE))
 
         broken = dict(probs)
-        broken['sr'] = -0.5
+        broken['sr_std'] = -0.5
         with pytest.raises(InvariantError) as excinfo:
             checker.check_after_before_draw(_POOL, broken, engine)
-        _assert_three_elements(str(excinfo.value), 'p_hard', "'sr'")
+        _assert_three_elements(str(excinfo.value), 'p_hard', "'sr_std'")
 
-    def test_total_beyond_exemption_raises(self):
-        """**负例 ②**（§六 S11）：把 Σ 改到 1.2（**超出 F 豁免量**）→ 必须抛错，
-        三要素齐备（§3.12.1 归一性行的 scope 感知式）。
+    def test_total_not_one_raises(self):
+        """**负例 ②**（§六 S11）：把 Σ 改到 1.2 → 必须抛错，三要素齐备，
+        且期望值恰为 `1.0`（S8 起无「合法的例外值」可枚举）。
 
-        改的是 `r` 槽（已被 F 归零）：全部分量非负，故只有归一性一条判据能拦下它。
-        期望值即 `1 + 0.009 = 1.009`，豁免槽位集写死为 `_EXEMPT`。
+        改的是 `r_std` 卡（已被 F 步搬空）：全部分量非负，故只有归一性一条判据
+        能拦下它。
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
         probs = engine.before_draw(_POOL, state, dict(_BASE))
 
         broken = dict(probs)
-        broken['r'] = 0.2
-        assert sum(broken.values()) == pytest.approx(1.209, abs=1e-9)
+        broken['r_std'] = 0.2
+        assert sum(broken.values()) == pytest.approx(1.2, abs=1e-9)
         with pytest.raises(InvariantError) as excinfo:
             checker.check_after_before_draw(_POOL, broken, engine)
         message = str(excinfo.value)
         _assert_three_elements(message, 'p_hard', "'Σp'")
-        assert '1.009' in message, f'期望值须含豁免量：{message}'
-        assert '1.209' in message, f'实际值缺失：{message}'
-        for key in _EXEMPT:
-            assert key in message, f'豁免槽位 {key!r} 未出现在异常信息内：{message}'
+        assert '1.0' in message, f'期望值须为 1.0：{message}'
+        assert '1.2' in message, f'实际值缺失：{message}'
 
     def test_multiple_f_parts_partial_fire_no_alarm(self):
-        """池内**多个** F 型零件、只有其中一个触发时不得假警报（可达取值集逐零件列）。
+        """池内**多个** F 型零件、只有其中一个触发时不得假警报。
 
-        实测形态（2026-10-13）：`hard(scope='sr')`（阈值 1，触发）与
-        `hard(scope='r')`（阈值 99，全程不触发）同池，输出
-        `{'ssr_featured': 0.003, 'ssr': 0.006, 'sr_featured': 0.1099, 'sr': 0.8901}`、
-        Σ = 1.009。若把两个零件的豁免集取**并集**，期望值会变成
-        `1 + (0.009 + 1.0) = 2.009`（不可达）→ 对合法配置假警报；本用例钉住
-        「逐零件分列」这一形态。
+        `hard(scope='sr')`（阈值 1，触发）与 `hard(scope='r')`（阈值 99，不触发）
+        同池：前者把 r 卡搬进 sr 卡，后者不动作，输出 Σ = 1.0。M1 期本用例守的是
+        「取值集逐零件分列、不取并集」；S8 起判据无取值集，本用例守的是**同一条
+        事实的恒等形态**：多个 F 零件并存时输出仍精确归一（F 零件若退回「造质量」
+        的绝对赋值形态，本条即红）。
         """
         checker = InvariantChecker(enabled=True)
         defs = [PityDef(name='h_sr', btype='hard', scope='sr', threshold=1),
                 PityDef(name='h_r', btype='hard', scope='r', threshold=99)]
         engine, state = _engine(invariants=checker, pities=defs)
         probs = engine.before_draw(_POOL, state, dict(_BASE))
-        assert sum(probs.values()) == pytest.approx(1.009, abs=invariants_mod.TOL)
+        assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
         checker.check_after_before_draw(_POOL, probs, engine)
 
-    def test_transfer_after_f_keeps_exemption_mass(self):
-        """排在 F 之后的转移算子把质量搬进豁免槽位时，Σ 仍等于 `1 + Σp(豁免槽位)`。
+    def test_transfer_after_f_keeps_total_one(self):
+        """F 步之后的转移算子照常作用时，Σ 恒为 1（转移族 `Σδ = 0`）。
 
-        实测形态（2026-10-13，见 `_check_distribution` 的 docstring）：同池
-        `hard(scope='sr')` 与 `soft(scope='ssr')` 并存——后者 scope 的 rank 更小、
-        **排在前者之前**执行（`_resolve_order` 的首键是稀有度 rank），故 F 之后
-        不再有算子改动豁免集，连跑 6 抽的 Σ 依次为 1.209 / 1.409 / …，
-        逐抽等于 `1 + Σp(ssr 两槽)`。
+        同池 `hard(scope='sr')`（阈值 1）与 `soft(scope='ssr')`：后者 scope 的 rank
+        更小、**排在前者之前**执行（`_resolve_order` 的首键是稀有度 rank），连跑
+        4 抽每抽输出 Σ = 1.0（M1 期本用例的期望值是 `1 + Σp(豁免槽位)` 且单调
+        抬升，S8 起该形态消失）。
         """
         checker = InvariantChecker(enabled=True)
         defs = [PityDef(name='h_sr', btype='hard', scope='sr', threshold=1),
@@ -448,12 +457,9 @@ class TestDistributionLayer:
         for _ in range(4):
             probs = engine.before_draw(_POOL, state, dict(_BASE))
             totals.append(sum(probs.values()))
-            exempt_mass = sum(probs.get(k, 0.0) for k in _EXEMPT)
-            assert totals[-1] == pytest.approx(1.0 + exempt_mass,
-                                               abs=invariants_mod.TOL)
+            assert totals[-1] == pytest.approx(1.0, abs=invariants_mod.TOL)
             engine.after_draw(_POOL, state, 'r_std')
-        assert totals[0] > 1.0 and totals == sorted(totals), (
-            f'软保底推进须让 Σ 单调抬升，实测 {totals}')
+        assert len(totals) == 4
 
     def test_disabled_checker_is_a_no_op(self):
         """`enabled=False`（构造默认值）时四层判据一律不跑——生产关闭态的判据面。"""
@@ -463,7 +469,7 @@ class TestDistributionLayer:
         probs = engine.before_draw(_POOL, state, dict(_BASE))
 
         broken = dict(probs)
-        broken['sr'] = -0.5
+        broken['sr_std'] = -0.5
         checker.check_after_before_draw(_POOL, broken, engine)
         checker.check_delta(_POOL, {'a': 0.1}, {'a': -1.0})
 
@@ -709,11 +715,6 @@ _PRESET_COMMON = dict(soft_start=1, soft_end=3, soft_increment=10.0, threshold=2
                       selected_card_init='sr_up', fate_threshold=2,
                       cr_counter_threshold=3, cr_base_rate=0.0, max_triggers=0)
 
-#: 槽位 -> 代表卡（抽样反查表；与 `_wide_spec` 的 `card_to_slot` 互逆）。
-_SLOT_TO_CARD = {'ssr_featured': 'ssr_up', 'ssr': 'ssr_std',
-                 'sr_featured': 'sr_up', 'sr': 'sr_std', 'r': 'r_std'}
-
-
 def _preset_btype_list():
     from gacha_simulator.core.pity import BEHAVIOR_REGISTRY
     return sorted(BEHAVIOR_REGISTRY)
@@ -724,10 +725,11 @@ def test_every_registry_type_runs_without_false_alarm(btype):
     """**校验器可用性的前提**：11 个 registry 类型各跑一段抽卡序列，四层判据全程
     不得报错。
 
-    「生产关闭」不等于「启用即炸」：本层若对合法配置假警报（ISSUE-011 的形态），
-    它就只是噪声源。故对每个类型单独造一台引擎（一池一保底，避免组合规则的干扰），
-    以固定种子抽 25 抽（奖励按调整后的分布抽样，与「先定分布、再抽奖励」的引擎
-    同形），断言不抛 `InvariantError`。
+    「生产关闭」不等于「启用即炸」：本层若对合法配置假警报（ISSUE-011 / ISSUE-903
+    的形态），它就只是噪声源。故对每个类型单独造一台引擎（一池一保底，避免组合
+    规则的干扰），以固定种子抽 25 抽（奖励按调整后的分布抽样，与「先定分布、
+    再抽奖励」的引擎同形；S8 起 `probs` 的键即卡 id，可直接当奖励 id），断言不抛
+    `InvariantError`。
     """
     kw = dict(_PRESET_COMMON)
     # `targeted` / `rotating_inverse` 的 scope 取 ssr（前者靠 UP 卡触发，后者方向相反）
@@ -738,7 +740,7 @@ def test_every_registry_type_runs_without_false_alarm(btype):
 
     rng = random.Random(7)
     for _ in range(25):
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_WIDE_BASE))
         roll = rng.random()
         acc = 0.0
         pick = 'r'
@@ -747,7 +749,7 @@ def test_every_registry_type_runs_without_false_alarm(btype):
             if roll <= acc:
                 pick = slot
                 break
-        engine.after_draw(_POOL, state, _SLOT_TO_CARD[pick])
+        engine.after_draw(_POOL, state, pick)
     assert state.get('p', '_active') is True
 
 
@@ -844,39 +846,38 @@ class TestErrorTypeAndSwallow:
 # ══════════════════════════════════════════════════════════════════
 # 十一、ISSUE-903 里程碑绊线（M2 的反转义务落在代码上，F2）
 # ══════════════════════════════════════════════════════════════════
-def test_issue_903_f_part_options_track_pipeline_normalization():
-    """ISSUE-903：取值集的 F 零件选项**必须与管道的真实形态同步**（S11 审查收口 F2）。
+def test_issue_903_reversal_is_landed():
+    """ISSUE-903 的**反转义务已落地**（S8-2 执行；原里程碑绊线改写）。
 
-    判据是**双条件**（两侧各自可红）：
+    原绊线的判据是「管道输出 Σ 是否已归一化 ⟺ 取值集是否只剩 `1.0`」，S8 落地时
+    它转红并要求同批改写——本用例即那次改写的结果，钉住**反转后的状态**：
 
-    ==============================  ==========================  ==================================
-    真管道的输出 Σ                  取值集必须                  违反后果
-    ==============================  ==========================  ==================================
-    != 1（M1 槽位级管道：F 豁免把   **含** F 零件选项 `1 + m`   早删 = 对合法配置假警报（ISSUE-011）
-    Σ 抬到 `1 + m`）
-    = 1（S8 起 `_apply_delta` 无条  **只留** `1.0`              留旧选项 = 对合法配置假警报（ISSUE-903
-    件归一化）                                                  的反向失配）
-    ==============================  ==========================  ==================================
+    ==============================  ==================================================
+    面                              现行判据
+    ==============================  ==================================================
+    F 选项机制                      `_exemption_options` / `_EXEMPTION_PART_TYPES` /
+                                    `_DrawProbe` 三个符号**已整体删除**（S8 起无
+                                    「合法的例外值」可枚举，机制本身失去对象）
+    分布层判据                      恒等断言 `Σp = 1`：1.0 通过、1.009（M1 的合法
+                                    期望值）抛错
+    ==============================  ==================================================
 
-    本用例不依赖 S8 的实现符号（不扫 `_apply_delta` 这个名字）、只观测**生产管道的
-    输出**，故转红的时刻正是「管道形态变了而 checker 没变」那一刻；S8 落地时本用例
-    与分布层正例（`test_legal_hard_sr_config_no_alarm` 的 `Σ = 1.009`）会同批转红，
-    处置见 `invariants._exemption_options` 的 ISSUE-903 段与计划 S8-6 ⑤。
+    **判别力**：把 F 选项机制加回模块（或把判据退回取值集形态）时，前两条断言必红。
     """
-    engine, state = _engine(invariants=InvariantChecker(enabled=True), threshold=1)
-    probs = engine.before_draw(_POOL, state, dict(_BASE))
-    total = sum(probs.values())
-    options = invariants_mod._exemption_options(
-        engine.get_spec(_POOL), probs, engine,
-        invariants_mod._pool_pities(engine, _POOL))
-    has_f_option = any('F 零件豁免槽位' in label for label, _ in options)
-    normalized = abs(total - 1.0) <= invariants_mod.TOL
+    # ① 机制已删除（三个符号都不在模块面上）
+    for gone in ('_exemption_options', '_EXEMPTION_PART_TYPES', '_DrawProbe'):
+        assert not hasattr(invariants_mod, gone), f'{gone} 应随 S8 删除'
 
-    assert has_f_option is not normalized, (
-        f'ISSUE-903 的取值集与管道形态脱节：管道输出 Σ = {total!r}'
-        f'（{"已归一化" if normalized else "未归一化"}），取值集 = {options}。'
-        + ('S8 已落地（`_apply_delta` 无条件归一化）→ `_exemption_options` 须把 F '
-           '零件选项整体移除、只留 1.0'
-           if normalized else
-           'M1 期管道未归一化 → 取值集须保留各 F 零件自己的 `1 + m` 选项 '
-           '（逐零件分列，不取并集）'))
+    # ② 判据是恒等断言：1.0 通过、1.009 抛错
+    checker = InvariantChecker(enabled=True)
+    engine, state = _engine(invariants=checker, threshold=1)
+    probs = engine.before_draw(_POOL, state, dict(_BASE))
+    assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
+    checker.check_after_before_draw(_POOL, probs, engine)
+
+    legacy = dict(probs)
+    legacy['r_std'] = legacy['r_std'] + sum(probs.get(c, 0.0)
+                                            for c in _HIGHER_CARDS)
+    assert sum(legacy.values()) == pytest.approx(1.009, abs=invariants_mod.TOL)
+    with pytest.raises(InvariantError):
+        checker.check_after_before_draw(_POOL, legacy, engine)

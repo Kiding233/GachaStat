@@ -38,7 +38,15 @@ def state():
 
 
 def _make_draw(reward_id, rarity='ssr', is_featured=False, selected=None):
-    """构造 DrawInfo 快捷方法。"""
+    """构造 DrawInfo 快捷方法。
+
+    **S8 起基础分布是卡级**（§3.9.1）：`base_probabilities` 与 `current` 的键即卡 id
+    （旧稿写槽位名 `ssr_featured` / `ssr_standard`，卡级管道下 `transfer_linear` 取
+    `dist[c]` 会直接 `KeyError`）。槽位三字段保留（ISSUE-901：旧保底类仍读它们），
+    但**不是**本管道键空间。
+    `rarity_rank` 方向为「rank 小 = 稀有度更高」（对齐 `config_store._parse_rarities`；
+    旧稿写成 `{'ssr': 3, ...}` 会让 `_lower_rarities` 恒返空集、软保底静默恒等）。
+    """
     featured_cards = {'ssr': ('f1', 'f2')}
     all_cards = ('f1', 'f2', 's1', 's2')
     return DrawInfo(
@@ -50,8 +58,8 @@ def _make_draw(reward_id, rarity='ssr', is_featured=False, selected=None):
         featured_slots={'ssr': ('ssr_featured',)},
         card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured',
                        's1': 'ssr_standard', 's2': 'ssr_standard'},
-        base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-        rarity_rank={'ssr': 3, 'sr': 2, 'r': 1},
+        base_probabilities={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
+        rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
     )
 
 
@@ -60,7 +68,7 @@ def _make_ctx(state, reward_id, rarity='ssr', is_featured=False):
     draw = _make_draw(reward_id, rarity, is_featured)
     return PityContext(
         draw=draw,
-        current={'ssr_featured': 0.005, 'ssr_standard': 0.005},
+        current={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
         state=state,
     )
 
@@ -118,38 +126,44 @@ class TestTargetedPity:
         assert state.get('test_tgt', 'guaranteed', False) is False
 
     def test_fate_threshold_zero_always_guaranteed(self, state):
-        """fate_threshold=0 → 定轨后始终处于保证状态，全部概率归入 selected_card 槽位。"""
+        """fate_threshold=0 → 定轨后始终处于保证状态，**全部概率归入定轨卡**。
+
+        **S8 起断言面是单卡**（§六 的「S8 单卡定向」条）：卡级管道下
+        `SelectedModifier` 的 A = `(selected,)`，故定轨卡拿到整个 scope 的量，
+        **另一张 featured 卡（f2）也归零**——这是 S8 相对旧实现（同槽位平摊 50/50）
+        的语义提升，原断言只看槽位、看不见这一层。
+        """
         pity = _make(state, 'targeted', 'test_tgt', fate_threshold=0)
         state.set('test_tgt', 'selected_card', 'f1')
 
         ctx = _make_ctx(state, '', rarity='')  # before_draw 不计 reward_id
         result = pity.before_draw(ctx)
-        # featured 占 100%，且进一步收窄至 selected_card 的槽位
-        assert result['ssr_featured'] == pytest.approx(0.01)
-        assert result['ssr_standard'] == pytest.approx(0.0)
+        assert result['f1'] == pytest.approx(1.0), '定轨卡收下整个 scope'
+        assert result['f2'] == pytest.approx(0.0), '同 scope 的另一张 featured 不在 A 内'
+        assert result['s1'] == pytest.approx(0.0)
+        assert result['s2'] == pytest.approx(0.0)
 
     def test_small_pity_uses_base_distribution(self, state):
-        """小保底：featured 占比由基础分布决定，不修改概率。"""
+        """小保底：不修改概率（原样返回基础分布）。"""
         pity = _make(state, 'targeted', 'test_tgt', fate_threshold=1)
         state.set('test_tgt', 'selected_card', 'f1')
 
         ctx = _make_ctx(state, '', rarity='')
         result = pity.before_draw(ctx)
-        # 小保底：featured 占比 = 0.005/(0.005+0.005) = 50%
-        assert result['ssr_featured'] == pytest.approx(0.005)
-        assert result['ssr_standard'] == pytest.approx(0.005)
+        assert result == {'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25}
 
     def test_guaranteed_targets_selected_card_slot(self, state):
-        """大保底状态：featured 100% 且收窄到 selected_card 的槽位。"""
+        """大保底状态：全部概率收窄到 `selected_card`（单卡定向）。"""
         pity = _make(state, 'targeted', 'test_tgt', fate_threshold=1)
         state.set('test_tgt', 'selected_card', 'f1')
         state.set('test_tgt', 'guaranteed', True)
 
         ctx = _make_ctx(state, '', rarity='')
         result = pity.before_draw(ctx)
-        # 大保底 + selected_card → 全部分配给 f1 所在的槽位
-        assert result['ssr_featured'] == pytest.approx(0.01)
-        assert result['ssr_standard'] == pytest.approx(0.0)
+        assert result['f1'] == pytest.approx(1.0)
+        assert result['f2'] == pytest.approx(0.0)
+        assert result['s1'] == pytest.approx(0.0)
+        assert result['s2'] == pytest.approx(0.0)
 
     def test_hit_judge_follows_selected_card(self, state):
         """命中判据 = `reward_id == selected_card`。

@@ -25,6 +25,10 @@ from gacha_simulator.core.pity import (
     PityState, DrawInfo, PityContext,
     _redistribute_scope, create_behavior,
 )
+# `transfer_linear` 的**家**是叶子层 `pity_primitives`（§3.9.4 的「模块归属」段：
+# 它与 `Pity` 骨架之间无依赖，且实现层的 Modifier 也要用它），编排层 `pity.py` 只是
+# re-export。本文件从**定义处**导入，使「归属是否漂移」在本行即显形。
+from gacha_simulator.core.pity_primitives import transfer_linear
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -38,8 +42,45 @@ def state():
 
 @pytest.fixture
 def base_ctx(state):
-    """构造一个标准 SSR 小保底 PityContext。
-    基础分布：featured 槽 0.005 (50%), standard 槽 0.005 (50%)。
+    """构造一个标准 SSR 小保底 PityContext（**卡级分布**，S8 起管道键空间）。
+
+    基础分布：四张卡各 0.25（featured 两张 f1/f2 合计 50%，standard 两张 s1/s2
+    合计 50%），Σ = 1。旧稿写槽位名（`ssr_featured` / `ssr_standard`）且 Σ = 0.01，
+    卡级管道下 `transfer_linear` 取 `dist[c]`（c 为卡 id）会直接 `KeyError`；
+    Σ = 1 也使 `_apply_delta` 的归一化退化为恒等（与生产路径同形）。
+    `rarity_rank` 方向为「rank 小 = 稀有度更高」（旧稿写 `{'ssr': 3, ...}` 会让
+    `_lower_rarities` 恒返空集、软保底静默恒等）。
+    """
+    draw = DrawInfo(
+        pool_id='test_pool',
+        pool_instance_id='test_pool_0',
+        reward_id='',
+        reward_rarity='',
+        is_featured=False,
+        scope_cards={'ssr': ('f1', 'f2', 's1', 's2')},
+        featured_cards={'ssr': ('f1', 'f2')},
+        scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
+        featured_slots={'ssr': ('ssr_featured',)},
+        card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured',
+                       's1': 'ssr_standard', 's2': 'ssr_standard'},
+        base_probabilities={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
+        rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
+    )
+    return PityContext(
+        draw=draw,
+        current={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
+        state=state,
+    )
+
+
+@pytest.fixture
+def slot_ctx(state):
+    """**槽位级**上下文的独立夹具——只服务 `TestRedistributeScope`。
+
+    `_redistribute_scope` 是 M1 的槽位级函数，按 ISSUE-502 **保留至「发布前一次性
+    移除旧保底类」的 commit**（其 4 处调用点全在旧类体内），故它的单测继续在槽位
+    键空间上跑；与上面那个卡级夹具分开，避免「测旧函数」与「测新管道」共用一份
+    夹具而互相带偏。
     """
     draw = DrawInfo(
         pool_id='test_pool',
@@ -54,7 +95,7 @@ def base_ctx(state):
         card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured',
                        's1': 'ssr_standard', 's2': 'ssr_standard'},
         base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-        rarity_rank={'ssr': 3, 'sr': 2, 'r': 1},
+        rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
     )
     return PityContext(
         draw=draw,
@@ -87,9 +128,8 @@ class TestRotatingPity:
         """小保底：featured 占比由基础分布决定，不修改概率。"""
         pity = _make(state, 'rotating', 'test_rot')
         result = pity.before_draw(base_ctx)
-        # 小保底 featured 占比 = 0.005/(0.005+0.005) = 50%
-        assert result['ssr_featured'] == pytest.approx(0.005)
-        assert result['ssr_standard'] == pytest.approx(0.005)
+        # 小保底：分布原样返回（featured 卡合计 50%）
+        assert result == {'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25}
 
     def test_guaranteed_pity_gives_100_percent_featured(self, state, base_ctx):
         """大保底：featured 100%。"""
@@ -109,10 +149,10 @@ class TestRotatingPity:
         pity.after_draw(miss_ctx)
         assert state.get('test_rot', 'guaranteed', False) is True
 
-        # 大保底：featured 100%
+        # 大保底：featured 卡集收下全部（卡级）
         result = pity.before_draw(base_ctx)
-        assert result['ssr_featured'] == pytest.approx(0.01)
-        assert result['ssr_standard'] == pytest.approx(0.0)
+        assert sum(result[c] for c in ('f1', 'f2')) == pytest.approx(1.0)
+        assert result['s1'] == pytest.approx(0.0) and result['s2'] == pytest.approx(0.0)
 
     def test_hit_featured_clears_guaranteed(self, state, base_ctx):
         """中 featured 后 guaranteed=False，回到小保底。"""
@@ -265,9 +305,9 @@ class TestRotatingCRPity:
         state.set('test_cr', 'guaranteed', False)
 
         result = pity.before_draw(base_ctx)
-        # 100% featured
-        assert result['ssr_featured'] == pytest.approx(0.01)
-        assert result['ssr_standard'] == pytest.approx(0.0)
+        # 100% featured（卡级：featured 卡集收下全部）
+        assert sum(result[c] for c in ('f1', 'f2')) == pytest.approx(1.0)
+        assert result['s1'] == pytest.approx(0.0) and result['s2'] == pytest.approx(0.0)
 
     def test_cr_not_intercept_when_guaranteed(self, state, base_ctx):
         """大保底时 CR 不介入，由 `guaranteed` 分支接管。"""
@@ -276,8 +316,8 @@ class TestRotatingCRPity:
         state.set('test_cr', 'guaranteed', True)
 
         result = pity.before_draw(base_ctx)
-        # 大保底：100% featured（由 rotating Modifier 的 `guaranteed` 分支处理）
-        assert result['ssr_featured'] == pytest.approx(0.01)
+        # 大保底：100% featured（由 RotatingModifier 的 `guaranteed` 分支处理）
+        assert sum(result[c] for c in ('f1', 'f2')) == pytest.approx(1.0)
 
     def test_readonly_mode_no_random_change(self, state, base_ctx):
         """readonly=True 时不执行随机判定，确定性返回。"""
@@ -285,8 +325,8 @@ class TestRotatingCRPity:
         state.set('test_cr', 'guaranteed', False)
         state.set('test_cr', 'cr_counter', 0)
         result = pity.before_draw(base_ctx, readonly=True)
-        # 小保底：featured 占比由基础分布决定
-        assert result['ssr_featured'] == pytest.approx(0.005)
+        # 小保底：分布原样返回
+        assert result == {'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25}
 
     def test_cr_base_rate_deterministic(self, state, base_ctx):
         """cr_base_rate=1.0 forces 100% intercept; cr_base_rate=0 never intercepts."""
@@ -295,14 +335,14 @@ class TestRotatingCRPity:
         state.set('test_cr_full', 'guaranteed', False)
         state.set('test_cr_full', 'cr_counter', 0)
         result = pity_full.before_draw(base_ctx)
-        assert result['ssr_featured'] == pytest.approx(0.01)
+        assert sum(result[c] for c in ('f1', 'f2')) == pytest.approx(1.0)
 
         pity_none = _make(state, 'rotating_cr', 'test_cr_none',
                           cr_counter_threshold=3, cr_base_rate=0.0)
         state.set('test_cr_none', 'guaranteed', False)
         state.set('test_cr_none', 'cr_counter', 0)
         result2 = pity_none.before_draw(base_ctx)
-        assert result2['ssr_featured'] == pytest.approx(0.005)
+        assert result2 == {'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25}
 
     def test_cr_state_probs_boundary(self, state, base_ctx):
         """cr_state_probs[idx]=1.0 triggers intercept at that state."""
@@ -311,14 +351,14 @@ class TestRotatingCRPity:
         state.set('test_cr_sp', 'guaranteed', False)
         state.set('test_cr_sp', 'cr_counter', 0)
         result = pity.before_draw(base_ctx)
-        assert result['ssr_featured'] == pytest.approx(0.01)
+        assert sum(result[c] for c in ('f1', 'f2')) == pytest.approx(1.0)
 
         pity2 = _make(state, 'rotating_cr', 'test_cr_sp2',
                       cr_counter_threshold=2, cr_state_probs=[0.0, 1.0, 0.0])
         state.set('test_cr_sp2', 'guaranteed', False)
         state.set('test_cr_sp2', 'cr_counter', 1)
         result2 = pity2.before_draw(base_ctx)
-        assert result2['ssr_featured'] == pytest.approx(0.01)
+        assert sum(result2[c] for c in ('f1', 'f2')) == pytest.approx(1.0)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -418,30 +458,140 @@ class TestRotatingCRSoftPity:
 class TestRedistributeScope:
     """模块级概率重分配函数。"""
 
-    def test_full_featured_ratio(self, base_ctx):
+    def test_full_featured_ratio(self, slot_ctx):
         """featured_ratio=1.0 → 全部概率归入 featured 槽。"""
         result = _redistribute_scope(
-            base_ctx, featured_ratio=1.0, total=0.01,
+            slot_ctx, featured_ratio=1.0, total=0.01,
             featured_slots=('ssr_featured',), scope='ssr',
         )
         assert result['ssr_featured'] == pytest.approx(0.01)
         assert result['ssr_standard'] == pytest.approx(0.0)
 
-    def test_half_featured_ratio_preserves_proportions(self, base_ctx):
+    def test_half_featured_ratio_preserves_proportions(self, slot_ctx):
         """featured_ratio=0.5 → featured/standard 各占 50%，内部按权重比例分配。"""
         result = _redistribute_scope(
-            base_ctx, featured_ratio=0.5, total=0.01,
+            slot_ctx, featured_ratio=0.5, total=0.01,
             featured_slots=('ssr_featured',), scope='ssr',
         )
         assert result['ssr_featured'] == pytest.approx(0.005)
         assert result['ssr_standard'] == pytest.approx(0.005)
 
-    def test_zero_total_ratio_math(self, base_ctx):
+    def test_zero_total_ratio_math(self, slot_ctx):
         """total=0 时重分配算出全零，由调用方负责前置守卫（rotating Modifier 已有）。"""
         result = _redistribute_scope(
-            base_ctx, featured_ratio=0.5, total=0.0,
+            slot_ctx, featured_ratio=0.5, total=0.0,
             featured_slots=('ssr_featured',), scope='ssr',
         )
         # total=0 → 所有槽位概率归零；调用方应在调用前检查 total<=0
         assert result['ssr_featured'] == pytest.approx(0.0)
         assert result['ssr_standard'] == pytest.approx(0.0)
+
+
+# ══════════════════════════════════════════════════════════════════
+# S8-3：卡级助手 `transfer_linear`（§3.9.4）
+# ══════════════════════════════════════════════════════════════════
+#
+# 本组是 S8-3 的块级验收面（§七 S8-3 的验收命令 `-k transfer_linear`）。它与上面的
+# `TestRedistributeScope` 是**两个键空间的两代实现**，并存到「发布前一次性移除旧
+# 保底类」的 commit（ISSUE-502）：`_redistribute_scope` 是槽位级、返回新分布；
+# `transfer_linear` 是卡级、返回**增量向量**（§3.9.4）。
+
+class TestTransferLinear:
+    """`transfer_linear(dist, A, Q, amount, shape, weights)` 的双分支与全部守卫。"""
+
+    def test_transfer_linear_matches_scope_equivalent(self):
+        """单卡 A / 单卡 Q 且取值是二进制精确数时，与 `_redistribute_scope` 逐元素相等。
+
+        「单槽位 / 组内等权」是两者**唯一**可以逐元素对照的场景：A 与 Q 各只含一张卡
+        时，槽位级与卡级是 1:1 的同构（`card_to_slot` 是双射），两条算术路径也重合
+        （`_redistribute_scope` 的 `total · w / w` 与 `transfer_linear` 的
+        `p(A) + p(Q)` 在本组取值下都落回精确值 1.0 / 0.0）。
+        **跨槽位或不等权场景不得照抄本断言**：两者的差别正在「A 内按当前比例还是按
+        声明权重分配」（§3.9.4 的三点差别），那时只有增量向量可比（见下一条）。
+        """
+        dist = {'a': 0.25, 'q': 0.75}
+        ctx = PityContext(
+            draw=DrawInfo(
+                pool_id='p', pool_instance_id='p_0', reward_id='',
+                reward_rarity='', is_featured=False,
+                scope_cards={'ssr': ('a', 'q')}, featured_cards={'ssr': ('a',)},
+                scope_slots={'ssr': ('slot_a', 'slot_q')},
+                featured_slots={'ssr': ('slot_a',)},
+                card_to_slot={'a': 'slot_a', 'q': 'slot_q'},
+                base_probabilities={'a': 0.25, 'q': 0.75},
+                rarity_rank={'ssr': 0},
+            ),
+            current=dict(dist), state=PityState(),
+        )
+        old = _redistribute_scope(ctx, featured_ratio=1.0, total=0.25 + 0.75,
+                                  featured_slots=('slot_a',), scope='ssr')
+        delta = transfer_linear(dist, ('a',), ('q',), dist['q'])
+        assert delta is not None
+        new = {c: dist[c] + delta.get(c, 0.0) for c in dist}
+        # 卡级 → 槽位级（本夹具的映射是双射，逐元素对照成立）
+        assert new['a'] == old['slot_a']
+        assert new['q'] == old['slot_q']
+        assert new['a'] == 1.0 and new['q'] == 0.0
+
+    def test_transfer_linear_ratio_preserving(self):
+        """A 内两卡不等权：`current` 保当前比例、`declared` 按声明权重；Q 侧恒按当前比例。
+
+        | 断言 | 判据 |
+        |------|------|
+        | `current` 的 δ_A 之比 == 当前 p 之比 | A 内「保持组内当前比例」 |
+        | `declared` 的 δ_A 之比 == 声明权重之比 | A 内改按 `weights` 分配 |
+        | 两者的 δ_Q 之比 == 当前 p 之比 | Q 侧形状不可指定，恒为当前形状 |
+        | `Σδ == 0` | 转移族配平（§3.1.5.2.1），框架归一化退化为恒等 |
+
+        **判别性**：把 `declared` 写成 `current`（或反之）会让第 1 / 2 条断言之一转红
+        ——本夹具的当前比例（1:7）与声明权重（3:1）刻意不同。
+        """
+        dist = {'a1': 0.01, 'a2': 0.07, 'q1': 0.02, 'q2': 0.90}
+        weights = {'a1': 0.75, 'a2': 0.25, 'q1': 0.5, 'q2': 0.5}
+        amount = dist['q1'] + dist['q2']
+
+        cur = transfer_linear(dist, ('a1', 'a2'), ('q1', 'q2'), amount)
+        dec = transfer_linear(dist, ('a1', 'a2'), ('q1', 'q2'), amount,
+                              shape='declared', weights=weights)
+
+        assert abs(sum(cur.values())) < 1e-15, 'Σδ = 0（转移族配平）'
+        assert abs(sum(dec.values())) < 1e-15
+        # A 侧：current 保当前比例（1:7），declared 按声明权重（3:1）
+        assert cur['a1'] / cur['a2'] == pytest.approx(dist['a1'] / dist['a2'])
+        assert dec['a1'] / dec['a2'] == pytest.approx(weights['a1'] / weights['a2'])
+        assert cur['a1'] / cur['a2'] != pytest.approx(weights['a1'] / weights['a2'])
+        # Q 侧：两者都按当前比例（1:45），形状不可指定
+        for d in (cur, dec):
+            assert d['q1'] / d['q2'] == pytest.approx(dist['q1'] / dist['q2'])
+        # 转移量：A 侧合计 == amount、Q 侧合计 == −amount
+        for d in (cur, dec):
+            assert d['a1'] + d['a2'] == pytest.approx(amount)
+            assert d['q1'] + d['q2'] == pytest.approx(-amount)
+
+    def test_transfer_linear_declared_survives_zero_pA(self):
+        """`shape='declared'` 在 `p(A) = 0` 时仍可转移；`w(A) = 0` 时返回 `None`。
+
+        这正是 §3.1.5.6.1「来源二」在冲突配置下生效的路径（`declared` 唯一的用武之地，
+        §3.1.2 的「A 侧形状」段）：`p(A) = 0` 而 `w(A) > 0` → 转移照常；`w(A) = 0`
+        （池子声明该组不可获得，来源一）→ 不转移。
+        """
+        dist = {'a': 0.0, 'q': 1.0}
+        weights = {'a': 0.5, 'q': 0.5}
+        d = transfer_linear(dist, ('a',), ('q',), dist['q'],
+                            shape='declared', weights=weights)
+        assert d is not None and d['a'] == pytest.approx(1.0) and d['q'] == pytest.approx(-1.0)
+        assert transfer_linear(dist, ('a',), ('q',), dist['q'],
+                               shape='declared', weights={'a': 0.0, 'q': 1.0}) is None
+        # `current` 形状下 `p(A) = 0` 未定义（u_A 无定义）→ 不转移
+        assert transfer_linear(dist, ('a',), ('q',), dist['q']) is None
+
+    def test_transfer_linear_guards(self):
+        """其余守卫：`p(Q) <= 0` / `amount <= 0` 返 `None`；未知 shape / 缺 weights 抛 `ValueError`。"""
+        dist = {'a': 0.3, 'q': 0.7}
+        assert transfer_linear(dist, ('a',), ('q',), 0.0) is None, 'amount <= 0'
+        assert transfer_linear(dist, ('a',), ('q',), -0.1) is None
+        assert transfer_linear(dist, ('a',), (), 0.5) is None, 'p(Q) = 0（无货可取）'
+        with pytest.raises(ValueError):
+            transfer_linear(dist, ('a',), ('q',), 0.5, shape='nope')
+        with pytest.raises(ValueError):
+            transfer_linear(dist, ('a',), ('q',), 0.5, shape='declared')

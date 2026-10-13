@@ -66,10 +66,10 @@ class TestSelectedTargetResolution:
 
     @staticmethod
     def _ctx(state, current=None):
-        # 两个**互不相同**的 featured 槽（P64 S7d 审查收口）：单槽夹具下
-        # 「A = 定轨卡所在槽」与「A = 全部 featured 槽」产出同值、判别力为零；
-        # 拆成两槽后，定轨 f1 时 `ssr_featured_a` 独得 scope 总量（0.015）、
-        # `ssr_featured_b` 归零，与「两槽均分（各 0.0075）」可区分。
+        # 两个**互不相同**的 featured 卡（P64 S7d 审查收口；S8-2 起断言面由槽位
+        # 换成卡 id）：单卡夹具下「A = 定轨卡」与「A = 全部 featured」产出同值、
+        # 判别力为零；两张 featured 卡时，定轨 f1 独得 scope 总量（0.015）、f2 归零，
+        # 与「两张均分（各 0.0075）」可区分。
         draw = DrawInfo(
             pool_id='p1', pool_instance_id='p1_0',
             reward_id='', reward_rarity='', is_featured=False,
@@ -79,14 +79,12 @@ class TestSelectedTargetResolution:
             featured_slots={'ssr': ('ssr_featured_a', 'ssr_featured_b')},
             card_to_slot={'f1': 'ssr_featured_a', 'f2': 'ssr_featured_b',
                           's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured_a': 0.005, 'ssr_featured_b': 0.005,
-                                'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.2, 'f2': 0.2, 's1': 0.6},
+            rarity_rank={'ssr': 0},
         )
         return PityContext(
             draw=draw,
-            current=dict(current or {'ssr_featured_a': 0.005, 'ssr_featured_b': 0.005,
-                                     'ssr_standard': 0.005}),
+            current=dict(current or {'f1': 0.2, 'f2': 0.2, 's1': 0.6}),
             state=state,
         )
 
@@ -94,19 +92,19 @@ class TestSelectedTargetResolution:
         """selected 在 card_to_slot 中 → A 列落在其投影槽位（scope 总量全给该槽）。
 
         **本用例是「定轨卡定位」的判别面（P64 S7d 审查收口）**：把
-        `SelectedModifier.apply` 的 `A = selected_keys or featured` 变异为
-        `A = featured`（完全忽略定轨卡）时，本用例必红。判别点：
-        `ssr_featured_a` 应为 scope 总量 `0.015`（定轨 f1 独得），变异后 A 退化为
-        `('ssr_featured_a', 'ssr_featured_b')`、两槽均分为 `0.0075`。
+        `SelectedModifier.compute_delta` 的 `A = (sel,) if sel in featured else featured`
+        变异为 `A = featured`（完全忽略定轨卡）时，本用例必红。判别点：
+        `f1` 应为 scope 总量 `1.0`（定轨卡独得），变异后 A 退化为
+        `('f1', 'f2')`、两卡按声明权重各得 `0.5`。
         """
         state = PityState()
         pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=0)
         state.set('tgt', 'selected_card', 'f1')
 
         out = pity.before_draw(self._ctx(state))
-        assert out['ssr_featured_a'] == pytest.approx(0.015)   # 定轨槽独得 scope 总量
-        assert out['ssr_featured_b'] == pytest.approx(0.0)     # 兄弟 featured 槽被搬空
-        assert out['ssr_standard'] == pytest.approx(0.0)
+        assert out['f1'] == pytest.approx(1.0)     # 定轨卡独得 scope 总量
+        assert out['f2'] == pytest.approx(0.0)     # 兄弟 featured 卡被搬空
+        assert out['s1'] == pytest.approx(0.0)
 
     def test_unresolvable_selection_falls_back_to_all_featured(self):
         """selected 的投影不在 featured 投影内 → A 列回退全部 featured 槽。
@@ -122,9 +120,9 @@ class TestSelectedTargetResolution:
         state.set('tgt', 'selected_card', 's1')   # 非 featured 卡
 
         out = pity.before_draw(self._ctx(state))
-        assert out['ssr_featured_a'] == pytest.approx(0.0075)  # 回退到全部 featured → 两槽均分
-        assert out['ssr_featured_b'] == pytest.approx(0.0075)
-        assert out['ssr_standard'] == pytest.approx(0.0)
+        assert out['f1'] == pytest.approx(0.5)   # 回退到全部 featured → 两卡按声明权重均分
+        assert out['f2'] == pytest.approx(0.5)
+        assert out['s1'] == pytest.approx(0.0)
 
     def test_selected_none_returns_all_featured(self):
         """selected=None → A 列 = 全部 featured 槽（经 `guaranteed` 分支触发）。
@@ -137,9 +135,9 @@ class TestSelectedTargetResolution:
         state.set('tgt', 'guaranteed', True)      # selected_card 保持未设置
 
         out = pity.before_draw(self._ctx(state))
-        assert out['ssr_featured_a'] == pytest.approx(0.0075)
-        assert out['ssr_featured_b'] == pytest.approx(0.0075)
-        assert out['ssr_standard'] == pytest.approx(0.0)
+        assert out['f1'] == pytest.approx(0.5)
+        assert out['f2'] == pytest.approx(0.5)
+        assert out['s1'] == pytest.approx(0.0)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -213,20 +211,29 @@ class TestMultiPityCoordination:
     """rotating + hard 同时作用——概率叠加 + 状态独立。"""
 
     def test_rotating_and_hard_on_same_pool(self):
-        """rotating 和 hard 概率叠加：先 rotating 调整比例，再 hard 100% featured。"""
+        """rotating 和 hard 概率叠加：hard 先夺走更低稀有度，rotating 再把非 featured 搬空。
+
+        **S8-2 起断言面是卡级**（§3.9.1），且池子**必须含更低稀有度卡**：新
+        `hard` 是夺取型（`amount = p(Q)`，Q = 更低稀有度，§3.1.2 表第 1 行），
+        全 SSR 的池子上 `Q` 为空、hard 退化为恒等（旧稿的池只有两张 SSR 卡，
+        在那个池上 hard 的「100%」是旧槽位级绝对赋值的产物）。故本用例补一张 R 卡
+        作取源面，并把 `rarity_rank` 的方向修正为「rank 小 = 稀有度更高」
+        （旧稿写 `{'ssr': 3, ...}`，会让 `_lower_rarities` 恒返空集、
+        `transfer_linear` 因 `p(Q) = 0` 静默恒等——**本用例正是被这条掩盖的**）。
+        """
         state = PityState()
 
         pool = Pool(
             id='test_pool', name='测试池',
             cost={'gem': 1},
             rewards=[
-                (Reward(id='f1', name='F1', extra_info={'rarity': 'SSR', 'featured': True}), 0.005),
-                (Reward(id='s1', name='S1', extra_info={'rarity': 'SSR', 'featured': False}), 0.005),
+                (Reward(id='f1', name='F1', extra_info={'rarity': 'SSR', 'featured': True}), 0.006),
+                (Reward(id='s1', name='S1', extra_info={'rarity': 'SSR', 'featured': False}), 0.004),
+                (Reward(id='r1', name='R1', extra_info={'rarity': 'R'}), 0.99),
             ],
         )
 
-        scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = \
-            compute_scope_mappings(pool)
+        scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot =             compute_scope_mappings(pool)
 
         rot_def = PityDef(name='rot', btype='rotating', scope='ssr')
         hard_def = PityDef(name='hard90', btype='hard', scope='ssr', threshold=90)
@@ -243,24 +250,27 @@ class TestMultiPityCoordination:
             pool_specs={'test_pool': pool_spec},
             pity_defs=[rot_def, hard_def],
             state=state,
-            rarity_rank={'ssr': 3, 'sr': 2, 'r': 1},
+            rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
         )
+        base = {'f1': 0.006, 's1': 0.004, 'r1': 0.99}
 
-        # 初始——小保底，未到硬保底阈值
-        probs = engine.before_draw('test_pool', state,
-                                    {'ssr_featured': 0.005, 'ssr_standard': 0.005})
-        # rotating 小保底维持基础比例
-        assert probs['ssr_featured'] == pytest.approx(0.005)
-        assert probs['ssr_standard'] == pytest.approx(0.005)
+        # 初始——小保底（rotating 未置位）、未到硬保底阈值 → 恒等
+        probs = engine.before_draw('test_pool', state, dict(base))
+        assert probs == base
 
-        # 设 counter 到 90——hard 保底触发 + rotating 大保底
+        # hard 单独触发（rotating 未置位）：Q = 更低稀有度（r1）整组搬空、
+        # A = scope 卡集按当前比例收下（0.006 : 0.004 之比保持不变）
         state.set('hard90', 'counter', 89)
+        probs_hard = engine.before_draw('test_pool', state, dict(base))
+        assert probs_hard['r1'] == pytest.approx(0.0)
+        assert probs_hard['f1'] / probs_hard['s1'] == pytest.approx(0.006 / 0.004)
+
+        # 再叠 rotating 大保底：非 featured 的 s1 也被搬空、f1 收下全部
         state.set('rot', 'guaranteed', True)
-        probs2 = engine.before_draw('test_pool', state,
-                                     {'ssr_featured': 0.005, 'ssr_standard': 0.005})
-        # 两条保底叠加后 standard 槽位归零（全部导向 featured）
-        assert probs2['ssr_standard'] == pytest.approx(0.0)
-        assert probs2['ssr_featured'] >= 0.005  # featured 至少保持基础概率
+        probs2 = engine.before_draw('test_pool', state, dict(base))
+        assert probs2['s1'] == pytest.approx(0.0)
+        assert probs2['r1'] == pytest.approx(0.0)
+        assert probs2['f1'] == pytest.approx(1.0)
 
         # P82-2 观察点（P64 §1.5）：书写顺序 ('rot', 'hard90') 接线后反转为
         # (hard90, rot)；上面的概率断言在两种顺序下都成立（本组合属 §1.5
@@ -268,6 +278,7 @@ class TestMultiPityCoordination:
         assert [n for n, _ in engine.get_behaviors_for_pool('test_pool')] == [
             'hard90', 'rot']
         assert tuple(engine.pool_specs['test_pool'].pity_names) == ('rot', 'hard90')
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -356,33 +367,31 @@ class TestDidFireUnified:
 
 
 # ════════════════════════════════════════════════════════
-# 两份「卡 id → 稀有度」实现的一致性（缺陷 12 的守卫）
+# 「卡 id → 稀有度」推断的守卫（缺陷 12 的同源重复实现已消除）
 # ════════════════════════════════════════════════════════
 
-class TestRarityInferenceConsistency:
-    """A 与 B 必须对同一 spec 给出同一答案。
+class TestRarityInferenceGuards:
+    '''`PityEngine._infer_rarity`（状态路径）的答案必须与池内真实稀有度一致。
 
-    - **A** = `pool.infer_rarity_from_spec`——喂**概率**路径（`scale_factors` 还原段、
-      `aggregate_probs_by_rarity`）
-    - **B** = `PityEngine._infer_rarity`——喂**状态**路径（`DrawInfo.reward_rarity`
-      → `_should_reset` / `_is_trigger_rarity` / `did_fire`）
+    **S8-2 改写（ISSUE-504）**：原类名 `TestRarityInferenceConsistency`，断言面是
+    「两份实现（A = `pool.infer_rarity_from_spec` 喂概率路径、B =
+    `PityEngine._infer_rarity` 喂状态路径）逐卡同答」。**A 已随其最后一批消费者
+    删除**（`banner.draw` 的 `scale_factors` 还原段与 `aggregate_probs_by_rarity`
+    的内部调用；`banner.draw` 改走卡级直传后，概率路径不再需要「卡 id → 稀有度」
+    的反查），故「两处实现漂移」这一缺陷形态**在结构上不再存在**（缺陷 12 的根因
+    即 A 单方面漂移）。本类保留的是**剩下的那一份实现**的守卫：B 的答案必须等于
+    池内每张卡声明的稀有度，且两条支撑它的不变量成立——不变量破了，B 就会答错
+    （而不是「与另一份实现分歧」）。
 
-    两者是同一条规则的两处实现，**已经漂移过一次**：缺陷 12 只存在于 A（SR / R 返回
-    `None`），B 从来没有（它一直遍历 `scope_cards`）。分歧的后果是「同一张卡在概率里
-    是 SR、在状态里是 SSR」，不报错、不崩溃。本测试把这种静默漂移变成响亮失败。
+    判据的两条不变量（真实配置全量扫描，实测 8 banner × 各池 152 张卡逐卡成立）：
 
-    `None`（A 的「不属于任何槽位」）与 `''`（B 的「无稀有度」）是两种哨兵，语义等价，
-    比较时归一。
-    """
+    ① `ssr_ids ⊆ scope_cards['ssr']`（需要的是「查得到」而非「相等」——
+       `batch_simulator` 建 `ssr_ids` 时排除 `_no_card`，等号会在合法配置上误红）；
+    ② `featured_ids ⊆ scope_cards`。
+    '''
 
-    @staticmethod
-    def _both(cid, spec, engine):
-        from gacha_simulator.core.pool import infer_rarity_from_spec
-        return ((infer_rarity_from_spec(cid, spec) or None),
-                (engine._infer_rarity(cid, spec) or None))
-
-    def test_agree_on_multi_rarity_spec(self):
-        """不依赖真配置的最小构造：三种稀有度各给一张卡。"""
+    def test_infer_rarity_agrees_with_declared_rarity_on_multi_rarity_spec(self):
+        '''不依赖真配置的最小构造：三种稀有度各给一张卡 + 一张表外卡。'''
         spec = PoolPitySpec(
             pity_names=['p'],
             scope_cards={'ssr': ('ssr_a',), 'sr': ('sr_a',), 'r': ('r_a',)},
@@ -391,16 +400,13 @@ class TestRarityInferenceConsistency:
             featured_ids={'ssr_a'},
         )
         engine = PityEngine({'k': spec}, [])
-        for cid in ('ssr_a', 'sr_a', 'r_a', 'not_in_spec'):
-            a, b = self._both(cid, spec, engine)
-            assert a == b, f'{cid}: A={a!r} B={b!r}（两份实现分歧）'
+        for cid, expected in (('ssr_a', 'ssr'), ('sr_a', 'sr'), ('r_a', 'r')):
+            assert engine._infer_rarity(cid, spec) == expected, cid
+        # 表外卡 → 空串哨兵（「无稀有度」），不得回退猜测
+        assert engine._infer_rarity('not_in_spec', spec) == ''
 
-    def test_agree_on_real_config_and_invariants_hold(self):
-        """真实配置全量扫一遍，并断言两条支撑「必然一致」的不变量。
-
-        不变量成立时 A 与 B 必然给出同一答案，故同时断言它们——任一条破掉，
-        本测试即红（这是比「逐卡比对」更早的预警）。
-        """
+    def test_infer_rarity_on_real_config_and_invariants_hold(self):
+        '''真实配置全量扫一遍：逐卡答对 + 两条不变量成立（不变量破了即答错）。'''
         from pathlib import Path
         from gacha_simulator.core.config_toml import load_toml
         from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
@@ -425,14 +431,13 @@ class TestRarityInferenceConsistency:
                     f'{banner.id}.{pid}: featured_ids 不在 scope_cards 内'
 
                 for rwd, _ in pool.rewards:
-                    a, b = self._both(rwd.id, spec, env.pity_engine)
-                    assert a == b, f'{rwd.id} @ {banner.id}.{pid}: A={a!r} B={b!r}'
-                    # A 的答案还必须与该卡在池里的真实稀有度一致
+                    got = env.pity_engine._infer_rarity(rwd.id, spec) or None
                     real = (rwd.extra_info.get('rarity') or '').lower() or None
-                    assert a == real, f'{rwd.id} @ {banner.id}.{pid}: A={a!r} 真实={real!r}'
+                    assert got == real, f'{rwd.id} @ {banner.id}.{pid}: 推断={got!r} 真实={real!r}'
                     checked += 1
         assert checked > 0, '未扫到任何卡——本测试无验收面'
-# ══════════════════════════════════════════════════════════════════
+
+
 # G16（P64 独立先行）：reset="never"：hard 出金不重置 counter
 # ══════════════════════════════════════════════════════════════════
 
@@ -459,7 +464,10 @@ class TestNeverResetHardPity:
 
     NAME = 'tof_hard'
     THRESHOLD = 80
-    CUR = {'ssr_featured': 0.6, 'sr_featured': 0.4}
+    #: 卡级基础分布（S8-2 起管道为卡级）：SSR 的 UP 卡 0.6 + 更低稀有度卡 0.4，
+    #: Σ = 1（归一化在 Σ = 1 时退化为恒等，故断言值即保底算出的值）。
+    #: 夹具的卡集（`_mk_draw`）：`ssr` 一张 `f1`、`sr` 一张 `sf1`。
+    CUR = {'f1': 0.6, 'sf1': 0.4}
 
     @classmethod
     def _make(cls, state, **pdef_kwargs):
@@ -469,7 +477,7 @@ class TestNeverResetHardPity:
 
     @classmethod
     def _ctx(cls, state, rarity='r', featured=False):
-        """一次抽卡的上下文：current 含两个槽位，便于断言「被强制为 100%」。"""
+        """一次抽卡的上下文：current 含两张卡（scope 一张 + 更低稀有度一张）。"""
         return PityContext(
             draw=_mk_draw('f1' if featured else 's1', rarity, featured),
             current=dict(cls.CUR),
@@ -502,9 +510,10 @@ class TestNeverResetHardPity:
         assert self._counter(state) == self.THRESHOLD - 1, \
             'reset="never" 下出金不得清零 counter'
 
-        # 第 80 抽：counter 未被出金清零 → 保底照常触发，scope 槽位强制 100%
+        # 第 80 抽：counter 未被出金清零 → 保底照常触发，scope 卡集收下全部
+        #（Q = 更低稀有度 = sf1，夺取型 amount = p(Q)）
         assert self._draw(bh, state, rarity='ssr') == {
-            'ssr_featured': 1.0, 'sr_featured': 0.0}
+            'f1': 1.0, 'sf1': 0.0}
         # 第 80 抽之后的 counter 终值**有意不在此断言**（原为 `== THRESHOLD` 的
         # 两条重复断言，仅报错文案不同）：`never` 下为 80，而「保底触发时归零」
         # 这一候选语义（能产生「每 N 抽一个白送金」的周期性）下为 0——两者都是
@@ -531,7 +540,7 @@ class TestNeverResetHardPity:
         assert self._counter(s_feat) == self.THRESHOLD - 1, \
             'featured 语义：非 featured 出金不清零'
         assert self._draw(feat, s_feat, rarity='r') == {
-            'ssr_featured': 1.0, 'sr_featured': 0.0}
+            'f1': 1.0, 'sf1': 0.0}
 
     def test_never_reset_reaches_behavior_via_create_behavior(self):
         """`reset='never'` 经 `create_behavior(PityDef(...))` 透传（配置 → 行为接线面）。
@@ -560,7 +569,7 @@ class TestNeverResetHardPity:
         self._draw(bh, state, rarity='ssr', featured=True)
         assert self._counter(state) == self.THRESHOLD - 1
         assert self._draw(bh, state, rarity='ssr') == {
-            'ssr_featured': 1.0, 'sr_featured': 0.0}
+            'f1': 1.0, 'sf1': 0.0}
 
 
 # ══════════════════════════════════════════════════════════════════

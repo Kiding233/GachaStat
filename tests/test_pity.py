@@ -30,7 +30,11 @@ from gacha_simulator.core.pity import (
 # 公共夹具：三稀有度 SSR 池的一次抽卡上下文
 # ═══════════════════════════════════════════════════════════════════
 
-_SSR_PROBS = {'ssr': 0.006, 'sr': 0.051, 'r': 0.943}
+#: 基础分布是**卡级**（S8 起管道为卡级，D20 / §3.9.1）：键即卡 id。旧稿写稀有度名
+#: （`'ssr'` / `'sr'` / `'r'`）——本夹具的槽位名恰与稀有度名同形，故旧稿在 M1 的
+#: 槽位级管道下可用；卡级管道下 A/Q 是卡集合、`transfer_linear` 取 `dist[c]`
+#: （c 为卡 id）会直接 `KeyError`。
+_SSR_PROBS = {'ssr_card': 0.006, 'sr_card': 0.051, 'r_card': 0.943}
 _SSR_RANK = {'ssr': 0, 'sr': 1, 'r': 2}
 _SSR_CARDS = {'ssr': ('ssr_card',), 'sr': ('sr_card',), 'r': ('r_card',)}
 _SSR_SLOTS = {'ssr': ('ssr',), 'sr': ('sr',), 'r': ('r',)}
@@ -38,10 +42,12 @@ _SSR_C2S = {'ssr_card': 'ssr', 'sr_card': 'sr', 'r_card': 'r'}
 
 
 def _ssr_draw():
-    """一次抽卡的静态事实：A 列（`scope_cards`）与投影表（`card_to_slot`）齐备。
+    """一次抽卡的静态事实：A 列（`scope_cards`）与分布键空间同键。
 
-    新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到分布键空间；合成 spec
-    比真实路径少一个键时保底会**静默恒等**，故夹具必须给全。
+    S8 起 A 列是**卡集合**、`dist` 是**卡级**分布，两者同键空间（D20），
+    故夹具的卡 id 必须与分布键一致；合成 spec 少一个键时保底会**静默恒等**
+    （`d.get(c, 0.0)` 对未出现的键取 0），故夹具必须给全。槽位三字段保留
+    （ISSUE-901：旧保底类仍读它们），但**不是**本管道键空间。
     """
     return DrawInfo(
         pool_id='t', pool_instance_id='t', reward_id='', reward_rarity='',
@@ -136,9 +142,9 @@ class TestSoftStepProgress:
         pity = _make_soft(state)
         state.set('test', 'counter', 73)
         out = pity.before_draw(_ssr_ctx(state), readonly=True)
-        assert out['ssr'] == pytest.approx(0.006 + 100.0 / 18 / 100.0)
-        assert out['sr'] < _SSR_PROBS['sr']
-        assert out['r'] < _SSR_PROBS['r']
+        assert out['ssr_card'] == pytest.approx(0.006 + 100.0 / 18 / 100.0)
+        assert out['sr_card'] < _SSR_PROBS['sr_card']
+        assert out['r_card'] < _SSR_PROBS['r_card']
         assert sum(out.values()) == pytest.approx(1.0)
 
     def test_soft_preserves_total(self):
@@ -172,15 +178,15 @@ class TestHardPityThreshold:
         pity = _make_hard(state)
         state.set('test', 'counter', 90)
         out = pity.before_draw(_ssr_ctx(state), readonly=True)
-        assert out['ssr'] == pytest.approx(1.0)
-        assert out['sr'] == pytest.approx(0.0)
+        assert out['ssr_card'] == pytest.approx(1.0)
+        assert out['sr_card'] == pytest.approx(0.0)
 
     def test_threshold_early_reached(self):
         state = PityState()
         pity = _make_hard(state, threshold=50)
         state.set('test', 'counter', 50)
         out = pity.before_draw(_ssr_ctx(state), readonly=True)
-        assert out['ssr'] == pytest.approx(1.0)
+        assert out['ssr_card'] == pytest.approx(1.0)
 
     def test_hard_preserves_sum(self):
         state = PityState()
@@ -205,7 +211,7 @@ class TestN1CounterPhase:
         first_full = None
         for n in range(1, 96):
             out = pity.before_draw(_ssr_ctx(state))
-            if first_full is None and out['ssr'] == pytest.approx(1.0):
+            if first_full is None and out['ssr_card'] == pytest.approx(1.0):
                 first_full = n
         assert state.get('test', 'counter', 0) == 95, '每抽须推进一次计数'
         assert first_full == 90, f'首次 100% 应落在第 90 抽，实得 {first_full}'
@@ -216,7 +222,7 @@ class TestN1CounterPhase:
         first_full = None
         for n in range(1, 96):
             out = pity.before_draw(_ssr_ctx(state))
-            if first_full is None and out['ssr'] == pytest.approx(1.0):
+            if first_full is None and out['ssr_card'] == pytest.approx(1.0):
                 first_full = n
         assert state.get('test', 'counter', 0) == 95
         assert first_full == 90, f'软保底满档应落在第 90 抽，实得 {first_full}'
@@ -344,10 +350,8 @@ class TestPityEngineReset:
             scope_cards={'ssr': ('ssr_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
-            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
-            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
-            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
+            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
             card_to_slot={'ssr_card': 'ssr'},
         )
         eng2 = PityEngine(
@@ -384,10 +388,8 @@ class TestPityEngineBeforeDraw:
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
-            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
-            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
-            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
+            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
             card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         engine = PityEngine(
@@ -400,9 +402,9 @@ class TestPityEngineBeforeDraw:
 
     def test_before_draw_increments_counter(self):
         engine, state = self._make_engine()
-        probs = engine.before_draw('pool', state, {'ssr': 0.006, 'r': 0.994})
+        probs = engine.before_draw('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
         assert state.get('test_pity', 'counter', 0) == 1
-        assert 'ssr' in probs
+        assert 'ssr_card' in probs
 
     def test_before_draw_unknown_pool(self):
         engine = PityEngine(pool_specs={}, pity_defs=[], state=PityState(), rarity_rank={})
@@ -413,8 +415,8 @@ class TestPityEngineBeforeDraw:
     def test_get_probabilities_at_pity_cap(self):
         engine, state = self._make_engine()
         state.data.setdefault('test_pity', {})['counter'] = 90
-        probs = engine.get_probabilities('pool', state, {'ssr': 0.006, 'r': 0.994})
-        assert probs['ssr'] == pytest.approx(1.0)
+        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
+        assert probs['ssr_card'] == pytest.approx(1.0)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -446,10 +448,8 @@ class TestMultiPityStacking:
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
-            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
-            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
-            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
+            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
             card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         engine = PityEngine(
@@ -466,14 +466,14 @@ class TestMultiPityStacking:
         # counter=82: 软保底生效但未达100%，硬保底未触发
         state.data = {'soft': {'counter': 82, '_active': True},
                       'hard': {'counter': 82, '_active': True}}
-        probs = engine.get_probabilities('pool', state, {'ssr': 0.006, 'r': 0.994})
-        assert 0.3 < probs['ssr'] < 0.99  # soft pity active, not 100%
+        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
+        assert 0.3 < probs['ssr_card'] < 0.99  # soft pity active, not 100%
 
         # counter=90: 硬保底覆盖 → SSR=100%
         state.data = {'soft': {'counter': 90, '_active': True},
                       'hard': {'counter': 90, '_active': True}}
-        probs = engine.get_probabilities('pool', state, {'ssr': 0.006, 'r': 0.994})
-        assert probs['ssr'] == pytest.approx(1.0)
+        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
+        assert probs['ssr_card'] == pytest.approx(1.0)
 
     def test_pity_order_matters(self):
         """软保底(soft_interval)先于硬保底(hard)执行，概率叠加正确"""
@@ -493,10 +493,8 @@ class TestMultiPityStacking:
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
-            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
-            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
-            # 合成 spec 比真实路径少一个键而让保底静默恒等。
+            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
+            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
             card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         eng3 = PityEngine(
@@ -505,8 +503,8 @@ class TestMultiPityStacking:
         )
         state3.data = {'s': {'counter': 82, '_active': True},
                        'h': {'counter': 82, '_active': True}}
-        probs = eng3.get_probabilities('pool', state3, {'ssr': 0.006, 'r': 0.994})
-        assert 0.3 < probs['ssr'] < 0.99
+        probs = eng3.get_probabilities('pool', state3, {'ssr_card': 0.006, 'r_card': 0.994})
+        assert 0.3 < probs['ssr_card'] < 0.99
 
 
 class TestCounterBoundaries:
@@ -537,7 +535,7 @@ class TestCounterBoundaries:
         pity = _make_hard(state)
         state.set('test', 'counter', 90)
         out = pity.before_draw(_ssr_ctx(state), readonly=True)
-        assert out['ssr'] == pytest.approx(1.0)  # 触发
+        assert out['ssr_card'] == pytest.approx(1.0)  # 触发
 
     def test_soft_boundary_start(self):
         """counter=start-1 时 boost=0、概率不变；counter=start 起加成"""
@@ -545,10 +543,10 @@ class TestCounterBoundaries:
         pity = _make_soft(state)
         state.set('test', 'counter', 72)
         out = pity.before_draw(_ssr_ctx(state), readonly=True)
-        assert out['ssr'] == pytest.approx(0.006)
+        assert out['ssr_card'] == pytest.approx(0.006)
         state.set('test', 'counter', 73)
         out73 = pity.before_draw(_ssr_ctx(state), readonly=True)
-        assert out73['ssr'] >= 0.006
+        assert out73['ssr_card'] >= 0.006
 
     def test_soft_boundary_end(self):
         """counter=end 时 boost=100%，SSR=100%"""
@@ -556,4 +554,4 @@ class TestCounterBoundaries:
         pity = _make_soft(state)
         state.set('test', 'counter', 90)
         out = pity.before_draw(_ssr_ctx(state), readonly=True)
-        assert out['ssr'] == pytest.approx(1.0)
+        assert out['ssr_card'] == pytest.approx(1.0)

@@ -197,8 +197,10 @@ class Banner:
 
         1) excludes_all_pity → 旁路 before_draw/after_draw，不触碰 pity_state，
            DrawOutcome.pity_triggered 恒 False、triggered_pity_name 恒 None
-        2) 正常 pool → P55 概率聚合（aggregate_probs_by_rarity）→ before_draw 调整
-           → scale_factors 还原卡级概率 → _apply_probabilities → pool.draw() → after_draw
+        2) 正常 pool → **卡级直传**（S8-2，§3.9.1 的目标路径）：`{card_id: p}` 直接进
+           `before_draw` 调整 → 返回值直接 `_apply_probabilities` → pool.draw() → after_draw。
+           S8 前是「卡级 → 槽位级聚合 → before_draw → scale_factors 还原回卡级」四件套，
+           该往返与缺陷 12（SR / R 卡缩放被跳过、Σ > 1、保底效果打折）同批删除
         3) 计算 pity_triggered + triggered_pity_name（featured_ids 判定 + spec.pity_names 拼接）
 
         转换【不】在此评估——统一由 after_draw 事件订阅（P61 priority=1）触发
@@ -206,8 +208,6 @@ class Banner:
         draw() 内部唯一的状态变化：当抽 pool 达 max_draws 标记 exhausted、
         Banner 级 max_draws 自动 exhaust。
         """
-        from .pool import aggregate_probs_by_rarity, infer_rarity_from_spec
-
         pool = pool or self.active_pool
         pool_key = self._pool_key_of(pool)
         qualified_key = f"{self.id}.{pool_key}"
@@ -224,28 +224,16 @@ class Banner:
             reward = pool.draw()
         else:
             pity_spec = pity_engine.get_spec(qualified_key)
-            rarity_probs = aggregate_probs_by_rarity(pool, pity_spec) if pity_spec else probabilities
-            adjusted_rarity = pity_engine.before_draw(qualified_key, pity_state, rarity_probs)
-            if rarity_probs != adjusted_rarity:
-                # 从聚合概率还原为卡牌级别概率——区分 featured/standard 槽位
-                scale_factors = {}
-                for slot, new_total in adjusted_rarity.items():
-                    old_total = rarity_probs.get(slot, 0)
-                    if old_total > 0 and new_total != old_total:
-                        scale_factors[slot] = new_total / old_total
-                featured_ids: Set[str] = set()
-                if pity_spec and pity_spec.featured_cards:
-                    for cards in pity_spec.featured_cards.values():
-                        featured_ids.update(cards)
-                for rwd_id in list(probabilities.keys()):
-                    if rwd_id in featured_ids:
-                        slot = f'{infer_rarity_from_spec(rwd_id, pity_spec) or "ssr"}_featured'
-                    else:
-                        rarity = infer_rarity_from_spec(rwd_id, pity_spec)
-                        slot = rarity.lower() if rarity else None
-                    if slot and slot in scale_factors:
-                        probabilities[rwd_id] *= scale_factors[slot]
-            pool._apply_probabilities(probabilities)
+            # S8-2（§3.9.1 的目标路径）：**卡级管道**——`probabilities` 是池内真实分布
+            # `{card_id: p}`，直接进 `before_draw`，其返回值直接喂 `_apply_probabilities`。
+            # 净删除三件：`aggregate_probs_by_rarity` 调用（卡级 → 槽位级聚合）、整个
+            # `scale_factors` 还原段（含 `infer_rarity_from_spec` 的槽位反查）、以及
+            # `:209` 的两符号函数局部 import。**修复面**：还原段曾对 SR / R 卡静默跳过
+            # 缩放（`infer_rarity_from_spec` 只认 SSR），使喂给 `pool.draw()` 的卡级字典
+            # Σ > 1、软保底效果被打折（缺陷 12，2026-10-09）；卡级管道下该缺陷的成因
+            # 不复存在（不再有往返，也就不需要还原）。
+            adjusted = pity_engine.before_draw(qualified_key, pity_state, probabilities)
+            pool._apply_probabilities(adjusted)
             reward = pool.draw()
             # ISSUE-108：after_draw 前采集抽前峰值——counter 型 behavior 触发抽（如 hard-90）
             # 会在 after_draw 内 _counter().reset()，故峰值必须在 after_draw 前取

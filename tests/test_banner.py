@@ -959,13 +959,20 @@ def test_p72_mixed_draws_cross_banner_key_integrity():
 # ════════════════════════════════════════════════════════
 
 class TestPityAdjustmentReachesCardLevel:
-    """保底调整必须逐槽位落到卡级：Σ 恒为 1，且每槽位的卡级合计 == 槽位级调整值。
+    """保底调整必须逐卡落实：Σ 恒为 1，且喂给抽卡的卡级字典就是保底管道的输出。
 
     缺陷 12：`banner.draw` 的 scale_factors 还原段用 `infer_rarity_from_spec` 反查
     每张卡的槽位，而该函数原先只认 SSR，SR / R 得到 None、缩放被跳过——保底从
     SR / R 取走的质量从未在卡级字典里扣除，Σ 涨到 1.5+，`pool.draw` 按 `random()*Σ`
     采样时把全部卡等比稀释，保底效果被打折（真实 config 的 ssr_soft 第 90 抽：
     意图 100%、实际 50.1%）。
+
+    **S8-2 起本类换验收面（管道改卡级直传，§3.9.1）**：还原段与聚合段整体删除，
+    「槽位级调整值 → 卡级还原」这条三步往返不复存在，故原「每槽位的卡级合计 ==
+    槽位级调整值」的断言失去对象（槽位级分布不再产生）。现行的等价验收面是
+    **「喂给 `pool.draw` 的卡级字典 == `before_draw` 的返回值」**（逐卡精确相等），
+    它比原断言更强：原断言只钉住「槽位合计相符」（组内分配可以漂移），现行断言钉住
+    「保底算出的每一个卡级概率都原样到达采样点」。Σ = 1 一条不变。
     """
 
     SLOT_OF = {'ssr_up': 'ssr_featured', 'ssr_std': 'ssr', 'sr_a': 'sr', 'r_a': 'r'}
@@ -1013,7 +1020,7 @@ class TestPityAdjustmentReachesCardLevel:
         orig_bd = env.pity_engine.before_draw
 
         def spy_bd(key, st, dist):
-            captured['slot_before'] = dict(dist)
+            captured['slot_before'] = dict(dist)      # S8 起即卡级分布（键为卡 id）
             out = orig_bd(key, st, dist)
             captured['slot_after'] = dict(out)
             return out
@@ -1024,21 +1031,24 @@ class TestPityAdjustmentReachesCardLevel:
                     PityState.from_dict(env.pity_state_init), pool)
         return captured
 
-    def test_card_level_sum_is_one_and_matches_slot_totals(self, monkeypatch):
+    def test_card_level_sum_is_one_and_pity_output_passes_through(self, monkeypatch):
         cap = self._run_one_draw(monkeypatch)
         card, before, after = cap['card'], cap['slot_before'], cap['slot_after']
 
         # 验收面守门：保底必须真的改了分布，否则本测试恒真
         assert after != before, '保底未生效——本测试无验收面'
-        assert after['sr'] < before['sr'], '软保底应从 SR 取质量'
+        # 方向断言（卡级）：软保底自更低稀有度取质量、搬进 SSR 卡集
+        assert after['sr_a'] < before['sr_a'], '软保底应从 SR 取质量'
+        assert after['r_a'] < before['r_a'], '软保底应从 R 取质量'
+        ssr = ('ssr_up', 'ssr_std')
+        assert sum(after[c] for c in ssr) > sum(before[c] for c in ssr), \
+            '软保底应把质量搬进 SSR 卡集'
 
         # ① 卡级字典是归一化的（这正是缺陷 12 破坏的那条）
         assert abs(sum(card.values()) - 1.0) < 1e-12, f'Σ = {sum(card.values())}'
 
-        # ② 每个槽位的卡级合计 == 槽位级调整值（逐槽位精确相等）
-        by_slot: dict = {}
-        for cid, v in card.items():
-            by_slot[self.SLOT_OF[cid]] = by_slot.get(self.SLOT_OF[cid], 0.0) + v
-        assert set(by_slot) == set(after), f'槽位集合不符：{set(by_slot)} vs {set(after)}'
-        for slot, total in after.items():
-            assert abs(by_slot[slot] - total) < 1e-12, f'{slot}: {by_slot[slot]} != {total}'
+        # ② 逐卡精确相等：喂给 `pool.draw` 的卡级字典 == 保底管道的返回值
+        #    （S8 起卡级直传，中间不再有聚合 / 还原两步；缺陷 12 的成因即那条
+        #    还原段，本断言把「调整逐卡落实」钉在同一处）
+        assert card == after, f'卡级字典与保底输出不符：{card} vs {after}'
+        assert set(card) == set(self.SLOT_OF), '卡级字典须覆盖池内全部卡'

@@ -9,6 +9,12 @@ import random
 from .pity_primitives import (  # noqa: F401
     Counter, Flag, DrawInfo, PityContext, LifecycleConfig, PityState,
     _SOFT_TYPES, _HARD_TYPES, _EVENT_DRIVEN_TYPES, _EXTERNAL_STATE_KEYS,
+    # P64 S8-1 / S8-3：卡级增量管道的两个本原函数。**定义**住叶子层
+    # （`pity_primitives.py`），此处 re-export 使其在编排层可见：
+    # `_apply_delta` 的另一个消费方是**实现层**的 `Modifier.apply` 默认实现，
+    # 而实现层不得 import 本模块（§3.1.6 单向依赖），故它不能定义在本模块内
+    # （§3.9.2 称之为「框架级」函数，指可见面而非存放文件）。
+    transfer_linear, _apply_delta,
 )
 from .pity_tracker import (  # noqa: F401
     AlwaysActive, CounterTracker, DependentActive, DependentFiniteActive,
@@ -469,6 +475,17 @@ class HardPityBehavior(CounterBasedBehavior):
 
 
 # ── P56：_redistribute_scope() —— rotating/targeted 家族共用的概率重分配工具 ──
+#
+# **S8 处置（ISSUE-502，强制）**：本函数**本体保留**，与叶子层的卡级助手
+# `transfer_linear`（`pity_primitives.py`，§3.9.4）并存。理由：本模块内仍有 4 处
+# 调用点，全部位于**按 GATE-5 要保留到发布前的旧类体内**（`RotatingBehavior` /
+# `RotatingCRBehavior._force_featured` / `TargetedBehavior` 两处）——删函数本体即
+# `NameError`（模块级名字在**调用时**解析，导入期与 ruff 都不报错），而 S5a 等价性
+# 装置与 S8-6 的「对 S5 产物容差 1e-12」正是拿这些旧类当基准。
+# 故 S8 只**新增**卡级 `transfer_linear` 并让新骨架改用它（`Pity.before_draw` 经
+# Modifier 链消费）；本函数与其 4 处调用点、10 个旧保底类、`PoolPitySpec` /
+# `DrawInfo` 的槽位三字段、`compute_scope_mappings` 的槽位产出，一律并入 GATE-5
+# 末条「发布前一次性移除旧保底类」的同一个 commit（ISSUE-901）。
 
 def _redistribute_scope(ctx, featured_ratio, total, featured_slots, scope):
     """在 featured/非featured 之间按基础权重比例重分配 scope 总概率。"""
@@ -1384,7 +1401,19 @@ class Pity(PityBehavior):
         链**之前**，**并透传 `readonly`**：`StreakTracker` 在此掷骰，`readonly=True`
         时早退不掷——策略层每次概率查询都会经 `PityEngine.before_draw` 走到本相位，
         漏透传即每次查询都掷骰、全局随机流整体错位（§3.1.1 的 N1 相位表）。
+
+        **Modifier 链是卡级增量管道（S8，D20 + §3.9.2）**：`ctx.current` 与各
+        `compute_delta()` 的 A / Q 两列同为卡级键空间；每个 Modifier 在前一个的输出上
+        操作，非短路，`_apply_delta` 逐项归一化。
+
+        **只读查询标记（§3.9.6 的「处置（两期）②」，M2 落实）**：本方法是 `readonly`
+        实参的唯一入口，故在首行把它写进 `ctx.readonly`（**先于 `is_active` 早退**：
+        早退路径不跑 Modifier，但把标记写全可免去「有的分支写了、有的没写」两套
+        语义）。`PityEngine.get_probabilities` 以 `readonly=True` 走本方法，Modifier
+        据此复刻「查询不体现 CR 拦截」的旧语义（消费方当前一处：`RotatingModifier`
+        的 `extra_flag` 抑制）。
         """
+        ctx.readonly = readonly
         if not self._lifecycle.is_active(self._state, self._name):
             return ctx.current.copy()
         for tr in self._trackers:            # N1 首段：计数型先在 before 侧推进
@@ -1393,10 +1422,11 @@ class Pity(PityBehavior):
             tr.prepare(ctx, self._state, self._name, readonly=readonly)
         out = ctx.current.copy()
         for mod in self._modifiers:
-            # ISSUE-407：按零件命名空间取 view，不得写死 `self._view`
-            nxt = mod.apply(ctx, self._view_for(mod), out, readonly)
-            if nxt is not None:
-                out = nxt                    # 链式应用（非短路）
+            # ISSUE-407 / ISSUE-505：按零件命名空间取 view，**不得写死 `self._view`**
+            # （声明了 `namespace` 的零件必须读到自己的命名空间）。
+            d = mod.compute_delta(self._view_for(mod), out, ctx)
+            if d is not None:
+                out = _apply_delta(out, d)   # (out + d) / Σ(out + d)
         return out
 
     # ── M4 / 退役：after_draw ──
@@ -2205,15 +2235,16 @@ class PityEngine:
     def _infer_rarity(self, reward_id: str, spec: PoolPitySpec) -> str:
         """从 reward_id 推断稀有度（大小写归一化）。
 
-        与 `pool.infer_rarity_from_spec` 是同一条规则的两处实现（本方法喂**状态**
-        路径：`DrawInfo.reward_rarity` → `_should_reset` / `_is_trigger_rarity`；
-        那份喂**概率**路径）。2026-10-09 起两者都退化为「扫 scope_cards」——原先
-        本方法特有的「先查 ssr_ids」那一级与那份特有的两级回退一并删除，它们都是
-        为绕开 worst_impact 那张写错名字的表而存在的。
+        **S8-2 起本方法是「卡 id → 稀有度」这条规则的唯一实现**：原先 `pool.py` 里
+        还有一份（喂**概率**路径——`banner.draw` 的 `scale_factors` 还原段与
+        `aggregate_probs_by_rarity`），两者的判定顺序曾不同（本方法先查 `ssr_ids`、
+        那份先查 `scope_cards`），并因此漂移出缺陷 12。S8-2 把概率路径改为卡级直传
+        后那份零消费者、随 ISSUE-504 删除，故「两处实现必须同答」这一守卫形态
+        **在结构上不再存在**（守卫随之改写为「本方法的答案 == 池内真实稀有度」，
+        见 `tests/core/test_pity_integration.py::TestRarityInferenceGuards`）。
 
-        **两者必须保持同答**，守卫见
-        `tests/core/test_pity_integration.py::TestRarityInferenceConsistency`；
-        P64 的 S8 会删除 pool.py 那份（其概率路径消费者消失），届时只剩本方法。
+        判定只用 `scope_cards`（唯一真相源；`spec.ssr_ids` 那一级与另一份的两级回退
+        已于 2026-10-09 删除，它们都是为绕开 worst_impact 那张写错名字的表而存在的）。
         """
         rid_lower = reward_id.lower()
         for rarity, cards in spec.scope_cards.items():

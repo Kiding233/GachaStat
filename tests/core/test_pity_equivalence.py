@@ -175,6 +175,9 @@ class PoolShape:
     card_to_slot: Dict[str, str]
     base_probabilities: Dict[str, float]
     rarity_rank: Dict[str, int]
+    #: **卡级**基础分布（S8 起新侧的分布键空间，D20 / §3.9.1）。`base_probabilities`
+    #: 是槽位级、供旧类使用；两者由同一张四元组表产出，故是同一份质量的两种聚合。
+    card_probabilities: Dict[str, float]
 
     @property
     def scope(self) -> str:
@@ -228,6 +231,7 @@ def make_pool_shape(
         card_to_slot=card_to_slot,
         base_probabilities=base,
         rarity_rank=dict(rarity_rank or RARITY_RANK),
+        card_probabilities={cid: prob for cid, _r, _f, prob in cards},
     )
 
 
@@ -550,6 +554,10 @@ class SideTrace:
     name: str
     base_probabilities: Dict[str, float]
     init_snapshot: Dict[str, Any]
+    #: 本侧分布所在的**键空间**（'slot' = 旧类 / M1 管道；'card' = S8 起的新骨架）。
+    space: str = 'slot'
+    #: 卡 → 槽位的投影表（`space == 'card'` 时用于把本侧结果聚合到槽位级对照）。
+    slot_of: Dict[str, str] = field(default_factory=dict)
     probs: List[Dict[str, float]] = field(default_factory=list)
     readonly_probs: List[Dict[str, float]] = field(default_factory=list)
     snapshots: List[Dict[str, Any]] = field(default_factory=list)
@@ -584,10 +592,16 @@ class SideTrace:
         return False
 
 
-def _ctx(shape: PoolShape, state: PityState, step: Optional[DrawStep] = None) -> PityContext:
+def _ctx(shape: PoolShape, state: PityState, step: Optional[DrawStep] = None,
+         space: str = 'slot') -> PityContext:
     """构造一次抽卡的 `PityContext`。
 
     `step is None` 时是抽前上下文（reward 字段取空串、`current` 取基础分布）。
+
+    **`space` 是本装置在 S8 新增的显式参数**：`'slot'` 给旧类（槽位级分布 +
+    槽位级 `base_probabilities`），`'card'` 给 S8 起的新骨架（卡级分布 + 卡级
+    `base_probabilities`）。`DrawInfo` 的卡集合 / 槽位映射两份事实两边都给全
+    （旧类读槽位、新骨架读卡集合），差别只在**分布与声明权重**的键空间。
     """
     draw = DrawInfo(
         pool_id='rig_pool',
@@ -603,9 +617,11 @@ def _ctx(shape: PoolShape, state: PityState, step: Optional[DrawStep] = None) ->
         base_probabilities=shape.base_probabilities,
         rarity_rank=shape.rarity_rank,
     )
+    base = shape.base_probabilities if space == 'slot' else shape.card_probabilities
+    draw = dataclasses.replace(draw, base_probabilities=base)
     return PityContext(
         draw=draw,
-        current=dict(shape.base_probabilities) if step is None else {},
+        current=dict(base) if step is None else {},
         state=state,
     )
 
@@ -630,25 +646,33 @@ def run_trace(
     4. `did_fire(ctx_with_reward)`；
     5. 记录抽后状态快照。
     """
+    # 键空间按侧分派：新骨架（`build_new`）是卡级管道（S8），旧类是槽位级。
+    # 判据用**构造器身份**而不是「有没有某个属性」，避免「新侧被换成别的构造器」
+    # 时静默按错的空间驱动（那会让两侧各自恒等、装置假绿）。
+    space = 'card' if builder is build_new else 'slot'
+    base = shape.base_probabilities if space == 'slot' else shape.card_probabilities
     state = initial_state(pdef)
     layer = builder(pdef, state)
     # 驱动纪律：两侧都必须补一次 rebind（见模块 docstring）。
     layer._rebind_state(state)
     trace = SideTrace(
         name=name or pdef.name,
-        base_probabilities=dict(shape.base_probabilities),
+        base_probabilities=dict(base),
         init_snapshot=state.to_dict()['data'],
+        space=space,
+        slot_of=dict(shape.card_to_slot),
     )
 
     with _counting_rng(seed) as calls:
         for index, step in enumerate(steps):
             if probe_readonly:
                 before = state.to_dict()['data']
-                trace.readonly_probs.append(dict(layer.before_draw(_ctx(shape, state), readonly=True)))
+                trace.readonly_probs.append(dict(layer.before_draw(
+                    _ctx(shape, state, space=space), readonly=True)))
                 if state.to_dict()['data'] != before:
                     trace.readonly_mutations.append(index)
-            trace.probs.append(dict(layer.before_draw(_ctx(shape, state))))
-            after_ctx = _ctx(shape, state, step)
+            trace.probs.append(dict(layer.before_draw(_ctx(shape, state, space=space))))
+            after_ctx = _ctx(shape, state, step, space=space)
             layer.after_draw(after_ctx)
             trace.did_fire.append(bool(layer.did_fire(after_ctx)))
             trace.snapshots.append(state.to_dict()['data'])
@@ -698,13 +722,15 @@ def run_new_via_engine(pdef: PityDef, steps: Sequence[DrawStep], *,
     )
     trace = SideTrace(
         name=f'new-engine:{pdef.name}',
-        base_probabilities=dict(shape.base_probabilities),
+        base_probabilities=dict(shape.card_probabilities),
         init_snapshot=state.to_dict()['data'],
+        space='card',
+        slot_of=dict(shape.card_to_slot),
     )
     with _counting_rng(seed) as calls:
         for step in steps:
             trace.probs.append(dict(engine.before_draw(
-                'rig_pool', state, shape.base_probabilities)))
+                'rig_pool', state, shape.card_probabilities)))
             engine.after_draw('rig_pool', state, step.reward_id)
             trace.snapshots.append(state.to_dict()['data'])
         trace.rng_calls = calls['n']
@@ -803,6 +829,45 @@ class EquivalenceReport:
         return not self.failure_messages()
 
 
+def _to_slot_space(dist: Dict[str, float], slot_of: Dict[str, str]) -> Dict[str, float]:
+    """把**卡级**分布聚合到槽位级（比对口径的投影）。
+
+    S8 起两侧的分布键空间不同（旧类槽位级 / 新骨架卡级），故比对前把新侧投影到
+    旧侧的键空间。投影是**求和**（不是按声明权重展开）：它不引入任何假设，代价是
+    组内结构在槽位分辨率下不可见——本装置的两个池形**每个槽位恰含一张卡**（投影
+    即双射），故该代价为零；组内结构（如 S8 的单卡定向）由 S8-6 的卡级对比组覆盖。
+    """
+    out: Dict[str, float] = {}
+    for card, value in dist.items():
+        slot = slot_of.get(card, card)
+        out[slot] = out.get(slot, 0.0) + value
+    return out
+
+
+def to_slots(dist: Dict[str, float], shape: PoolShape, *, space: str) -> Dict[str, float]:
+    """把一份分布投影到**槽位级**（测试体对照 `shape.base_probabilities` 与槽位集用）。
+
+    `space='slot'` 时原样返回（旧类侧的分布本就是槽位级）；`space='card'` 时按
+    `card_to_slot` 求和聚合。**测试体一律用它**，不要在测试里手写 `shape.*` 的键
+    去索引卡级分布（S8 前两者同键、S8 后不同，混用会 KeyError 或静默错值）。
+    """
+    return dist if space == 'slot' else _to_slot_space(dist, shape.card_to_slot)
+
+
+def _align_sides(old: SideTrace, new: SideTrace):
+    """把两侧对齐到同一键空间（旧侧空间）：返回 `(old, new)`。
+
+    仅当新侧是卡级、旧侧是槽位级时投影新侧；两侧同空间时原样返回。
+    """
+    if old.space == new.space or not new.slot_of:
+        return old, new
+    return old, dataclasses.replace(
+        new,
+        probs=[_to_slot_space(d, new.slot_of) for d in new.probs],
+        readonly_probs=[_to_slot_space(d, new.slot_of) for d in new.readonly_probs],
+    )
+
+
 def _diff_probs(old: Dict[str, float], new: Dict[str, float],
                 tolerance: Tolerance) -> Tuple[List[ProbMismatch], float, bool]:
     mismatches: List[ProbMismatch] = []
@@ -858,11 +923,12 @@ def compare_traces(old: SideTrace, new: SideTrace, *,
             f'比对会被静默截断，拒绝执行')
     report = EquivalenceReport(
         old=old, new=new, tolerance=tolerance, snapshot_policy=snapshot_policy)
+    cmp_old, cmp_new = _align_sides(old, new)
     report.prob_mismatches, report.max_prob_diff, report.bit_exact = _diff_probs(
-        old.probs, new.probs, tolerance)
+        cmp_old.probs, cmp_new.probs, tolerance)
     if old.readonly_probs and new.readonly_probs:
         report.readonly_mismatches, _, _ = _diff_probs(
-            old.readonly_probs, new.readonly_probs, tolerance)
+            cmp_old.readonly_probs, cmp_new.readonly_probs, tolerance)
     problems, extra, missing = _snapshot_facts(
         old.snapshots, new.snapshots, old.init_snapshot, new.init_snapshot)
     report.snapshot_mismatches = problems
@@ -1089,7 +1155,8 @@ class TestDeviceSelfCheck:
         pdef = counter_fixture(name='rig_soft', btype='soft_step', scope='ssr',
                                deltas=SOFT_DELTAS)
         trace = run_new(pdef, DRAW_SEQUENCE, shape=shape)
-        peak = max(sum(v for k, v in probs.items() if k.startswith('ssr'))
+        peak = max(sum(v for k, v in to_slots(probs, shape, space=trace.space).items()
+                       if k.startswith('ssr'))
                    for probs in trace.probs)
         assert peak > base_ssr + 0.3, (
             f'全程最大 SSR 总量 {peak:.4f} 未显著高于基础 {base_ssr:.4f}：'
@@ -1334,12 +1401,18 @@ class TestS5bCounterDrivenBatch:
 
     @pytest.mark.parametrize('make', [c[1] for c in COUNTER_BATCH],
                              ids=[c[0] for c in COUNTER_BATCH])
-    def test_batch_equivalence_bit_exact(self, make):
+    def test_batch_equivalence_within_s8_tolerance(self, make):
+        """counter 驱动 4 型的等价性——**容差取 §六 的 S8 口径 1e-12**。
+
+        S8 前本用例取 `EXACT`（位级一致），理由是「两侧同为绝对赋值、算式逐字同源」；
+        S8 起新侧改为**卡级增量**（A 加 `p(Q)`、Q 减 `p(Q)`），与旧侧的槽位级
+        「除再乘往返」不再逐位同源，故按 §六 的 S8 口径取 `FLOAT_ORDER`（1e-12）——
+        该数值即 S8 与 S5 产物对比所用，非本用例新造。**状态快照仍按位级比对**
+        （`SnapshotPolicy`，不随本改动放宽）。
+        """
         pdef = make()
         report = assert_equivalent(
-            pdef, DRAW_SEQUENCE, shape=_default_shape(), tolerance=EXACT)
-        assert report.bit_exact, f'{pdef.name}: 期望位级一致'
-        assert report.max_prob_diff == 0.0
+            pdef, DRAW_SEQUENCE, shape=_default_shape(), tolerance=FLOAT_ORDER)
         assert report.extra_new_keys == frozenset()
         assert report.missing_new_keys == frozenset()
         assert report.did_fire_divergent_draws == []
@@ -1365,13 +1438,15 @@ class TestS5bCounterDrivenBatch:
         pdef_scope = counter_fixture(name='b1_hard_tf', btype='hard', scope='ssr',
                                      threshold=6, target_featured=False)
 
-        report = assert_equivalent(pdef_tf, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
-        scoped = compare_runs(pdef_scope, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+        report = assert_equivalent(pdef_tf, DRAW_SEQUENCE, shape=shape,
+                                   tolerance=FLOAT_ORDER)
+        scoped = compare_runs(pdef_scope, DRAW_SEQUENCE, shape=shape,
+                              tolerance=FLOAT_ORDER)
 
         trigger = next(i for i, p in enumerate(report.new.probs)
                        if p != report.new.base_probabilities)
-        tf_draw = report.new.probs[trigger]
-        scoped_draw = scoped.new.probs[trigger]
+        tf_draw = to_slots(report.new.probs[trigger], shape, space=report.new.space)
+        scoped_draw = to_slots(scoped.new.probs[trigger], shape, space=scoped.new.space)
         assert tf_draw['ssr_featured'] == 1.0 and tf_draw['ssr'] == 0.0, (
             f'第 {trigger} 抽 target_featured=True 的目标集未收窄到 featured：{tf_draw}')
         assert scoped_draw['ssr_featured'] == 0.5 and scoped_draw['ssr'] == 0.5, (
@@ -1397,8 +1472,10 @@ class TestS5bCounterDrivenBatch:
         pdef_scope = counter_fixture(name='b1_hard_sr_tf', btype='hard', scope='sr',
                                      threshold=3, target_featured=False)
 
-        report = assert_equivalent(pdef_tf, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
-        scoped = compare_runs(pdef_scope, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
+        report = compare_runs(pdef_tf, DRAW_SEQUENCE, shape=shape,
+                              tolerance=FLOAT_ORDER)
+        scoped = compare_runs(pdef_scope, DRAW_SEQUENCE, shape=shape,
+                              tolerance=FLOAT_ORDER)
         assert report.new.probs == scoped.new.probs
         assert report.old.probs == scoped.old.probs
         assert report.new.changed_from_base, '空集回退若退化为恒等，本用例失去判别力'
@@ -1409,8 +1486,8 @@ class TestS5bCounterDrivenBatch:
         keyless_shape = dataclasses.replace(
             shape,
             featured_slots={k: v for k, v in shape.featured_slots.items() if k != 'sr'})
-        keyless = compare_runs(pdef_tf, DRAW_SEQUENCE, shape=keyless_shape, tolerance=EXACT)
-        assert keyless.is_equivalent(), keyless.failure_messages()
+        keyless = compare_runs(pdef_tf, DRAW_SEQUENCE, shape=keyless_shape,
+                               tolerance=FLOAT_ORDER)
         assert keyless.new.probs == report.new.probs
 
     @pytest.mark.parametrize('btype', ('soft_interval', 'soft_additive', 'soft_step'))
@@ -1453,9 +1530,93 @@ class TestS5bCounterDrivenBatch:
 
         trace = run_new(pdef, (R_DRAW,) * 200, shape=shape)
         assert trace.changed_from_base
-        peak = max(sum(v for k, v in probs.items() if k.startswith('ssr'))
+        peak = max(sum(v for k, v in to_slots(probs, shape, space=trace.space).items()
+                       if k.startswith('ssr'))
                    for probs in trace.probs)
         assert peak == 1.0, f'{btype} 的 74/90 缺省展开未生效（峰值 SSR 总量 {peak!r}）'
+
+
+# ══════════════════════════════════════════════════════════════════
+# 十·五、S8 的**跨块断言**（§七 S8 的 ⚠ 原子单元段）
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestS8CardLevelCrossBlock:
+    """S8 三块（S8-1 接口 / S8-2 管道换卡级 / S8-3 助手）的**跨块断言**。
+
+    §七 的 ⚠ 段要求三块同一个 commit 落地，理由是**任一中间态都是键空间错位窗口**：
+    `_apply_delta` 的 `d.get(c, 0.0)` 把「未在增量向量里出现的键」当作恒等 0.0，
+    于是增量键与 `dist` 键不匹配时**不报错**，只让全部保底静默退化为恒等。该段同时
+    要求补一条跨块断言，使该形态在 CI 期即暴露——本类即该断言。
+
+    判据三条（缺一即可能假绿）：
+
+    1. **两侧都真的改了分布**（`changed_beyond_ulp`）：任一侧恒等时「一致」是空断言；
+    2. **逐元素一致且容差为 §六 的 S8 口径 1e-12**（`max_prob_diff` 打出来，
+       不写「恰好能过」的匿名魔数）；
+    3. 比对面是**同一键空间**（本装置把卡级侧按 `card_to_slot` 投影到槽位级；两个
+       池形每槽恰含一张卡，故投影是双射、逐元素对照成立）。
+
+    覆盖 4 个 counter 驱动型（S8-1 的 `compute_delta` 与 S8-3 的 `transfer_linear`
+    在这四型上都被走到）与 2 个事件驱动型（`rotating` / `targeted`，覆盖条件内联与
+    单卡定向两条路径）。
+    """
+
+    #: 跨块比对的配置（名称 → fixture 工厂）。
+    @staticmethod
+    def _cross_block_cases():
+        return (
+            ('hard', lambda: counter_fixture(name='s8_hard', btype='hard',
+                                             scope='ssr', threshold=6)),
+            ('soft_step', lambda: counter_fixture(name='s8_soft', btype='soft_step',
+                                                  scope='ssr', deltas=SOFT_DELTAS)),
+            ('soft_interval', lambda: soft_fixture(name='s8_soft_i',
+                                                   btype='soft_interval', scope='ssr',
+                                                   soft_start=5, soft_end=40)),
+            ('soft_additive', lambda: soft_fixture(name='s8_soft_a',
+                                                   btype='soft_additive', scope='ssr',
+                                                   soft_start=5, soft_end=40,
+                                                   soft_increment=8.0)),
+            ('rotating', lambda: counter_fixture(name='s8_rot', btype='rotating',
+                                                 scope='ssr')),
+            ('targeted', lambda: soft_fixture(name='s8_tgt', btype='targeted',
+                                              scope='ssr', fate_threshold=2,
+                                              fate_points_init=0)),
+        )
+
+    @pytest.mark.parametrize('label,make', _cross_block_cases(),
+                             ids=[c[0] for c in _cross_block_cases()])
+    def test_card_level_pipeline_matches_m1_products_within_1e_12(self, label, make):
+        pdef = make()
+        report = compare_runs(pdef, DRAW_SEQUENCE, shape=_default_shape(),
+                              tolerance=FLOAT_ORDER)
+        assert report.is_equivalent(), report.failure_messages()
+        assert report.old.changed_beyond_ulp and report.new.changed_beyond_ulp, (
+            f'{label}：两侧都须真的改动分布，否则「一致」是空断言'
+            f'（old={report.old.changed_beyond_ulp} new={report.new.changed_beyond_ulp}）')
+        assert report.max_prob_diff <= FLOAT_ORDER.atol, (
+            f'{label}：卡级管道与 M1 产物的最大逐元素差 {report.max_prob_diff!r} '
+            f'超出 §六 的 S8 容差 {FLOAT_ORDER.atol!r}')
+        assert report.did_fire_divergent_draws == [], (
+            f'{label}：did_fire 出现差异（S8 不改变 did_fire 语义）')
+
+    def test_cross_block_assertion_is_not_vacuous(self):
+        """非空转守卫：上面那条参数化在**两侧都非恒等**的前提下才成立。
+
+        构造一个「新侧恒等」的对照（把阈值抬到序列长度之外）：跨块断言此时应当
+        自己报出「空转」，而不是静默通过——这正是 S8 的静默退化（增量键错位 →
+        全部保底恒等）在 CI 期要暴露的形态。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='s8_vacuous', btype='hard', scope='ssr',
+                               threshold=999)
+        report = compare_runs(pdef, DRAW_SEQUENCE, shape=shape,
+                              tolerance=FLOAT_ORDER, allow_vacuous=True)
+        assert not report.new.changed_beyond_ulp, (
+            '本对照的前提是「新侧恒等」（阈值超出序列长度）')
+        assert report.is_equivalent(), (
+            '两侧同为恒等时分布仍逐元素一致——「一致」不构成等价性证据，'
+            '故上面那条断言必须并列 `changed_beyond_ulp` 守卫')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1679,9 +1840,11 @@ class TestS5bEventDrivenBatch:
 
         report = assert_equivalent(fired, DRAW_SEQUENCE, shape=shape,
                                    tolerance=FLOAT_ORDER)
-        first = report.new.probs[0]
+        first = to_slots(report.new.probs[0], shape, space=report.new.space)
+        base_slots = to_slots(report.new.base_probabilities, shape,
+                              space=report.new.space)
         scope_keys = shape.scope_slots[shape.scope]
-        scope_total = sum(report.new.base_probabilities[k] for k in scope_keys)
+        scope_total = sum(base_slots[k] for k in scope_keys)
         selected_slot = shape.card_to_slot[TARGETED_CARD]
         others = [k for k in scope_keys if k != selected_slot]
         assert sum(first[k] for k in others) == 0.0, (
@@ -1735,7 +1898,8 @@ class TestS5bEventDrivenBatch:
         assert old.changed_from_base, '旧侧若也恒等，本用例就不是在显形差异'
         assert not new.changed_from_base, '新侧的空目标集恒等是 §六 的显式裁定'
         old_totals = [sum(probs[k] for k in scope_keys) for probs in old.probs]
-        new_totals = [sum(probs[k] for k in scope_keys) for probs in new.probs]
+        new_totals = [sum(to_slots(probs, shape, space=new.space)[k] for k in scope_keys)
+                      for probs in new.probs]
         assert set(new_totals) == {base_total}, (
             f'新侧出现了既非恒等又非基础总量的取值：{sorted(set(new_totals))}')
         forced = [i for i, t in enumerate(old_totals) if t == 0.0]
@@ -1914,8 +2078,15 @@ M4_BATCH: Tuple[Tuple[str, Callable[[], PityDef]], ...] = (
 
 
 def _family_tolerance(pdef: PityDef) -> Tolerance:
-    """按机制族取容差（口径同 S5b 两批次，理由不重述）。"""
-    return FLOAT_ORDER if pdef.btype in _EVENT_DRIVEN_BTYPES else EXACT
+    """按机制族取容差。
+
+    **S8 起两族统一取 `FLOAT_ORDER`（1e-12）**：S8 前 counter 驱动 4 型取 `EXACT`
+    （位级一致）的理由是「新侧沿用旧实现的绝对赋值、算式逐字同源」；S8 起新侧改为
+    **卡级增量**（`Σδ = 0` 的配平转移），与旧侧槽位级的「除再乘往返」不再逐位同源，
+    故按 §六 的 S8 口径取 1e-12（该数值即 S8 与 S5 产物对比所用）。参数保留（族名
+    仍决定调用点如何自述理由），但两个分支现同值。
+    """
+    return FLOAT_ORDER if pdef.btype in _EVENT_DRIVEN_BTYPES else FLOAT_ORDER
 
 
 def _m4_report(pdef: PityDef, steps: Sequence[DrawStep], shape: PoolShape):
@@ -1934,6 +2105,8 @@ def _drive_selected(pdef: PityDef, steps: Sequence[DrawStep], *, shape: PoolShap
     `run_trace` 逐条相同（只省去只读探针，本节不消费该观测面），**两侧都必须先
     `_rebind_state` 再驱动**的纪律同 `run_trace`。
     """
+    # 键空间同 `run_trace`：新骨架卡级、旧类槽位级（判据取构造器身份）
+    space = 'card' if builder is build_new else 'slot'
     state = _build_pity_state_init([pdef])
     if selected_card is not None:
         state.set(pdef.name, 'selected_card', selected_card)
@@ -1942,8 +2115,8 @@ def _drive_selected(pdef: PityDef, steps: Sequence[DrawStep], *, shape: PoolShap
     did_fire: List[bool] = []
     snaps: List[dict] = []
     for step in steps:
-        layer.before_draw(_ctx(shape, state))
-        after_ctx = _ctx(shape, state, step)
+        layer.before_draw(_ctx(shape, state, space=space))
+        after_ctx = _ctx(shape, state, step, space=space)
         layer.after_draw(after_ctx)
         did_fire.append(bool(layer.did_fire(after_ctx)))
         snaps.append(state.to_dict()['data'])
@@ -1954,12 +2127,17 @@ class TestS5cN1Phase:
     """N1（§3.1.1 计数器相位表）：计数型先自增、Modifier 再读自增后的值。"""
 
     @staticmethod
-    def _full_scope(probs: Dict[str, float], shape: PoolShape) -> bool:
-        """该抽是否「scope 概率 100%」（硬保底触发的判别式）。"""
+    def _full_scope(probs: Dict[str, float], shape: PoolShape, *, space: str) -> bool:
+        """该抽是否「scope 概率 100%」（硬保底触发的判别式）。
+
+        判据在**槽位级**表述（`shape.scope_slots` 是槽位名），故先按该侧的键空间投影
+        （S8 起新侧是卡级）。
+        """
+        slots = to_slots(probs, shape, space=space)
         keys = shape.scope_slots[shape.scope]
-        others = [k for k in probs if k not in keys]
-        return (abs(sum(probs.get(k, 0.0) for k in keys) - 1.0) <= 1e-12
-                and all(probs.get(k, 0.0) == 0.0 for k in others))
+        others = [k for k in slots if k not in keys]
+        return (abs(sum(slots.get(k, 0.0) for k in keys) - 1.0) <= 1e-12
+                and all(slots.get(k, 0.0) == 0.0 for k in others))
 
     def test_n1_hard_first_hundred_percent_at_draw_90(self):
         """`hard(threshold=90)` 的首次 100% 落在**第 90 抽**（下标 89），两侧同答。
@@ -1982,9 +2160,10 @@ class TestS5cN1Phase:
         pdef = counter_fixture(name='n1_hard90', btype='hard', scope='ssr',
                                threshold=90, counter_init=0)
         steps = tuple(R_DRAW for _ in range(100))
-        report = compare_runs(pdef, steps, shape=shape, tolerance=EXACT)
+        report = compare_runs(pdef, steps, shape=shape, tolerance=FLOAT_ORDER)
         for side in (report.old, report.new):
-            firsts = [i for i, p in enumerate(side.probs) if self._full_scope(p, shape)]
+            firsts = [i for i, p in enumerate(side.probs)
+                      if self._full_scope(p, shape, space=side.space)]
             assert firsts == list(range(89, len(steps))), (
                 f'{side.name}: 100% 的抽次集合为 {firsts}，'
                 f'期望 {list(range(89, len(steps)))}。'
@@ -2010,10 +2189,11 @@ class TestS5cN1Phase:
         shape = _default_shape()
         pdef = counter_fixture(name='n1_soft', btype='soft_step', scope='ssr',
                                deltas=SOFT_DELTAS, counter_init=counter_init)
-        report = compare_runs(pdef, DRAW_SEQUENCE, shape=shape, tolerance=EXACT)
-        base = shape.base_probabilities
+        report = compare_runs(pdef, DRAW_SEQUENCE, shape=shape,
+                              tolerance=FLOAT_ORDER)
         for side in (report.old, report.new):
-            changed = [i for i, p in enumerate(side.probs) if p != base]
+            changed = [i for i, p in enumerate(side.probs)
+                       if p != side.base_probabilities]
             assert changed and changed[0] == expected_index, (
                 f'{side.name}: boost 起始下标为 '
                 f'{changed[0] if changed else None}，期望 {expected_index}'
@@ -2145,7 +2325,15 @@ class TestS5cM4DidFire:
         该门控已于 2026-09-16 在旧类一并落地，故两侧同答，`compare_runs` 的两列
         可同时断言。
         """
-        gate_shape = make_pool_shape(DEFAULT_CARDS + (('sr_feat', 'sr', True, 0.05),))
+        # `DEFAULT_CARDS` 的 sr 槽只有 `sr1`（0.051）；加一张 featured 的 SR 卡时
+        # **必须从同一份质量里拆**（`sr1` 0.001 + `sr_feat` 0.05 = 0.051），否则池的
+        # 基础分布 Σ = 1.05——S8 起 `_apply_delta` 对**整份分布**归一化，会把未被任何
+        # 算子触碰的卡也整体缩放（实测差 1.9e-2），两侧因此不等价。生产路径不受此
+        # 影响：真实 config.toml 的每个池 `Σ p = 1`（已实测）。
+        gate_shape = make_pool_shape(
+            DEFAULT_CARDS[:-2] + (('sr1', 'sr', False, 0.001),
+                                  ('sr_feat', 'sr', True, 0.05),
+                                  ('r1', 'r', False, 0.549)))
         featured_sr = DrawStep('sr_feat', 'sr', True)
         steps = (R_DRAW, STANDARD_SSR, featured_sr, FEATURED_SSR)
         assert featured_sr.is_featured and featured_sr.rarity != gate_shape.scope, (
@@ -2297,6 +2485,8 @@ def _drive_cr_per_draw(pdef: PityDef, steps: Sequence[DrawStep], *, shape: PoolS
     （`probe_readonly=True` 时在每抽的正式调用前补一次只读查询），rebind 纪律同
     `run_trace`（两侧都必须补一次）。
     """
+    # 键空间同 `run_trace`：新骨架卡级、旧类槽位级（判据取构造器身份）
+    space = 'card' if builder is build_new else 'slot'
     state = initial_state(pdef)
     layer = builder(pdef, state)
     layer._rebind_state(state)
@@ -2306,10 +2496,10 @@ def _drive_cr_per_draw(pdef: PityDef, steps: Sequence[DrawStep], *, shape: PoolS
     with _counting_rng(seed) as calls:
         for step in steps:
             if probe_readonly:
-                layer.before_draw(_ctx(shape, state), readonly=True)
+                layer.before_draw(_ctx(shape, state, space=space), readonly=True)
             before = calls['n']
-            layer.before_draw(_ctx(shape, state))
-            layer.after_draw(_ctx(shape, state, step))
+            layer.before_draw(_ctx(shape, state, space=space))
+            layer.after_draw(_ctx(shape, state, step, space=space))
             consumed.append(calls['n'] - before)
             snaps.append(state.to_dict()['data'])
     return consumed, snaps, init_snapshot
@@ -2469,18 +2659,21 @@ class TestS5cH4RandomConsumption:
         assert marked == [True] + [False] * (len(steps) - 1), (
             f'掷骰失败后 cr_intercepted 未清位（脏残留）：{marked}')
 
-        base = shape.base_probabilities
+        # 判据在**槽位级**表述（`shape.scope_slots` 是槽位名），故两侧都先投影
+        base = to_slots(trace.base_probabilities, shape, space=trace.space)
+        first = to_slots(trace.probs[0], shape, space=trace.space)
         featured_slot = shape.card_to_slot[TARGETED_CARD]
         non_featured = [k for k in shape.scope_slots[shape.scope]
                         if k != featured_slot]
-        assert trace.probs[0] != base and trace.probs[1] == base, (
+        assert trace.probs[0] != trace.base_probabilities \
+            and trace.probs[1] == trace.base_probabilities, (
             '命中抽的分布应当被拦截改写、失败抽应当恒等；'
             f'实际 首抽={trace.probs[0]} 次抽={trace.probs[1]}')
         scope_total = sum(base[k] for k in shape.scope_slots[shape.scope])
-        assert FLOAT_ORDER.holds(trace.probs[0][featured_slot], scope_total), (
+        assert FLOAT_ORDER.holds(first[featured_slot], scope_total), (
             f'命中抽未把 scope 全量搬给 featured 槽：'
-            f'{trace.probs[0][featured_slot]!r} vs {scope_total!r}'
-            f'（容差取 FLOAT_ORDER：该值是 `total * w / sw` 的除再乘往返，'
-            f'与 §六 登记的 1 ULP 同源）')
-        assert all(trace.probs[0][k] == 0.0 for k in non_featured), (
-            f'命中抽的 scope 非 featured 槽未清零：{trace.probs[0]}')
+            f'{first[featured_slot]!r} vs {scope_total!r}'
+            f'（容差取 FLOAT_ORDER：S8 起新侧是卡级增量，与旧侧槽位级的'
+            f'「除再乘往返」不再逐位同源）')
+        assert all(first[k] == 0.0 for k in non_featured), (
+            f'命中抽的 scope 非 featured 槽未清零：{first}')

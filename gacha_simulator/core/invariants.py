@@ -48,29 +48,23 @@
   `InvariantError` 的 docstring 使用约束段。
 """
 
-from dataclasses import dataclass
 from typing import Dict, Mapping, Sequence, Tuple
 
-from .pity_modifier import HardModifier, NotOwnedModifier, _higher_rarity_keys
-from .pity_primitives import DrawInfo, _EXTERNAL_STATE_KEYS
+from .pity_primitives import _EXTERNAL_STATE_KEYS
 
 
 #: 概率断言容差（§3.12.1 归一性行的「容差 1e-12」）。
 TOL = 1e-12
 
-#: F 型算子（§3.13 分布层行的「被 F 豁免的更高稀有度槽位」中的 F）——M1 形态为
-#: **绝对赋值 + 更高稀有度豁免**（§3.9 过渡期纪律）的两类实现者。集合与 S10-1 的
-#: `kind == 'f'` 一致：`tests/core/test_pity_invariants.py` 的 `_MODIFIER_SPECS` 把
-#: `hard` 与 `not_owned` 都标为 `'f'`（两者共用 `_higher_rarity_keys`）。
-#:
-#: **未触达分支（S11 审查收口，2026-10-13）**：`NotOwnedModifier` 在全库**没有任何
-#: preset 构造它**（`gacha_simulator/` 内零个 `NotOwnedModifier(...)` 调用点，
-#: 只有类定义本身），故 `_exemption_options` 的豁免分支在**真实配置**下只被
-#: `HardModifier` 走过：11 个 registry 类型的假警报扫描与组合扫描都覆盖不到本集合
-#: 的第二类：它的行为面只在 `tests/core/test_pity_modifier.py` 的单零件用例与
-#: S10-1 的合成组合里有证据，**preset 面为零**。「本项在真实配置下是否成立」属
-#: **未验证面**，不因那两条扫描通过而成立。
-_EXEMPTION_PART_TYPES = (HardModifier, NotOwnedModifier)
+#: ~~`_EXEMPTION_PART_TYPES`（F 型算子集合：`HardModifier` / `NotOwnedModifier`）~~
+#: **随 S8 删除**（ISSUE-903 的反转义务，2026-10-13 登记 / S8-2 落地）：F 型的
+#: 「更高稀有度豁免」是 **M1 槽位级管道**的形态（`apply` 返回分布、输出 `Σ = 1 + m`），
+#: S8 起 `_apply_delta` 无条件归一化，且转移族恒有 `Σδ = 0` 使其退化为恒等，故
+#: 管道输出**恒有 `Σp ≡ 1`**（§3.9.5）。届时旧集合对合法配置抛假警报（M1 与本式
+#: 相符、M2 与之相悖，两个里程碑的期望值相反）。
+#: 同批删除的还有：本集合的遍历、`_DrawProbe` 载体（它的唯一消费者是
+#: `_higher_rarity_keys`，该助手随 S8 的 Modifier 改写从 `pity_modifier.py` 删除）、
+#: 以及 `_exemption_options`（退化为恒等断言 `Σp = 1`）。
 
 #: 声明集之外的**外部写入键**白名单（§3.1.1 的 L4 例外 2：`selected_card` 由策略层
 #: `NonDrawAction` 与 `_build_pity_state_init` 写入、**无任何零件声明它**，而
@@ -114,17 +108,6 @@ class InvariantError(Exception):
     「§六 的等价性 harness 注入 `enabled=True`」的真实陷阱**：harness 若走并行路径
     且只断言「未抛异常」，不变式破坏会被吞成失败计数而假绿。
     """
-
-
-@dataclass(frozen=True)
-class _DrawProbe:
-    """`_higher_rarity_keys` 的实参面最小载体：该助手只读 `ctx.draw`。
-
-    刻意**不**构造完整的 `PityContext`——后者要 `state` / `current` 两个本层拿不到
-    也无需要的实参，塞 `state=None` 的假 ctx 比一个单字段载体更易误导。
-    """
-
-    draw: DrawInfo
 
 
 def _names_label(names: Sequence[str]) -> str:
@@ -227,56 +210,26 @@ class InvariantChecker:
 
     def _check_distribution(self, pool_id: str, dist: Mapping[str, float],
                             engine, spec, pities) -> None:
-        """非负性（§3.12.1 非负性行）+ 归一性（M1 scope 感知式，见下）。
+        """非负性（§3.12.1 非负性行）+ 归一性（**S8 起的恒等断言 `Σp = 1`**）。
 
-        **归一性在本入口是「有限取值集取一」**，不是单式——这是与 S10-1 对齐的
-        结果，理由两条，都是实参面的事实而非宽松处理：
+        **归一性口径在本入口已完成里程碑切换（ISSUE-903 的反转义务，S8-2 落地）**：
 
-        1. S10-1 的管道判据本就是分两支的：F 步未触发的那一抽断言 `Σp == 1`
-           （`test_pipeline_total_equals_last_f_step_exemption` 的 `if not fired_f`
-           支与 `test_pipeline_total_is_one_without_f_part`），触发的那一抽断言
-           `Σp == 1 + Σp(豁免槽位)`。**判据域由「本次是否真有 F 算子参与」决定**
-           （§3.12.1 归一性行的例外条原文即写作「当参与本次 `before_draw` 的算子含
-           低于最高稀有度的 F 型时」）。
-        2. 本入口的签名由 ISSUE-003 固定为 `(pool_id, dist, engine)`，**看不到 F 是否
-           触发**：触发与否取决于算子的内联条件（`counter >= τ`），而该条件只能靠
-           重写一份谓词或回放零件才能取得，两条路都与 S10-2 收口提出的「镜像谓词与
-           生产判据各写一份口径会持续分叉」相悖。故本层接受**可达取值集**
-           （`_exemption_options`）：无 F 触发时的 `1`，与各 F 零件各自的
-           `1 + Σp(该零件的豁免槽位)`。
+        - **M1（S8 前）** 是 scope 感知式 `Σp = 1 + Σp(被 F 豁免的更高稀有度槽位)`，
+          实现形态是「可达取值集取一」（`_exemption_options`：无 F 触发时的 `1`，
+          与各 F 零件各自的 `1 + Σp(该零件的豁免槽位)`）——F 型的「绝对赋值 + 更高
+          稀有度豁免」会造出 `Σ > 1`（实测 `hard(scope='sr')` 得 `Σ = 1.009`）。
+        - **S8 起** 管道改用卡级增量：`_apply_delta`（§3.9.2）**无条件归一化**，而
+          转移族恒有 `Σδ = 0` 使其退化为恒等（§3.9.5 的「`Σ(p + δ) ≠ 1`」行已记
+          本条消失），故**管道输出恒有 `Σp ≡ 1`**。此时旧的取值集式对**合法配置**
+          抛假警报（M1 与本式相符、M2 与之相悖，两个里程碑的期望值相反），故本判据
+          退化为单式断言，`_exemption_options` / `_EXEMPTION_PART_TYPES` /
+          `_DrawProbe` 同批删除——**这是一处口径的净简化，不是放宽**：S8 后 `Σp ≠ 1`
+          一律是缺陷，没有「合法的例外值」需要枚举。
 
-        **豁免量按本入口的输出分布度量**，其有效性依据是执行顺序（`_resolve_order`
-        的排序键以稀有度 rank 为首）：F 零件的豁免集是**严格高于**其 scope 的稀有度
-        之槽位，而一个能把质量搬进该集合的转移算子，其 scope 必高于该 F 的 scope、
-        即 rank 更小、**排在 F 之前**；排在 F 之后的转移算子（rank 相同或更大）其目标
-        集与源组同在该豁免集之外，故豁免集上的质量在 F 之后不再变动，输出 Σ 恒等于
-        `1 + Σp(豁免槽位)`。实测（2026-10-13）：同池 `hard(scope='sr')` +
-        `soft(scope='ssr')`（后者 rank 更小、先执行）连跑 6 抽，输出 Σ 依次为
-        1.209 / 1.409 / …，逐抽等于 `1 + Σp(ssr 两槽)`，无假警报。
-
-        **已登记的盲区（两条，方向相反；都是实参面所限，不是疏漏）**：
-
-        1. **F 触发了但豁免被整体丢掉**（豁免槽位归零）时 `Σp` 退化为 `1`，落进
-           第一分支而被接受。该形态在**步级**由 S10-1 的
-           `test_f_step_exemption_keeps_original_values`（豁免槽位逐位保留原值）
-           拦截；本入口按定义看不到步，故该盲区由那里覆盖。
-        2. **对偶方向（S11 审查 2026-10-13 实测）**：F **未**触发（真期望
-           `Σ = 1.0`）时，把 `Σ` 人为抬到 `1 + m`（`m` = 该 F 零件豁免槽位上的
-           质量，实测 1.009 恰等于豁免量）**被接受**。原因是取值集是**无条件
-           析取**：F 零件的选项**不附带「该零件本抽必须已触发」的前提**，故它同时
-           为「真触发」与「未触发但 Σ 被抬到同一量」两态背书。本层看不到触发与否，
-           该区分只能落在步级判据上。已由
-           `test_f_not_fired_but_raised_to_exemption_mass_is_accepted` 把「接受」
-           钉成已知行为：将来收紧取值集时该用例转红，提醒同批改写本段。
-
-        **复现纪律（S11 审查的方法学警告，2026-10-13）**：复现第 1 条盲区**不得**
-        用「把 `_higher_rarity_keys` 换成空元组」的写法：该助手经 from-import 进
-        `tests/core/test_pity_invariants.py`（S10-1）**与本层**两侧，把它换掉会让
-        「截获判据」与「被测对象」**同向失明**、结果假绿（看似盲区、实则判据也瞎了）。
-        正确复现是**保住助手、只丢豁免**（手工把豁免槽位上的质量清掉）。同理，若
-        「改助手本身」成为真故障，S10-1 的豁免类用例**挡不住**（其期望值与生产值
-        同源）；这正是 `tests/core/test_pity_invariant_checker.py` 的 `_EXEMPT`
-        写死字面量的理由。
+        **判据域的两条已知边界（S8 后仍成立）**：本入口按定义只看得见**输出分布**，
+        看不见中间步（`Σ(p + δ) ≠ 1` 之类的步级异常由增量层 `check_delta` 在
+        `_apply_delta` 内部判）；`PityEngine.get_probabilities`（只读查询入口）不经
+        本入口，其输出不在判据面内（模块 docstring 的「四层覆盖边界」段）。
         """
         names = [name for name, _bh in pities]
         label = _names_label(names)
@@ -290,16 +243,13 @@ class InvariantChecker:
                     f"[分布层] 保底 {label} 键 {key!r}：期望 p >= 0，实际 {value!r}"
                     f"（池 {pool_id!r} 的管道输出；§3.12.1 非负性行）")
 
-        # ── 归一性（M1 scope 感知式 + 无 F 参与时的退化式）──
-        options = _exemption_options(spec, dist, engine, pities)
+        # ── 归一性（S8 起：恒等断言）──
         total = float(sum(dist.values()))
-        if any(abs(total - expected) <= TOL for _label, expected in options):
+        if abs(total - 1.0) <= TOL:
             return
-        detail = '；'.join(
-            f'{expected!r}（{option_label}）' for option_label, expected in options)
         raise InvariantError(
-            f"[分布层] 保底 {label} 键 'Σp'：期望 {detail}；实际 {total!r}"
-            f"（池 {pool_id!r} 的管道输出；§3.12.1 归一性行的 scope 感知式）")
+            f"[分布层] 保底 {label} 键 'Σp'：期望 1.0；实际 {total!r}"
+            f"（池 {pool_id!r} 的管道输出；§3.12.1 归一性行，S8 起的恒等口径）")
 
     # ── 状态层 ──
 
@@ -484,66 +434,3 @@ def _pool_pities(engine, pool_id: str) -> Sequence[Tuple[str, object]]:
     `behaviors` 过滤——池内序与池成员判定归引擎（P82-1 的 `_pool_order`）。
     """
     return list(engine.get_behaviors_for_pool(pool_id))
-
-
-def _exemption_options(spec, dist: Mapping[str, float], engine,
-                       pities) -> Sequence[Tuple[str, float]]:
-    """可达的 Σp 取值集 `[(来源说明, 期望值)]`（§3.12.1 归一性行的两支）。
-
-    - `('无 F 参与（F 型算子未触发）', 1.0)`——非 F 算子一律守恒
-      （§3.12.1 的转移族 `Σδ = 0`，S10-1 的 `test_transfer_step_preserves_total`），
-      故无 F 触发时管道输出恒为 1。
-    - 每个 F 型算子一条 `('保底 X 的 F 零件豁免槽位 [...]，其上质量 m', 1 + m)`——
-      **逐零件分开列，不取并集**：并集会在「池内多个 F 型算子、只有其中一个触发」
-      时给出不可达的期望值（实测形态：`hard(scope='sr')` 与 `hard(scope='r')` 同池、
-      后者阈值未到，输出 Σ = 1.009，而并集式 `E = {ssr 槽} ∪ {ssr 槽, sr 槽}` 给出
-      1 + 1.009 = 2.009 的假警报）。
-
-    **ISSUE-903（S11 审查收口 F2，2026-10-13，M2 的反转义务，强制）**：本函数的
-    F 零件选项（`1 + m`）**只对 M1 的槽位级管道成立**。S8 起 `_apply_delta`
-    （§3.9.2）无条件归一化，且转移族恒有 `Σδ = 0` 使其退化为恒等，故 S8 起管道
-    输出恒有 `Σp ≡ 1`（§3.9.5）；届时本选项对**合法配置**抛假警报（ISSUE-903 的
-    反向失配：M1 与本式相符、M2 与之相悖，两个里程碑的期望值相反）。**S8 起此处
-    须把 F 零件选项整体移除、只留 `1.0`**：`_EXEMPTION_PART_TYPES` 的遍历、
-    `_DrawProbe` 的构造与 `_higher_rarity_keys` 的调用同批删除，`options` 退化为
-    单元素列表（`_check_distribution` 的判据随之成为恒等断言 `Σp = 1`，其 docstring
-    的「有限取值集取一」段与本条同批改写；`tests/core/test_pity_invariant_checker.py`
-    的分布层正例与 `tests/core/test_pity_invariants.py` 的三处断言也按 S8-6 ⑤
-    同步改写）。该义务由
-    `test_issue_903_f_part_options_track_pipeline_normalization` 作**里程碑绊线**
-    机械把守：它以「真管道的输出 Σ 是否已归一化」为判据（不扫 S8 的实现符号），
-    S8 落地而本选项未删即转红。
-
-    **豁免集与 S10-1 共用同一生产助手**：`_higher_rarity_keys`（`pity_modifier.py`
-    模块级，`HardModifier` / `NotOwnedModifier` 共用）是豁免集的唯一实现，S10-1 的
-    `exempted` 与生产算子的豁免循环都取自它。本层**不另写一份谓词**（S10-2 收口已
-    提出「镜像谓词与生产判据各写一份口径会持续分叉」的隐患）。
-
-    F 型集合 = 本池各保底的 `modifiers` 中属于 `_EXEMPTION_PART_TYPES` 者，scope
-    取该零件自己的 `_scope`；`DrawInfo` 由池 spec 与引擎的稀有度表重建，与
-    `PityEngine.before_draw` 构造的那份同源（`scope_cards` / `card_to_slot` /
-    `rarity_rank` 三项即该助手读的全部字段）。
-    """
-    draw = DrawInfo(
-        pool_id='', pool_instance_id='', reward_id='', reward_rarity='',
-        is_featured=False,
-        scope_cards=spec.scope_cards,
-        featured_cards=spec.featured_cards,
-        scope_slots=spec.scope_slots,
-        featured_slots=spec.featured_slots,
-        card_to_slot=spec.card_to_slot,
-        base_probabilities=dict(dist),
-        rarity_rank=getattr(engine, '_rarity_rank', None) or {},
-    )
-    probe = _DrawProbe(draw)
-    options: list = [('无 F 参与（F 型算子未触发）', 1.0)]
-    for name, bh in pities:
-        for mod in (getattr(bh, '_modifiers', None) or ()):
-            if not isinstance(mod, _EXEMPTION_PART_TYPES):
-                continue
-            keys = tuple(dict.fromkeys(_higher_rarity_keys(probe, mod._scope)))
-            mass = float(sum(dist.get(k, 0.0) for k in keys))
-            options.append((
-                f"保底 '{name}' 的 F 零件豁免槽位 {sorted(keys)}，其上质量 {mass!r}",
-                1.0 + mass))
-    return options

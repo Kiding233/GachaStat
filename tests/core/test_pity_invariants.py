@@ -16,24 +16,21 @@ Tracker / Modifier / Lifecycle 三族实例。组合不经 registry、不走 `cr
 | ④ | 状态键合法 | 构造期声明集汇总 + 运行期写入集 |
 | ⑤ | 确定性 | 同种子两跑逐位相同（复用同一 Pity / 各自新建两条路径） |
 
-## 归一性的口径随里程碑切换（ISSUE-903，后手改造者必读）
+## 归一性的口径已完成里程碑切换（ISSUE-903 的反转，S8-2 落地）
 
-本文件按 **M1 槽位级管道** 的 **scope 感知式**实现：
-`Σp = 1 + Σp(被 F 豁免的更高稀有度槽位)`，无 F 参与时退化为 `Σp = 1`
-（判据出处：§3.12.1 的归一性行 + §3.13 的分布层行；实测形态见 §3.12.1 的
-`hard(scope='sr')` 例，输出 `{ssr: 0.006, ssr_featured: 0.003, sr: 1.0, r: 0.0}`、
-Σ = 1.009，即「目标集绝对赋值到 1.0 + 更高稀有度槽位原值保留」）。
+**本文件的判据现为恒等断言 `Σp = 1`**（每个触发的步、每次抽卡的管道输出都如此）。
+M1 期的 **scope 感知式**（`Σp = 1 + Σp(被 F 豁免的更高稀有度槽位)`，出处 §3.12.1
+的归一性行 + §3.13 的分布层行；实测形态见 §3.12.1 的 `hard(scope='sr')` 例，
+输出 `{ssr: 0.006, ssr_featured: 0.003, sr: 1.0, r: 0.0}`、Σ = 1.009）**已随 S8
+整块消失**：`_apply_delta`（§3.9.2）无条件归一化，且转移族恒有 `Σδ = 0` 使其
+退化为恒等（§3.9.5 的「`Σ(p + δ) ≠ 1`」行已记该条消失），故 S8 起恒有 `Σp ≡ 1`。
 
-**自 S8 起** `_apply_delta`（§3.9.2）无条件归一化，且转移族恒有 `Σδ = 0` 使其
-退化为恒等，故 S8 起恒有 `Σp ≡ 1`（§3.9.5 的 `Σ(p + δ) ≠ 1` 行）。届时本文件
-**三处**断言须按 `Σp = 1` 改写（改写点登记在 M2 的 S8-6 ⑤）：
-
-1. `TestNormalizationInvariant.test_step_total_scope_aware_for_f_part`
-2. `TestNormalizationInvariant.test_pipeline_total_equals_last_f_step_exemption`
-3. `TestNormalizationInvariant.test_hard_below_top_rarity_scope_aware_shape`
-
-（`test_transfer_step_preserves_total` 与 `test_pipeline_total_is_one_without_f_part`
-在 S8 后仍然成立，不需改写。）
+**改写面（S8-2，S8-6 ⑤ 的一部分提前执行）**：原登记的三处断言（`..._scope_aware_
+for_f_part` / `..._equals_last_f_step_exemption` / `..._hard_below_top_rarity_scope_
+aware_shape`）按新语义重写，`_exempted_mass` / `_assert_scope_aware_total` 两个
+助手同批删除。**这不是放宽**：`Σ ≠ 1` 从「有合法例外值」变成「一律是缺陷」，
+判据面更严（且原式对**输出**分布取豁免量，本就有「豁免被整体去掉时两侧同时减到
+1」的盲区，见下）。
 
 ## 组合面的三条生成纪律
 
@@ -71,16 +68,13 @@ Tracker / Modifier / Lifecycle 三族实例。组合不经 registry、不走 `cr
 单抽场景（第二步 `dist_out == dist_in`、δ 全域为 0）；定位过程与处置见
 `TestConcentratingPairDegeneracy` 的 docstring。
 
-## Σ 式对「豁免被整体去掉」不敏感（本块的实测发现）
+## S8 的对应结构式：更高稀有度**不写增量**（逐位保留）
 
-§3.12.1 的 `Σp = 1 + Σp(被 F 豁免的更高稀有度槽位)` 的右侧取自**输出**分布，故把
-F 步的豁免整个删掉（豁免槽位归零）会让两侧同时减到 1、该式照样成立。实测
-（2026-10-13）：删掉 `HardModifier.apply` 的豁免循环后，该式在含 `hard(scope='sr')`
-的随机组合上仍全绿。故本文件在该式之外并列一条
-`test_f_step_exemption_keeps_original_values`（豁免槽位逐位保留原值，即 §3.12.1
-所引 §3.1.5.2 的「更高稀有度槽位还原原值」），两条合起来才对 F 语义有判别力。
-该结构式在 S8 后依然成立（§3.9.5：增量形式下「U 外的卡逐位不变」），故它**不在**
-上面那三处待改写点内。
+M1 的「豁免」在增量形式下的对应物是 §3.9.5 的「U 外的卡逐位不变」：`hard(scope='sr')`
+的 A = sr 卡、Q = 更低稀有度卡，**更高稀有度的卡既不进 A 也不进 Q**，故其 δ 为 0、
+取值逐位保留。本文件保留一条并列断言（`test_f_step_leaves_higher_rarity_unwritten`）
+把该结构钉住——Σ 式（现为恒等 `Σp = 1`）对「豁免/保留被整体破坏」不敏感：把更高
+稀有度的质量搬走再重新归一化，Σ 仍是 1，只有该结构式能拦下它。
 
 
 ## 与 S11 的分工
@@ -98,7 +92,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
-from gacha_simulator.core.pity import Pity, PityEngine, _EXTERNAL_STATE_KEYS
+from gacha_simulator.core.pity import (
+    Pity, PityEngine, _apply_delta, _EXTERNAL_STATE_KEYS,
+)
 from gacha_simulator.core.pity_modifier import (
     HardModifier,
     Modifier,
@@ -107,7 +103,6 @@ from gacha_simulator.core.pity_modifier import (
     RotatingModifier,
     SelectedModifier,
     SoftModifier,
-    _higher_rarity_keys,
 )
 from gacha_simulator.core.pity_primitives import DrawInfo, PityContext, PityState
 from gacha_simulator.core.pity_tracker import (
@@ -148,8 +143,9 @@ _PITY_NAME = 's10_combo'
 class _Shape:
     """一个池子的槽位映射 + 基础分布（`DrawInfo` 的全部映射齐备）。
 
-    `slot_to_card` 是本文件新增的**抽样反查表**：驱动层从调整后的分布抽一个槽位，
-    再反查代表卡作为本次奖励（与「先定分布、再抽奖励」的引擎同形）。
+    **S8-2 起 `base` 是卡级分布**（键即卡 id）：驱动层从调整后的分布抽一张卡、
+    该卡即本次奖励（与「先定分布、再抽奖励」的引擎同形）。槽位三字段仍保留
+    （ISSUE-901：旧保底类与等价性装置读它们），但**不是**本文件的分布键空间。
     """
 
     label: str
@@ -159,7 +155,6 @@ class _Shape:
     scope_slots: Dict[str, tuple]
     featured_slots: Dict[str, tuple]
     card_to_slot: Dict[str, str]
-    slot_to_card: Dict[str, str]
     base: Dict[str, float]
 
 
@@ -175,9 +170,7 @@ STANDARD_SHAPE = _Shape(
     featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr',), 'r': ('r',)},
     card_to_slot={'ssr_up': 'ssr_featured', 'ssr_std': 'ssr',
                   'sr_std': 'sr', 'r_std': 'r'},
-    slot_to_card={'ssr_featured': 'ssr_up', 'ssr': 'ssr_std',
-                  'sr': 'sr_std', 'r': 'r_std'},
-    base={'ssr_featured': 0.006, 'ssr': 0.004, 'sr': 0.05, 'r': 0.94},
+    base={'ssr_up': 0.006, 'ssr_std': 0.004, 'sr_std': 0.05, 'r_std': 0.94},
 )
 
 #: 宽池形：`sr` 也有 featured 卡（`compute_scope_mappings` 对「两级都有 UP」的池子
@@ -197,10 +190,8 @@ WIDE_SHAPE = _Shape(
     featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr_featured',), 'r': ('r',)},
     card_to_slot={'ssr_up': 'ssr_featured', 'ssr_std': 'ssr',
                   'sr_up': 'sr_featured', 'sr_std': 'sr', 'r_std': 'r'},
-    slot_to_card={'ssr_featured': 'ssr_up', 'ssr': 'ssr_std',
-                  'sr_featured': 'sr_up', 'sr': 'sr_std', 'r': 'r_std'},
-    base={'ssr_featured': 0.006, 'ssr': 0.004, 'sr_featured': 0.01, 'sr': 0.04,
-          'r': 0.94},
+    base={'ssr_up': 0.006, 'ssr_std': 0.004, 'sr_up': 0.01, 'sr_std': 0.04,
+          'r_std': 0.94},
 )
 
 SHAPES: Tuple[_Shape, ...] = (STANDARD_SHAPE, WIDE_SHAPE)
@@ -250,25 +241,32 @@ class _DrawStep:
 
 @dataclass
 class _Step:
-    """一次 Modifier 应用的观测记录（δ 与归一性的观测面）。"""
+    """一次 Modifier 应用的观测记录（δ 与归一性的观测面）。
+
+    **S8-1 起记录的是增量本身**（`compute_delta` 的返回值），不再是「输出分布」：
+    M1 的 Modifier 自算输出，S8 起输出由框架的 `_apply_delta` 统一算（§3.9.2），
+    故 `dist_out` 改由本类**按同一式子重算**（与骨架的内循环同式，见其 property）。
+    """
 
     draw_index: int
     part_key: str
-    kind: str                 # 'f'（绝对赋值 + 豁免）/ 'transfer'（转移族）
+    kind: str                 # 'f'（hard 族：`HardModifier` / `NotOwnedModifier`）/ 'transfer'
     scope: str
     dist_in: Dict[str, float]
-    dist_out: Optional[Dict[str, float]]   # None = 本次未触发（`apply` 返回 None）
-    exempted: Tuple[str, ...]              # F 型豁免的更高稀有度槽位（仅 'f' 步非空）
+    delta: Optional[Dict[str, float]]      # None = 本次未触发（`compute_delta` 返回 None）
 
     @property
     def fired(self) -> bool:
-        return self.dist_out is not None
+        return self.delta is not None
 
-    def delta(self) -> Dict[str, float]:
-        """δ = 输出 − 输入（未触发的步须先查 `fired` 再调用）。"""
-        out = self.dist_out or {}
-        return {k: out.get(k, 0.0) - self.dist_in.get(k, 0.0)
-                for k in set(self.dist_in) | set(out)}
+    @property
+    def dist_out(self) -> Dict[str, float]:
+        """该步的输出分布 = `_apply_delta(dist_in, delta)`（未触发即恒等）。
+
+        与 `Pity.before_draw` 内循环的式子**同源同式**（同一函数、同一实参），
+        故它是生产输出的忠实重建，而不是另写一份近似。
+        """
+        return _apply_delta(self.dist_in, self.delta or {})
 
 
 class _StepLog:
@@ -282,8 +280,9 @@ class _StepLog:
 class _Recorder:
     """Modifier 的 1:1 委派包装，唯一作用是记录每步的输入 / 输出分布。
 
-    **不改行为**：`Pity` 消费的四个成员（`apply` / `rebind` / `state_keys` /
-    `namespace`）一律直转发，`inner` 供断言取真实零件。故 `Pity._declared_keys` /
+    **不改行为**：`Pity` 消费的四个成员（`compute_delta` / `rebind` / `state_keys` /
+    `namespace`）一律直转发（S8-1 起骨架调 `compute_delta`，M1 期的 `apply` 已收敛为
+    基类默认实现），`inner` 供断言取真实零件。故 `Pity._declared_keys` /
     `_namespaces` / `_view_for` 在包装下与未包装时同值。
     """
 
@@ -299,19 +298,17 @@ class _Recorder:
     def state_keys(self):
         return self.inner.state_keys()
 
-    def apply(self, ctx, view, dist, readonly):
-        out = self.inner.apply(ctx, view, dist, readonly)
+    def compute_delta(self, view, dist, ctx):
+        delta = self.inner.compute_delta(view, dist, ctx)
         self._log.steps.append(_Step(
             draw_index=self._log.draw_index,
             part_key=self._part.key,
             kind=self._part.kind,
             scope=self._part.scope,
             dist_in=dict(dist),
-            dist_out=None if out is None else dict(out),
-            exempted=(_higher_rarity_keys(ctx, self._part.scope)
-                      if self._part.kind == 'f' else ()),
+            delta=None if delta is None else dict(delta),
         ))
-        return out
+        return delta
 
 
 @dataclass
@@ -645,13 +642,15 @@ def _ctx(shape: _Shape, state: PityState, *, sim: _Sim,
     return ctx
 
 
-def _step_of(shape: _Shape, slot: str) -> _DrawStep:
-    """槽位 → 奖励事实（稀有度取槽位名前缀，featured 由槽位名后缀判定）。"""
-    return _DrawStep(
-        card=shape.slot_to_card[slot],
-        rarity=slot.split('_')[0],
-        is_featured=slot.endswith('_featured'),
-    )
+def _step_of(shape: _Shape, card: str) -> _DrawStep:
+    """**卡 id** → 奖励事实（稀有度由 `scope_cards` 反查，featured 由 `featured_cards` 判定）。
+
+    S8-2 起分布是卡级的，故抽样得到的键就是卡 id、无需再经槽位反查（M1 期的
+    `slot_to_card` 随之删除）。
+    """
+    rarity = next((r for r, cs in shape.scope_cards.items() if card in cs), '')
+    featured = any(card in cs for cs in shape.featured_cards.values())
+    return _DrawStep(card=card, rarity=rarity, is_featured=featured)
 
 
 def _build_pity(combo: _Combo, state: PityState, log: _StepLog) -> Pity:
@@ -823,27 +822,35 @@ def _criteria_violations(trackers, modifiers) -> List[str]:
 # 七、断言助手
 # ══════════════════════════════════════════════════════════════════
 
+def _higher_rarity_cards(shape: _Shape, scope: str) -> Tuple[str, ...]:
+    """比 `scope` 更高的稀有度下的**全部卡**（由池事实独立算出，不读生产助手）。
+
+    判据同 §3.1.2 的「更低稀有度」的对偶：`rarity_rank` 中 `rank < rank(scope)` 的
+    稀有度之全部卡。**本文件自算**（不复用 `pity_modifier._lower_rarities` 或其对偶），
+    理由是 S10-1 的方法学纪律：期望值与生产值同源时，生产侧坏掉会让两侧同向偏移、
+    断言双双失明。
+    """
+    scope_rank = shape.rarity_rank.get(scope, 99)
+    out: List[str] = []
+    for rarity, rank in shape.rarity_rank.items():
+        if rank < scope_rank:
+            out.extend(shape.scope_cards.get(rarity, ()))
+    return tuple(out)
+
+
 def _total(dist: Dict[str, float]) -> float:
     return sum(dist.values())
 
 
-def _exempted_mass(dist: Dict[str, float], exempted) -> float:
-    """被 F 豁免的更高稀有度槽位上的概率和（scope 感知式的加项）。"""
-    return sum(dist.get(k, 0.0) for k in exempted)
-
-
-def _assert_scope_aware_total(dist: Dict[str, float], exempted, where: str) -> None:
-    """§3.12.1 归一性：`Σp = 1 + Σp(被 F 豁免的更高稀有度槽位)`（容差 1e-12）。"""
-    expected = 1.0 + _exempted_mass(dist, exempted)
-    assert abs(_total(dist) - expected) <= TOL, (
-        f'{where}：Σp = {_total(dist)!r}，期望 {expected!r}'
-        f'（1 + 豁免槽位 {list(exempted)} 上的 {_exempted_mass(dist, exempted)!r}）')
-
-
 def _assert_total_is_one(dist: Dict[str, float], where: str) -> None:
-    """无 F 参与时的退化式：`Σp = 1`（容差 1e-12）。"""
+    """§3.12.1 归一性（**S8 起的唯一口径**）：`Σp = 1`（容差 1e-12）。
+
+    M1 期的 scope 感知式（`1 + Σp(豁免槽位)`）与其助手 `_exempted_mass` /
+    `_assert_scope_aware_total` 已随 S8 删除，理由见模块 docstring 的
+    「归一性的口径已完成里程碑切换」段。
+    """
     assert abs(_total(dist) - 1.0) <= TOL, (
-        f'{where}：Σp = {_total(dist)!r}，期望 1.0（无 F 型参与，退化式）')
+        f'{where}：Σp = {_total(dist)!r}，期望 1.0（S8 起 `_apply_delta` 无条件归一化）')
 
 
 def _declared_allowed(run: _Run) -> set:
@@ -858,28 +865,29 @@ def _declared_allowed(run: _Run) -> set:
 # ══════════════════════════════════════════════════════════════════
 
 class TestNormalizationInvariant:
-    """§3.12.1 归一性行 + §3.13 分布层行的 scope 感知式（M1 口径，见模块 docstring）。"""
+    """§3.12.1 归一性行——**S8 起的恒等口径**：每个触发的步、每次抽卡的管道输出
+    都 `Σp = 1`（改写记录见模块 docstring 的「归一性的口径已完成里程碑切换」段）。"""
 
-    @pytest.mark.parametrize('combo', _COMBOS_WITH_F, ids=_IDS_WITH_F)
-    def test_step_total_scope_aware_for_f_part(self, combo):
-        """F 型（hard / not_owned）步：`Σp = 1 + Σp(豁免槽位)`。
+    @pytest.mark.parametrize('combo', _COMBOS, ids=_IDS_ALL)
+    def test_every_fired_step_total_is_one(self, combo):
+        """**每个**触发的步（含 hard 族的 F 步）输出 `Σp = 1`。
 
-        §3.12.1 的例外条即此处：F 语义是「全池置零 + 更高稀有度槽位还原原值」，
-        故 scope 低于最高稀有度时输出 Σ > 1。
+        M1 期的 scope 感知式对 F 步另取 `1 + Σp(豁免槽位)`；S8 起 F 步是配平转移
+        （A 加 `p(Q)`、Q 减 `p(Q)`，`Σδ = 0`），框架归一化退化为恒等，故本式对
+        **全部**机制同形——「F 步是个例外」这件事在 M2 不复存在。
         """
         run = _trace(combo)
-        for step in [s for s in run.fired_steps() if s.kind == 'f']:
-            _assert_scope_aware_total(
-                step.dist_out, step.exempted,
+        for step in run.fired_steps():
+            _assert_total_is_one(
+                step.dist_out,
                 f'[{combo.label}] 第 {step.draw_index} 抽的 {step.part_key} 步')
 
     @pytest.mark.parametrize('combo', _COMBOS, ids=_IDS_ALL)
     def test_transfer_step_preserves_total(self, combo):
         """转移族步：`Σδ = 0`（总量守恒）。
 
-        §3.9.2 的「因转移族恒有 `Σδ = 0`」是本式的出处；它也是 scope 感知式能从
-        F 步传播到管道末端的载体（soft / rotating / non_featured / selected 四类
-        只在 scope 内重分配，scope 外原值保留）。
+        §3.1.5.2.1 的「转移族恒有 `Σδ = 0`」是本式的出处；它是 S8 管道「`Σp ≡ 1`
+        从第一步传播到末端」的载体（每个机制都只在 A / Q 之间搬质量，其余卡不写增量）。
         """
         run = _trace(combo)
         for step in run.fired_steps():
@@ -890,70 +898,86 @@ class TestNormalizationInvariant:
                 f'[{combo.label}] 第 {step.draw_index} 抽的 {step.part_key} 步：'
                 f'Σ 由 {before!r} 变为 {after!r}（转移族须守恒）')
 
-    @pytest.mark.parametrize('combo', _COMBOS_WITH_F, ids=_IDS_WITH_F)
-    def test_f_step_exemption_keeps_original_values(self, combo):
-        """F 步的豁免槽位**逐位保留原值**（§3.12.1 的「更高稀有度槽位还原原值」）。
+    @pytest.mark.parametrize('combo', _COMBOS, ids=_IDS_ALL)
+    def test_delta_is_balanced_for_every_fired_step(self, combo):
+        """`Σδ = 0` 对**全部**机制成立（含 hard 族的 F 步）。
 
-        **为什么该式必须与 Σ 式并存**：Σ 式的右侧 `Σp(豁免槽位)` 取自**输出**分布，
-        故「豁免被整体去掉」（豁免槽位归零）会让两侧同时减到 1、Σ 式照样成立。实测
-        （2026-10-13）：删掉 `HardModifier.apply` 的豁免循环后，Σ 式在含
-        `hard(scope='sr')` 的随机组合上**仍全绿**，只有本条与
-        `test_hard_below_top_rarity_scope_aware_shape` 变红。判别该破坏的是本式。
+        这是 S8 相对 M1 的结构性变化：M1 的 F 型是「绝对赋值 + 更高稀有度豁免」，
+        其 δ 在输出侧不配平（`Σ(out + δ) = 1 + m`）；S8 起 F 型同为配平转移，
+        故本式覆盖六个机制、无例外。
         """
         run = _trace(combo)
+        for step in run.fired_steps():
+            total_delta = sum((step.delta or {}).values())
+            assert abs(total_delta) <= TOL, (
+                f'[{combo.label}] 第 {step.draw_index} 抽的 {step.part_key} 步：'
+                f'Σδ = {total_delta!r}（S8 起全部机制配平）')
+
+    #: 本用例的判据域 = 「有更高稀有度可比」的 F 型组合（scope 已是最高稀有度时
+    #: 「更高稀有度卡集」为空、断言无判别对象）。**在参数化处筛掉**而不是在用例内
+    #: `skip`：跳过会让「域为空」与「域内全过」长得一样，而域非空这一事实由
+    #: `TestCombinationSpaceCoverage` 的覆盖守卫单独断言。
+    @pytest.mark.parametrize(
+        'combo', [c for c in _COMBOS_WITH_F if _higher_rarity_cards(c.shape, c.scope)],
+        ids=[c.label for c in _COMBOS_WITH_F if _higher_rarity_cards(c.shape, c.scope)])
+    def test_f_step_leaves_higher_rarity_unwritten(self, combo):
+        """F 步（hard 族）**不写更高稀有度卡的增量** → 其取值逐位保留。
+
+        这是 M1 的「豁免」在增量形式下的对应物（§3.9.5 的「U 外的卡逐位不变」）：
+        A = scope 卡集、Q = 更低稀有度卡集，更高稀有度的卡**既不在 A 也不在 Q**，
+        故其 δ 为 0、输出逐位等于输入。**为什么该结构式必须与 Σ 式并存**：Σ 式
+        （现为恒等 `Σp = 1`）对「把更高稀有度的质量搬走再重新归一化」不敏感——
+        那仍然归一，只有本式能拦下它。**豁免集写死为「比 scope 高的稀有度卡」**
+        （由 `combo.shape.rarity_rank` 与 `scope_cards` 独立算出，不读生产助手：
+        读助手会让期望值与生产值同向偏移，故障时双双失明）。
+        """
+        run = _trace(combo)
+        higher = _higher_rarity_cards(combo.shape, combo.scope)
+        assert higher, '本用例的参数化域须保证有更高稀有度卡（否则断言无判别对象）'
         for step in [s for s in run.fired_steps() if s.kind == 'f']:
-            for key in step.exempted:
-                assert step.dist_out[key] == step.dist_in[key], (
+            for key in higher:
+                assert step.delta.get(key, 0.0) == 0.0, (
                     f'[{combo.label}] 第 {step.draw_index} 抽的 {step.part_key} 步：'
-                    f'豁免槽位 {key!r} 须保留原值 {step.dist_in[key]!r}，'
+                    f'更高稀有度卡 {key!r} 不得写增量，实测 '
+                    f'δ = {step.delta.get(key, 0.0)!r}')
+                # 结构式（δ 恰为 0）精确；**取值**只到 §六 的 S8 容差 1e-12：
+                # 框架的归一化 `(p + δ) / Σ(p + δ)` 在 `Σ(out)` 与 1.0 差 1 ULP 时
+                # 会把**每一张卡**（含未被触碰的）整体缩放 1 ULP（实测 seed118 的
+                # `ssr_up` 由 0.006 变 0.006000000000000001）。「逐位保留」在
+                # 归一化管道的字面意义到此为止，故判据拆成两半：结构上 δ ≡ 0
+                # （精确）、数值上保留（1e-12）。
+                assert abs(step.dist_out[key] - step.dist_in[key]) <= TOL, (
+                    f'[{combo.label}] 第 {step.draw_index} 抽的 {step.part_key} 步：'
+                    f'更高稀有度卡 {key!r} 须保留 {step.dist_in[key]!r}，'
                     f'实测 {step.dist_out[key]!r}')
 
     @pytest.mark.parametrize('combo', _COMBOS_WITHOUT_F, ids=_IDS_WITHOUT_F)
     def test_pipeline_total_is_one_without_f_part(self, combo):
-        """无 F 型参与时退化为 `Σp = 1`（§3.12.1 的「无 F 参与时退化为」半句）。"""
+        """无 F 型参与时 `Σp = 1`（S8 起该式对**全部**组合成立，本子面是它的非空转
+        对照组：无 F 时连 M1 的例外条都不适用）。"""
         run = _trace(combo)
         for index, dist in enumerate(run.probs):
             _assert_total_is_one(dist, f'[{combo.label}] 第 {index} 抽的管道输出')
 
-    @pytest.mark.parametrize('combo', _COMBOS_WITH_F, ids=_IDS_WITH_F)
-    def test_pipeline_total_equals_last_f_step_exemption(self, combo):
-        """含 F 型时的管道口径：`Σ(管道输出) = 1 + Σ(最后一次 F 步的豁免槽位值)`。
-
-        依据：F 步把非豁免侧归一到 1.0、豁免槽位原值保留，此后每一步转移都守恒
-        （上一条），故管道输出 Σ 等于「最后一次 F 步那一刻」的 `1 + Σp(豁免槽位)`。
-        **适用边界**：F 步之后若再有转移改写豁免槽位的值，最终分布本身不再满足
-        scope 感知式（§3.12.1 的实测例是单个 `hard(scope='sr')`），故本式以「F 步
-        那一刻的分布」为基准，而不是以最终分布为基准。
-        """
+    @pytest.mark.parametrize('combo', _COMBOS, ids=_IDS_ALL)
+    def test_pipeline_total_is_one_for_every_combo(self, combo):
+        """**全部**组合的管道输出 `Σp = 1`（含 F 型组合——M1 期这一支取
+        `1 + Σp(最后一次 F 步的豁免槽位)`，S8 起两支持平）。"""
         run = _trace(combo)
         for index, dist in enumerate(run.probs):
-            fired_f = [s for s in run.steps_by_draw[index]
-                       if s.kind == 'f' and s.fired]
-            if not fired_f:
-                _assert_total_is_one(dist, f'[{combo.label}] 第 {index} 抽（F 未触发）')
-                continue
-            last = fired_f[-1]
-            expected = 1.0 + _exempted_mass(last.dist_out, last.exempted)
-            assert abs(_total(dist) - expected) <= TOL, (
-                f'[{combo.label}] 第 {index} 抽：管道 Σ = {_total(dist)!r}，'
-                f'期望 {expected!r}（最后一次 F 步为 {last.part_key}，'
-                f'豁免槽位 {list(last.exempted)}）')
+            _assert_total_is_one(dist, f'[{combo.label}] 第 {index} 抽的管道输出')
 
-    def test_hard_below_top_rarity_scope_aware_shape(self):
-        """§3.12.1 实测形态的定点用例：`hard(scope='sr')` 输出 Σ = 1 + p(ssr 槽位) > 1。
+    def test_hard_below_top_rarity_leaves_higher_rarity_untouched(self):
+        """定点用例：`hard(scope='sr')` 的输出 `Σ = 1`，且 ssr 两张卡逐位保留。
 
-        与 §3.12.1 的实测例同形（该例给 `{ssr: 0.006, ssr_featured: 0.003, sr: 1.0,
-        r: 0.0}`、Σ = 1.009），本用例的池形与基础分布取 `STANDARD_SHAPE`，故具体
-        数值不同、**结构相同**：目标集（sr）绝对赋值到 1.0、更低稀有度（r）归零、
-        更高稀有度（ssr 两槽）原值保留。
+        M1 期的对应形态是「Σ = 1 + p(ssr 槽位) > 1」（§3.12.1 的实测例
+        `{ssr: 0.006, ssr_featured: 0.003, sr: 1.0, r: 0.0}`、Σ = 1.009）；S8 起
+        目标集（sr 卡）收下 `p(Q)`（Q = 更低稀有度 r 卡）、更高稀有度不写增量，
+        故 Σ = 1、ssr 卡逐位保留。
 
-        **`exempted == {'ssr', 'ssr_featured'}` 这条定点断言的角色**（2026-10-13）：
-        归一性的加项与被豁免槽位集都取自生产同源助手 `_higher_rarity_keys`，故该
-        助手自身坏掉时，期望值与生产值同向偏移，随机面上的 Σ 式与「豁免槽位保留
-        原值」式**双双失明**（实测：令该助手恒返回空元组后，261 条里只有本用例与
-        `test_space_covers_three_families_and_both_shapes` 的覆盖守卫变红）。本断言
-        用**写死的字面集**钉住豁免集，是该故障模式在随机面之外的唯一拦截点，不得
-        改写成「与 `_higher_rarity_keys` 的返回值比对」（那会让它与故障同向偏移）。
+        **定点断言的角色**：`higher` 集由 `scope_cards` / `rarity_rank` **独立算出**
+        （写死为「ssr 的两张卡」这一事实），不读任何生产助手——助手自身坏掉时期望值
+        会与生产值同向偏移，只有独立算出的字面集能钉住它。
         """
         combo = _FIXED_COMBOS['hard_below_top']
         run = _trace(combo)
@@ -961,21 +985,20 @@ class TestNormalizationInvariant:
         assert fired, 'hard(scope=sr) 须在本序列内触发（否则本用例无观测对象）'
         step = fired[0]
         dist = step.dist_out
-        exempted = set(step.exempted)
-        assert exempted == {'ssr', 'ssr_featured'}, (
-            f'豁免槽位须为 ssr 的两槽，实测 {sorted(exempted)}')
-        _assert_scope_aware_total(dist, step.exempted, '[hard_below_top]')
-        assert _total(dist) > 1.0, 'scope 低于最高稀有度时 Σ 必大于 1'
-        # 本组合只有 hard 一个 Modifier，故该步输出即**管道输出**：scope 感知式在
-        # 「无后续转移改写豁免槽位」这一域内对管道输出本身成立。
-        _assert_scope_aware_total(run.probs[step.draw_index], step.exempted,
-                                  '[hard_below_top] 管道输出')
-        for key in exempted:
-            assert dist[key] == combo.shape.base[key], (
-                f'豁免槽位 {key} 须保留原值 {combo.shape.base[key]!r}，'
-                f'实测 {dist[key]!r}')
-        assert dist['sr'] == pytest.approx(1.0, abs=TOL), 'sr 目标集绝对赋值到 1.0'
-        assert dist['r'] == pytest.approx(0.0, abs=TOL), '更低稀有度须被搬空'
+        higher = _higher_rarity_cards(combo.shape, 'sr')
+        assert set(higher) == {'ssr_up', 'ssr_std'}, (
+            f'更高稀有度卡集须为 ssr 的两张卡，实测 {sorted(higher)}')
+        _assert_total_is_one(dist, '[hard_below_top] 该步输出')
+        assert _total(dist) == pytest.approx(1.0, abs=TOL), 'S8 起 Σp ≡ 1（M1 为 1.009）'
+        # 本组合只有 hard 一个 Modifier，故该步输出即**管道输出**
+        _assert_total_is_one(run.probs[step.draw_index], '[hard_below_top] 管道输出')
+        for key in higher:
+            assert abs(dist[key] - combo.shape.base[key]) <= TOL, (
+                f'更高稀有度卡 {key} 须保留 {combo.shape.base[key]!r}，'
+                f'实测 {dist[key]!r}（容差 1e-12：归一化在 Σ 差 1 ULP 时整体缩放）')
+        # A = sr 卡收下 p(Q) = p(r 卡) = 0.94 → 0.99；Q 归零
+        assert dist['sr_std'] == pytest.approx(0.99, abs=TOL), 'sr 卡收下 p(Q)'
+        assert dist['r_std'] == pytest.approx(0.0, abs=TOL), '更低稀有度须被搬空'
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1017,7 +1040,7 @@ class TestDeltaLegalityInvariant:
         """`p + δ ≥ 0`（按 `p` 与 `δ` 逐位相加判，不预先约简成 `out ≥ 0`）。"""
         run = _trace(combo)
         for step in run.fired_steps():
-            delta = step.delta()
+            delta = step.delta or {}
             for key, p in step.dist_in.items():
                 combined = p + delta.get(key, 0.0)
                 assert combined >= 0.0, (
@@ -1039,7 +1062,7 @@ class TestDeltaLegalityInvariant:
             assert support, (
                 f'[{combo.label}] 第 {step.draw_index} 抽的 {step.part_key} 步：'
                 f'输入分布无支撑（p 恒为 0），本不变式无判别力')
-            delta = step.delta()
+            delta = step.delta or {}
             assert any(delta.get(k, 0.0) != 0.0 for k in support), (
                 f'[{combo.label}] 第 {step.draw_index} 抽的 {step.part_key} 步：'
                 f'δ 在支撑 {support} 上恒为 0（该步触发了却未改动任何有概率的槽位）')
@@ -1217,9 +1240,9 @@ class TestDeterminismInvariant:
         随机源，「同种子相同」会退化成恒真（本用例随之失败）。
         """
         combo = _FIXED_COMBOS['streak_rng']
-        sequence = tuple(_step_of(combo.shape, slot) for slot in (
-            'r', 'r', 'r', 'ssr_featured', 'r', 'r', 'ssr', 'r',
-            'r', 'sr', 'r', 'r', 'r', 'ssr_featured', 'r', 'r'))
+        sequence = tuple(_step_of(combo.shape, card) for card in (
+            'r_std', 'r_std', 'r_std', 'ssr_up', 'r_std', 'r_std', 'ssr_std', 'r_std',
+            'r_std', 'sr_std', 'r_std', 'r_std', 'r_std', 'ssr_up', 'r_std', 'r_std'))
 
         def _run_with_count():
             log = _StepLog()
@@ -1273,11 +1296,12 @@ class TestCombinationSpaceCoverage:
             '触发稀有度须覆盖最高与次高')
         assert _COMBOS_WITH_F and _COMBOS_WITHOUT_F, 'F / 非 F 两个子面都须非空'
         assert any(c.has_f_part() and c.scope != 'ssr' for c in _COMBOS), (
-            '须有「F 型 scope 低于最高稀有度」的组合（scope 感知式的判别面）')
-        assert any(s.kind == 'f' and s.fired and s.exempted
+            '须有「F 型 scope 低于最高稀有度」的组合（「更高稀有度逐位保留」的判别面）')
+        assert any(s.kind == 'f' and s.fired
+                   and _higher_rarity_cards(c.shape, c.scope)
                    for c in _COMBOS for s in _trace(c).steps()), (
-            '须有「F 步实际触发且豁免集非空」的步，否则 scope 感知式的加项恒为 0、'
-            '与退化式 Σp = 1 无判别差异')
+            '须有「F 步实际触发且存在更高稀有度卡」的步，否则「更高稀有度逐位保留」'
+            '的断言在组合面上无判别对象（该集合为空时它退化为恒真）')
 
     def test_declared_keys_aggregation_non_empty_across_space(self):
         """三族汇总在组合面上各自非空（§六：「断言须先证该汇总非空」）。"""
@@ -1354,22 +1378,29 @@ class TestConcentratingPairDegeneracy:
         pairs = [s for s in run.steps() if s.part_key in ('rotating', 'selected')]
         assert len(pairs) >= 2, '本组合须含两个集中型 Modifier 的步'
         first, second = pairs[0], pairs[1]
-        assert first.fired and second.fired, '两步都须触发（否则无观测对象）'
+        assert first.fired, '第一步须触发（否则无观测对象）'
+        # **S8 起第二步是「不触发」**：第一步已把 scope 总量全部搬进目标集，第二步的
+        # 源组（scope 内非目标卡）已归零 → `transfer_linear` 的 `p(Q) <= 0` 守卫命中、
+        # 返回 `None`（恒等）。M1 期它算出的是一个**恒零的 δ**（「按声明权重重分配」
+        # 在目标集已满时退化为恒等）——两者行为等价（都是恒等映射），S8 的形态更强：
+        # 它不再需要「第二个零件的 δ 恰好恒零」这一额外解释（§3.9.5 的 `p(Q) == 0`
+        # 行就是它的依据）。
+        assert second.delta is None or all(v == 0.0 for v in second.delta.values()), (
+            f'[{combo.label}] 第二步须为恒等（不触发或恒零 δ），实测 δ = {second.delta}')
         assert second.dist_out == first.dist_out, (
             f'[{combo.label}] 集中型串联的第二步须与第一步同分布（实测 '
             f'第一步 {first.dist_out}、第二步 {second.dist_out}）')
-        support = [k for k, v in second.dist_in.items() if v > 0.0]
-        assert all(second.delta().get(k, 0.0) == 0.0 for k in support), (
-            '第二步的 δ 在支撑上恒为 0（这正是生成纪律 2 的实测依据）')
 
-    def test_second_step_delta_is_zero_everywhere(self):
-        """δ 恒零是**全域**的（不只支撑上）：该步确为恒等映射。"""
+    def test_second_step_is_identity_everywhere(self):
+        """第二步的恒等是**全域**的（不只支撑上）：δ 不触发或恒零，且输出 == 输入。"""
         combo = _FIXED_COMBOS['concentrating_pair']
         run = _trace(combo)
         pairs = [s for s in run.steps() if s.part_key in ('rotating', 'selected')]
         second = pairs[1]
-        assert all(v == 0.0 for v in second.delta().values()), (
-            f'[{combo.label}] 第二步的 δ 须全域为 0，实测 {second.delta()}')
+        assert second.delta is None or all(v == 0.0 for v in second.delta.values()), (
+            f'[{combo.label}] 第二步的 δ 须不触发或全域为 0，实测 {second.delta}')
+        assert second.dist_out == second.dist_in, (
+            f'[{combo.label}] 第二步须是恒等映射，实测 {second.dist_in} → {second.dist_out}')
 
 
 # ══════════════════════════════════════════════════════════════════

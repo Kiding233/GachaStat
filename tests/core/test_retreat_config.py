@@ -454,8 +454,13 @@ def test_truncate_copies_rarity_rank():
 def test_truncated_env_soft_pity_is_not_identity():
     """截断 env 的软保底必须真的改动分布（漏拷 `rarity_rank` 时恒等）。
 
-    实测（真实 config.toml、`from_pool_id='pool_c1'`、counter=90、
-    `base={'ssr': 0.02, 'r': 0.98}`）：空表下分布原样返回；补齐后 `ssr` 由 0.02 抬到 1.0。
+    **S8-2 起管道是卡级**（§3.9.1）：基础分布改由池内**卡 id** 构造——原写
+    `base={'ssr': 0.02, 'r': 0.98}` 是槽位级键，卡级管道下 `transfer_linear`
+    取 `dist[c]`（c 为卡 id）会直接 `KeyError`（**不是静默恒等**，这是 S8 键空间
+    纪律的显形面）。实测（真实 config.toml、`from_pool_id='pool_c1'`、counter=90、
+    按池内声明概率建基础分布）：空表下分布原样返回；补齐后 SSR 卡集的小计由
+    池内声明值抬到 1.0（ssr 是最高稀有度，软保底的 Q = 更低稀有度卡，
+    `amount` 封顶 `p(Q)`）。
     """
     from gacha_simulator.core.config_toml import load_toml
     from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
@@ -470,7 +475,17 @@ def test_truncated_env_soft_pity_is_not_identity():
     assert truncated.rarity_rank, '截断 copy 丢了 rarity_rank'
     env = SimulationEnvBuilder.from_config_store(truncated)
     eng = env.pity_engine
-    base = {'ssr': 0.02, 'r': 0.98}
-    out = eng.before_draw(truncated.pools[0].pool_id, eng._state, dict(base))
-    assert out['ssr'] > base['ssr'], (
-        f"截断路径的软保底恒等（ssr 仍为 {out['ssr']}）——`rarity_rank` 未随截断复制")
+    pool_id = truncated.pools[0].pool_id
+    spec = eng.get_spec(pool_id)
+    assert spec is not None, '截断后的池必须在 pool_specs 内（否则测不到本缺陷）'
+    ssr_cards = tuple(spec.scope_cards['ssr'])
+    base = {r.id: p for r, p in env.pools[0].active_pool.rewards}
+    assert ssr_cards and len(base) > len(ssr_cards), \
+        '本用例需要 SSR 与更低稀有度两类卡（Q 非空才谈得上搬质量）'
+
+    out = eng.before_draw(pool_id, eng._state, dict(base))
+    ssr_before = sum(base[c] for c in ssr_cards)
+    ssr_after = sum(out[c] for c in ssr_cards)
+    assert ssr_after > ssr_before, (
+        f"截断路径的软保底恒等（SSR 卡集小计仍为 {ssr_after}）——"
+        f"`rarity_rank` 未随截断复制")

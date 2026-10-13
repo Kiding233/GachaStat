@@ -37,10 +37,22 @@ class DrawInfo:
 
 @dataclass
 class PityContext:
-    """管道中流转的可变载体。"""
+    """管道中流转的可变载体。
+
+    **`readonly` 是 S8 / M2 的查询标记**（§3.9.6 的「处置（两期）②」）：`True` 表示
+    本次调度是只读查询（`PityEngine.get_probabilities` → `Pity.before_draw(readonly=True)`），
+    不是真实抽卡。它是 `readonly` 形参从 Modifier 面废除后的落点——按 §3.1.2 的
+    「新机制需要新的静态事实时**加字段、不改签名**」，而不是给 `compute_delta()` 加形参。
+    写入者是 `Pity.before_draw` 的首行（唯一的 readonly 入口透传点），消费面当前一处：
+    `RotatingModifier` 据此抑制 `extra_flag`（复刻旧 `RotatingCRBehavior` 的只读查询
+    语义：查询不体现 CR 拦截）。**Trackers 侧的 `readonly`（`advance` / `prepare` 形参）
+    是另一条通路**，不经本字段、不受本条影响。
+    """
+
     draw: DrawInfo
     current: Dict[str, float]
     state: 'PityState'
+    readonly: bool = False
 
 
 # ── P60 新增：Counter / Flag 微抽象 ──
@@ -163,7 +175,108 @@ _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'targeted', 'targeted_soft',
 #: 本模块只依赖标准库（§3.1.6），不因此引入任何依赖方向问题。
 _EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
 
+# ── 概率代数（P64 S8：卡级增量管道的两个本原函数，§3.9.2 / §3.9.4）──
+#
+# 两者都是**纯函数、只依赖标准库**，故住叶子层（§3.1.6）：
+# - `_apply_delta` 的消费面有两处且分居两层——编排层的 `Pity.before_draw` 内循环
+#   （§3.1.4 骨架）与**实现层** `pity_modifier.Modifier.apply` 的默认实现（§3.14.3）。
+#   实现层**不得 import `pity.py`**（§3.1.6 的单向依赖，双向 import 即循环），故它
+#   只能住叶子层：放 `pity.py` 会让基类只能走函数内惰性 import（本项目已把
+#   「函数内 import 漏改不报错」列为缺陷形态，见 §3.9.3 的 banner 局部 import 处置）。
+#   `pity.py` 以 `from .pity_primitives import _apply_delta` 再导出，故
+#   `from gacha_simulator.core.pity import _apply_delta` 亦可用（§3.9.2 称其为
+#   「框架级」函数，该名在编排层可见）。
+# - `transfer_linear` 的消费面在 `pity_modifier.py`（六个机制）与 preset 工厂，
+#   同一条理由（§3.9.4 的「模块归属」段）。
+
+def _apply_delta(dist: Dict[str, float], d: Dict[str, float]) -> Dict[str, float]:
+    """把增量向量 `d` 作用到分布 `dist` 上并**归一化**（§3.9.2 的框架级归一化）。
+
+    `out = {c: dist[c] + d.get(c, 0.0) for c in dist}`——只遍历 `dist` 的键，故
+    **`d` 里多出来的键不参与输出**（增量向量按稀疏给出：未列出的卡 δ = 0）；
+    归一化 `Σ(out) <= 0` 时返回原 `dist`（该行是退化保护，§3.9.5 的「归一化后
+    总量 ≤ 0」行）。
+
+    **转移族下本函数退化为恒等**（§3.1.5.2.1：转移族恒有 `Σδ = 0`，故
+    `Σ(p + δ) ≡ 1`），但它**不因此可删**：接口本身允许不配平的自定义 Modifier
+    （§3.9.2 的「为什么归一化放引擎层」段），归一化是对该接口的兜底。
+    """
+    out = {c: dist[c] + d.get(c, 0.0) for c in dist}
+    total = sum(out.values())
+    return dist if total <= 0 else {c: v / total for c, v in out.items()}
+
+
+def transfer_linear(dist: Dict[str, float], A, Q, amount: float,
+                    shape: str = 'current', weights=None) -> Optional[Dict[str, float]]:
+    r"""把 `amount` 的概率质量从 Q 搬到 A，返回**增量向量**（§3.9.4）。
+
+    ```
+    A 内每卡 + amount · u_A(c)        u_A 由 shape 定：
+                                        'current'  → p_c / p(A)
+                                        'declared' → w_c / w(A)，w 由 weights 传入
+    Q 内每卡 − amount · p_c / p(Q)    （Q 侧恒为当前形状，不可指定）
+    其余不写（= 0）
+    ```
+
+    配平：`Σδ = amount − amount = 0`，故 `Σ(p + δ) = 1`、框架归一化退化为恒等
+    （§3.1.5.2.1）。
+
+    **定位是助手、不是接口**（§3.9.4 首段）：Modifier 的接口是
+    `compute_delta(view, dist, ctx)`，返回任意增量向量；当前七个机制恰好都落在
+    「A 加 Q 减」这一族，故提供本函数供其复用。**不属于该族的新机制直接实现
+    `compute_delta()`，不经过本函数。**
+
+    **A 与 Q 必须不交**（§3.9.4 的前置条件表）：相交时同一张卡既加又减，结果由
+    字典写法次序决定、语义无定义。本助手**不做该校验**（调用方按 §3.1.2 机制表
+    构造 A/Q，两者天然不交）。
+
+    边缘返回 `None` 的三处（恒等；均为**防御性**返回，调用方仍应在
+    `compute_delta()` 开头自行早退，以免把行为依赖在助手的内部实现上）：
+    `p(Q) <= 0`（无货可取）/ `amount <= 0`（不转移）/ `shape='current'` 时
+    `p(A) <= 0`（`u_A` 未定义）。`shape='declared'` 时改判 `w(A) <= 0`
+    （池子声明该组不可获得）：**该分支在 `p(A) = 0` 时仍可分配**，这正是
+    `declared` 唯一的用武之地（§3.1.2 的「A 侧形状」段 / §3.1.5.6.1 的
+    「来源二」在冲突配置下由此生效）。
+
+    `dist` 与 `A` / `Q` 的键空间必须一致（S8 起都是**卡级**，D20）；键不一致时
+    此处直接 `KeyError` 而非静默恒等——静默恒等会让全部保底无声失效，而报错能
+    在首次抽卡就暴露键空间错位。
+    """
+    pQ = sum(dist[c] for c in Q)
+    if pQ <= 0 or amount <= 0:
+        return None                      # 无货可取 / 不转移 → 恒等
+    if shape == 'current':
+        pA = sum(dist[c] for c in A)
+        if pA <= 0:
+            return None                  # 目标组当前无概率 → u_A 未定义（不转移）
+        uA = {c: dist[c] / pA for c in A}
+    elif shape == 'declared':
+        if not weights:
+            raise ValueError("shape='declared' 必须同时传 weights"
+                             "（声明权重，即 ctx.base_probabilities）")
+        wA = sum(weights.get(c, 0.0) for c in A)
+        if wA <= 0:
+            return None                  # 池子声明该组不可获得 → 不转移
+        uA = {c: weights.get(c, 0.0) / wA for c in A}
+    else:
+        raise ValueError("未知的 shape: %r" % (shape,))
+
+    d = {c: amount * uA[c] for c in A}
+    for c in Q:
+        # **先除后乘**（`amount * (dist[c] / pQ)`，不是 `amount * dist[c] / pQ`）：
+        # 夺取型机制的 `amount` 与 `pQ` 由**同一表达式**算出（调用方传
+        # `sum(dist[c] for c in Q)`，本函数内同式同序），故两者**位级相等**；
+        # 此时「源组归零」（§3.9.5 的 `p(Q) == amount` 行）要求 Q 侧增量的量值与
+        # `dist[c]` 精确抵消，而先乘后除的写法会留下 1 ULP 的**负**残值
+        # （实测 `dist[c] = pQ = amount = 0.4` 得 `-5.55e-17`）——它会被 §3.12.1 的
+        # 非负性判据判为违规（`not (v >= 0)`），也会让 `pool.draw` 的累积权重
+        # 出现极小的非单调段。先除后乘在该形态下给出精确 0.0。
+        d[c] = d.get(c, 0.0) - amount * (dist[c] / pQ)
+    return d
+
+
 __all__ = [
     'Counter', 'Flag', 'DrawInfo', 'PityContext', 'LifecycleConfig', 'PityState',
     '_SOFT_TYPES', '_HARD_TYPES', '_EVENT_DRIVEN_TYPES', '_EXTERNAL_STATE_KEYS',
+    'transfer_linear', '_apply_delta',
 ]

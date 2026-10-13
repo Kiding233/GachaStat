@@ -1,132 +1,225 @@
-"""保底引擎测试：SoftStepBehavior / HardPityBehavior / PityState / PityEngine"""
+"""保底引擎测试：软/硬保底概率行为 + PityState / PityEngine。
+
+**P64 S7d 改造（旧类直构 → 新架构）**：本文件原以 counter 驱动两族的旧行为类直构
+并调用其 `_compute_probabilities(ctx, counter)`。改造后一律经
+`create_behavior(PityDef(...), state)` 取统一骨架 `Pity`，断言面随之改为
+「骨架内部结构 + 公开调度入口」：
+
+- **boost 爬升函数**由 `Pity._modifiers[0]`（软保底 Modifier）承载。旧
+  `_compute_probabilities(ctx, counter)` 的「显式给计数」入口对应
+  `Pity.before_draw(ctx, readonly=True)`（只读查询不推进 `advance` 相位，
+  读到的正是预置的那个计数）；
+- **阈值行为**由 `before_draw` 的产出分布承载（不再经旧类的槽位法内部路径）；
+- **N1 相位**（计数在 `before_draw` 的 `advance` 段递增）由 `TestN1CounterPhase`
+  两条顺序驱动用例钉住：`hard(threshold=90)` 首次 100% 落在第 90 抽、软保底满档
+  同样落在第 90 抽。
+
+**构造期纪律**：骨架 `Pity` **不在构造期绑定**零件 Counter/Flag（绑定只发生在
+`Pity._rebind_state`，引擎三条派发入口首行都会做）。本文件直驱骨架处一律显式补
+一次 `_rebind_state(state)`。
+"""
 import pytest
+
+from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pity import (
-    HardPityBehavior,
-    PoolPitySpec, PityState, PityEngine,
-    DrawInfo, PityContext,
-    SoftStepBehavior, create_behavior,
+    DrawInfo, PityContext, PityEngine, PityState, PoolPitySpec, create_behavior,
 )
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Task 13(a1): 保底引擎核心——软/硬保底 + 3 种重置语义
+# 公共夹具：三稀有度 SSR 池的一次抽卡上下文
+# ═══════════════════════════════════════════════════════════════════
+
+_SSR_PROBS = {'ssr': 0.006, 'sr': 0.051, 'r': 0.943}
+_SSR_RANK = {'ssr': 0, 'sr': 1, 'r': 2}
+_SSR_CARDS = {'ssr': ('ssr_card',), 'sr': ('sr_card',), 'r': ('r_card',)}
+_SSR_SLOTS = {'ssr': ('ssr',), 'sr': ('sr',), 'r': ('r',)}
+_SSR_C2S = {'ssr_card': 'ssr', 'sr_card': 'sr', 'r_card': 'r'}
+
+
+def _ssr_draw():
+    """一次抽卡的静态事实：A 列（`scope_cards`）与投影表（`card_to_slot`）齐备。
+
+    新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到分布键空间；合成 spec
+    比真实路径少一个键时保底会**静默恒等**，故夹具必须给全。
+    """
+    return DrawInfo(
+        pool_id='t', pool_instance_id='t', reward_id='', reward_rarity='',
+        is_featured=False,
+        scope_cards=dict(_SSR_CARDS),
+        featured_cards={},
+        scope_slots=dict(_SSR_SLOTS),
+        featured_slots=dict(_SSR_SLOTS),
+        card_to_slot=dict(_SSR_C2S),
+        base_probabilities=dict(_SSR_PROBS),
+        rarity_rank=dict(_SSR_RANK),
+    )
+
+
+def _ssr_ctx(state):
+    return PityContext(draw=_ssr_draw(), current=dict(_SSR_PROBS), state=state)
+
+
+def _make_hard(state, threshold=90, name='test'):
+    """构造 hard 骨架并补一次重绑（骨架不在构造期绑定零件）。"""
+    pity = create_behavior(
+        PityDef(name=name, btype='hard', scope='ssr', threshold=threshold,
+                reset='ssr'), state)
+    pity._rebind_state(state)
+    return pity
+
+
+def _make_soft(state, start=73, end=90, name='test'):
+    """构造 soft_interval 骨架并补一次重绑。"""
+    pity = create_behavior(
+        PityDef(name=name, btype='soft_interval', scope='ssr',
+                soft_start=start, soft_end=end, reset='ssr'), state)
+    pity._rebind_state(state)
+    return pity
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Task 13(a1): 保底引擎核心：软/硬保底 + 3 种重置语义
 # ═══════════════════════════════════════════════════════════════════
 
 class TestSoftStepProgress:
-    """SoftStepBehavior 概率爬升——_cumulative_boost 与旧 _progress 等价"""
+    """软保底 boost 爬升：`SoftModifier._cumulative_boost` 与旧爬升曲线等价。
+
+    §3.4.1 修正 ② 与 2026-10-06 端点裁决后 `soft_interval(73, 90)` 的
+    deltas = ((72, 0.0), (18, 5.555556))：第 73 抽起加成、第 90 抽满。
+    """
 
     @staticmethod
-    def _make_soft_behavior(start=73, end=90):
-        """构造 soft_interval(73, 90) 的 SoftStepBehavior。
-
-        §3.4.1 修正 ② 与 2026-10-06 端点裁决后 deltas = ((72, 0.0), (18, 5.555556))：
-        第 73 抽起加成、第 90 抽满，不再等价于旧 SoftPityBehavior 的 (73, 0.0) 首段。
-        """
-        from gacha_simulator.core.config_toml import _expand_soft_to_deltas
-        deltas = _expand_soft_to_deltas('soft_interval', start, end, None)
-        return SoftStepBehavior(
-            name='test', state=PityState(), scope='ssr', btype='soft_interval',
-            deltas=deltas, reset='ssr',
-        )
+    def _boost(pity, counter):
+        """取软保底 Modifier 的累计 boost%（旧 `_cumulative_boost` 的新承载点）。"""
+        return pity._modifiers[0]._cumulative_boost(counter)
 
     def test_boost_zero_below_start(self):
         """counter < start → boost=0"""
-        bh = self._make_soft_behavior(73, 90)
-        # §3.4.1 修正 ②：首段为 start-1 = 72，故第 73 抽即加成
-        assert bh._cumulative_boost(72) == 0.0
-        assert bh._cumulative_boost(73) > 0.0
+        pity = _make_soft(PityState())
+        assert self._boost(pity, 72) == 0.0
+        assert self._boost(pity, 73) > 0.0
 
     def test_first_increment_lands_exactly_at_start(self):
         """§3.4.1 修正 ②：counter==start 恰为第一档增量，counter==start-1 为 0"""
-        bh = self._make_soft_behavior(73, 90)
-        assert bh._cumulative_boost(72) == 0.0
-        assert bh._cumulative_boost(73) == pytest.approx(100.0 / 18)
+        pity = _make_soft(PityState())
+        assert self._boost(pity, 72) == 0.0
+        assert self._boost(pity, 73) == pytest.approx(100.0 / 18)
 
     def test_boost_increases_after_start(self):
         """counter 进入增量段后 boost 递增"""
-        bh = self._make_soft_behavior(73, 90)
+        pity = _make_soft(PityState())
         # deltas = ((72, 0.0), (18, 5.555556)) → counter=74: 2 档 = 11.1111%
-        assert bh._cumulative_boost(74) == pytest.approx(2 * 100.0 / 18)
-        assert bh._cumulative_boost(80) > bh._cumulative_boost(74)
+        assert self._boost(pity, 74) == pytest.approx(2 * 100.0 / 18)
+        assert self._boost(pity, 80) > self._boost(pity, 74)
 
     def test_boost_reaches_100_at_end(self):
         """counter=end 时 boost 恰为 100%（两端都含，100% 落在 end）"""
-        bh = self._make_soft_behavior(73, 90)
-        assert bh._cumulative_boost(90) == pytest.approx(100.0)
-        assert bh._cumulative_boost(89) < 100.0
+        pity = _make_soft(PityState())
+        assert self._boost(pity, 90) == pytest.approx(100.0)
+        assert self._boost(pity, 89) < 100.0
 
     def test_boost_clamped_at_100(self):
         """counter 超出范围后 boost 封顶 100%"""
-        bh = self._make_soft_behavior(73, 90)
-        assert bh._cumulative_boost(100) == pytest.approx(100.0)
-        assert bh._cumulative_boost(200) == pytest.approx(100.0)
+        pity = _make_soft(PityState())
+        assert self._boost(pity, 100) == pytest.approx(100.0)
+        assert self._boost(pity, 200) == pytest.approx(100.0)
 
-    def test_target_featured_preserves_total(self):
-        """feature_slot 分离后概率和保持"""
-        bh = SoftStepBehavior(
-            name='test', state=PityState(), scope='ssr', btype='soft_interval',
-            deltas=((79, 0.0), (11, 9.090909)), target_featured=True, reset='featured',
-        )
-        probs = {'ssr': 0.002, 'ssr_featured': 0.002, 'sr': 0.051, 'r': 0.945}
-        draw = DrawInfo(
-            pool_id='t', pool_instance_id='t', reward_id='', reward_rarity='',
-            is_featured=False, scope_cards={}, rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
-            scope_slots={'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr',), 'r': ('r',)},
-            featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr',), 'r': ('r',)},
-            base_probabilities=probs,
-        )
-        ctx = PityContext(draw=draw, current=probs.copy(), state=PityState())
+    def test_boost_lands_on_scope_probability_at_first_step(self):
+        """boost 经只读查询落在**分布**上：第 73 抽 scope 恰增一个百分点档位。
+
+        旧用例经 `_compute_probabilities(ctx, counter)` 只断言 boost 数值；本断言
+        把它接到分布出口（`t = boost%/100` 的百分点绝对量口径，§3.4.1 修正 ①），
+        使「boost 数值算对但没接到概率上」这一失效形态可见。
+        """
+        state = PityState()
+        pity = _make_soft(state)
+        state.set('test', 'counter', 73)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out['ssr'] == pytest.approx(0.006 + 100.0 / 18 / 100.0)
+        assert out['sr'] < _SSR_PROBS['sr']
+        assert out['r'] < _SSR_PROBS['r']
+        assert sum(out.values()) == pytest.approx(1.0)
+
+    def test_soft_preserves_total(self):
+        """软保底各档位下概率和保持 1（`target_featured` 形态已按裁决 7B 移出配置面）。
+
+        旧用例以 `target_featured=True` 收窄目标组后断言 Σ=1；该配置形态已由
+        裁决 7B（2026-10-05）从 `soft_*` 的配置面移除（`create_behavior` 抛
+        `ConfigError`，见 `tests/core/test_pity_validate_behaviors.py` 的 7B 用例），
+        故本断言取**合法形态**（目标组 = scope 全集）覆盖同一不变式。
+        """
+        state = PityState()
+        pity = _make_soft(state)
         for c in [0, 40, 80, 85, 90, 100]:
-            result = bh._compute_probabilities(ctx, c)
-            assert sum(result.values()) == pytest.approx(1.0)
+            state.set('test', 'counter', c)
+            out = pity.before_draw(_ssr_ctx(state), readonly=True)
+            assert sum(out.values()) == pytest.approx(1.0), f'counter={c}'
 
 
-class TestHardPityNewArchitecture:
-    """硬保底——CounterBasedBehavior 子类"""
-
-    def _make_hard(self, threshold=90, target_featured=False):
-        return HardPityBehavior(
-            name='test', state=PityState(), scope='ssr', btype='hard',
-            threshold=threshold, target_featured=target_featured, reset='ssr',
-        )
-
-    def _make_ctx(self, probs=None):
-        if probs is None:
-            probs = {'ssr': 0.006, 'sr': 0.051, 'r': 0.943}
-        draw = DrawInfo(
-            pool_id='t', pool_instance_id='t', reward_id='', reward_rarity='',
-            is_featured=False, scope_cards={}, rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
-            scope_slots={'ssr': ('ssr',), 'sr': ('sr',), 'r': ('r',)},
-            featured_slots={'ssr': ('ssr',), 'sr': ('sr',), 'r': ('r',)},
-            base_probabilities=probs,
-        )
-        return PityContext(draw=draw, current=probs.copy(), state=PityState())
+class TestHardPityThreshold:
+    """硬保底阈值行为：`counter >= threshold` 时目标组 100%。"""
 
     def test_below_threshold_unchanged(self):
-        bh = self._make_hard(90)
-        ctx = self._make_ctx()
-        result = bh._compute_probabilities(ctx, 89)
-        assert result == pytest.approx(ctx.current)
+        state = PityState()
+        pity = _make_hard(state)
+        state.set('test', 'counter', 89)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out == pytest.approx(_SSR_PROBS)
 
     def test_at_threshold_ssr_100_pct(self):
-        bh = self._make_hard(90)
-        ctx = self._make_ctx()
-        result = bh._compute_probabilities(ctx, 90)
-        assert result['ssr'] == pytest.approx(1.0)
-        assert result['sr'] == pytest.approx(0.0)
+        state = PityState()
+        pity = _make_hard(state)
+        state.set('test', 'counter', 90)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out['ssr'] == pytest.approx(1.0)
+        assert out['sr'] == pytest.approx(0.0)
 
     def test_threshold_early_reached(self):
-        bh = self._make_hard(50)
-        ctx = self._make_ctx()
-        result = bh._compute_probabilities(ctx, 50)
-        assert result['ssr'] == pytest.approx(1.0)
+        state = PityState()
+        pity = _make_hard(state, threshold=50)
+        state.set('test', 'counter', 50)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out['ssr'] == pytest.approx(1.0)
 
     def test_hard_preserves_sum(self):
-        bh = self._make_hard(90)
-        ctx = self._make_ctx()
+        state = PityState()
+        pity = _make_hard(state)
         for c in [0, 50, 89, 90, 100]:
-            result = bh._compute_probabilities(ctx, c)
-            assert sum(result.values()) == pytest.approx(1.0)
+            state.set('test', 'counter', c)
+            out = pity.before_draw(_ssr_ctx(state), readonly=True)
+            assert sum(out.values()) == pytest.approx(1.0), f'counter={c}'
+
+
+class TestN1CounterPhase:
+    """N1 相位：计数型在 `before_draw` 的 `advance` 段递增。
+
+    「第 N 抽读到的计数为 N」是 `hard(threshold=90)` 首次 100% 落在**第 90 抽**的
+    唯一原因（旧 `CounterBasedBehavior.before_draw` 同为「先自增、再算概率」）。
+    把 `advance` 整段删掉、或挪到 Modifier 链之后，两条用例必红。
+    """
+
+    def test_hard_first_100_percent_lands_on_threshold_draw(self):
+        state = PityState()
+        pity = _make_hard(state, threshold=90)
+        first_full = None
+        for n in range(1, 96):
+            out = pity.before_draw(_ssr_ctx(state))
+            if first_full is None and out['ssr'] == pytest.approx(1.0):
+                first_full = n
+        assert state.get('test', 'counter', 0) == 95, '每抽须推进一次计数'
+        assert first_full == 90, f'首次 100% 应落在第 90 抽，实得 {first_full}'
+
+    def test_soft_full_boost_lands_on_end_draw(self):
+        state = PityState()
+        pity = _make_soft(state, start=73, end=90)
+        first_full = None
+        for n in range(1, 96):
+            out = pity.before_draw(_ssr_ctx(state))
+            if first_full is None and out['ssr'] == pytest.approx(1.0):
+                first_full = n
+        assert state.get('test', 'counter', 0) == 95
+        assert first_full == 90, f'软保底满档应落在第 90 抽，实得 {first_full}'
 
 
 class TestPityState:
@@ -232,7 +325,7 @@ class TestPityEngineReset:
         assert state.get('test_pity', 'counter', 0) == 0
 
     def test_deactivate_on_early_hit(self):
-        """deactivate_on_early_hit=True → 触发后停用，计数器保持（由 _on_reset 接管）"""
+        """deactivate_on_early_hit=True → 触发后停用，计数器保持（退役跳过重置）"""
         from gacha_simulator.core.config_store import PityDef as _PityDef
         from gacha_simulator.core.config_toml import _expand_soft_to_deltas
         deltas = _expand_soft_to_deltas('soft_interval', 73, 90, None)
@@ -251,9 +344,9 @@ class TestPityEngineReset:
             scope_cards={'ssr': ('ssr_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
-            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
-            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
+            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
+            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
             # 合成 spec 比真实路径少一个键而让保底静默恒等。
             card_to_slot={'ssr_card': 'ssr'},
         )
@@ -266,8 +359,7 @@ class TestPityEngineReset:
         state2.incr('test_once', 'counter')
         assert state2.get('test_once', 'counter', 0) == 1
         eng2.after_draw('test_pool', state2, 'ssr_card')
-        # deactivate_on_early_hit=True → _on_reset 返回 True，
-        # 跳过默认 counter reset，behavior 被停用
+        # deactivate_on_early_hit=True → 退役先于 commit，且跳过默认 counter reset
         assert state2.get('test_once', 'counter', 0) == 1  # counter 保持
         assert state2.get('test_once', '_active', True) is False  # 已停用
 
@@ -292,9 +384,9 @@ class TestPityEngineBeforeDraw:
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
-            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
-            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
+            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
+            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
             # 合成 spec 比真实路径少一个键而让保底静默恒等。
             card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
@@ -354,9 +446,9 @@ class TestMultiPityStacking:
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
-            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
-            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
+            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
+            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
             # 合成 spec 比真实路径少一个键而让保底静默恒等。
             card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
@@ -384,7 +476,7 @@ class TestMultiPityStacking:
         assert probs['ssr'] == pytest.approx(1.0)
 
     def test_pity_order_matters(self):
-        """软保底(soft_interval)先于硬保底(hard)执行——概率叠加正确"""
+        """软保底(soft_interval)先于硬保底(hard)执行，概率叠加正确"""
         from gacha_simulator.core.config_store import PityDef as _PityDef
         from gacha_simulator.core.config_toml import _expand_soft_to_deltas
         deltas = _expand_soft_to_deltas('soft_interval', 73, 90, None)
@@ -401,9 +493,9 @@ class TestMultiPityStacking:
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             scope_slots={'ssr': ('ssr',)},
             featured_slots={'ssr': ('ssr',)},
-            # S4-2：新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名
-            # （`_to_dist_keys`）。真实构造点（`batch_simulator` / `worst_impact`）
-            # 一律由 `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
+            # 新架构的 A 列是**卡集合**，经 `card_to_slot` 投影到槽位名。
+            # 真实构造点（`batch_simulator` / `worst_impact`）一律由
+            # `compute_scope_mappings()` 同源产出该映射，此处补齐，避免
             # 合成 spec 比真实路径少一个键而让保底静默恒等。
             card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
@@ -418,58 +510,50 @@ class TestMultiPityStacking:
 
 
 class TestCounterBoundaries:
-    """保底计数器边界——HardPityBehavior._compute_probabilities"""
+    """保底计数器边界：经只读查询在**显式计数**下取分布。
 
-    def _make_hard_ctx(self, probs=None):
-        if probs is None:
-            probs = {'ssr': 0.006, 'r': 0.994}
-        draw = DrawInfo(
-            pool_id='t', pool_instance_id='t', reward_id='', reward_rarity='',
-            is_featured=False, scope_cards={}, rarity_rank={'ssr': 0, 'r': 1},
-            scope_slots={'ssr': ('ssr',)}, featured_slots={'ssr': ('ssr',)},
-            base_probabilities=probs,
-        )
-        return PityContext(draw=draw, current=probs.copy(), state=PityState())
+    旧用例直调 `_compute_probabilities(ctx, counter)` 显式给计数；新架构的对应
+    入口是 `before_draw(ctx, readonly=True)`。只读查询不推进 `advance` 相位，
+    故读到的正是预置的那个计数（`hard(threshold=90)` 首次 100% 落在第 90 抽的
+    顺序面由 `TestN1CounterPhase` 单独钉住）。
+    """
 
     def test_counter_zero(self):
-        bh = HardPityBehavior(name='t', state=PityState(), scope='ssr',
-                              btype='hard', threshold=90, reset='ssr')
-        ctx = self._make_hard_ctx()
-        result = bh._compute_probabilities(ctx, 0)
-        assert result == pytest.approx(ctx.current)
+        state = PityState()
+        pity = _make_hard(state)
+        state.set('test', 'counter', 0)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out == pytest.approx(_SSR_PROBS)
 
     def test_counter_threshold_minus_one(self):
-        bh = HardPityBehavior(name='t', state=PityState(), scope='ssr',
-                              btype='hard', threshold=90, reset='ssr')
-        ctx = self._make_hard_ctx()
-        result = bh._compute_probabilities(ctx, 89)
-        assert result == pytest.approx(ctx.current)  # 尚未触发
+        state = PityState()
+        pity = _make_hard(state)
+        state.set('test', 'counter', 89)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out == pytest.approx(_SSR_PROBS)  # 尚未触发
 
     def test_counter_at_threshold(self):
-        bh = HardPityBehavior(name='t', state=PityState(), scope='ssr',
-                              btype='hard', threshold=90, reset='ssr')
-        ctx = self._make_hard_ctx()
-        result = bh._compute_probabilities(ctx, 90)
-        assert result['ssr'] == pytest.approx(1.0)  # 触发
+        state = PityState()
+        pity = _make_hard(state)
+        state.set('test', 'counter', 90)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out['ssr'] == pytest.approx(1.0)  # 触发
 
     def test_soft_boundary_start(self):
-        """counter=start 时 boost=0，概率不变"""
-        from gacha_simulator.core.config_toml import _expand_soft_to_deltas
-        deltas = _expand_soft_to_deltas('soft_interval', 73, 90, None)
-        bh = SoftStepBehavior(name='t', state=PityState(), scope='ssr',
-                              btype='soft_interval', deltas=deltas, reset='ssr')
-        ctx = self._make_hard_ctx({'ssr': 0.006, 'r': 0.994})
-        result = bh._compute_probabilities(ctx, 72)
-        assert result['ssr'] == pytest.approx(0.006)
-        result73 = bh._compute_probabilities(ctx, 73)
-        assert result73['ssr'] >= 0.006  # at start, first step has 0% boost
+        """counter=start-1 时 boost=0、概率不变；counter=start 起加成"""
+        state = PityState()
+        pity = _make_soft(state)
+        state.set('test', 'counter', 72)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out['ssr'] == pytest.approx(0.006)
+        state.set('test', 'counter', 73)
+        out73 = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out73['ssr'] >= 0.006
 
     def test_soft_boundary_end(self):
         """counter=end 时 boost=100%，SSR=100%"""
-        from gacha_simulator.core.config_toml import _expand_soft_to_deltas
-        deltas = _expand_soft_to_deltas('soft_interval', 73, 90, None)
-        bh = SoftStepBehavior(name='t', state=PityState(), scope='ssr',
-                              btype='soft_interval', deltas=deltas, reset='ssr')
-        ctx = self._make_hard_ctx({'ssr': 0.006, 'r': 0.994})
-        result = bh._compute_probabilities(ctx, 90)
-        assert result['ssr'] == pytest.approx(1.0)
+        state = PityState()
+        pity = _make_soft(state)
+        state.set('test', 'counter', 90)
+        out = pity.before_draw(_ssr_ctx(state), readonly=True)
+        assert out['ssr'] == pytest.approx(1.0)

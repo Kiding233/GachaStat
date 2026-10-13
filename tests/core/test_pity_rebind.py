@@ -4,12 +4,25 @@
 - 各 behavior 的 _rebind_state 纯重定向（计数写新 state、旧 state 不变）
 - engine is_active 默认值 False（ISSUE-120）
 - 带保底模拟后 banner_end_pity_states 含 counter（P75 核心目标，修复前恒空）
+
+**P64 S7d 改造（旧类直构 → 新架构）**：本文件原以四个旧行为类的工厂函数直构并
+断言其私有结构。改造后工厂一律经 `create_behavior(PityDef(...), state)` 取统一
+骨架 `Pity`，断言面改为骨架的内部结构：
+
+| 旧断言面 | 新断言面 |
+|----------|----------|
+| `bh._counter()` | `bh._trackers[0]._counter`（`CounterTracker`） |
+| `bh._guaranteed` | `bh._trackers[0]._flag_ctl`（`FlagTracker`） |
+| `bh._fate_points` | `bh._trackers[0]._ctls['fate_points']`（`FateTracker`） |
+| `bh._active.is_set()` | `bh._lifecycle.is_active(state, name)` |
+| `bh._state` / `engine._state` | 不变（`Pity._state` 同名同义） |
+
+三条语义（纯重定向 / 跨模拟隔离 / 交错时序自愈）的载体见各自用例的 docstring。
 """
 import os
 
 from gacha_simulator.core.pity import (
-    PityState, PityEngine,
-    SoftStepBehavior, HardPityBehavior, RotatingBehavior, TargetedBehavior,
+    PityState, PityEngine, PityContext, DrawInfo, create_behavior,
 )
 from gacha_simulator.core.config_store import PityDef
 
@@ -17,21 +30,30 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 _CFG = os.path.join(_ROOT, 'gacha_simulator', 'config', 'config.toml')
 
 
+def _make(a, name, btype, **pdef_kwargs):
+    """经 `create_behavior` 构造骨架（**不补 rebind**），把绑定留给被测的 rebind 调用。
+
+    骨架不在构造期绑定零件 Counter/Flag（§3.1.4），故 `_counter` / `_flag_ctl`
+    在首次 `_rebind_state` 之前恒为 `None`：这正是「纯重定向」用例的判别前提。
+    """
+    return create_behavior(
+        PityDef(name=name, btype=btype, scope='ssr', **pdef_kwargs), a)
+
+
 def _soft(a, name='t'):
-    return SoftStepBehavior(name=name, state=a, scope='ssr', btype='soft_interval',
-                            deltas=((73, 0.0), (17, 5.88)), reset='ssr')
+    return _make(a, name, 'soft_interval', soft_start=73, soft_end=90, reset='ssr')
 
 
 def _hard(a, name='h'):
-    return HardPityBehavior(name=name, state=a, scope='ssr', btype='hard', threshold=90)
+    return _make(a, name, 'hard', threshold=90)
 
 
 def _rot(a, name='r'):
-    return RotatingBehavior(name=name, state=a, scope='ssr')
+    return _make(a, name, 'rotating')
 
 
 def _tgt(a, name='tgt'):
-    return TargetedBehavior(name=name, state=a, scope='ssr', fate_threshold=2)
+    return _make(a, name, 'targeted', fate_threshold=2)
 
 
 class TestRebindPureRedirect:
@@ -47,7 +69,7 @@ class TestRebindPureRedirect:
         a.set('t', 'counter', 5)  # 预置旧账本非零值——纯重定向不得复制到新账本
         bh._rebind_state(b)
         assert b.get('t', 'counter', 0) == 0  # 新账本初始为 0（若复制旧值此处会失败）
-        bh._counter().incr()
+        bh._trackers[0]._counter.incr()
         assert b.get('t', 'counter') == 1
         assert a.get('t', 'counter', 0) == 5  # 旧账本保持非零
 
@@ -57,7 +79,7 @@ class TestRebindPureRedirect:
         a.set('h', 'counter', 7)
         bh._rebind_state(b)
         assert b.get('h', 'counter', 0) == 0
-        bh._counter().incr()
+        bh._trackers[0]._counter.incr()
         assert b.get('h', 'counter') == 1
         assert a.get('h', 'counter', 0) == 7
 
@@ -67,7 +89,7 @@ class TestRebindPureRedirect:
         a.set('r', 'guaranteed', True)  # 预置大保底态——不得复制到新账本
         bh._rebind_state(b)
         assert b.get('r', 'guaranteed', False) is False  # 新账本初始无 guaranteed
-        bh._guaranteed.set()
+        bh._trackers[0]._flag_ctl.set()
         assert b.get('r', 'guaranteed') is True
         assert a.get('r', 'guaranteed', False) is True
 
@@ -77,7 +99,7 @@ class TestRebindPureRedirect:
         a.set('tgt', 'fate_points', 3)
         bh._rebind_state(b)
         assert b.get('tgt', 'fate_points', 0) == 0
-        bh._fate_points.incr()
+        bh._trackers[0]._ctls['fate_points'].incr()
         assert b.get('tgt', 'fate_points') == 1
         assert a.get('tgt', 'fate_points', 0) == 3
 
@@ -343,20 +365,42 @@ class TestNonSnapshotState:
 
     生产路径（batch_simulator/worst_impact/profile 脚本）均从 env.pity_state_init 传阶段 3
     快照，故无实际风险。此用例显式声明该用法不受支持，并锁定边界：非快照 state 下
-    CounterBasedBehavior 的 _active 读默认 False → before_draw 提前返回（概率调整不生效）。
+    `_active` 读默认 False → `before_draw` 首行早退（概率调整不生效、计数不推进）。
     """
+
+    @staticmethod
+    def _ctx(state):
+        draw = DrawInfo(
+            pool_id='t', pool_instance_id='t_0', reward_id='', reward_rarity='',
+            is_featured=False,
+            scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
+            featured_cards={},
+            scope_slots={'ssr': ('ssr',)}, featured_slots={'ssr': ('ssr',)},
+            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
+            base_probabilities={'ssr': 0.006, 'r': 0.994},
+            rarity_rank={'ssr': 0, 'r': 1},
+        )
+        return PityContext(draw=draw, current={'ssr': 0.006, 'r': 0.994},
+                           state=state)
 
     def test_non_snapshot_state_silent_degradation(self):
         a = PityState()
         bh = _soft(a)                 # 构造期写 _active=True 到 a
         non_snapshot = PityState()    # 独立空 state，非阶段 3 快照来源
         bh._rebind_state(non_snapshot)
-        assert bh._active.is_set() is False  # 非快照缺 _active → 默认 False → 早退
+        assert bh._lifecycle.is_active(non_snapshot, 't') is False, \
+            '非快照缺 _active → 默认 False → 首行早退'
+        # 早退的可观测后果：概率不被调整、计数不推进
+        ctx = self._ctx(non_snapshot)
+        assert bh.before_draw(ctx) == ctx.current
+        assert non_snapshot.get('t', 'counter', 0) == 0
         # 阶段 3 快照（含构造期 _active=True）恢复后生效
         snap = PityState()
         snap.set('t', '_active', True)
         bh._rebind_state(snap)
-        assert bh._active.is_set() is True
+        assert bh._lifecycle.is_active(snap, 't') is True
+        bh.before_draw(self._ctx(snap))
+        assert snap.get('t', 'counter', 0) == 1, '快照 state 下计数照常推进'
 
 
 class TestHard90Peak:

@@ -1,7 +1,18 @@
-"""P56 阶段十三-a：RotatingBehavior / RotatingCRBehavior / _soft 变体单元测试。
+"""P56 阶段十三-a：rotating 族（大小保底 / 捕获明光 / 两个 `_soft` 变体）单元测试。
+
+**P64 S7d 改造（旧类直构 → 新架构）**：原文件以 rotating 族四个旧行为类直构；
+改造后一律经 `create_behavior(PityDef(...), state)` 取统一骨架 `Pity`。旧类内部
+结构在新架构下的对应物：
+
+| 旧形态 | 新承载点 |
+|--------|----------|
+| `guaranteed` 标记 | `Pity._trackers` 里的 `FlagTracker`（`_flag_ctl`） |
+| `cr_counter` | `Pity._trackers` 里的 `StreakTracker`（`_cr_counter`） |
+| `counter`（`_soft` 变体） | `Pity._trackers` 里的 `CounterTracker`（`_counter`） |
+| `_active` | `Pity._lifecycle`（`is_active` / `_ns_active`） |
 
 覆盖目标：
-  1. 纯净 rotating 大小保底翻转正确性——歪后 guaranteed=True、中 featured 后 guaranteed=False
+  1. 纯净 rotating 大小保底翻转正确性：歪后 guaranteed=True、中 featured 后 guaranteed=False
   2. 小保底 featured 占比由基础分布决定（非硬编码 50%）
   3. CR 连歪计数器递增/重置/逻辑边界
   4. _soft 后缀 counter 递增 + SSR 重置
@@ -9,11 +20,10 @@
 """
 
 import pytest
+from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pity import (
     PityState, DrawInfo, PityContext,
-    RotatingBehavior, RotatingCRBehavior,
-    RotatingSoftBehavior, RotatingCRSoftBehavior,
-    _redistribute_scope,
+    _redistribute_scope, create_behavior,
 )
 
 
@@ -53,24 +63,37 @@ def base_ctx(state):
     )
 
 
+def _make(state, btype, name, **pdef_kwargs):
+    """经 `create_behavior` 构造骨架并补一次重绑。
+
+    骨架**不在构造期绑定**零件 Counter/Flag（§3.1.4；绑定只发生在
+    `Pity._rebind_state`），引擎的三条派发入口首行都会做这件事，本文件直驱骨架
+    故须显式补一次。
+    """
+    pity = create_behavior(
+        PityDef(name=name, btype=btype, scope='ssr', **pdef_kwargs), state)
+    pity._rebind_state(state)
+    return pity
+
+
 # ══════════════════════════════════════════════════════════════════
-# RotatingBehavior —— 纯净轮换保底
+# rotating：纯净轮换保底
 # ══════════════════════════════════════════════════════════════════
 
-class TestRotatingBehavior:
-    """纯净大小保底——零参数事件驱动。"""
+class TestRotatingPity:
+    """纯净大小保底：零参数事件驱动。"""
 
     def test_small_pity_uses_base_distribution(self, state, base_ctx):
-        """小保底：featured 占比由基础分布决定——不修改概率。"""
-        bh = RotatingBehavior('test_rot', state, scope='ssr')
-        result = bh.before_draw(base_ctx)
+        """小保底：featured 占比由基础分布决定，不修改概率。"""
+        pity = _make(state, 'rotating', 'test_rot')
+        result = pity.before_draw(base_ctx)
         # 小保底 featured 占比 = 0.005/(0.005+0.005) = 50%
         assert result['ssr_featured'] == pytest.approx(0.005)
         assert result['ssr_standard'] == pytest.approx(0.005)
 
     def test_guaranteed_pity_gives_100_percent_featured(self, state, base_ctx):
         """大保底：featured 100%。"""
-        bh = RotatingBehavior('test_rot', state, scope='ssr')
+        pity = _make(state, 'rotating', 'test_rot')
         # 先模拟歪一次 → guaranteed=True
         draw_miss = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
@@ -83,17 +106,17 @@ class TestRotatingBehavior:
             rarity_rank={'ssr': 3},
         )
         miss_ctx = PityContext(draw=draw_miss, current={'ssr_featured': 0.005, 'ssr_standard': 0.005}, state=state)
-        bh.after_draw(miss_ctx)
+        pity.after_draw(miss_ctx)
         assert state.get('test_rot', 'guaranteed', False) is True
 
         # 大保底：featured 100%
-        result = bh.before_draw(base_ctx)
+        result = pity.before_draw(base_ctx)
         assert result['ssr_featured'] == pytest.approx(0.01)
         assert result['ssr_standard'] == pytest.approx(0.0)
 
     def test_hit_featured_clears_guaranteed(self, state, base_ctx):
-        """中 featured 后 guaranteed=False——回到小保底。"""
-        bh = RotatingBehavior('test_rot', state, scope='ssr')
+        """中 featured 后 guaranteed=False，回到小保底。"""
+        pity = _make(state, 'rotating', 'test_rot')
         # 先歪一次
         draw_miss = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
@@ -106,7 +129,7 @@ class TestRotatingBehavior:
             rarity_rank={'ssr': 3},
         )
         miss_ctx = PityContext(draw=draw_miss, current={}, state=state)
-        bh.after_draw(miss_ctx)
+        pity.after_draw(miss_ctx)
         assert state.get('test_rot', 'guaranteed', False) is True
 
         # 再中 featured
@@ -121,12 +144,12 @@ class TestRotatingBehavior:
             rarity_rank={'ssr': 3},
         )
         hit_ctx = PityContext(draw=draw_hit, current={}, state=state)
-        bh.after_draw(hit_ctx)
+        pity.after_draw(hit_ctx)
         assert state.get('test_rot', 'guaranteed', False) is False
 
     def test_non_ssr_does_not_trigger(self, state):
         """非 scope 稀有度不触发状态转移。"""
-        bh = RotatingBehavior('test_rot', state, scope='ssr')
+        pity = _make(state, 'rotating', 'test_rot')
         draw = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='r1', reward_rarity='sr', is_featured=False,
@@ -134,13 +157,20 @@ class TestRotatingBehavior:
             card_to_slot={}, base_probabilities={}, rarity_rank={'ssr': 3, 'sr': 2},
         )
         ctx = PityContext(draw=draw, current={}, state=state)
-        bh.after_draw(ctx)
+        pity.after_draw(ctx)
         # guaranteed 未被设置（保持默认 False）
         assert state.get('test_rot', 'guaranteed', False) is False
 
-    def test_did_fire_returns_is_hit(self, state):
-        """did_fire() = _is_hit() → is_featured 为 True 时返回 True。"""
-        bh = RotatingBehavior('test_rot', state, scope='ssr')
+    def test_did_fire_true_on_hit_false_on_miss(self, state):
+        """`did_fire`：出 scope ∧ 命中（featured）为真，未命中为假。
+
+        M4 统一语义（「本次抽卡是否让本保底回到初始状态」）由 `Pity.did_fire`
+        （= `any(tr.did_reset(...))`）承载；旧类那个只看 `is_featured` 的命中判据
+        已内联进 `FlagTracker`，并**叠加了 scope 门控**：两条 draw 都出 scope，
+        故此处两者同答（scope 门控的判别力由
+        `tests/core/test_pity_integration.py::TestDidFireUnified` 单独钉住）。
+        """
+        pity = _make(state, 'rotating', 'test_rot')
         draw_hit = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='f1', reward_rarity='ssr', is_featured=True,
@@ -150,7 +180,7 @@ class TestRotatingBehavior:
             base_probabilities={'ssr_featured': 0.01}, rarity_rank={'ssr': 3},
         )
         ctx_hit = PityContext(draw=draw_hit, current={}, state=state)
-        assert bh.did_fire(ctx_hit) is True
+        assert pity.did_fire(ctx_hit) is True
 
         draw_miss = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
@@ -161,19 +191,19 @@ class TestRotatingBehavior:
             base_probabilities={'ssr_standard': 0.01}, rarity_rank={'ssr': 3},
         )
         ctx_miss = PityContext(draw=draw_miss, current={}, state=state)
-        assert bh.did_fire(ctx_miss) is False
+        assert pity.did_fire(ctx_miss) is False
 
 
 # ══════════════════════════════════════════════════════════════════
-# RotatingCRBehavior —— 捕获明光
+# rotating_cr：捕获明光
 # ══════════════════════════════════════════════════════════════════
 
-class TestRotatingCRBehavior:
-    """轮换 + 捕获明光——CR 状态机。"""
+class TestRotatingCRPity:
+    """轮换 + 捕获明光：CR 状态机。"""
 
     def test_cr_counter_increments_on_loss(self, state, base_ctx):
         """小保底歪了 → cr_counter++。"""
-        bh = RotatingCRBehavior('test_cr', state, scope='ssr', cr_counter_threshold=3)
+        pity = _make(state, 'rotating_cr', 'test_cr', cr_counter_threshold=3)
         draw = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
@@ -185,12 +215,12 @@ class TestRotatingCRBehavior:
             rarity_rank={'ssr': 3},
         )
         ctx = PityContext(draw=draw, current={}, state=state)
-        bh.after_draw(ctx)
+        pity.after_draw(ctx)
         assert state.get('test_cr', 'cr_counter', 0) == 1
 
     def test_cr_counter_resets_on_win(self, state):
         """小保底赢了 → cr_counter 归零。（需先经过 guaranteed→hit 回到小保底状态）"""
-        bh = RotatingCRBehavior('test_cr', state, scope='ssr', cr_counter_threshold=3)
+        pity = _make(state, 'rotating_cr', 'test_cr', cr_counter_threshold=3)
 
         # 第1抽：小保底歪 → cr_counter=1, guaranteed=True
         miss_draw = DrawInfo(
@@ -203,7 +233,7 @@ class TestRotatingCRBehavior:
             base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
             rarity_rank={'ssr': 3},
         )
-        bh.after_draw(PityContext(draw=miss_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
         assert state.get('test_cr', 'cr_counter', 0) == 1
         assert state.get('test_cr', 'guaranteed', False) is True
 
@@ -218,103 +248,98 @@ class TestRotatingCRBehavior:
             base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
             rarity_rank={'ssr': 3},
         )
-        bh.after_draw(PityContext(draw=hit_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=hit_draw, current={}, state=state))
         assert state.get('test_cr', 'guaranteed', False) is False  # 大保底清除
         assert state.get('test_cr', 'cr_counter', 0) == 1  # CR 不介入大保底
 
         # 第3抽：小保底赢 → cr_counter 归零
-        bh.after_draw(PityContext(draw=hit_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=hit_draw, current={}, state=state))
         assert state.get('test_cr', 'cr_counter', 0) == 0
 
     def test_cr_100_percent_intercept_at_threshold(self, state, base_ctx):
-        """cr_counter >= threshold → 100% 拦截——featured_ratio=1.0。"""
-        bh = RotatingCRBehavior('test_cr', state, scope='ssr', cr_counter_threshold=2)
+        """cr_counter >= threshold → 100% 拦截：featured_ratio=1.0。"""
+        pity = _make(state, 'rotating_cr', 'test_cr', cr_counter_threshold=2)
         # 设 cr_counter = 2（达到阈值）
         state.set('test_cr', 'cr_counter', 2)
         # 设 guaranteed = False（小保底状态）
         state.set('test_cr', 'guaranteed', False)
 
-        result = bh.before_draw(base_ctx)
+        result = pity.before_draw(base_ctx)
         # 100% featured
         assert result['ssr_featured'] == pytest.approx(0.01)
         assert result['ssr_standard'] == pytest.approx(0.0)
 
     def test_cr_not_intercept_when_guaranteed(self, state, base_ctx):
-        """大保底时 CR 不介入——透传给父类。"""
-        bh = RotatingCRBehavior('test_cr', state, scope='ssr', cr_counter_threshold=3)
+        """大保底时 CR 不介入，由 `guaranteed` 分支接管。"""
+        pity = _make(state, 'rotating_cr', 'test_cr', cr_counter_threshold=3)
         # 设 guaranteed = True（大保底状态）
         state.set('test_cr', 'guaranteed', True)
 
-        result = bh.before_draw(base_ctx)
-        # 大保底：100% featured（由父类 RotatingBehavior 处理）
+        result = pity.before_draw(base_ctx)
+        # 大保底：100% featured（由 rotating Modifier 的 `guaranteed` 分支处理）
         assert result['ssr_featured'] == pytest.approx(0.01)
 
     def test_readonly_mode_no_random_change(self, state, base_ctx):
-        """readonly=True 时不执行随机判定——确定性返回。"""
-        bh = RotatingCRBehavior('test_cr', state, scope='ssr', cr_counter_threshold=3)
+        """readonly=True 时不执行随机判定，确定性返回。"""
+        pity = _make(state, 'rotating_cr', 'test_cr', cr_counter_threshold=3)
         state.set('test_cr', 'guaranteed', False)
         state.set('test_cr', 'cr_counter', 0)
-        result = bh.before_draw(base_ctx, readonly=True)
-        # 小保底——featured 占比由基础分布决定
+        result = pity.before_draw(base_ctx, readonly=True)
+        # 小保底：featured 占比由基础分布决定
         assert result['ssr_featured'] == pytest.approx(0.005)
-
-
-# ══════════════════════════════════════════════════════════════════
-# RotatingSoftBehavior —— 轮换 + 软保底（mixin）
-# ══════════════════════════════════════════════════════════════════
-
 
     def test_cr_base_rate_deterministic(self, state, base_ctx):
         """cr_base_rate=1.0 forces 100% intercept; cr_base_rate=0 never intercepts."""
-        bh_full = RotatingCRBehavior('test_cr_full', state, scope='ssr',
-                                      cr_counter_threshold=3, cr_base_rate=1.0)
+        pity_full = _make(state, 'rotating_cr', 'test_cr_full',
+                          cr_counter_threshold=3, cr_base_rate=1.0)
         state.set('test_cr_full', 'guaranteed', False)
         state.set('test_cr_full', 'cr_counter', 0)
-        result = bh_full.before_draw(base_ctx)
+        result = pity_full.before_draw(base_ctx)
         assert result['ssr_featured'] == pytest.approx(0.01)
 
-        bh_none = RotatingCRBehavior('test_cr_none', state, scope='ssr',
-                                      cr_counter_threshold=3, cr_base_rate=0.0)
+        pity_none = _make(state, 'rotating_cr', 'test_cr_none',
+                          cr_counter_threshold=3, cr_base_rate=0.0)
         state.set('test_cr_none', 'guaranteed', False)
         state.set('test_cr_none', 'cr_counter', 0)
-        result2 = bh_none.before_draw(base_ctx)
+        result2 = pity_none.before_draw(base_ctx)
         assert result2['ssr_featured'] == pytest.approx(0.005)
 
     def test_cr_state_probs_boundary(self, state, base_ctx):
         """cr_state_probs[idx]=1.0 triggers intercept at that state."""
-        bh = RotatingCRBehavior('test_cr_sp', state, scope='ssr',
-                                 cr_counter_threshold=2,
-                                 cr_state_probs=[1.0, 0.0, 0.0])
+        pity = _make(state, 'rotating_cr', 'test_cr_sp',
+                     cr_counter_threshold=2, cr_state_probs=[1.0, 0.0, 0.0])
         state.set('test_cr_sp', 'guaranteed', False)
         state.set('test_cr_sp', 'cr_counter', 0)
-        result = bh.before_draw(base_ctx)
+        result = pity.before_draw(base_ctx)
         assert result['ssr_featured'] == pytest.approx(0.01)
 
-        bh2 = RotatingCRBehavior('test_cr_sp2', state, scope='ssr',
-                                  cr_counter_threshold=2,
-                                  cr_state_probs=[0.0, 1.0, 0.0])
+        pity2 = _make(state, 'rotating_cr', 'test_cr_sp2',
+                      cr_counter_threshold=2, cr_state_probs=[0.0, 1.0, 0.0])
         state.set('test_cr_sp2', 'guaranteed', False)
         state.set('test_cr_sp2', 'cr_counter', 1)
-        result2 = bh2.before_draw(base_ctx)
+        result2 = pity2.before_draw(base_ctx)
         assert result2['ssr_featured'] == pytest.approx(0.01)
 
-class TestRotatingSoftBehavior:
-    """mixin 提供 counter 管理 + deltas 引擎委托。"""
+
+# ══════════════════════════════════════════════════════════════════
+# rotating_soft：轮换 + 软保底
+# ══════════════════════════════════════════════════════════════════
+
+class TestRotatingSoftPity:
+    """`_soft` 变体提供 counter 管理 + deltas 引擎委托。"""
 
     def test_counter_increments_on_before_draw(self, state, base_ctx):
         """before_draw 递增 counter。"""
-        bh = RotatingSoftBehavior('test_rs', state, scope='ssr',
-                                   soft_start=74, soft_end=90)
-        bh.before_draw(base_ctx)
+        pity = _make(state, 'rotating_soft', 'test_rs', soft_start=74, soft_end=90)
+        pity.before_draw(base_ctx)
         assert state.get('test_rs', 'counter', 0) == 1
 
     def test_ssr_resets_counter(self, state, base_ctx):
         """SSR 出货 → counter 重置。"""
-        bh = RotatingSoftBehavior('test_rs', state, scope='ssr',
-                                   soft_start=74, soft_end=90)
+        pity = _make(state, 'rotating_soft', 'test_rs', soft_start=74, soft_end=90)
         # 递增几次 counter
         for _ in range(10):
-            bh.before_draw(base_ctx)
+            pity.before_draw(base_ctx)
         assert state.get('test_rs', 'counter', 0) == 10
 
         # SSR 出货
@@ -327,20 +352,18 @@ class TestRotatingSoftBehavior:
             base_probabilities={'ssr_featured': 0.01}, rarity_rank={'ssr': 3},
         )
         hit_ctx = PityContext(draw=hit_draw, current={}, state=state)
-        bh.after_draw(hit_ctx)
+        pity.after_draw(hit_ctx)
         assert state.get('test_rs', 'counter', 0) == 0
 
     def test_readonly_no_counter_increment(self, state, base_ctx):
         """readonly=True 不递增 counter。"""
-        bh = RotatingSoftBehavior('test_rs', state, scope='ssr',
-                                   soft_start=74, soft_end=90)
-        bh.before_draw(base_ctx, readonly=True)
+        pity = _make(state, 'rotating_soft', 'test_rs', soft_start=74, soft_end=90)
+        pity.before_draw(base_ctx, readonly=True)
         assert state.get('test_rs', 'counter', 0) == 0
 
-    def test_guaranteed_flag_works_with_mixin(self, state, base_ctx):
-        """mixin 不破坏 rotating 的大小保底翻转。"""
-        bh = RotatingSoftBehavior('test_rs', state, scope='ssr',
-                                   soft_start=74, soft_end=90)
+    def test_guaranteed_flag_works_with_soft(self, state, base_ctx):
+        """软保底不破坏 rotating 的大小保底翻转。"""
+        pity = _make(state, 'rotating_soft', 'test_rs', soft_start=74, soft_end=90)
         # 歪一次
         miss_draw = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
@@ -352,24 +375,23 @@ class TestRotatingSoftBehavior:
             base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
             rarity_rank={'ssr': 3},
         )
-        bh.after_draw(PityContext(draw=miss_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
         assert state.get('test_rs', 'guaranteed', False) is True
 
 
 # ══════════════════════════════════════════════════════════════════
-# RotatingCRSoftBehavior —— CR + 软保底（mixin）
+# rotating_cr_soft：CR + 软保底
 # ══════════════════════════════════════════════════════════════════
 
-class TestRotatingCRSoftBehavior:
-    """CR + 软保底组合——mixin 提供 counter 管理。"""
+class TestRotatingCRSoftPity:
+    """CR + 软保底组合：两个计数独立运作。"""
 
     def test_combined_cr_and_soft_counter(self, state, base_ctx):
         """CR counter 和 soft counter 独立运作。"""
-        bh = RotatingCRSoftBehavior('test_crs', state, scope='ssr',
-                                     cr_counter_threshold=3,
-                                     soft_start=74, soft_end=90)
+        pity = _make(state, 'rotating_cr_soft', 'test_crs',
+                     cr_counter_threshold=3, soft_start=74, soft_end=90)
         # 递增 soft counter
-        bh.before_draw(base_ctx)
+        pity.before_draw(base_ctx)
         assert state.get('test_crs', 'counter', 0) == 1
 
         # 歪一次 → cr_counter++
@@ -383,14 +405,14 @@ class TestRotatingCRSoftBehavior:
             base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
             rarity_rank={'ssr': 3},
         )
-        bh.after_draw(PityContext(draw=miss_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
         assert state.get('test_crs', 'cr_counter', 0) == 1
         # SSR 出货后 soft counter 重置
         assert state.get('test_crs', 'counter', 0) == 0
 
 
 # ══════════════════════════════════════════════════════════════════
-# _redistribute_scope —— 概率重分配工具函数
+# _redistribute_scope：概率重分配工具函数
 # ══════════════════════════════════════════════════════════════════
 
 class TestRedistributeScope:
@@ -415,11 +437,11 @@ class TestRedistributeScope:
         assert result['ssr_standard'] == pytest.approx(0.005)
 
     def test_zero_total_ratio_math(self, base_ctx):
-        """total=0 时重分配算出全零——由调用方负责前置守卫（RotatingBehavior 已有）。"""
+        """total=0 时重分配算出全零，由调用方负责前置守卫（rotating Modifier 已有）。"""
         result = _redistribute_scope(
             base_ctx, featured_ratio=0.5, total=0.0,
             featured_slots=('ssr_featured',), scope='ssr',
         )
-        # total=0 → 所有槽位概率归零——调用方应在调用前检查 total<=0
+        # total=0 → 所有槽位概率归零；调用方应在调用前检查 total<=0
         assert result['ssr_featured'] == pytest.approx(0.0)
         assert result['ssr_standard'] == pytest.approx(0.0)

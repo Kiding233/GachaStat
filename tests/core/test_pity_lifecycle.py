@@ -12,9 +12,10 @@ import warnings
 
 from gacha_simulator.core.pity import (
     AlwaysActive, DependentActive, DependentFiniteActive, DrawInfo,
-    FiniteActive, HardPityBehavior,
+    FiniteActive, create_behavior,
     LifecycleConfig, Pity, PityContext, PityEngine, PityState, StateView, Tracker,
 )
+from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pity_modifier import HardModifier, Modifier
 from gacha_simulator.core.pity_tracker import (
     CounterTracker, FlagTracker, NamespaceTracker,
@@ -25,14 +26,19 @@ class TestDeactivateOnEarlyHit:
     """deactivate_on_early_hit——提前命中永久关闭。"""
 
     def test_hard_pity_early_hit_deactivates(self):
-        """HardPityBehavior + deactivate_on_early_hit：提前命中 featured 后 _active 被清除。"""
+        """hard 保底 + deactivate_on_early_hit：提前命中 featured 后 `_active` 被清除。
+
+        **P64 S7d 改造**：原以旧 hard 行为类直构并传 `LifecycleConfig`；改造后经
+        `create_behavior(PityDef(...))` 取统一骨架 `Pity`，生命周期由
+        `build_lifecycle(pdef)` 从 `deactivate_on_early_hit` 字段转换（唯一转换点），
+        退役判定走 `Pity._lifecycle.should_deactivate` 的四实参形态。
+        """
         state = PityState()
-        lifecycle = LifecycleConfig(
-            deactivate_on_early_hit=True,
-        )
-        bh = HardPityBehavior('early_hard', state, 'ssr', threshold=120,
-                               lifecycle=lifecycle,
-                               target_featured=True)
+        pity = create_behavior(
+            PityDef(name='early_hard', btype='hard', scope='ssr', threshold=120,
+                    target_featured=True, deactivate_on_early_hit=True), state)
+        # 骨架不在构造期绑定零件，直驱前须自行补一次重绑
+        pity._rebind_state(state)
 
         # 激活状态
         state.set('early_hard', '_active', True)
@@ -50,9 +56,11 @@ class TestDeactivateOnEarlyHit:
         # counter 低于 threshold
         state.set('early_hard', 'counter', 50)
 
-        bh.after_draw(ctx)
+        pity.after_draw(ctx)
         # deactivate_on_early_hit → _active 被清除
         assert state.get('early_hard', '_active', True) is False
+        # 退役先于 commit，且该退役形态跳过重置（counter 保持）
+        assert state.get('early_hard', 'counter', 0) == 50
 
 
 # ══════════════════════════════════════════════════════════════════

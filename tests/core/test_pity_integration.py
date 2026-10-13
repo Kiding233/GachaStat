@@ -1,9 +1,15 @@
 """P56 集成测试——多 behavior 协同 + depends_on 激活传播 + card_to_slot。
 
 覆盖目标：
-  1. _resolve_selected_slots O(1) card_to_slot 路径
+  1. 定轨目标集的定位（`card_to_slot` 投影主路径 + 落空回退）
   2. depends_on：被依赖方 did_fire → 依赖方 _active 从 False → True
   3. 多保底协同：rotating + hard 同时作用于一个池子
+
+**P64 S7d 改造（旧类直构 → 新架构）**：本文件原直构三个旧行为类；改造后一律经
+`create_behavior(PityDef(...), state)` 取统一骨架 `Pity`。旧类独有的私有方法
+（`_resolve_selected_slots` / `_is_hit`）在新架构下**没有同名对应物**，其语义由
+`SelectedModifier` 的 A 列解析与各 Tracker 内联的判据承载，断言面随之改为
+「`before_draw` 的产出分布」与「`did_fire` / 状态键」两类可观测事实。
 """
 
 import subprocess
@@ -13,7 +19,6 @@ from pathlib import Path
 import pytest
 from gacha_simulator.core.pity import (
     PityState, PityEngine, DrawInfo, PityContext,
-    TargetedBehavior, RotatingBehavior, HardPityBehavior,
     compute_scope_mappings,
     PoolPitySpec,
     # P64 S6b（G5）：排序键的直测面
@@ -31,19 +36,36 @@ P82_BUILTIN_KEYS = [
 P82_PLUGIN_KEYS = ['plugin/example_phased']
 
 
+def _make_pity(state, btype, name, **pdef_kwargs):
+    """经 `create_behavior` 构造骨架并补一次重绑（骨架不在构造期绑定零件）。"""
+    pity = create_behavior(
+        PityDef(name=name, btype=btype, scope='ssr', **pdef_kwargs), state)
+    pity._rebind_state(state)
+    return pity
+
+
 # ══════════════════════════════════════════════════════════════════
-# _resolve_selected_slots O(1) 路径
+# 定轨目标集的定位
 # ══════════════════════════════════════════════════════════════════
 
-class TestResolveSelectedSlots:
-    """TargetedBehavior._resolve_selected_slots 的 card_to_slot 主路径。"""
+class TestSelectedTargetResolution:
+    """`SelectedModifier` 的 A 列解析：旧 `_resolve_selected_slots` 的替代断言面。
 
-    def test_o1_lookup_via_card_to_slot(self):
-        """selected 在 card_to_slot 中 → O(1) 返回对应槽位。"""
-        state = PityState()
-        bh = TargetedBehavior('tgt', state, scope='ssr', fate_threshold=1)
-        state.set('tgt', 'selected_card', 'f1')
+    旧类有一个私有方法 `_resolve_selected_slots(selected, featured_slots, ctx)`，
+    按「`card_to_slot` 直查 → 按槽位名反查 featured 槽 → 遍历 `scope_cards`」三级
+    回退定位定轨槽。新架构**不再复刻**该方法（见 `SelectedModifier` 的 docstring）：
+    `card_to_slot` 是唯一投影通道（`_to_dist_keys`），A 列落空时回退**全部 featured 槽**
+    （`selected_keys or featured`）。故本类断言的对象由「私有方法的返回值」改为
+    「`before_draw` 产出分布的目标集落点」；目标集取错时 scope 总量会落在错误的槽位
+    或整条保底恒等，两种形态都可判。
 
+    `tau=0` 是「定轨后必出」形态（G19 尘白禁区不歪池），用于让 `sel is not None` 的
+    分支可达；`selected_card=None` 的一档改由 `guaranteed` 分支触发（与旧实现的
+    析取项同形）。
+    """
+
+    @staticmethod
+    def _ctx(state, current=None):
         draw = DrawInfo(
             pool_id='p1', pool_instance_id='p1_0',
             reward_id='', reward_rarity='', is_featured=False,
@@ -51,50 +73,53 @@ class TestResolveSelectedSlots:
             featured_cards={'ssr': ('f1', 'f2')},
             scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
             featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured', 's1': 'ssr_standard'},
+            card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured',
+                          's1': 'ssr_standard'},
             base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
             rarity_rank={'ssr': 3},
         )
-        ctx = PityContext(draw=draw, current={}, state=state)
-
-        result = bh._resolve_selected_slots('f1', ('ssr_featured',), ctx)
-        assert result == ('ssr_featured',)
-
-    def test_fallback_when_not_in_card_to_slot(self):
-        """selected 不在 card_to_slot → 降级遍历 featured_slots → scope_cards。"""
-        state = PityState()
-        bh = TargetedBehavior('tgt', state, scope='ssr', fate_threshold=1)
-
-        draw = DrawInfo(
-            pool_id='p1', pool_instance_id='p1_0',
-            reward_id='', reward_rarity='', is_featured=False,
-            scope_cards={'ssr': ('f1', 'f2', 's1')},
-            featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={},  # 空——走降级路径
-            base_probabilities={},
-            rarity_rank={'ssr': 3},
+        return PityContext(
+            draw=draw,
+            current=dict(current or {'ssr_featured': 0.005, 'ssr_standard': 0.005}),
+            state=state,
         )
-        ctx = PityContext(draw=draw, current={}, state=state)
 
-        result = bh._resolve_selected_slots('f1', ('ssr_featured',), ctx)
-        assert result == ('ssr_featured',)
+    def test_selected_card_located_via_card_to_slot(self):
+        """selected 在 card_to_slot 中 → A 列落在其投影槽位（scope 总量全给该槽）。"""
+        state = PityState()
+        pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=0)
+        state.set('tgt', 'selected_card', 'f1')
+
+        out = pity.before_draw(self._ctx(state))
+        assert out['ssr_featured'] == pytest.approx(0.01)
+        assert out['ssr_standard'] == pytest.approx(0.0)
+
+    def test_unresolvable_selection_falls_back_to_all_featured(self):
+        """selected 的投影不在 featured 投影内 → A 列回退全部 featured 槽。
+
+        旧用例的触发条件是「selected 不在 `card_to_slot` 里」（走槽位名反查回退）；
+        新架构以 `card_to_slot` 为唯一通道，该回退不复刻，**等价语义**由「A 列落空 →
+        回退全部 featured」承担（`selected_keys or featured`）。本用例把触发条件
+        换成「selected 投影与 featured 投影不相交」，效果同档（目标集 = 全部 featured），
+        且断言可判：A 若真的为空，`SelectedModifier` 直接返 `None`、分布保持原值。
+        """
+        state = PityState()
+        pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=0)
+        state.set('tgt', 'selected_card', 's1')   # 非 featured 卡
+
+        out = pity.before_draw(self._ctx(state))
+        assert out['ssr_featured'] == pytest.approx(0.01)
+        assert out['ssr_standard'] == pytest.approx(0.0)
 
     def test_selected_none_returns_all_featured(self):
-        """selected=None → 返回全部 featured_slots。"""
+        """selected=None → A 列 = 全部 featured 槽（经 `guaranteed` 分支触发）。"""
         state = PityState()
-        bh = TargetedBehavior('tgt', state, scope='ssr', fate_threshold=1)
-        draw = DrawInfo(
-            pool_id='p1', pool_instance_id='p1_0',
-            reward_id='', reward_rarity='', is_featured=False,
-            scope_cards={}, featured_cards={}, scope_slots={},
-            featured_slots={'ssr': ('ssr_featured', 'ssr_featured2')},
-            card_to_slot={}, base_probabilities={}, rarity_rank={},
-        )
-        ctx = PityContext(draw=draw, current={}, state=state)
-        result = bh._resolve_selected_slots(None, ('ssr_featured', 'ssr_featured2'), ctx)
-        assert result == ('ssr_featured', 'ssr_featured2')
+        pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=1)
+        state.set('tgt', 'guaranteed', True)      # selected_card 保持未设置
+
+        out = pity.before_draw(self._ctx(state))
+        assert out['ssr_featured'] == pytest.approx(0.01)
+        assert out['ssr_standard'] == pytest.approx(0.0)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -249,58 +274,65 @@ class TestDidFireUnified:
 
     统一前 rotating / targeted 只判 judge、不含 scope 门控，会在「出非 scope 稀有度的
     UP」时为真而状态并未翻转，`depends_on` 依赖方被提前激活。
+
+    **P64 S7d 改造**：旧类各有一个私有 `_is_hit()` 表达「judge 命中」（不含 scope
+    门控），新架构把它内联进各 Tracker 的判据（`_judge_hit`）里、**不再有同名可观测
+    面**。故「judge 命中但被 scope 门控挡住」这一形态改写为**状态侧的可观测事实**：
+    `did_fire` 为假 **且** `after_draw` 后标志 / 计数未被触碰。
     """
 
     def test_rotating_requires_scope(self):
         state = PityState()
-        bh = RotatingBehavior('rot', state, scope='ssr')
+        pity = _make_pity(state, 'rotating', 'rot')
 
         out_of_scope = PityContext(draw=_mk_draw('sf1', 'sr', True),
                                    current={}, state=state)
-        assert bh._is_hit(out_of_scope) is True      # judge 命中（is_featured）
-        assert bh.did_fire(out_of_scope) is False    # 但 scope 门控挡住
+        assert pity.did_fire(out_of_scope) is False    # scope 门控挡住
+        pity.after_draw(out_of_scope)
+        assert state.get('rot', 'guaranteed', False) is False  # 状态未翻转
 
         in_scope = PityContext(draw=_mk_draw('f1', 'ssr', True),
                                current={}, state=state)
-        assert bh.did_fire(in_scope) is True
+        assert pity.did_fire(in_scope) is True
 
     def test_rotating_matches_after_draw_reset(self):
         """did_fire 与 after_draw 的重置分支严格同条件。"""
         state = PityState()
-        bh = RotatingBehavior('rot', state, scope='ssr')
+        pity = _make_pity(state, 'rotating', 'rot')
         ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state)
-        bh.after_draw(ctx)
+        pity.after_draw(ctx)
         assert state.get('rot', 'guaranteed', False) is False   # 状态未翻转
-        assert bh.did_fire(ctx) is False                        # did_fire 亦为假
+        assert pity.did_fire(ctx) is False                      # did_fire 亦为假
 
     def test_targeted_requires_scope(self):
         state = PityState()
-        bh = TargetedBehavior('tgt', state, scope='ssr', fate_threshold=1)
+        pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=1)
         state.set('tgt', 'selected_card', 'sf1')     # 定轨卡指向非 scope 稀有度
 
         ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state)
-        assert bh._is_hit(ctx) is True               # judge 命中
-        assert bh.did_fire(ctx) is False             # 但 scope 门控挡住
+        assert pity.did_fire(ctx) is False           # scope 门控挡住
+        pity.after_draw(ctx)
+        assert state.get('tgt', 'fate_points', 0) == 0   # 命中判据为真但状态未累积
 
     def test_targeted_in_scope_fires(self):
         state = PityState()
-        bh = TargetedBehavior('tgt', state, scope='ssr', fate_threshold=1)
+        pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=1)
         state.set('tgt', 'selected_card', 'f1')
         ctx = PityContext(draw=_mk_draw('f1', 'ssr', True), current={}, state=state)
-        assert bh.did_fire(ctx) is True
+        assert pity.did_fire(ctx) is True
 
     def test_counter_family_unchanged(self):
-        """counter 驱动型仍为 _should_reset——出 scope 即真，不看 featured。"""
+        """counter 驱动型仍为「出 scope 即真」，不看 featured。"""
         state = PityState()
-        bh = HardPityBehavior('h', state, scope='ssr', threshold=90)
+        pity = _make_pity(state, 'hard', 'h', threshold=90)
 
         not_featured = PityContext(draw=_mk_draw('s1', 'ssr', False),
                                    current={}, state=state)
-        assert bh.did_fire(not_featured) is True
+        assert pity.did_fire(not_featured) is True
 
         other_rarity = PityContext(draw=_mk_draw('sf1', 'sr', True),
                                    current={}, state=state)
-        assert bh.did_fire(other_rarity) is False
+        assert pity.did_fire(other_rarity) is False
 
 
 # ════════════════════════════════════════════════════════
@@ -389,8 +421,9 @@ class TestNeverResetHardPity:
 
     判据只取 §六 G16 断言行的**已钉住两条**：**hard 保底出金不重置 counter**
     与 **counter 达阈值当抽被强制为 scope 100%**（外加 `reset="featured"` /
-    默认行为不受影响）。实现面是 `_should_reset` 的 `never` 分支（恒 False），
-    故出金不再把 counter 打回 0，第 79 抽出金后第 80 抽照常触发保底。
+    默认行为不受影响）。实现面是 `CounterTracker` 的 `reset_on='never'` 分支
+    （`_reset_condition` 恒 False），故出金不再把 counter 打回 0，第 79 抽出金后
+    第 80 抽照常触发保底。
 
     **本类不钉该断言行的另一半「每 N 抽白送保底金」**：`never` 下 counter 从不
     归零，第 80 抽起**每一抽**都被强制（本机复跑 90 抽，forced = 第 80..90 抽），
@@ -407,6 +440,12 @@ class TestNeverResetHardPity:
     NAME = 'tof_hard'
     THRESHOLD = 80
     CUR = {'ssr_featured': 0.6, 'sr_featured': 0.4}
+
+    @classmethod
+    def _make(cls, state, **pdef_kwargs):
+        """经 `create_behavior` 构造 hard 骨架并补一次重绑。"""
+        return _make_pity(state, 'hard', cls.NAME, threshold=cls.THRESHOLD,
+                          **pdef_kwargs)
 
     @classmethod
     def _ctx(cls, state, rarity='r', featured=False):
@@ -432,8 +471,7 @@ class TestNeverResetHardPity:
     def test_never_reset_gold_at_79_keeps_80th_guaranteed(self):
         """第 79 抽提前出金不清零 counter → 第 80 抽仍必出（白送保底金）。"""
         state = PityState()
-        bh = HardPityBehavior(self.NAME, state, scope='ssr',
-                              threshold=self.THRESHOLD, reset='never')
+        bh = self._make(state, reset='never')
 
         for _ in range(self.THRESHOLD - 2):          # 抽 1..78：不出金
             assert self._draw(bh, state, rarity='r') == self.CUR
@@ -454,10 +492,9 @@ class TestNeverResetHardPity:
 
     def test_never_reset_default_and_featured_unaffected(self):
         """对照：默认（落回 scope）出金即清零、下一抽不再强制；`featured` 语义不变。"""
-        # ── 默认：reset 缺省 → CounterBasedBehavior 落回 scope('ssr') ──
+        # ── 默认：reset 缺省 → CounterTracker 落回 scope('ssr') ──
         s_scope = PityState()
-        default = HardPityBehavior(self.NAME, s_scope, scope='ssr',
-                                   threshold=self.THRESHOLD)
+        default = self._make(s_scope)
         for _ in range(self.THRESHOLD - 2):
             self._draw(default, s_scope, rarity='r')
         self._draw(default, s_scope, rarity='ssr', featured=True)   # 第 79 抽出金
@@ -467,8 +504,7 @@ class TestNeverResetHardPity:
 
         # ── featured：仅 featured 出金清零 ──
         s_feat = PityState()
-        feat = HardPityBehavior(self.NAME, s_feat, scope='ssr',
-                                threshold=self.THRESHOLD, reset='featured')
+        feat = self._make(s_feat, reset='featured')
         for _ in range(self.THRESHOLD - 2):
             self._draw(feat, s_feat, rarity='r')
         self._draw(feat, s_feat, rarity='ssr', featured=False)      # 非 featured 出金
@@ -480,9 +516,9 @@ class TestNeverResetHardPity:
     def test_never_reset_reaches_behavior_via_create_behavior(self):
         """`reset='never'` 经 `create_behavior(PityDef(...))` 透传（配置 → 行为接线面）。
 
-        S4-2 起 `hard` 已 preset 化：本用例断言的对象由旧类 `HardPityBehavior`
-        改为统一骨架 `Pity` + 「`reset` 落进 `CounterTracker.reset_on`」这一接线点
-        （旧类的 `_reset` 属性在骨架上不存在）。
+        S4-2 起 `hard` 已 preset 化：本用例断言的对象由旧行为类改为统一骨架 `Pity`
+        + 「`reset` 落进 `CounterTracker.reset_on`」这一接线点（旧类的 `_reset`
+        属性在骨架上不存在）。
         """
         from gacha_simulator.core.pity import create_behavior, Pity
 

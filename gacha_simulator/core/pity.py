@@ -1692,9 +1692,11 @@ def _check_declared_keys(declared_keys, name):
     由 §3.1.4 骨架写入。本函数**不自行推断声明集**（那会让 §3.12.1 / §3.12.2 /
     §3.13 三处各有一套口径），只做两条判据的检查本体。
 
-    判据 1（同键被两个 Tracker 声明）：比对 `declared_keys['trackers']` 内的重复。
-    两个 Tracker 写同一个键时，后写者覆盖先写者，计数器的归属不再唯一，
-    且**不报错**（读取侧只看到一个值）。
+    判据 1（同一状态键被重复声明）：比对 `declared_keys['trackers']` 内的重复。
+    两种形态都落在这一条：**两个 Tracker** 声明同一个键（后写者覆盖先写者，
+    计数器的归属不再唯一），或**单个 Tracker 的键集内**同一键出现两次
+    （声明集与「一个键一个写入方」不再对应）。两者读取侧都只看到一个值、
+    **不报错**，故一律在构造期拒收。
 
     判据 2（Modifier 引用不存在的键）：「存在」的口径 = 该键在 **Tracker ∪
     Lifecycle** 的 `state_keys()` 并集内，另加 `_EXTERNAL_STATE_KEYS` 白名单。
@@ -1720,8 +1722,9 @@ def _check_declared_keys(declared_keys, name):
     if duplicated:
         raise ConfigError(
             f"保底 '{name}' 的 Tracker 声明集存在重复键 "
-            f"{sorted(duplicated)}：同一状态键不得被两个 Tracker 声明"
-            f"（§3.12.2 判据 1）：后写者会覆盖先写者的计数，且不报错"
+            f"{sorted(duplicated)}：同一状态键被重复声明"
+            f"（两个 Tracker 之间，或单个 Tracker 内）（§3.12.2 判据 1）："
+            f"「一个键一个写入方」不再成立，后写者覆盖先写者，且不报错"
         )
 
     # ── 判据 2：Modifier 引用不存在的状态键（§3.12.2 第 2 条）──

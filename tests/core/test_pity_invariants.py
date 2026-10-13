@@ -98,7 +98,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
-from gacha_simulator.core.pity import Pity, PityEngine
+from gacha_simulator.core.pity import Pity, PityEngine, _EXTERNAL_STATE_KEYS
 from gacha_simulator.core.pity_modifier import (
     HardModifier,
     Modifier,
@@ -790,7 +790,16 @@ def _criteria_violations(trackers, modifiers) -> List[str]:
 
     判据 1：同一键被两个 Tracker 声明（比对 `trackers` 声明集的重复）。
     判据 2：Modifier 声明的读键不在 `trackers` 的声明集内，且不在
-    `selected_card` 白名单内（本文件的组合无 lifecycle 声明键，故并集的另一半恒空）。
+    `selected_card` 白名单内。
+
+    **本镜像不建模判据 2 并集的 lifecycle 半边**（形参面无 Lifecycle）。该半边在
+    **当前组合面上与生产判据零差异**，理由是实测而非推断：`_LIFECYCLE_SPECS` 的
+    `finite` / `dependent_finite` **确实声明** `('triggers',)`（且两者都已纳入
+    组合面），但组合面内**无任何 Modifier 读 `triggers`**（Modifier 的 `state_keys()`
+    只有 counter / guaranteed / forced_loss / cr_intercepted / fate_points /
+    selected_card 六个键），故「Tracker 声明集」与「Tracker ∪ Lifecycle 声明集」
+    对 Modifier 的可读键给出同一答案。生产侧该半边由 S10-2 的
+    `test_finite_activation_declared_key_accepted` 两方向覆盖。
 
     **不含** Tracker 自身的读键：判据 2 的文本只约束 Modifier（§3.12.2），
     `StreakTracker` 对 `guaranteed` 的守卫读带默认值、缺键无害，不在两条判据内。
@@ -1451,6 +1460,15 @@ _FIXED_COMBOS: Dict[str, _Combo] = {
 # **命名约束（GATE-6 测试策略）**：验收命令的过滤词 `illegal` / `cycle` 必须落在
 # 用例名内，且命中项**恰好三条**。故承载本段的类名与同文件其他类名一律不含
 # 这两个词（`-k` 是子串匹配、且匹配面含类名与模块名），否则会连带命中无关用例。
+# S10-2 收口补入的用例同样避开这两个词（命名时另须避开 `lifecycle`，它是 `cycle`
+# 的子串），使过滤词命中数仍为三条。
+#
+# **「不可写」的理由只适用判据 1 / 2（S10-2 审查 F5 收窄）**：`PityEngine.__init__`
+# 只收 `PityDef` 并经 `create_behavior` 的 preset 分支造零件，零件键集由 btype 固定、
+# 不受用例摆布（实测 11 个 btype 的默认 `PityDef` 全数产出合法组合：无重复 Tracker
+# 键、无未知 Modifier 键），故判据 1 / 2 的**引擎层负例写不出**，只能直构 `Pity`。
+# 判据 3 的引擎层负例**可写**（两个 `PityDef` 的 `depends_on` 互指即在引擎路径抛
+# `ConfigError`），见本类的 `test_cycle_depends_on`。
 
 class _TypoKeyModifier(Modifier):
     """键名拼错的 Modifier：`state_keys()` 申报一个不存在的键 `'countr'`。
@@ -1462,6 +1480,17 @@ class _TypoKeyModifier(Modifier):
 
     def state_keys(self):
         return ('countr',)
+
+
+class _TriggersKeyModifier(Modifier):
+    """读 Lifecycle 声明键 `triggers` 的 Modifier 桩件（判据 2 并集的 lifecycle 半边）。
+
+    生产 Modifier 无一读该键（全库仅 `Finite*` 生命周期声明它），故这一半边只能
+    以桩件复现。桩件只申报声明集、不参与 `apply`（本用例只走构造期）。
+    """
+
+    def state_keys(self):
+        return ('triggers',)
 
 
 class TestCombinationCriteriaConstruction:
@@ -1541,3 +1570,80 @@ class TestCombinationCriteriaConstruction:
                     soft_start=70, soft_increment=6, depends_on='cyc_src'),
         ])
         assert engine._activation_graph == {'cyc_src': ['cyc_dst']}
+
+    def test_rejected_combination_leaves_state_untouched(self):
+        """检查点次序：判据抛错时 state 必须**一位未写**（S10-2 审查 F2 护栏）。
+
+        判据 1 / 2 在 `Pity.__init__` 里的位置须在 `self._lifecycle.initialize`
+        **之前**：`initialize` 会往 `state` 写初始 `_active`，次序颠倒则非法组合
+        留下半写的 state（后续复用同一 state 的路径会读到一条已被拒的保底的残留）。
+        故本用例对**拒收后的 state** 逐位断言为空，并把合法组合的对照一并写出
+        （证明「空」是次序之功，而非 `initialize` 根本不写）。
+        """
+        state = PityState()
+        with pytest.raises(ConfigError, match='重复键'):
+            Pity(
+                name=_PITY_NAME, state=state, scope='ssr',
+                btype='soft_step',
+                trackers=[CounterTracker(scope='ssr', init=0),
+                          CounterTracker(scope='ssr', init=0)],
+                modifiers=[SoftModifier('ssr', deltas=((2, 0.0), (3, 30.0)))],
+            )
+        assert state.to_dict()['data'] == {}, (
+            f'判据 1 拒收后 state 仍被写入：{state.to_dict()}')
+
+        state2 = PityState()
+        with pytest.raises(ConfigError, match='不存在的状态键'):
+            Pity(
+                name=_PITY_NAME, state=state2, scope='ssr',
+                btype='soft_step',
+                trackers=[],
+                modifiers=[SoftModifier('ssr', deltas=((2, 0.0), (3, 30.0)))],
+            )
+        assert state2.to_dict()['data'] == {}, (
+            f'判据 2 拒收后 state 仍被写入：{state2.to_dict()}')
+
+        # 对照：同一形态去掉非法项后，`initialize` 必写 `_active`
+        legal = PityState()
+        Pity(
+            name=_PITY_NAME, state=legal, scope='ssr', btype='soft_step',
+            trackers=[CounterTracker(scope='ssr', init=0)],
+            modifiers=[SoftModifier('ssr', deltas=((2, 0.0), (3, 30.0)))],
+        )
+        assert legal.to_dict()['data'] == {_PITY_NAME: {'_active': True}}, (
+            f'合法组合的初始 state 形状变了：{legal.to_dict()}')
+
+    def test_finite_activation_declared_key_accepted(self):
+        """判据 2 的「存在」口径含 Lifecycle 半边（§3.12.2 原文，S10-2 审查 F3）。
+
+        `FiniteActive(max_triggers=2)` 声明 `('triggers',)`，而**无任何 Tracker**
+        声明它，故读它的 Modifier 仅在「Tracker ∪ Lifecycle」口径下合法；把并集里
+        的 `set(declared_keys['lifecycle'])` 换成 `set()` 则本用例的正例必红。
+        `AlwaysActive`（不声明）一侧作为反向对照，证明上面的通过不是「判据 2 不查」。
+        """
+        def _build(lifecycle):
+            return Pity(
+                name=_PITY_NAME, state=PityState(), scope='ssr',
+                btype='soft_step',
+                trackers=[CounterTracker(scope='ssr', init=0)],
+                modifiers=[SoftModifier('ssr', deltas=((2, 0.0), (3, 30.0))),
+                           _TriggersKeyModifier()],
+                lifecycle=lifecycle,
+            )
+
+        assert _build(FiniteActive(max_triggers=2)) is not None, (
+            '声明 `triggers` 的生命周期未能供给 Modifier 的读键')
+
+        with pytest.raises(ConfigError, match='不存在的状态键'):
+            _build(AlwaysActive())
+
+    def test_criteria_whitelist_content(self):
+        """判据 2 的白名单内容等值断言（S10-2 审查 F4）。
+
+        白名单是判据 2 的**放行面**：多一个键即多一条「无声明方的读键被放行」的
+        缝隙（审查探针 K1：塞入 `bogus_unused` 后声明该键的 Modifier 被静默
+        ACCEPT，属非法形态漏过）；反之清空则 `targeted` / `targeted_soft` 的全部
+        合法配置被误杀。故内容与「非空」一并钉住，将来误加键即红。
+        """
+        assert _EXTERNAL_STATE_KEYS == frozenset({'selected_card'}), (
+            f'判据 2 的白名单内容已变：{sorted(_EXTERNAL_STATE_KEYS)}')

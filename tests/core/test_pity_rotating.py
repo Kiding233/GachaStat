@@ -29,6 +29,14 @@ from gacha_simulator.core.pity import (
 # 它与 `Pity` 骨架之间无依赖，且实现层的 Modifier 也要用它），编排层 `pity.py` 只是
 # re-export。本文件从**定义处**导入，使「归属是否漂移」在本行即显形。
 from gacha_simulator.core.pity_primitives import transfer_linear
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -71,7 +79,7 @@ def base_ctx(state):
         draw=draw,
         current={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
         state=state,
-    )
+    sim=_SIM,)
 
 
 @pytest.fixture
@@ -102,7 +110,7 @@ def slot_ctx(state):
         draw=draw,
         current={'ssr_featured': 0.005, 'ssr_standard': 0.005},
         state=state,
-    )
+    sim=_SIM,)
 
 
 def _make(state, btype, name, **pdef_kwargs):
@@ -143,7 +151,7 @@ class TestRotatingPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        miss_ctx = PityContext(draw=draw_miss, current={'f1': 0.005, 's1': 0.005}, state=state)
+        miss_ctx = PityContext(draw=draw_miss, current={'f1': 0.005, 's1': 0.005}, state=state, sim=_SIM)
         pity.after_draw(miss_ctx)
         assert state.get('test_rot', 'guaranteed', False) is True
 
@@ -163,7 +171,7 @@ class TestRotatingPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        miss_ctx = PityContext(draw=draw_miss, current={}, state=state)
+        miss_ctx = PityContext(draw=draw_miss, current={}, state=state, sim=_SIM)
         pity.after_draw(miss_ctx)
         assert state.get('test_rot', 'guaranteed', False) is True
 
@@ -175,7 +183,7 @@ class TestRotatingPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        hit_ctx = PityContext(draw=draw_hit, current={}, state=state)
+        hit_ctx = PityContext(draw=draw_hit, current={}, state=state, sim=_SIM)
         pity.after_draw(hit_ctx)
         assert state.get('test_rot', 'guaranteed', False) is False
 
@@ -188,7 +196,7 @@ class TestRotatingPity:
             scope_cards={}, featured_cards={},
             base_probabilities={}, rarity_rank={'ssr': 0, 'sr': 1},
         )
-        ctx = PityContext(draw=draw, current={}, state=state)
+        ctx = PityContext(draw=draw, current={}, state=state, sim=_SIM)
         pity.after_draw(ctx)
         # guaranteed 未被设置（保持默认 False）
         assert state.get('test_rot', 'guaranteed', False) is False
@@ -209,7 +217,7 @@ class TestRotatingPity:
             scope_cards={'ssr': ('f1',)}, featured_cards={'ssr': ('f1',)},
             base_probabilities={'f1': 0.01}, rarity_rank={'ssr': 0},
         )
-        ctx_hit = PityContext(draw=draw_hit, current={}, state=state)
+        ctx_hit = PityContext(draw=draw_hit, current={}, state=state, sim=_SIM)
         assert pity.did_fire(ctx_hit) is True
 
         draw_miss = DrawInfo(
@@ -218,7 +226,7 @@ class TestRotatingPity:
             scope_cards={'ssr': ('s1',)}, featured_cards={'ssr': ()},
             base_probabilities={'s1': 0.01}, rarity_rank={'ssr': 0},
         )
-        ctx_miss = PityContext(draw=draw_miss, current={}, state=state)
+        ctx_miss = PityContext(draw=draw_miss, current={}, state=state, sim=_SIM)
         assert pity.did_fire(ctx_miss) is False
 
 
@@ -239,7 +247,7 @@ class TestRotatingCRPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        ctx = PityContext(draw=draw, current={}, state=state)
+        ctx = PityContext(draw=draw, current={}, state=state, sim=_SIM)
         pity.after_draw(ctx)
         assert state.get('test_cr', 'cr_counter', 0) == 1
 
@@ -255,7 +263,7 @@ class TestRotatingCRPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state, sim=_SIM))
         assert state.get('test_cr', 'cr_counter', 0) == 1
         assert state.get('test_cr', 'guaranteed', False) is True
 
@@ -267,12 +275,12 @@ class TestRotatingCRPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        pity.after_draw(PityContext(draw=hit_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=hit_draw, current={}, state=state, sim=_SIM))
         assert state.get('test_cr', 'guaranteed', False) is False  # 大保底清除
         assert state.get('test_cr', 'cr_counter', 0) == 1  # CR 不介入大保底
 
         # 第3抽：小保底赢 → cr_counter 归零
-        pity.after_draw(PityContext(draw=hit_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=hit_draw, current={}, state=state, sim=_SIM))
         assert state.get('test_cr', 'cr_counter', 0) == 0
 
     def test_cr_100_percent_intercept_at_threshold(self, state, base_ctx):
@@ -368,7 +376,7 @@ class TestRotatingSoftPity:
             scope_cards={'ssr': ('f1',)}, featured_cards={'ssr': ('f1',)},
             base_probabilities={'f1': 0.01}, rarity_rank={'ssr': 0},
         )
-        hit_ctx = PityContext(draw=hit_draw, current={}, state=state)
+        hit_ctx = PityContext(draw=hit_draw, current={}, state=state, sim=_SIM)
         pity.after_draw(hit_ctx)
         assert state.get('test_rs', 'counter', 0) == 0
 
@@ -389,7 +397,7 @@ class TestRotatingSoftPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state, sim=_SIM))
         assert state.get('test_rs', 'guaranteed', False) is True
 
 
@@ -416,7 +424,7 @@ class TestRotatingCRSoftPity:
             base_probabilities={'f1': 0.005, 's1': 0.005},
             rarity_rank={'ssr': 0},
         )
-        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
+        pity.after_draw(PityContext(draw=miss_draw, current={}, state=state, sim=_SIM))
         assert state.get('test_crs', 'cr_counter', 0) == 1
         # SSR 出货后 soft counter 重置
         assert state.get('test_crs', 'counter', 0) == 0
@@ -498,7 +506,7 @@ class TestTransferLinear:
                 rarity_rank={'ssr': 0},
             ),
             current=dict(dist), state=PityState(),
-        )
+        sim=_SIM,)
         old = _redistribute_scope(ctx, featured_ratio=1.0, total=0.25 + 0.75,
                                   featured_slots=('slot_a',), scope='ssr')
         delta = transfer_linear(dist, ('a',), ('q',), dist['q'])

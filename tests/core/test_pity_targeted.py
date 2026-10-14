@@ -26,6 +26,14 @@ from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pity import (
     PityState, DrawInfo, PityContext, create_behavior,
 )
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -66,7 +74,7 @@ def _make_ctx(state, reward_id, rarity='ssr', is_featured=False):
         draw=draw,
         current={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
         state=state,
-    )
+    sim=_SIM,)
 
 
 def _make(state, btype, name, **pdef_kwargs):

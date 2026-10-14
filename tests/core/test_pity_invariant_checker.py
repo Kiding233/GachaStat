@@ -49,6 +49,14 @@ from gacha_simulator.core.pity import (
     PoolPitySpec,
 )
 from gacha_simulator.core.pity_tracker import CounterTracker
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 # ══════════════════════════════════════════════════════════════════
 # 〇、AST 判据本体（可对合成源码驱动；S11 审查收口 F4）
@@ -226,8 +234,8 @@ class TestCallSites:
         checker = _CountingChecker(enabled=True)
         engine, state = _engine(invariants=checker)
 
-        engine.before_draw(_POOL, state, dict(_BASE))
-        engine.after_draw(_POOL, state, 'sr_std')
+        engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
+        engine.after_draw(_POOL, state, 'sr_std', sim=_SIM)
 
         assert checker.before_calls >= 1, (
             'before_draw 的调用点未生效：check_after_before_draw 零调用')
@@ -251,15 +259,15 @@ class TestCallSites:
         # ── 默认关闭态：不建实例、零调用 ──
         engine, state = _engine(invariants=None)
         assert engine._invariants is None, '默认态须不建实例（挂载字段为 None）'
-        engine.before_draw(_POOL, state, dict(_BASE))
-        engine.after_draw(_POOL, state, 'sr_std')
+        engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
+        engine.after_draw(_POOL, state, 'sr_std', sim=_SIM)
         assert seen == [], f'invariants=None 时入口被调用：{seen}'
 
         # ── 阳性对照：同一探针在启用态的引擎上必须记录到两个入口 ──
         enabled_engine, enabled_state = _engine(
             invariants=InvariantChecker(enabled=True))
-        enabled_engine.before_draw(_POOL, enabled_state, dict(_BASE))
-        enabled_engine.after_draw(_POOL, enabled_state, 'sr_std')
+        enabled_engine.before_draw(_POOL, enabled_state, dict(_BASE), sim=_SIM)
+        enabled_engine.after_draw(_POOL, enabled_state, 'sr_std', sim=_SIM)
         assert seen == ['before', 'after'], (
             f'探针自身失灵（启用态下也记录不到调用）：{seen}')
 
@@ -297,8 +305,8 @@ class TestSwitchCarrier:
         assert restored._invariants is not None
         assert restored._invariants.enabled is True
         state = PityState()
-        restored.before_draw(_POOL, state, dict(_BASE))
-        restored.after_draw(_POOL, state, 'sr_std')
+        restored.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
+        restored.after_draw(_POOL, state, 'sr_std', sim=_SIM)
         assert restored._invariants.before_calls >= 1
         assert restored._invariants.after_calls >= 1
 
@@ -348,7 +356,7 @@ class TestDistributionLayer:
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
 
         assert probs == {'ssr_up': 0.003, 'ssr_std': 0.006,
                          'sr_std': 0.991, 'r_std': 0.0}, (
@@ -366,7 +374,7 @@ class TestDistributionLayer:
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker, threshold=99)
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
         assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
         checker.check_after_before_draw(_POOL, probs, engine)
 
@@ -381,7 +389,7 @@ class TestDistributionLayer:
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker, threshold=99)
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
         assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
 
         broken = dict(probs)
@@ -397,7 +405,7 @@ class TestDistributionLayer:
         含保底名 + 键 + 期望 / 实际三要素（§3.12.1 非负性行）。"""
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
 
         broken = dict(probs)
         broken['sr_std'] = -0.5
@@ -414,7 +422,7 @@ class TestDistributionLayer:
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
 
         broken = dict(probs)
         broken['r_std'] = 0.2
@@ -439,7 +447,7 @@ class TestDistributionLayer:
         defs = [PityDef(name='h_sr', btype='hard', scope='sr', threshold=1),
                 PityDef(name='h_r', btype='hard', scope='r', threshold=99)]
         engine, state = _engine(invariants=checker, pities=defs)
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
         assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
         checker.check_after_before_draw(_POOL, probs, engine)
 
@@ -458,10 +466,10 @@ class TestDistributionLayer:
         engine, state = _engine(invariants=checker, pities=defs)
         totals = []
         for _ in range(4):
-            probs = engine.before_draw(_POOL, state, dict(_BASE))
+            probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
             totals.append(sum(probs.values()))
             assert totals[-1] == pytest.approx(1.0, abs=invariants_mod.TOL)
-            engine.after_draw(_POOL, state, 'r_std')
+            engine.after_draw(_POOL, state, 'r_std', sim=_SIM)
         assert len(totals) == 4
 
     def test_disabled_checker_is_a_no_op(self):
@@ -469,7 +477,7 @@ class TestDistributionLayer:
         checker = InvariantChecker()
         assert checker.enabled is False
         engine, state = _engine(invariants=checker)
-        probs = engine.before_draw(_POOL, state, dict(_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
 
         broken = dict(probs)
         broken['sr_std'] = -0.5
@@ -488,8 +496,8 @@ class TestStateLayer:
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
         for reward in ('sr_std', 'r_std', 'ssr_up', 'r_std'):
-            engine.before_draw(_POOL, state, dict(_BASE))
-            engine.after_draw(_POOL, state, reward)
+            engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
+            engine.after_draw(_POOL, state, reward, sim=_SIM)
         assert state.data['p_hard']['_active'] is True
 
     def test_undeclared_state_key_raises(self):
@@ -501,8 +509,8 @@ class TestStateLayer:
         """
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
-        engine.before_draw(_POOL, state, dict(_BASE))
-        engine.after_draw(_POOL, state, 'sr_std')
+        engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
+        engine.after_draw(_POOL, state, 'sr_std', sim=_SIM)
 
         state.set('p_hard', 'countr', 3)
         with pytest.raises(InvariantError) as excinfo:
@@ -515,7 +523,7 @@ class TestStateLayer:
         不留则该键在真配置上必报假警报。"""
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
-        engine.after_draw(_POOL, state, 'sr_std')
+        engine.after_draw(_POOL, state, 'sr_std', sim=_SIM)
         state.set('p_hard', 'selected_card', 'sr_std')
         checker.check_after_after_draw(_POOL, state, engine)
 
@@ -532,7 +540,7 @@ class TestStateLayer:
         defs = [PityDef(name='p_rotsoft', btype='rotating_soft', scope='ssr',
                         soft_start=1, soft_end=2, soft_increment=10.0)]
         engine, state = _engine(invariants=checker, pities=defs)
-        engine.after_draw(_POOL, state, 'ssr_std')          # 基线：不报错
+        engine.after_draw(_POOL, state, 'ssr_std', sim=_SIM)          # 基线：不报错
 
         part_ns = 'p_rotsoft_soft'
         assert set(state.data.get(part_ns) or {}) == {'_active'}, (
@@ -619,7 +627,7 @@ class TestLifecycleLayer:
         """**负例 ③**（§六 S11）：在**白名单以外**写 `_active` → 必须抛错，三要素齐备。"""
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
-        engine.after_draw(_POOL, state, 'sr_std')
+        engine.after_draw(_POOL, state, 'sr_std', sim=_SIM)
 
         state.set('ghost_pity', '_active', True)
         with pytest.raises(InvariantError) as excinfo:
@@ -630,7 +638,7 @@ class TestLifecycleLayer:
         """`_active` 的值域是 bool（三处写入方分别写 True / True / False）。"""
         checker = InvariantChecker(enabled=True)
         engine, state = _engine(invariants=checker)
-        engine.after_draw(_POOL, state, 'sr_std')
+        engine.after_draw(_POOL, state, 'sr_std', sim=_SIM)
 
         state.set('p_hard', '_active', 1)
         with pytest.raises(InvariantError) as excinfo:
@@ -651,8 +659,8 @@ class TestLifecycleLayer:
         assert state.get('p_dep', '_active', False) is False, (
             'DependentActive 的构造期 initialize 不写 `_active`，本用例的前提')
 
-        engine.before_draw(_POOL, state, dict(_BASE))
-        engine.after_draw(_POOL, state, 'ssr_up')       # p_src 触发 → 传播
+        engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
+        engine.after_draw(_POOL, state, 'ssr_up', sim=_SIM)       # p_src 触发 → 传播
 
         assert state.get('p_dep', '_active', False) is True, '激活传播未发生，用例无观测对象'
         checker.check_after_after_draw(_POOL, state, engine)
@@ -718,7 +726,7 @@ class TestDeltaLayer:
 
         # ① 正面：骨架内循环真的走到增量层（探针本身可用的阳性对照即本断言）
         engine, state = _engine(invariants=InvariantChecker(enabled=True))
-        engine.before_draw(_POOL, state, dict(_BASE))
+        engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
         assert len(hits) == 1, (
             f'骨架内循环须命中增量层恰一次（hard(scope=sr) 首抽即触发），实测 {hits}')
         pool_id, dist, delta = hits[0]
@@ -736,7 +744,7 @@ class TestDeltaLayer:
         # ③ 关闭态：invariants=None 时连调用点都不进（生产零开销）
         hits.clear()
         engine_off, state_off = _engine(invariants=None)
-        engine_off.before_draw(_POOL, state_off, dict(_BASE))
+        engine_off.before_draw(_POOL, state_off, dict(_BASE), sim=_SIM)
         assert hits == [], f'invariants=None 时不得命中增量层，实测 {hits}'
 
     def test_get_probabilities_stays_outside_the_delta_layer(self, monkeypatch):
@@ -770,18 +778,18 @@ class TestDeltaLayer:
         # ① 只读查询路径不得进入增量层
         engine, state = _engine(invariants=InvariantChecker(enabled=True))
         _preset_counter(state)
-        queried = engine.get_probabilities(_POOL, state, dict(_BASE))
+        queried = engine.get_probabilities(_POOL, state, dict(_BASE), sim=_SIM)
         assert hits == [], f'只读查询不得进入增量层，实测命中 {hits}'
 
         # 阳性对照：同一探针在 before_draw 上必命中（否则上面那条恒真）
-        engine.before_draw(_POOL, state, dict(_BASE))
+        engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
         assert len(hits) == 1, (
             f'探针自身失灵（同引擎的 before_draw 也未命中增量层）：{hits}')
 
         # ② 查询输出不随校验器开关变化
         off_engine, off_state = _engine(invariants=None)
         _preset_counter(off_state)
-        off_queried = off_engine.get_probabilities(_POOL, off_state, dict(_BASE))
+        off_queried = off_engine.get_probabilities(_POOL, off_state, dict(_BASE), sim=_SIM)
         assert queried == off_queried, (
             f'只读查询的输出不得随校验器开关变化，实测 {queried} vs {off_queried}')
 
@@ -816,7 +824,7 @@ class TestDeltaLayer:
         monkeypatch.setattr(HardModifier, 'compute_delta', _spy)
 
         engine, state = _engine(invariants=InvariantChecker(enabled=True))
-        engine.before_draw(_POOL, state, dict(_BASE))
+        engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
 
         assert len(hits) == 1 and len(returned) == 1, (
             f'该步须恰有一次增量层调用与一次 Modifier 求值，实测 {hits} / {returned}')
@@ -871,7 +879,7 @@ def test_every_registry_type_runs_without_false_alarm(btype):
 
     rng = random.Random(7)
     for _ in range(25):
-        probs = engine.before_draw(_POOL, state, dict(_WIDE_BASE))
+        probs = engine.before_draw(_POOL, state, dict(_WIDE_BASE), sim=_SIM)
         roll = rng.random()
         acc = 0.0
         pick = 'r'
@@ -880,7 +888,7 @@ def test_every_registry_type_runs_without_false_alarm(btype):
             if roll <= acc:
                 pick = slot
                 break
-        engine.after_draw(_POOL, state, pick)
+        engine.after_draw(_POOL, state, pick, sim=_SIM)
     assert state.get('p', '_active') is True
 
 
@@ -1002,7 +1010,7 @@ def test_issue_903_reversal_is_landed():
     # ② 判据是恒等断言：1.0 通过、1.009 抛错
     checker = InvariantChecker(enabled=True)
     engine, state = _engine(invariants=checker, threshold=1)
-    probs = engine.before_draw(_POOL, state, dict(_BASE))
+    probs = engine.before_draw(_POOL, state, dict(_BASE), sim=_SIM)
     assert sum(probs.values()) == pytest.approx(1.0, abs=invariants_mod.TOL)
     checker.check_after_before_draw(_POOL, probs, engine)
 

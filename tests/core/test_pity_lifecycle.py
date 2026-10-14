@@ -20,6 +20,14 @@ from gacha_simulator.core.pity_modifier import HardModifier, Modifier
 from gacha_simulator.core.pity_tracker import (
     CounterTracker, FlagTracker, NamespaceTracker,
 )
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 class TestDeactivateOnEarlyHit:
@@ -50,7 +58,7 @@ class TestDeactivateOnEarlyHit:
             scope_cards={'ssr': ('f1',)}, featured_cards={'ssr': ('f1',)},
             base_probabilities={'f1': 0.01}, rarity_rank={'ssr': 0},
         )
-        ctx = PityContext(draw=draw, current={}, state=state)
+        ctx = PityContext(draw=draw, current={}, state=state, sim=_SIM)
         # counter 低于 threshold
         state.set('early_hard', 'counter', 50)
 
@@ -97,7 +105,7 @@ def _pity_ctx(rarity: str = 'ssr', is_featured: bool = False,
         pool_id='p', pool_instance_id='p_0',
         reward_id=f'{rarity}_card', reward_rarity=rarity, is_featured=is_featured,
     )
-    return PityContext(draw=draw, current=dict(current or {}), state=st)
+    return PityContext(draw=draw, current=dict(current or {}), state=st, sim=_SIM)
 
 
 def _make_pity(state=None, *, name=PITY_NAME, btype='rotating', trackers=None,

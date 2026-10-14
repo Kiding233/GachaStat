@@ -148,6 +148,14 @@ from gacha_simulator.core.pity import (
     create_behavior,
     transfer_linear,
 )
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 # ══════════════════════════════════════════════════════════════════
 # 一、池事实与抽卡序列
@@ -637,7 +645,7 @@ def _ctx(shape: PoolShape, state: PityState, step: Optional[DrawStep] = None,
         draw=draw,
         current=dict(base) if step is None else {},
         state=state,
-    )
+    sim=_SIM,)
 
 
 def run_trace(
@@ -744,8 +752,8 @@ def run_new_via_engine(pdef: PityDef, steps: Sequence[DrawStep], *,
     with _counting_rng(seed) as calls:
         for step in steps:
             trace.probs.append(dict(engine.before_draw(
-                'rig_pool', state, shape.card_probabilities)))
-            engine.after_draw('rig_pool', state, step.reward_id)
+                'rig_pool', state, shape.card_probabilities, sim=_SIM)))
+            engine.after_draw('rig_pool', state, step.reward_id, sim=_SIM)
             trace.snapshots.append(state.to_dict()['data'])
         trace.rng_calls = calls['n']
     return trace
@@ -2982,7 +2990,7 @@ class TestS8SingleCardTargeting:
         state = _build_pity_state_init([pdef])
         engine = PityEngine({'s8_up_pool': _engine_pool_spec(pdef, shape)}, [pdef],
                             rarity_rank=shape.rarity_rank, state=state)
-        probs = engine.before_draw('s8_up_pool', state, dict(shape.card_probabilities))
+        probs = engine.before_draw('s8_up_pool', state, dict(shape.card_probabilities), sim=_SIM)
 
         scope_total = sum(shape.card_probabilities[c]
                           for c in shape.scope_cards['ssr'])
@@ -3166,7 +3174,7 @@ class TestS8RegisteredDifferencePriorityShape:
         assert order == [rot.name, hard.name], (
             f'本用例的前提是「rotating 经 priority 排在 hard 之前」，实测顺序 {order}')
 
-        probs = engine.before_draw('s8_g_pool', state, dict(shape.card_probabilities))
+        probs = engine.before_draw('s8_g_pool', state, dict(shape.card_probabilities), sim=_SIM)
         assert probs['f1'] == pytest.approx(1.0), (
             f'hard 的 A 侧须取当前形状（保留 rotating 造成的 f1 独占），实测 {probs}')
         assert probs['s1'] == pytest.approx(0.0), (
@@ -3184,7 +3192,7 @@ class TestS8RegisteredDifferencePriorityShape:
         hard_old._rebind_state(old_state)
         ctx = _ctx(shape, old_state, space='slot')
         after_rot = rot_old.before_draw(ctx)
-        ctx2 = PityContext(draw=ctx.draw, current=after_rot, state=old_state)
+        ctx2 = PityContext(draw=ctx.draw, current=after_rot, state=old_state, sim=_SIM)
         old_slots = hard_old.before_draw(ctx2)
         assert old_slots['ssr_featured'] == pytest.approx(0.5), (
             f'旧类侧须把 A 侧重置为声明比例（0.5 / 0.5），实测 {old_slots}')
@@ -3492,7 +3500,7 @@ class TestS8NonUnitSumCoverage:
                             [pdef], rarity_rank=shape.rarity_rank, state=state,
                             invariants=None)
         scaled = {c: 0.8 * v for c, v in shape.card_probabilities.items()}
-        out = engine.before_draw('s8_sigma_off_pool', state, dict(scaled))
+        out = engine.before_draw('s8_sigma_off_pool', state, dict(scaled), sim=_SIM)
         assert out == scaled, (
             f'校验器关闭时偏离须原样穿过（不报错、不归一化），实测 {out}')
 
@@ -3512,7 +3520,7 @@ class TestS8NonUnitSumCoverage:
                             invariants=checker)
         scaled = {c: 0.8 * v for c, v in shape.card_probabilities.items()}
         with pytest.raises(InvariantError) as excinfo:
-            engine.before_draw('s8_sigma_pool', state, dict(scaled))
+            engine.before_draw('s8_sigma_pool', state, dict(scaled), sim=_SIM)
         message = str(excinfo.value)
         assert "'Σp'" in message and '期望 1.0' in message, (
             f'须由分布层的归一性判据拦下，实测 {message}')

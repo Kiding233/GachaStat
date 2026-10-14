@@ -32,7 +32,15 @@ from .pity_primitives import PityContext, PityState, _apply_delta, transfer_line
 __all__ = [
     'Modifier', 'HardModifier', 'SoftModifier',
     'RotatingModifier', 'NonFeaturedModifier', 'SelectedModifier', 'NotOwnedModifier',
+    'KNOWN_SIM_SOURCES',
 ]
+
+#: `SimView` 的**已知源集合**（P64 S9-2，§3.10.2）：`Modifier.uses_sim` 注解里
+#: 允许出现的名字。当前只有 `owns`（`balance()` 已于 2026-10-06 删除，全库零使用）。
+#: 注解**不参与门控**（它的漂移后果是「文档过时」，而门控的漂移后果是「保底静默
+#: 算错」，两者不对称），只作文档与检查器输入；名字写错（拼写、或引用了已删除的源）
+#: 在 `Pity` 构造期抛 `ConfigError`（校验点见 `pity.py` 的 `_check_uses_sim`）。
+KNOWN_SIM_SOURCES: tuple = ('owns',)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -90,6 +98,13 @@ class Modifier:
     #: 命名空间声明面（ISSUE-407）：None = 不做命名空间切换，`Pity` 传默认 view；
     #: `'<ns>'` = 本零件声明独立命名空间，`Pity` 传 `StateView(state, part.namespace)`。
     namespace: Optional[str] = None
+
+    #: `SimView` 源声明（P64 S9-2，§3.10.2）：本零件读了 `ctx.sim` 的哪些源。
+    #: **纯文档 + 检查器输入，不参与门控**：`ctx.sim` 对所有保底一律可读（非
+    #: Optional、永远填充），故这里写不写都不影响行为。名字须在
+    #: `KNOWN_SIM_SOURCES` 内，否则 `Pity` 构造期抛 `ConfigError`（防「引用了
+    #: 已删除的源」这类注解腐烂）。基类默认 `()`（不读 sim 的零件不覆写）。
+    uses_sim: tuple = ()
 
     def compute_delta(self, view, dist: Dict[str, float],
                       ctx: PityContext) -> Optional[Dict[str, float]]:
@@ -527,6 +542,9 @@ class NotOwnedModifier(Modifier):
     输出 `Σ > 1`，同 §3.1.2 边界二的已登记差异类）已随 S8-1 废除；真实配置的 G3
     scope 为 `ssr`（rank 0），此时 `p(Q) = 1 − p(A)`，A 收下全部可用质量。
     """
+
+    #: 本零件读 `ctx.sim` 的哪个源（§3.10.2 的注解形态）：只读「是否拥有」。
+    uses_sim = ('owns',)
 
     def __init__(self, scope: str, threshold: int = 50):
         self._scope = scope

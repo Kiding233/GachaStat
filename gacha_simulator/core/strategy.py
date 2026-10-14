@@ -175,7 +175,12 @@ class StrategyContext:
         if pool is None or pool.is_exchange:
             return {}
         probs = {r.id: p for r, p in pool.rewards}
-        result = self._pity_engine.get_probabilities(pool_id, self._pity_state, probs)
+        # P64 S9-2（§3.10.2，通道 B）：本通道**完全绕过 `Banner.draw`**，故必须
+        # 自行填 `sim`：`StrategyContext` 持有 `GachaState`（`self.state`），
+        # 视图由它就地自产，与通道 A 共用同一 `GachaState` 源（§六 的「两通道必须
+        # 共用同一 GachaState / `_initial_counts` 源」）。漏填即构造期 `TypeError`。
+        result = self._pity_engine.get_probabilities(
+            pool_id, self._pity_state, probs, self.state.sim_view())
         self._pity_cache[pool_id] = result
         return result
 

@@ -13,7 +13,13 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+# P64 S9-2：`PityContext.sim` 的类型注记是字符串前向引用 `'SimView'`。`SimView` 住
+# `core/state.py`，而本层「仅依赖标准库」（§3.1.6）：故只在**类型检查期**引用它，
+# 运行期不 import（无模块级依赖，不成环）。
+if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
+    from .state import SimView
 
 
 # ── P60 新增：DrawInfo (frozen) + PityContext (可变载体) ──
@@ -88,6 +94,16 @@ class PityContext:
     # （含自身命名空间）。注记须与真实类型一致（引擎与 `SoftPityMixin` 的 fork 透传
     # 的都是原始 `PityState`）。
     state: 'PityState'
+    # P64 S9-2（§3.10.2）：模拟级只读视图（玩家持有），**非 Optional、永远填充**。
+    # 类型写作字符串 `'SimView'`：本层只依赖标准库（§3.1.6），`SimView` 住
+    # `core/state.py`，故此处不得 import 它（叶子层不引入上层依赖）。
+    # 写入者是**两条送达通道**（`core/banner.py` 的 `draw` 与 `core/strategy.py`
+    # 的 `get_pity_probabilities`，各自 `state.sim_view()`），两者都经 `PityEngine`
+    # 的三个调度入口（`before_draw` / `after_draw` / `get_probabilities`）的**必填参**
+    # `sim` 透传：缺参在构造本对象时即 `TypeError`（构造期失败），而不是运行期
+    # 读到 `None` 的静默恒等（§3.10.2 改判的四层 None 来源已全部消除）。
+    # 消费方：`NotOwnedModifier` 经 `ctx.sim.owns(card_id)` 直接读、**无 None 兜底**。
+    sim: 'SimView'
     readonly: bool = False
     invariants: Optional[Any] = None
 

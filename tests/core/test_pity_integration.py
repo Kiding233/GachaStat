@@ -28,6 +28,14 @@ from gacha_simulator.core.pity import (
 from gacha_simulator.core.pity_modifier import Modifier
 from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pool import Pool, Reward
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 ROOT = Path(__file__).resolve().parents[2]
 # 与 scripts/p82_baseline.py 的 BUILTIN_KEYS / PLUGIN_KEYS 同源（9 组）
@@ -84,7 +92,7 @@ class TestSelectedTargetResolution:
             draw=draw,
             current=dict(current or {'f1': 0.2, 'f2': 0.2, 's1': 0.6}),
             state=state,
-        )
+        sim=_SIM,)
 
     def test_selected_card_located_via_card_to_slot(self):
         """selected 在 card_to_slot 中 → A 列落在其投影槽位（scope 总量全给该槽）。
@@ -183,8 +191,8 @@ class TestDependsOnIntegration:
         assert state.get('dependent', '_active', False) is False
 
         # 模拟抽中 featured SSR —— source.did_fire → True
-        engine.before_draw('test_pool', state, {'ssr_featured': 0.005, 'ssr_standard': 0.005})
-        engine.after_draw('test_pool', state, 'f1')
+        engine.before_draw('test_pool', state, {'ssr_featured': 0.005, 'ssr_standard': 0.005}, sim=_SIM)
+        engine.after_draw('test_pool', state, 'f1', sim=_SIM)
 
         # 依赖方被激活
         assert state.get('dependent', '_active', False) is True
@@ -250,19 +258,19 @@ class TestMultiPityCoordination:
         base = {'f1': 0.006, 's1': 0.004, 'r1': 0.99}
 
         # 初始：小保底（rotating 未置位）、未到硬保底阈值 → 恒等
-        probs = engine.before_draw('test_pool', state, dict(base))
+        probs = engine.before_draw('test_pool', state, dict(base), sim=_SIM)
         assert probs == base
 
         # hard 单独触发（rotating 未置位）：Q = 更低稀有度（r1）整组搬空、
         # A = scope 卡集按当前比例收下（0.006 : 0.004 之比保持不变）
         state.set('hard90', 'counter', 89)
-        probs_hard = engine.before_draw('test_pool', state, dict(base))
+        probs_hard = engine.before_draw('test_pool', state, dict(base), sim=_SIM)
         assert probs_hard['r1'] == pytest.approx(0.0)
         assert probs_hard['f1'] / probs_hard['s1'] == pytest.approx(0.006 / 0.004)
 
         # 再叠 rotating 大保底：非 featured 的 s1 也被搬空、f1 收下全部
         state.set('rot', 'guaranteed', True)
-        probs2 = engine.before_draw('test_pool', state, dict(base))
+        probs2 = engine.before_draw('test_pool', state, dict(base), sim=_SIM)
         assert probs2['s1'] == pytest.approx(0.0)
         assert probs2['r1'] == pytest.approx(0.0)
         assert probs2['f1'] == pytest.approx(1.0)
@@ -309,20 +317,20 @@ class TestDidFireUnified:
         pity = _make_pity(state, 'rotating', 'rot')
 
         out_of_scope = PityContext(draw=_mk_draw('sf1', 'sr', True),
-                                   current={}, state=state)
+                                   current={}, state=state, sim=_SIM)
         assert pity.did_fire(out_of_scope) is False    # scope 门控挡住
         pity.after_draw(out_of_scope)
         assert state.get('rot', 'guaranteed', False) is False  # 状态未翻转
 
         in_scope = PityContext(draw=_mk_draw('f1', 'ssr', True),
-                               current={}, state=state)
+                               current={}, state=state, sim=_SIM)
         assert pity.did_fire(in_scope) is True
 
     def test_rotating_matches_after_draw_reset(self):
         """did_fire 与 after_draw 的重置分支严格同条件。"""
         state = PityState()
         pity = _make_pity(state, 'rotating', 'rot')
-        ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state)
+        ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state, sim=_SIM)
         pity.after_draw(ctx)
         assert state.get('rot', 'guaranteed', False) is False   # 状态未翻转
         assert pity.did_fire(ctx) is False                      # did_fire 亦为假
@@ -332,7 +340,7 @@ class TestDidFireUnified:
         pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=1)
         state.set('tgt', 'selected_card', 'sf1')     # 定轨卡指向非 scope 稀有度
 
-        ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state)
+        ctx = PityContext(draw=_mk_draw('sf1', 'sr', True), current={}, state=state, sim=_SIM)
         assert pity.did_fire(ctx) is False           # scope 门控挡住
         pity.after_draw(ctx)
         assert state.get('tgt', 'fate_points', 0) == 0   # 命中判据为真但状态未累积
@@ -341,7 +349,7 @@ class TestDidFireUnified:
         state = PityState()
         pity = _make_pity(state, 'targeted', 'tgt', fate_threshold=1)
         state.set('tgt', 'selected_card', 'f1')
-        ctx = PityContext(draw=_mk_draw('f1', 'ssr', True), current={}, state=state)
+        ctx = PityContext(draw=_mk_draw('f1', 'ssr', True), current={}, state=state, sim=_SIM)
         assert pity.did_fire(ctx) is True
 
     def test_counter_family_unchanged(self):
@@ -350,11 +358,11 @@ class TestDidFireUnified:
         pity = _make_pity(state, 'hard', 'h', threshold=90)
 
         not_featured = PityContext(draw=_mk_draw('s1', 'ssr', False),
-                                   current={}, state=state)
+                                   current={}, state=state, sim=_SIM)
         assert pity.did_fire(not_featured) is True
 
         other_rarity = PityContext(draw=_mk_draw('sf1', 'sr', True),
-                                   current={}, state=state)
+                                   current={}, state=state, sim=_SIM)
         assert pity.did_fire(other_rarity) is False
 
 
@@ -475,7 +483,7 @@ class TestNeverResetHardPity:
             draw=_mk_draw('f1' if featured else 's1', rarity, featured),
             current=dict(cls.CUR),
             state=state,
-        )
+        sim=_SIM,)
 
     @classmethod
     def _draw(cls, bh, state, rarity='r', featured=False):
@@ -833,7 +841,7 @@ class TestStateViewCrossPityReadClosed:
             base_probabilities={'c1': 1.0},
             rarity_rank={'ssr': 0},
         )
-        return PityContext(draw=draw, current={'c1': 1.0}, state=state)
+        return PityContext(draw=draw, current={'c1': 1.0}, state=state, sim=_SIM)
 
     def test_stateview_reads_own_namespace_without_ctx_state(self):
         """正例：Modifier 经 `view` 读**自己**命名空间的键 → 拿到真值，且不经 `ctx.state`。
@@ -897,3 +905,154 @@ class TestStateViewCrossPityReadClosed:
             '读他人命名空间的键须返回 default（跨保底读在架构上关闭）'
         # 对照（ISSUE-103）：隔离只由 view 承担，ctx.state 通道仍在
         assert ctx.state.get(self.FOREIGN_NAME, 'foreign_key') == 'other-pity-value'
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-2：`SimView` + `uses_sim` 注解校验 + 两条送达通道（§3.10.2）
+# ══════════════════════════════════════════════════════════════════
+
+def test_sim_view_owns_includes_initial_counts():
+    """`SimView.owns()` 取 `total_holding` 口径，**含初始持有**（ISSUE-009）。
+
+    判据四条：① 初始持有与模拟内获得**相加**（不是只看 `acquired`）；② 未持有的卡为 0；
+    ③ 视图是 `GachaState` 的**活引用**（O(1) 包装、不复制账本：同一 state 再获得一张，
+    视图随即反映）；④ `owns()` 与 `total_holding()` 逐值同源，且 `SimView` 的公开面
+    **恰为 `owns` 一个源**（`balance()` 已于 2026-10-06 删除，§3.10.2）。
+    """
+    state = _GachaState(initial_counts={'c1': 2})
+    state.add_card('c1')                     # 模拟内获得 1 张
+    view = state.sim_view()
+
+    assert view.owns('c1') == 3, '初始持有 2 + 模拟内 1 = 3（少算初始持有即本断言红）'
+    assert view.owns('never_seen') == 0
+    assert view.owns('c1') == state.total_holding('c1'), '两个入口须同口径'
+
+    state.add_card('c1')                     # 活引用：视图不缓存旧值
+    assert view.owns('c1') == 4
+
+    public = {n for n in dir(view) if not n.startswith('_')}
+    assert public == {'owns'},         f'SimView 只暴露 owns 一个源（§3.10.2 的「删除的符号」段），实测 {sorted(public)}'
+
+
+def test_sim_view_annotation_unknown_source_raises_config_error():
+    """`uses_sim` 注解名不在已知源集合内 → `ConfigError`（构造期，§3.10.2）。
+
+    正负两态同测：负例（注解 `'balance'`，该源已于 2026-10-06 删除）必抛，正例
+    （注解 `'owns'`，已知源）必须构造成功：只测负例无法区分「校验生效」与
+    「校验把所有注解都拒了」。
+    """
+    from gacha_simulator.core.config_store import ConfigError
+    from gacha_simulator.core.pity_modifier import KNOWN_SIM_SOURCES
+
+    assert KNOWN_SIM_SOURCES == ('owns',), '已知源集合当前只有 owns'
+
+    class _UnknownSourceMod(Modifier):
+        uses_sim = ('balance',)              # 已删除的源，不在已知集合内
+
+        def compute_delta(self, view, dist, ctx):
+            return None
+
+    class _KnownSourceMod(Modifier):
+        uses_sim = ('owns',)
+
+        def compute_delta(self, view, dist, ctx):
+            return None
+
+    def _make(mod):
+        return Pity(name='s9_sim_annot', state=PityState(), scope='ssr',
+                    btype='hard', trackers=[], modifiers=[mod],
+                    lifecycle=AlwaysActive())
+
+    with pytest.raises(ConfigError):
+        _make(_UnknownSourceMod())
+
+    _make(_KnownSourceMod())                 # 正例：已知源不拦
+
+
+def test_pity_engine_requires_sim_argument():
+    """`sim` 是**必填参**（§3.10.2）：缺参在构造 ctx 时即 `TypeError`。
+
+    覆盖三处构造点：`PityEngine` 的三个调度入口（before_draw / after_draw /
+    get_probabilities）与 `PityContext` 直构。若任一处被写回可选参（`sim=None`），
+    「运行期读到 `None` → Modifier 静默退化为恒等」这一失效形态即复活，本用例是它
+    的唯一捕获面（`None` 本身不会报错，只有「缺参」才会）。
+    """
+    state = PityState()
+    engine = PityEngine(pool_specs={}, pity_defs=[], state=state)
+
+    with pytest.raises(TypeError):
+        engine.before_draw('p', state, {})
+    with pytest.raises(TypeError):
+        engine.get_probabilities('p', state, {})
+    with pytest.raises(TypeError):
+        engine.after_draw('p', state, 'c1')
+
+    draw = DrawInfo(pool_id='p', pool_instance_id='p_0', reward_id='',
+                    reward_rarity='', is_featured=False)
+    with pytest.raises(TypeError):
+        PityContext(draw=draw, current={}, state=state)
+
+
+def test_channel_b_fills_sim_view():
+    """通道 B（策略查询）：`StrategyContext.get_pity_probabilities` 确实把 `SimView`
+    送进 `PityEngine.get_probabilities`，且该视图指向**当场的那个 `GachaState`**。
+
+    通道 B **完全绕过 `Banner.draw`**（经 `_pity_cache` 直调引擎），故通道 A 全绿
+    推不出 B 正确：两条通道各有一条填充点断言，缺一则「`sim` 只在一半路径生效」
+    这一盲区不可见（§六「`sim` 双通道送达」，通道 A 的断言在
+    `tests/service/test_gacha_service.py::test_channel_a_fills_sim_view`）。
+
+    探针是只读包装（转发给原方法），故断言对象就是引擎实际收到的实参。
+    """
+    from gacha_simulator.core import AllPoolsEndCondition, TargetCardSet
+    from gacha_simulator.core.state import GachaState, SimView
+    from gacha_simulator.core.strategy import StrategyContext
+
+    pool = Pool(
+        id='b_channel', name='通道 B 池', cost={'gem': 1},
+        rewards=[
+            (Reward(id='f1', name='F1', extra_info={'rarity': 'SSR', 'featured': True}), 0.006),
+            (Reward(id='s1', name='S1', extra_info={'rarity': 'SSR', 'featured': False}), 0.004),
+            (Reward(id='r1', name='R1', extra_info={'rarity': 'R', 'featured': False}), 0.99),
+        ],
+    )
+    scope_cards, featured_cards = compute_scope_mappings(pool)[:2]
+    spec = PoolPitySpec(
+        scope_cards=scope_cards, featured_cards=featured_cards,
+        pity_names=('hard90',), ssr_ids={'f1', 's1'}, featured_ids={'f1'},
+    )
+    engine = PityEngine(
+        pool_specs={pool.id: spec},
+        pity_defs=[PityDef(name='hard90', btype='hard', scope='ssr', threshold=90)],
+        state=PityState(), rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
+    )
+    # 夹具守卫：spec 必须在引擎内，否则 `get_probabilities` 在首行早退、探针恒空
+    assert engine.get_spec(pool.id) is not None
+
+    gacha_state = GachaState(initial_counts={'f1': 2})
+    ctx = StrategyContext(
+        state=gacha_state,
+        current_pools=[pool], all_pools=[pool],
+        future_schedules=[], target_cards=TargetCardSet([]),
+        stop_condition=AllPoolsEndCondition(1000.0),
+        _pity_engine=engine, _pity_state=PityState(),
+    )
+
+    seen = {}
+    orig = engine.get_probabilities
+
+    def spy(pool_id, st, base, sim):
+        seen['sim'] = sim
+        return orig(pool_id, st, base, sim)
+
+    engine.get_probabilities = spy
+    try:
+        result = ctx.get_pity_probabilities(pool.id)
+    finally:
+        engine.get_probabilities = orig
+
+    assert 'sim' in seen, '通道 B 未走到 PityEngine.get_probabilities（夹具失效）'
+    sim = seen['sim']
+    assert isinstance(sim, SimView),         f'通道 B 的 sim 实参须是 SimView，实测 {type(sim).__name__}'
+    assert sim.owns('f1') == gacha_state.total_holding('f1') == 2,         'sim 须指向当场的那个 GachaState（含初始持有），不是另建的空 state'
+    assert result, '分布查询须有产出（否则本用例无验收面）'

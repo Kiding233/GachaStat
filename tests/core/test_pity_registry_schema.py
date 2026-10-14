@@ -55,6 +55,14 @@ from gacha_simulator.core.pity_tracker import (
     AlwaysActive, CounterTracker, FateTracker, FlagTracker, NamespaceTracker,
     StreakTracker,
 )
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -726,7 +734,7 @@ class TestEventPresetsS43:
         软保底静默失效；本断言是该失效模式的唯一捕获面。
         """
         bh, state = _fx_build('rotating_soft', deltas=((74, 0.0), (16, 6.0)))
-        bh.before_draw(PityContext(draw=_fx_draw(), current=dict(_FX_BASE), state=state))
+        bh.before_draw(PityContext(draw=_fx_draw(), current=dict(_FX_BASE), state=state, sim=_SIM))
         assert state.get('fx', 'counter') == 1
         assert 'counter' not in state.to_dict()['data']['fx_soft']
 
@@ -849,12 +857,12 @@ class TestRotatingCrTrackerOrder:
         traj_new, traj_old = [], []
         for rarity, featured in self._CR_SEQ:
             draw = _fx_draw(rarity, featured)
-            bh.before_draw(PityContext(draw=draw, current=dict(_FX_BASE), state=state))
+            bh.before_draw(PityContext(draw=draw, current=dict(_FX_BASE), state=state, sim=_SIM))
             old.before_draw(PityContext(draw=draw, current=dict(_FX_BASE),
-                                        state=old_state))
-            bh.after_draw(PityContext(draw=draw, current=dict(_FX_BASE), state=state))
+                                        state=old_state, sim=_SIM))
+            bh.after_draw(PityContext(draw=draw, current=dict(_FX_BASE), state=state, sim=_SIM))
             old.after_draw(PityContext(draw=draw, current=dict(_FX_BASE),
-                                       state=old_state))
+                                       state=old_state, sim=_SIM))
             traj_new.append(state.get('fx', 'cr_counter', 0))
             traj_old.append(old_state.get('fx', 'cr_counter', 0))
 
@@ -966,7 +974,7 @@ class TestRotatingInverseS6a:
             return _orig_delta(view, dist, ctx)
 
         _mod.compute_delta = _probe
-        ctx = PityContext(draw=_fx_draw('ssr', True), current=base, state=state)
+        ctx = PityContext(draw=_fx_draw('ssr', True), current=base, state=state, sim=_SIM)
         assert bh.before_draw(ctx) == base
         assert calls == [], '未激活不得调度任何零件'
 
@@ -985,18 +993,18 @@ class TestRotatingInverseSemantics:
         base = dict(_FX_BASE)
 
         # 初始态：无 forced_loss，before_draw 恒等
-        ctx = PityContext(draw=_fx_draw('ssr', True), current=dict(base), state=state)
+        ctx = PityContext(draw=_fx_draw('ssr', True), current=dict(base), state=state, sim=_SIM)
         assert bh.before_draw(ctx) == base
 
         # 出 UP
         ctx_up = PityContext(draw=_fx_draw('ssr', True), current=dict(base),
-                             state=state)
+                             state=state, sim=_SIM)
         bh.after_draw(ctx_up)
         assert state.get('fx', 'forced_loss') is True
 
         # 下一次 SSR 必非 UP：featured 卡归零，scope 总量原样搬给非 featured（卡级）
         out = bh.before_draw(PityContext(draw=_fx_draw('ssr', True),
-                                         current=dict(base), state=state))
+                                         current=dict(base), state=state, sim=_SIM))
         scope_total = base['up'] + base['std']
         assert out['up'] == 0.0
         assert out['std'] == pytest.approx(scope_total)
@@ -1009,16 +1017,16 @@ class TestRotatingInverseSemantics:
         base = dict(_FX_BASE)
 
         bh.after_draw(PityContext(draw=_fx_draw('ssr', True), current=dict(base),
-                                  state=state))
+                                  state=state, sim=_SIM))
         assert state.get('fx', 'forced_loss') is True
 
         # 出非 UP（scope 内、非 featured）
         bh.after_draw(PityContext(draw=_fx_draw('ssr', False), current=dict(base),
-                                  state=state))
+                                  state=state, sim=_SIM))
         assert state.get('fx', 'forced_loss') is False
 
         out = bh.before_draw(PityContext(draw=_fx_draw('ssr', False),
-                                         current=dict(base), state=state))
+                                         current=dict(base), state=state, sim=_SIM))
         assert out == base, '恢复基础比例'
 
     def test_out_of_scope_draw_does_not_touch_flag(self):
@@ -1029,10 +1037,10 @@ class TestRotatingInverseSemantics:
         bh, state = _fx_build(_S6A_TYPE)
         base = dict(_FX_BASE)
         bh.after_draw(PityContext(draw=_fx_draw('sr', True), current=dict(base),
-                                  state=state))
+                                  state=state, sim=_SIM))
         assert state.get('fx', 'forced_loss') is None, '不得写该键'
         out = bh.before_draw(PityContext(draw=_fx_draw('sr', True),
-                                         current=dict(base), state=state))
+                                         current=dict(base), state=state, sim=_SIM))
         assert out == base
 
     def test_forced_loss_flag_is_internal_not_configurable(self):

@@ -24,6 +24,14 @@ from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pity import (
     DrawInfo, PityContext, PityEngine, PityState, PoolPitySpec, create_behavior,
 )
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -58,7 +66,7 @@ def _ssr_draw():
 
 
 def _ssr_ctx(state):
-    return PityContext(draw=_ssr_draw(), current=dict(_SSR_PROBS), state=state)
+    return PityContext(draw=_ssr_draw(), current=dict(_SSR_PROBS), state=state, sim=_SIM)
 
 
 def _make_hard(state, threshold=90, name='test'):
@@ -298,28 +306,28 @@ class TestPityEngineReset:
         state.incr('test_pity', 'counter')
         state.incr('test_pity', 'counter')
         assert state.get('test_pity', 'counter', 0) == 2
-        engine.after_draw('test_pool', state, 'ssr_card')
+        engine.after_draw('test_pool', state, 'ssr_card', sim=_SIM)
         assert state.get('test_pity', 'counter', 0) == 0
 
     def test_ssr_no_reset_on_sr(self):
         """_reset='ssr' → 非 SSR 不重置"""
         engine, state = self._make_engine('ssr')
         state.incr('test_pity', 'counter')
-        engine.after_draw('test_pool', state, 'sr_card')
+        engine.after_draw('test_pool', state, 'sr_card', sim=_SIM)
         assert state.get('test_pity', 'counter', 0) == 1
 
     def test_featured_reset_only_on_featured(self):
         """_reset='featured' → 标准 SSR 不重置"""
         engine, state = self._make_engine('featured')
         state.incr('test_pity', 'counter')
-        engine.after_draw('test_pool', state, 'ssr_card')
+        engine.after_draw('test_pool', state, 'ssr_card', sim=_SIM)
         assert state.get('test_pity', 'counter', 0) == 1
 
     def test_featured_reset_on_featured(self):
         """_reset='featured' → featured SSR 触发重置"""
         engine, state = self._make_engine('featured')
         state.incr('test_pity', 'counter')
-        engine.after_draw('test_pool', state, 'featured_card')
+        engine.after_draw('test_pool', state, 'featured_card', sim=_SIM)
         assert state.get('test_pity', 'counter', 0) == 0
 
     def test_deactivate_on_early_hit(self):
@@ -349,7 +357,7 @@ class TestPityEngineReset:
         )
         state2.incr('test_once', 'counter')
         assert state2.get('test_once', 'counter', 0) == 1
-        eng2.after_draw('test_pool', state2, 'ssr_card')
+        eng2.after_draw('test_pool', state2, 'ssr_card', sim=_SIM)
         # deactivate_on_early_hit=True → 退役先于 commit，且跳过默认 counter reset
         assert state2.get('test_once', 'counter', 0) == 1  # counter 保持
         assert state2.get('test_once', '_active', True) is False  # 已停用
@@ -384,20 +392,20 @@ class TestPityEngineBeforeDraw:
 
     def test_before_draw_increments_counter(self):
         engine, state = self._make_engine()
-        probs = engine.before_draw('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
+        probs = engine.before_draw('pool', state, {'ssr_card': 0.006, 'r_card': 0.994}, sim=_SIM)
         assert state.get('test_pity', 'counter', 0) == 1
         assert 'ssr_card' in probs
 
     def test_before_draw_unknown_pool(self):
         engine = PityEngine(pool_specs={}, pity_defs=[], state=PityState(), rarity_rank={})
         state = PityState()
-        probs = engine.before_draw('nonexistent', state, {'a': 1.0})
+        probs = engine.before_draw('nonexistent', state, {'a': 1.0}, sim=_SIM)
         assert probs == {'a': 1.0}
 
     def test_get_probabilities_at_pity_cap(self):
         engine, state = self._make_engine()
         state.data.setdefault('test_pity', {})['counter'] = 90
-        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
+        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994}, sim=_SIM)
         assert probs['ssr_card'] == pytest.approx(1.0)
 
 
@@ -443,13 +451,13 @@ class TestMultiPityStacking:
         # counter=82: 软保底生效但未达100%，硬保底未触发
         state.data = {'soft': {'counter': 82, '_active': True},
                       'hard': {'counter': 82, '_active': True}}
-        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
+        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994}, sim=_SIM)
         assert 0.3 < probs['ssr_card'] < 0.99  # soft pity active, not 100%
 
         # counter=90: 硬保底覆盖 → SSR=100%
         state.data = {'soft': {'counter': 90, '_active': True},
                       'hard': {'counter': 90, '_active': True}}
-        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994})
+        probs = engine.get_probabilities('pool', state, {'ssr_card': 0.006, 'r_card': 0.994}, sim=_SIM)
         assert probs['ssr_card'] == pytest.approx(1.0)
 
     def test_pity_order_matters(self):
@@ -475,7 +483,7 @@ class TestMultiPityStacking:
         )
         state3.data = {'s': {'counter': 82, '_active': True},
                        'h': {'counter': 82, '_active': True}}
-        probs = eng3.get_probabilities('pool', state3, {'ssr_card': 0.006, 'r_card': 0.994})
+        probs = eng3.get_probabilities('pool', state3, {'ssr_card': 0.006, 'r_card': 0.994}, sim=_SIM)
         assert 0.3 < probs['ssr_card'] < 0.99
 
 

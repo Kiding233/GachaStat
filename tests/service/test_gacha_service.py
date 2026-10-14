@@ -827,3 +827,49 @@ def test_return_compact_false_with_parallel_workers_propagates_warnings():
     assert batch.results == []          # return_compact=False → compact 不回传
     assert batch.warnings, '告警未经 BatchResult.warnings 到达调用方'
     assert all('零进度兜底' in w for w in batch.warnings)
+
+
+def test_channel_a_fills_sim_view():
+    """通道 A（抽卡管道）：`GachaService` 用的那条 `Banner.draw` 路径确实把 `SimView`
+    送进 `PityEngine.before_draw`，且该视图指向**当场的那个 `GachaState`**。
+
+    §六「`sim` 双通道送达」的通道 A 断言（用例名在计划内写死）。探针是只读包装
+    （转发给原方法），故断言对象就是引擎实际收到的实参：漏填即 `TypeError`（`sim`
+    非 Optional，§3.10.2），填错对象（例如另建一个空 state 的视图）则由
+    `owns()` 与当场 `state.total_holding()` 的对照判红。
+    通道 B 的对应断言在
+    `tests/core/test_pity_integration.py::test_channel_b_fills_sim_view`。
+    """
+    from gacha_simulator.core.state import GachaState, SimView
+
+    path = _write_targeted_config()
+    try:
+        store = load_toml(path)
+        env = SimulationEnvBuilder.from_config_store(store)
+        banner = env.pools[0]
+        pool = banner.active_pool
+        engine = env.pity_engine
+
+        # 初始持有非零：`owns()` 若漏算初始持有（或视图指向别的 state）即与对照不等
+        state = GachaState(initial_counts={'c1': 2})
+
+        seen = {}
+        orig = engine.before_draw
+
+        def spy(key, st, dist, sim):
+            seen['sim'] = sim
+            return orig(key, st, dist, sim)
+
+        engine.before_draw = spy
+        try:
+            banner.draw(state, engine, PityState.from_dict(env.pity_state_init), pool)
+        finally:
+            engine.before_draw = orig
+
+        assert 'sim' in seen, '通道 A 未走到 PityEngine.before_draw（夹具失效）'
+        sim = seen['sim']
+        assert isinstance(sim, SimView),             f'通道 A 的 sim 实参须是 SimView，实测 {type(sim).__name__}'
+        assert callable(getattr(sim, 'owns', None)), 'SimView.owns() 须可调用'
+        assert sim.owns('c1') == state.total_holding('c1') == 2,             'sim 须指向当场的那个 GachaState（含初始持有）'
+    finally:
+        os.unlink(path)

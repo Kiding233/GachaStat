@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 import random
 
 # ── P64 S1a：叶子原语层迁出至 pity_primitives（§3.1.6）──
@@ -22,12 +22,16 @@ from .pity_tracker import (  # noqa: F401
     StreakTracker, Tracker,
 )
 from .pity_modifier import (  # noqa: F401
-    HardModifier, Modifier, NonFeaturedModifier, RotatingModifier,
+    KNOWN_SIM_SOURCES, HardModifier, Modifier, NonFeaturedModifier, RotatingModifier,
     SelectedModifier, SoftModifier,
 )
 # P64 S11（ISSUE-003）：校验层由编排层**单向**引用——本模块 import 它，它不 import
 # 本模块（checker 的 `engine` 一律经实参传入），故不成环。类的定义归 `core/invariants.py`。
 from .invariants import InvariantChecker
+# P64 S9-2：`sim` 形参的类型注记用字符串前向引用 `'SimView'`（`SimView` 住
+# `core/state.py`，本模块不 import 它：只为类型检查而引用，运行期不需要该对象）。
+if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
+    from .state import SimView
 
 
 
@@ -601,7 +605,10 @@ class SoftPityMixin:
     def before_draw(self, ctx, readonly=False):
         v = self._counter.value() if readonly else self._counter.incr()
         modified = self._soft_engine._compute_probabilities(ctx, v)
-        forked = PityContext(draw=ctx.draw, current=modified, state=ctx.state)
+        # P64 S9-2：`sim` 是 `PityContext` 的必填字段，fork 必须原样透传
+        # （缺参即 TypeError；`sim` 与 `state` 同源，都是「本次调用」的载体）。
+        forked = PityContext(draw=ctx.draw, current=modified, state=ctx.state,
+                             sim=ctx.sim)
         return super().before_draw(forked, readonly=readonly)
     def after_draw(self, ctx):
         if ctx.draw.reward_rarity == self._scope:
@@ -1354,6 +1361,10 @@ class Pity(PityBehavior):
         # 不留半写的 state（`initialize` 与 `flags` / `counters` 消费都会写 state）。
         _check_declared_keys(self._declared_keys, name)
 
+        # P64 S9-2（§3.10.2）：`uses_sim` 注解的构造期校验：与上一条同层、同在
+        # 任何 state 写入之前。注解不参与门控，故这里只查名字是否在已知源集合内。
+        _check_uses_sim(modifiers, name)
+
         # ISSUE-202 / ISSUE-407：构造期写入初始 `_active` 的**唯一归属方法**。漏掉即
         # 非 `depends_on` 保底 `_active` 恒 False、`before_draw` / `after_draw` 首行
         # 双双早退，全部计数型保底静默失效。
@@ -1824,6 +1835,32 @@ def _check_declared_keys(declared_keys, name):
         )
 
 
+def _check_uses_sim(modifiers, name):
+    """`uses_sim` 注解的构造期校验（P64 S9-2 第 ③ 件，§3.10.2）。
+
+    **只校验名字是否在已知源集合内**（`KNOWN_SIM_SOURCES`，当前只有 `owns`），
+    **不参与门控**：`ctx.sim` 对所有保底一律可读（非 Optional、永远填充），注解写与
+    不写都不改变行为。校验的唯一对象是「注解腐烂」：名字拼错、或引用了已删除的源
+    （`balance()` 于 2026-10-06 删除）时，注解会静默地指向一个不存在的源，检查器
+    据此报告出的「哪些保底读了 sim 的什么」随之失真。与 §3.12.2 两条判据同层、
+    同在 `Pity` 构造期（`create_behavior` 的 preset 分支失败即抛 `ConfigError`）。
+
+    **为什么不在 `_validate_registry()` 的导入期自检里做**：那里只有 preset 工厂
+    可调用性可判（`class: None`），`Modifier` 实例要到 `preset(pdef)` 被调用时才
+    存在；注解住在零件类上、由 preset 实例化，故唯一能看到全部实例的时点是构造期。
+    """
+    from .config_store import ConfigError
+    for mod in modifiers:
+        for src in getattr(mod, 'uses_sim', ()) or ():
+            if src not in KNOWN_SIM_SOURCES:
+                raise ConfigError(
+                    f"保底 '{name}' 的 Modifier {type(mod).__name__} 声明了未知的 "
+                    f"`uses_sim` 源 {src!r}（§3.10.2）：已知源集合为 "
+                    f"{list(KNOWN_SIM_SOURCES)}。注解不参与门控，但它会被检查器读作"
+                    f"「本保底读了 sim 的什么」，指向不存在的源即注解腐烂"
+                )
+
+
 def _build_pity_state_init(pity_defs, counter_init_overrides=None):
     """从 PityDef 列表构造初始 PityState。
 
@@ -2180,11 +2217,17 @@ class PityEngine:
                 bh._rebind_state(state)
 
     def get_probabilities(self, pool_id: str, state: PityState,
-                          base_probabilities: Dict[str, float]) -> Dict[str, float]:
+                          base_probabilities: Dict[str, float],
+                          sim: 'SimView') -> Dict[str, float]:
         """查询保底调整后的概率分布。
 
         P75（ISSUE-122）：首行 rebind state 至传入参数（带重绑副作用），随后以只读
         语义查询——「查询不写计数」仍成立，但不再是 P55 归档定义的无副作用纯查询。
+
+        **P64 S9-2：`sim` 是必填参**（§3.10.2）：`PityContext.sim` 非 Optional，
+        缺参在构造 `ctx` 时即 `TypeError`（构造期失败），不是运行期读到 `None` 的
+        静默恒等。填充点是**通道 B**：`core/strategy.py` 的
+        `StrategyContext.get_pity_probabilities`（本入口的全库唯一外部调用点）。
         """
         self._rebind_state(state)  # 必须先于 spec=None 早退（ISSUE-123）
         spec = self.pool_specs.get(pool_id)
@@ -2202,7 +2245,8 @@ class PityEngine:
             base_probabilities=base_probabilities,
             rarity_rank=self._rarity_rank,
         )
-        ctx = PityContext(draw=draw_info, current=base_probabilities.copy(), state=state)
+        ctx = PityContext(draw=draw_info, current=base_probabilities.copy(), state=state,
+                          sim=sim)
 
         # 只读查询——对每个池关联 behavior 调度
         for pname, bh in self._behaviors_for_pool(pool_id):
@@ -2213,8 +2257,14 @@ class PityEngine:
         return ctx.current
 
     def before_draw(self, pool_id: str, state: PityState,
-                    base_probabilities: Dict[str, float]) -> Dict[str, float]:
-        """抽前调度：仅对当前池关联的 behavior 执行 before_draw。"""
+                    base_probabilities: Dict[str, float],
+                    sim: 'SimView') -> Dict[str, float]:
+        """抽前调度：仅对当前池关联的 behavior 执行 before_draw。
+
+        **P64 S9-2：`sim` 是必填参**（§3.10.2）：理由与
+        `get_probabilities` 同（缺参在构造 `ctx` 时即 `TypeError`）。填充点是
+        **通道 A**：`core/banner.py` 的 `Banner.draw`。
+        """
         self._rebind_state(state)  # P75：重绑 behaviors 到 per-call state（ISSUE-123 先于早退）
         spec = self.pool_specs.get(pool_id)
         if spec is None:
@@ -2231,7 +2281,8 @@ class PityEngine:
             base_probabilities=base_probabilities,
             rarity_rank=self._rarity_rank,
         )
-        ctx = PityContext(draw=draw_info, current=base_probabilities.copy(), state=state)
+        ctx = PityContext(draw=draw_info, current=base_probabilities.copy(), state=state,
+                          sim=sim)
 
         # ── P64 S8-6：增量层校验器的 per-call 引用。**只在本入口写**：
         #    `get_probabilities` 按 §3.13 已登记的「四层覆盖边界」不在判据面内
@@ -2251,8 +2302,18 @@ class PityEngine:
 
         return ctx.current
 
-    def after_draw(self, pool_id: str, state: PityState, reward_id: str):
-        """抽后调度：仅对当前池关联的 behavior 执行 after_draw。"""
+    def after_draw(self, pool_id: str, state: PityState, reward_id: str,
+                   sim: 'SimView'):
+        """抽后调度：仅对当前池关联的 behavior 执行 after_draw。
+
+        **P64 S9-2：`sim` 也是必填参**：本入口同样构造 `PityContext`，而该字段
+        非 Optional、永远填充（§3.10.2）。它不是「送达通道」（Modifier 不在本相位
+        运行），但**字段的完备性要求本入口一并填充**：漏填会让 `after_draw` 相位的
+        ctx 带一个 `None`，任何在 `after_draw` 读 `ctx.sim` 的零件（Tracker 亦可读）
+        会拿到 `AttributeError` 而非「视图」。§六 的「PityEngine 调度层既有调用形式
+        不变（before_draw / after_draw / get_probabilities …；S9 新增必填参数 sim）」
+        即本口径。
+        """
         self._rebind_state(state)  # P75：重绑 behaviors 到 per-call state
         spec = self.pool_specs.get(pool_id)
         if spec is None:
@@ -2273,7 +2334,7 @@ class PityEngine:
             base_probabilities={},
             rarity_rank=self._rarity_rank,
         )
-        ctx = PityContext(draw=draw_info, current={}, state=state)
+        ctx = PityContext(draw=draw_info, current={}, state=state, sim=sim)
 
         # 按池过滤调度 + P56 声明式依赖传播
         for pname, bh in self._behaviors_for_pool(pool_id):

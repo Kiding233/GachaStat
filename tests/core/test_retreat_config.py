@@ -5,6 +5,14 @@ from gacha_simulator.core.config_store import (
     LifecycleRuleEntry, DAY,
 )
 from gacha_simulator.core.retreat_config import RetreatConfigBuilder
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 def _make_store_with_3_pools():
@@ -483,7 +491,7 @@ def test_truncated_env_soft_pity_is_not_identity():
     assert ssr_cards and len(base) > len(ssr_cards), \
         '本用例需要 SSR 与更低稀有度两类卡（Q 非空才谈得上搬质量）'
 
-    out = eng.before_draw(pool_id, eng._state, dict(base))
+    out = eng.before_draw(pool_id, eng._state, dict(base), sim=_SIM)
     ssr_before = sum(base[c] for c in ssr_cards)
     ssr_after = sum(out[c] for c in ssr_cards)
     assert ssr_after > ssr_before, (

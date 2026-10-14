@@ -24,6 +24,14 @@ from gacha_simulator.core.pity_tracker import (
     FateTracker, FiniteActive, FlagTracker, Lifecycle, NamespaceTracker,
     StreakTracker, Tracker,
 )
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 # ══════════════════════════════════════════════════════════════════
 # S7e：等价性装置 golden（旧类下线后仍可断言的对照结果）
@@ -96,7 +104,7 @@ def _ctx(rarity: str = 'sr', is_featured: bool = False, state: PityState = None,
         pool_id='p', pool_instance_id='p_0', reward_id=reward_id or f'{rarity}_card',
         reward_rarity=rarity, is_featured=is_featured,
     )
-    return PityContext(draw=draw, current={}, state=st)
+    return PityContext(draw=draw, current={}, state=st, sim=_SIM)
 
 
 def _tracker(reset_on=None, init=0, state=None):
@@ -503,7 +511,7 @@ def _cr_ctx(rarity='sr', is_featured=False, state=None, current=None):
     return PityContext(
         draw=draw, state=st,
         current=current if current is not None else {'ssr': 0.01, 'ssr_featured': 0.005},
-    )
+    sim=_SIM,)
 
 
 def _cr_tracker(kw=None, state=None):

@@ -25,6 +25,14 @@ from gacha_simulator.core.pity import (
     PityState, PityEngine, PityContext, DrawInfo, create_behavior,
 )
 from gacha_simulator.core.config_store import PityDef
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _CFG = os.path.join(_ROOT, 'gacha_simulator', 'config', 'config.toml')
@@ -256,7 +264,7 @@ class TestEngineRebindExtended:
         """ISSUE-123：无效 pool_id 早退前已 rebind——engine._state 指向传入 state。"""
         engine = self._engine()
         b = PityState()
-        engine.get_probabilities('invalid_pool', b, {})  # spec=None 早退，但 rebind 先执行
+        engine.get_probabilities('invalid_pool', b, {}, sim=_SIM)  # spec=None 早退，但 rebind 先执行
         assert engine._state is b
 
     def test_interleaved_state_self_heal(self):
@@ -264,9 +272,9 @@ class TestEngineRebindExtended:
         engine = self._engine()
         bh = engine._behavior_list[0]
         other, cur = PityState(), PityState()
-        engine.get_probabilities('any', other, {})
+        engine.get_probabilities('any', other, {}, sim=_SIM)
         assert bh._state is other
-        engine.before_draw('any', cur, {})
+        engine.before_draw('any', cur, {}, sim=_SIM)
         assert bh._state is cur
 
 
@@ -281,7 +289,7 @@ class TestDependsOnIsActive:
         ], state=PityState(), rarity_rank={'ssr': 0})
         b = PityState()
         # 触发 rebind 到 B（get_probabilities 首行 rebind，即使 pool_specs 空早退）
-        engine.get_probabilities('any', b, {})
+        engine.get_probabilities('any', b, {}, sim=_SIM)
         # 依赖方未激活（B 无 _active 键 → is_active 默认 False）
         assert engine.is_active('dep') is False
         # 模拟源 did_fire 激活传播（after_draw 写 B）
@@ -388,7 +396,7 @@ class TestNonSnapshotState:
             rarity_rank={'ssr': 0, 'r': 1},
         )
         return PityContext(draw=draw, current={'ssr_card': 0.006, 'r_card': 0.994},
-                           state=state)
+                           state=state, sim=_SIM)
 
     def test_non_snapshot_state_silent_degradation(self):
         a = PityState()

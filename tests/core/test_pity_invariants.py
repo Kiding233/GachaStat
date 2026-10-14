@@ -622,10 +622,10 @@ def _ctx(shape: _Shape, state: PityState, *, sim: _Sim,
         base_probabilities=dict(shape.base) if step is None else {},
         rarity_rank=shape.rarity_rank,
     )
-    ctx = PityContext(
-        draw=draw, current=dict(shape.base) if step is None else {}, state=state)
-    ctx.sim = sim
-    return ctx
+    # P64 S9-2：`sim` 是 `PityContext` 的必填字段（§3.10.2），构造期即传入
+    return PityContext(
+        draw=draw, current=dict(shape.base) if step is None else {}, state=state,
+        sim=sim)
 
 
 def _step_of(shape: _Shape, card: str) -> _DrawStep:

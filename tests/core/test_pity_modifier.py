@@ -72,11 +72,16 @@ def _draw(rarity_rank=None, scope_cards=None, featured_cards=None, base=None):
     )
 
 
-def _ctx(dist=None, readonly=False, **kw):
-    """构造一次抽卡的 `PityContext`（`current` 为**卡级**分布）。"""
+def _ctx(dist=None, readonly=False, sim=None, **kw):
+    """构造一次抽卡的 `PityContext`（`current` 为**卡级**分布）。
+
+    P64 S9-2：`sim` 是 `PityContext` 的**必填字段**（§3.10.2），缺省用 `_Sim()`
+    的最小替身：本文件只验与「持有」无关的机制。
+    """
     return PityContext(draw=_draw(**kw),
                        current=dict(dist if dist is not None else BASE),
-                       state=PityState(), readonly=readonly)
+                       state=PityState(), sim=sim if sim is not None else _Sim(),
+                       readonly=readonly)
 
 
 class _View:
@@ -104,9 +109,7 @@ class _Sim:
 
 
 def _ctx_with_sim(dist, owned=(), **kw):
-    ctx = _ctx(dist, **kw)
-    ctx.sim = _Sim(owned)
-    return ctx
+    return _ctx(dist, sim=_Sim(owned), **kw)
 
 
 def _delta(mod, view=None, dist=None, ctx=None):

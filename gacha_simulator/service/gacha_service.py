@@ -316,12 +316,21 @@ class GachaService:
         state = initial_state.clone()
         pity_state = self.pity_state.clone()
         stats = SimulationStats()
+        # P64 S9-2（§四 本文件行，ISSUE-916）：初始持有的**唯一推导源**（数据源
+        # `self.card_defs`）与**唯一赋值点**（本函数 `clone()` 之后）都在这里。
+        # 赋值落在 clone 之后（而非构造点补传）才覆盖**全部**入口：构造点赋值只覆盖
+        # `batch_simulator` 那一处 `GachaState(...)`，覆盖不到任何「直接构造
+        # GachaState 后进入 run_simulation」的调用方（测试 / 脚本 / `worst_impact` /
+        # `retreat_search`），而那些路径的首行都是 `initial_state.clone()`。
+        # 赋值是**无条件覆盖**：state 字段是单一真相源，`self.card_defs` 是唯一推导源，
+        # 不保留「调用方预置的 initial_counts」（两个来源即两套口径，§四 明令禁止）。
         _initial_counts = {}
         for cd in self.card_defs:
             ic = cd.get('initial_count', 0) if isinstance(cd, dict) else getattr(cd, 'initial_count', 0)
             if ic > 0:
                 cid = cd['card_id'] if isinstance(cd, dict) else cd.card_id
                 _initial_counts[cid] = ic
+        state.initial_counts = _initial_counts
         banners = self._banners
         notifier = self._notifier
         real_time = state.real_time
@@ -490,7 +499,6 @@ class GachaService:
                         overflow = state.add_card(
                             reward.id, path="draw",
                             overflow_bands=self.card_overflow_map.get(reward.id),
-                            initial_counts=_initial_counts,
                         )
                         for k, v in overflow.items():
                             rg[k] = rg.get(k, 0) + v

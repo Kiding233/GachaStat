@@ -5,6 +5,14 @@ from gacha_simulator.core.worst_impact import (
     ConditionalResourceDistribution,
     WorstImpactResult,
 )
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 def _check_success_from_counts(obtained, target_specs):
@@ -195,7 +203,7 @@ def test_synthetic_pool_card_level_pipe_neither_drops_nor_invents_cards():
     probs = {r.id: p for r, p in pool.rewards}
     state = PityState.from_dict(cfg['pity_state_init'])
     state.set(spec.pity_names[0], 'counter', 85)   # 软保底爬升中段，必触发
-    out = engine.before_draw(key, state, probs)
+    out = engine.before_draw(key, state, probs, sim=_SIM)
 
     assert set(out) == set(probs), (
         f'卡级管道改了键集：多出 {sorted(set(out) - set(probs))}、'
@@ -225,8 +233,9 @@ def test_synthetic_pool_pity_actually_fires():
     fired = []
     orig = engine.before_draw
 
-    def spy(key, st, dist):
-        out = orig(key, st, dist)
+    def spy(key, st, dist, sim):
+        # P64 S9-2：`before_draw` 的 `sim` 是必填参（§3.10.2），探针须同签名转发
+        out = orig(key, st, dist, sim)
         if out != dist:
             fired.append(key)
         return out
@@ -351,8 +360,9 @@ def test_synthetic_pool_pity_moves_mass_into_featured_slot():
     seen = []
     orig = engine.before_draw
 
-    def spy(key, st, dist):
-        out = orig(key, st, dist)
+    def spy(key, st, dist, sim):
+        # P64 S9-2：`before_draw` 的 `sim` 是必填参（§3.10.2），探针须同签名转发
+        out = orig(key, st, dist, sim)
         if out != dist:
             seen.append((dict(dist), dict(out)))
         return out
@@ -560,7 +570,7 @@ def test_worst_impact_boundary_t_zero():
     assert sum(zeroed.values()) == pytest.approx(1.0)
     assert sum(zeroed[c] for c in A) == 0.0, '本用例的前置：p(A) == 0'
 
-    out = engine.before_draw(key, _wi_state(cfg), zeroed)
+    out = engine.before_draw(key, _wi_state(cfg), zeroed, sim=_SIM)
     assert out == zeroed, (
         f'p(A) = 0 时须整条恒等（不得把零概率目标抬起）：{zeroed} → {out}')
     assert abs(sum(out.values()) - 1.0) < 1e-12
@@ -597,7 +607,7 @@ def test_worst_impact_boundary_p_zero():
     assert sum(zeroed[c] for c in Q) == 0.0, '本用例的前置：p(Q) == 0'
     assert sum(zeroed[c] for c in A) > 0, 'A 侧须有概率（否则命中的是 `p(A) = 0` 支）'
 
-    out = engine.before_draw(key, _wi_state(cfg, 'h', counter=5), zeroed)
+    out = engine.before_draw(key, _wi_state(cfg, 'h', counter=5), zeroed, sim=_SIM)
     assert out == zeroed, f'p(Q) = 0 时须恒等：{zeroed} → {out}'
     assert abs(sum(out.values()) - 1.0) < 1e-12
 
@@ -632,7 +642,7 @@ def test_worst_impact_boundary_p_minus_t_zero():
     assert any(v != 0.0 for v in mul_first.values()), (
         f'本形状下两种写法同值（残值全 0），本用例的对零断言将失去判别力：{mul_first}')
 
-    out = engine.before_draw(key, _wi_state(cfg), probs)
+    out = engine.before_draw(key, _wi_state(cfg), probs, sim=_SIM)
     assert out != probs, '保底未触发（本用例无验收面）'
     residue = {c: out[c] for c in Q if out[c] != 0.0}
     assert not residue, (
@@ -707,7 +717,7 @@ def test_worst_impact_boundary_scope_key_missing(label, pdef_factory, counter):
     assert 'sr' in spec.scope_cards and 'r' in spec.scope_cards, \
         '本用例需要池内确有其他稀有度（否则缺键形态无判别力）'
 
-    out = engine.before_draw(key, _wi_state(cfg, 'p', counter=counter), probs)
+    out = engine.before_draw(key, _wi_state(cfg, 'p', counter=counter), probs, sim=_SIM)
     assert out == probs, f'{label}: scope 键缺失时须恒等而非抛 KeyError：{probs} → {out}'
     assert abs(sum(out.values()) - 1.0) < 1e-12
 
@@ -716,7 +726,7 @@ def test_worst_impact_boundary_scope_key_missing(label, pdef_factory, counter):
     engine2, key2, spec2, probs2 = _wi_pool0(cfg2)
     assert 'ssr' in spec2.scope_cards and 'ssr' in spec2.featured_cards, \
         '对照组需要 "ssr" 键存在'
-    out2 = engine2.before_draw(key2, _wi_state(cfg2, 'p', counter=counter), probs2)
+    out2 = engine2.before_draw(key2, _wi_state(cfg2, 'p', counter=counter), probs2, sim=_SIM)
     assert out2 != probs2, f'{label}: 对照组未触发（① 的恒等断言随之空转）'
     assert abs(sum(out2.values()) - 1.0) < 1e-12
 
@@ -754,7 +764,7 @@ def test_worst_impact_boundary_non_unit_sum():
     Q = tuple(spec.scope_cards['r'])
     assert higher and A and Q, '本用例需要三档稀有度都非空'
 
-    out = engine.before_draw(key, _wi_state(cfg, 'h', counter=5), probs)
+    out = engine.before_draw(key, _wi_state(cfg, 'h', counter=5), probs, sim=_SIM)
     assert out != probs, '保底未触发（本用例无验收面）'
     assert abs(sum(out.values()) - 1.0) < 1e-12, (
         f'Σ = {sum(out.values())!r}（S8 口径为恒等 1.0；旧因子实现在该形状为 1.009）')
@@ -796,7 +806,7 @@ def test_worst_impact_boundary_readonly_query_suppresses_cr_intercept():
 
     # ① 只读查询：`cr_intercepted` 已被上一次非只读调用置位，查询须**不体现**拦截
     st_query = _wi_state(cfg, 'cr', cr_intercepted=True)
-    queried = engine.get_probabilities(key, st_query, probs)
+    queried = engine.get_probabilities(key, st_query, probs, sim=_SIM)
     assert queried == probs, (
         f'只读查询体现了 CR 拦截（§3.9.6 的处置②失效）：{probs} → {queried}')
     assert st_query.get('cr', 'cr_intercepted') is True, \
@@ -804,6 +814,6 @@ def test_worst_impact_boundary_readonly_query_suppresses_cr_intercept():
 
     # ② 抽卡前（同一初始状态）：拦截成立、分布必须被改动
     st_draw = _wi_state(cfg, 'cr', cr_intercepted=True)
-    drawn = engine.before_draw(key, st_draw, probs)
+    drawn = engine.before_draw(key, st_draw, probs, sim=_SIM)
     assert drawn != probs, '抽卡前未体现拦截（① 的恒等断言随之空转）'
     assert abs(sum(drawn.values()) - 1.0) < 1e-12

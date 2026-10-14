@@ -553,17 +553,15 @@ def _run_single(env: SimulationEnv, target_set, seed: int, initial_resources: Di
     if env.milestone_defs:
         from gacha_simulator.core.milestone import MilestoneEngine, register_milestone_engine
         _milestone_engine = MilestoneEngine(env.milestone_defs, seed=seed)
-        # initial_counts 由 env.card_defs 推导（与 GachaService.run_simulation 内同源）
-        _ms_initial = {}
-        for _cd in env.card_defs:
-            _ic = _cd.get('initial_count', 0) if isinstance(_cd, dict) else getattr(_cd, 'initial_count', 0)
-            if _ic > 0:
-                _cid = _cd['card_id'] if isinstance(_cd, dict) else _cd.card_id
-                _ms_initial[_cid] = _ic
+        # P64 S9-2（§四 本文件行 / §七 S9-2 的 ④）：`_ms_initial` 推导与
+        # `initial_counts=` 实参**整段删除**：初始持有升为 `GachaState` 字段后，
+        # 唯一的推导源与赋值点都在 `GachaService.run_simulation`（clone 之后），
+        # 里程碑侧改从当场的 `state` 取（`core/milestone.py` 的 handler 内）。
+        # 本处推导本就**不是** `GachaState` 初值的来源：它包在 `if env.milestone_defs:`
+        # 内，无里程碑的配置根本不执行该块。
         register_milestone_engine(
             notifier, _milestone_engine,
             card_overflow_map=env.card_overflow_map,
-            initial_counts=_ms_initial,
         )
     # P61（Ph6 / ISSUE-312，阻塞）：Banner 运行时状态跨模拟隔离——env.pools 承载
     # List[Banner]，直接传入则 draw/_check_transitions 修改的 _pool_draws/_exhausted/

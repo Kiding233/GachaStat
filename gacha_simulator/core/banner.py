@@ -232,7 +232,14 @@ class Banner:
             # 缩放（`infer_rarity_from_spec` 只认 SSR），使喂给 `pool.draw()` 的卡级字典
             # Σ > 1、软保底效果被打折（缺陷 12，2026-10-09）；卡级管道下该缺陷的成因
             # 不复存在（不再有往返，也就不需要还原）。
-            adjusted = pity_engine.before_draw(qualified_key, pity_state, probabilities)
+            # P64 S9-2（§3.10.2，通道 A）：`sim` 由**本 state 就地自产**：不新增
+            # `draw` 形参、不经服务层透传（材料全在 state 上）。同一抽的 before_draw
+            # 与 after_draw 共用一个视图对象（同一 `GachaState` 源，§六 的「两通道
+            # 必须共用同一 GachaState」）。漏填即 `TypeError`（`PityContext.sim` 非
+            # Optional，构造期失败），不是运行期静默恒等。
+            sim_view = state.sim_view()
+            adjusted = pity_engine.before_draw(
+                qualified_key, pity_state, probabilities, sim_view)
             pool._apply_probabilities(adjusted)
             reward = pool.draw()
             # ISSUE-108：after_draw 前采集抽前峰值——counter 型 behavior 触发抽（如 hard-90）
@@ -242,7 +249,7 @@ class Banner:
                     (pity_engine.get_counter(name) for name in pity_spec.pity_names),
                     default=0,
                 )
-            pity_engine.after_draw(qualified_key, pity_state, reward.id)
+            pity_engine.after_draw(qualified_key, pity_state, reward.id, sim_view)
             # 保底触发判定：本次抽到的卡满足重置条件（featured SSR）
             if pity_spec and reward.id in pity_spec.featured_ids and pity_spec.pity_names:
                 pity_triggered = True

@@ -1019,9 +1019,10 @@ class TestPityAdjustmentReachesCardLevel:
 
         orig_bd = env.pity_engine.before_draw
 
-        def spy_bd(key, st, dist):
+        def spy_bd(key, st, dist, sim):
+            # P64 S9-2：`before_draw` 的 `sim` 是必填参（§3.10.2），探针须同签名转发
             captured['slot_before'] = dict(dist)      # S8 起即卡级分布（键为卡 id）
-            out = orig_bd(key, st, dist)
+            out = orig_bd(key, st, dist, sim)
             captured['slot_after'] = dict(out)
             return out
 

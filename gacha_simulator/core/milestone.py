@@ -160,22 +160,24 @@ class MilestoneEngine:
         return dict(self._defs)
 
 
-def register_milestone_engine(notifier, engine, card_overflow_map=None, initial_counts=None):
+def register_milestone_engine(notifier, engine, card_overflow_map=None):
     """P61 Ph0 装配点回调——装配层在构造 GachaService 前调用（batch_simulator.py L261-269）。
 
     engine 来源（P58 M4b）：`_run_single` 内 `MilestoneEngine(env.milestone_defs, seed=seed)`
     延迟构造后传入。订阅落在与模拟循环 emit 相同的 Notifier 实例上。
-    经闭包捕获 engine + card_overflow_map + initial_counts（P61 落点 #3 纠正——不用模块级全局）。
+    经闭包捕获 engine + card_overflow_map（P61 落点 #3 纠正：不用模块级全局）。
 
-    card_overflow_map / initial_counts：与 GachaService 内 M4 inline 消费块同源的
-    卡牌溢出分段表与初始持有量（env.card_overflow_map / 由 env.card_defs 推导），
-    供 `_consume_bonus` 的 state.add_card 溢出管道使用——M9 订阅 handler 拿不到
-    GachaService 内部 self，装配点透传这两份数据即可（与 env 构造时同源）。
+    card_overflow_map：与 GachaService 内 M4 inline 消费块同源的卡牌溢出分段表
+    （env.card_overflow_map），供 `_consume_bonus` 的 state.add_card 溢出管道使用
+    （M9 订阅 handler 拿不到 GachaService 内部 self，装配点透传这份数据即可）。
+
+    **P64 S9-2：`initial_counts` 形参删除**（§四 `core/milestone.py` 行）：初始持有
+    升为 `GachaState` 字段后，本回调**改从当场的 `state` 取**（`_on_after_draw` 的
+    形参里就有它），服务层不必再经形参传入。注册发生在 `GachaState` 构造**之前**
+    （`batch_simulator` 的装配顺序），故只能落在 handler 内、不能落在注册处。
     """
     if card_overflow_map is None:
         card_overflow_map = {}
-    if initial_counts is None:
-        initial_counts = {}
 
     def _on_after_draw(banner_id, pool_id, card_id, pity_triggered, draw_index, state, collector):
         for entry in engine.after_draw(banner_id, pool_id):
@@ -183,14 +185,13 @@ def register_milestone_engine(notifier, engine, card_overflow_map=None, initial_
             # 溢出资源注入 resources；归因数据随 collector.on_bonus 源头合并（方案 C）。
             _consume_bonus(entry, state, collector, pool_id, real_time=state.real_time,
                            draw_index=draw_index - 1,
-                           card_overflow_map=card_overflow_map,
-                           initial_counts=initial_counts)
+                           card_overflow_map=card_overflow_map)
 
     notifier.subscribe("after_draw", _on_after_draw, priority=0)
 
 
 def _consume_bonus(entry, state, collector, pool_id, real_time, draw_index,
-                   card_overflow_map=None, initial_counts=None):
+                   card_overflow_map=None):
     """消费单个 milestone bonus——资源/卡牌注入 + on_bonus 归因（方案 C，2026-08-03）。
 
     与 gacha_service 内联消费块（§3.5 M4）完全一致：直接资源注入 state.resources
@@ -212,7 +213,6 @@ def _consume_bonus(entry, state, collector, pool_id, real_time, draw_index,
             cid,
             path="milestone_gift",
             overflow_bands=(card_overflow_map or {}).get(cid),
-            initial_counts=initial_counts or {},
         )
         for k, v in overflow.items():
             state.resources[k] = state.resources.get(k, 0) + v

@@ -1276,13 +1276,25 @@ class TestG3ExcludeOwned:
 
         判据五条：① 夹具守卫：`up_a` **只**在 `initial_counts` 里（`acquired` 为空）；
         ② 引擎侧：`sim.owns()` 判 `up_a` 已拥有，且 G3 保底触发时把它排除出 A 列；
-        ③ 两侧「已拥有」卡集**相等**；④ 策略侧：以**同一个 `GachaState`** 构造
-        `StrategyContext`，`stop_on_target` 同样判 `up_a` 已达标（`WaitAction`，
-        不为它抽卡）；⑤ 反向守卫：`gacha_state.acquired` 仍为空（P60 语义「本次模拟
-        新获得」不变，迁移的是消费侧）。
+        ③ **口径同一性守卫**（S9-5 收口订正：**非**跨层判据）：两侧比的是
+        `SimView.owns` 与 `GachaState.total_holding`，而 `sim` 即
+        `gacha_state.sim_view()`，故两侧是**同一对象的同一函数**，无独立判别力
+        （M1「`total_holding` 漏算 `initial_counts`」下两侧同时变空、③ 仍绿）；它拦的
+        只是「把 `SimView.owns` 改成读 `acquired`」这类**口径分叉**（该变异下 ③ 红），
+        故登记入「未被任何变异覆盖的新断言」清单；④ 策略侧：以**同一个
+        `GachaState`** 构造 `StrategyContext`，`stop_on_target` 判 `up_a` 已达标
+        （`WaitAction`，不为它抽卡）；⑤ 反向守卫：`gacha_state.acquired` 仍为空
+        （P60 语义「本次模拟新获得」不变，迁移的是消费侧）。
 
-        判别力：④ 是本条的关键。若策略侧判据退回 `ctx.acquired`，同一夹具下
-        `stop_on_target` 会判 `up_a` **未**达标并抽卡（`DrawAction`），而 ②③ 仍绿。
+        ④ 的遮蔽关系与判别力（2026-10-14 审查收口实测订正）：④ 的牙齿**不在 s3**
+        （`stop_on_target` 主循环的 `>= quantity_needed`），而在 **s1**（第二段 banner
+        循环的 `_pool_needs_target`）：`pool.is_exchange=False` 使兑换分支整体落空，
+        s3 只决定第一段是否跳过该目标，不决定是否返回 `DrawAction`。探针实测（不改
+        生产代码）：**本夹具的 `GachaState` 无 `resources`，`can_afford_batch` 恒
+        False**，故第二段无论 s1 取何值都不返回 `DrawAction`，④ 在「仅回退 s1」「仅
+        回退 s3」「策略侧 3 处全回退」下**都仍绿**（本夹具下 ④ 无判别力，已登记）；
+        把 `gem` 补给 state 后复测，仅回退 s1 → `DrawAction`（④ 红）、仅回退 s3 →
+        仍 `WaitAction`（④ 绿），遮蔽关系成立。
         """
         from gacha_simulator.core.action import WaitAction
         from gacha_simulator.core.banner import Banner
@@ -1304,9 +1316,10 @@ class TestG3ExcludeOwned:
         assert pity_state.get('g3', 'counter', 0) == 50, '本抽须已到 τ'
         assert out['up_a'] == pytest.approx(0.0), '引擎侧须把初始持有的 UP 排除出 A 列'
 
-        # ③ 两侧「已拥有」卡集相等
+        # ③ 口径同一性守卫：`SimView.owns` 与 `GachaState.total_holding` 同源
         owned_strategy = {c for c in _G3_FEATURED if gacha_state.total_holding(c) > 0}
-        assert owned_strategy == owned_engine, '引擎侧与策略侧的「已拥有」卡集须一致'
+        assert owned_strategy == owned_engine, \
+            'SimView.owns 与 GachaState.total_holding 的口径不得分叉'
 
         # ④ 策略侧：同一 `GachaState` 上，`stop_on_target` 判 `up_a` 已达标
         banner = Banner(id='g3_pool', name='G3 池', pools={'main': pool})

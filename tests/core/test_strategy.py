@@ -180,7 +180,12 @@ def test_priority_chain_strategy_exhausted_fallback():
 # `acquired`）；(c) `stop_on_target` 条的 ①（s1 直调）与 ③（默认配置主循环）
 # 只被 ① 号变异覆盖，未做「单处回退」隔离（`stop_on_target` 的 s1 / s3 未单独
 # 变异，受 8 次上限约束；两者形态与已隔离的 `pity_reserve` / `pool_quota` 的
-# s1 / s2 逐字相同）。
+# s1 / s2 逐字相同）；(d) `test_g3_engine_and_strategy_agree_on_owned_set` 的
+# ①（`initial_counts` 夹具守卫）、③（**口径同一性守卫**：`SimView.owns` 与
+# `GachaState.total_holding` 是同一对象的同一函数，无独立判别力）与 ⑤
+# （`acquired` 仍为空的反向守卫）；该用例的 ④ 在本夹具下同样无判别力
+# （`_g3_engine` 的 `GachaState` 无 `resources` → `can_afford_batch` 恒 False）。
+# 遮蔽关系与两项实测（2026-10-14 审查收口）见该用例 docstring。
 
 _S95_CARD = 's95_card'
 _S95_BANNER = 's95_banner'
@@ -254,9 +259,13 @@ def test_pool_quota_holding_includes_initial_count():
     ① `select_action` 首段的 `>= quantity_needed`（兑换池路径）；
     ② `_pool_needs_target` 的 `< quantity_needed`。
 
-    **覆盖边界（如实声明）**：本策略的第三段「配额未尽则任意抽」在非兑换池上
-    不读 `_pool_needs_target`，故 ② 的**行为**在 `select_action` 里被该段遮蔽
-    （判 True 走第二段抽、判 False 走第三段也抽，同一 banner 下不可区分）。此处
+    **覆盖边界（如实声明，2026-10-14 审查收口实测订正）**：**单 banner 下行为
+    中性**：第三段「配额未尽则任意抽」在非兑换池上不读 `_pool_needs_target`，判
+    True 走第二段抽、判 False 走第三段也抽，同一 banner 下不可区分。**多 banner
+    下可观测**：第二段的「目标偏好」被第三段兜底取代，**抽卡目标 banner 改变**
+    （实测：两个非兑换 banner，`B1` 的池不含目标 / `B2` 的池含目标，
+    `quantity_needed=1`、`initial_counts={X:1}`：迁移后 `select_action` →
+    `DrawAction(banner_id='B1')`；把 s1 谓词换回 `ctx.acquired.get` → `B2`）。此处
     以**直调 `_pool_needs_target`** 覆盖 ② 的口径，`select_action` 只覆盖 ①。
     """
     ctx = _s95_ctx(initial_counts={_S95_CARD: 2})

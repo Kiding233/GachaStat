@@ -1056,3 +1056,566 @@ def test_channel_b_fills_sim_view():
     assert isinstance(sim, SimView),         f'通道 B 的 sim 实参须是 SimView，实测 {type(sim).__name__}'
     assert sim.owns('f1') == gacha_state.total_holding('f1') == 2,         'sim 须指向当场的那个 GachaState（含初始持有），不是另建的空 state'
     assert result, '分布查询须有产出（否则本用例无验收面）'
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-4：G3 专项（精确建模判据，§六 G3 专项 / §3.10.4）
+# ══════════════════════════════════════════════════════════════════
+
+_G3_SKIP_TYPE = 'hard_exclude_owned_skip'
+_G3_ANY_TYPE = 'hard_exclude_owned_any'
+
+#: G3 夹具的池子形态：两张 UP（`up_a` / `up_b`）+ 一张同稀有度常驻（`std`）。
+#: 三张同在 `scope_cards['ssr']` 内，故 `scope\A` 恒非空（Q 有减量可搬、`Σδ = 0`）。
+_G3_SCOPE_CARDS = ('up_a', 'up_b', 'std')
+_G3_FEATURED = ('up_a', 'up_b')
+_G3_BASE = {'up_a': 0.3, 'up_b': 0.3, 'std': 0.4}
+
+
+def _one_pity_pipeline(btype, *, name='g3', threshold=50, counter=0):
+    """「一个 ssr 池 + 一条保底」的最小**真管道**夹具：返回 `(engine, pool, pity_state, base)`。
+
+    池内 `rewards` 的权重与本夹具返回的 `base` **同值**，故通道 B 经 `pool.rewards`
+    取到的 `base_probabilities` 与直调入口传的 `base` 一致（两条通道可比的前提，
+    见 `test_channel_b_matches_before_draw`）。
+
+    `counter` 经 `PityDef.counter_init` 落到 per-call state；`counter_init=0` 时该键
+    不预建（L4 truthy 规则），读取回退 0。`threshold` 只有 counter 驱动型消费，
+    其余类型收下不用（它是 `PityDef` 的字段，不是非法键）。
+    """
+    base = dict(_G3_BASE)
+    pool = Pool(
+        id='g3_pool', name='G3 池', cost={'gem': 1},
+        rewards=[
+            (Reward(id=c, name=c,
+                    extra_info={'rarity': 'SSR', 'featured': c in _G3_FEATURED}),
+             base[c])
+            for c in _G3_SCOPE_CARDS
+        ],
+    )
+    scope_cards, featured_cards = compute_scope_mappings(pool)[:2]
+    spec = PoolPitySpec(
+        pity_names=(name,),
+        scope_cards=scope_cards, featured_cards=featured_cards,
+        ssr_ids=set(_G3_SCOPE_CARDS), featured_ids=set(_G3_FEATURED),
+    )
+    pity_state = PityState()
+    engine = PityEngine(
+        pool_specs={pool.id: spec},
+        pity_defs=[PityDef(name=name, btype=btype, scope='ssr',
+                           threshold=threshold, counter_init=counter)],
+        state=pity_state, rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
+    )
+    return engine, pool, pity_state, base
+
+
+def _g3_engine(btype, *, owns=(), initial_counts=None, threshold=50, counter=0,
+               name='g3'):
+    """G3 夹具：在 `_one_pity_pipeline` 之上补一个 `GachaState` 与它的 `SimView`。
+
+    返回 `(engine, pool, pity_state, gacha_state, sim, base)`。`owns` 是**本次模拟内
+    获得**的卡（写 `acquired`），`initial_counts` 是**初始持有**（写 `initial_counts`
+    字段）：两者都进 `SimView.owns()` 的 `total_holding` 口径（ISSUE-009），这正是
+    ①（模拟内获得）与补充用例（初始持有）的对照面。
+    """
+    engine, pool, pity_state, base = _one_pity_pipeline(
+        btype, name=name, threshold=threshold, counter=counter)
+    gacha_state = _GachaState(initial_counts=dict(initial_counts or {}))
+    for c in owns:
+        gacha_state.add_card(c)
+    return engine, pool, pity_state, gacha_state, gacha_state.sim_view(), base
+
+
+class TestG3ExcludeOwned:
+    """§六 G3 专项（精确建模判据）：崩坏3 精准补给「τ 抽必出**未获得的** UP」。
+
+    本组的立组目的是把 G3 与「pool 层近似」的分界钉死（§3.10.4 开头「为什么不能
+    沿用 pool 层近似」）：pool 层过滤（把已拥有的卡从 reward 列表移除）会让**每次
+    抽卡**都不出它们，而真实机制只作用于保底触发点，故 ①② 必须分列、不可互替。
+
+    ③a / ③b 是一对**并列的建模假设**（§3.10.4 的 2026-09-30 用户裁决：零直接信源，
+    两形态各违背规则原文的一半，机制定稿前谁也不是「已确认等价」）。本组按 §六 的
+    要求**两个 type 各断言一条**，两条断言的对象都是「该实现的实际行为」，不是
+    「机制已定稿」的判定；日后查证定稿为一方时，删去被否的那条即可。
+    """
+
+    def test_g3_trigger_excludes_owned_up_from_target_set(self):
+        """① 保底触发时**已拥有的 UP 不被选中**：目标集只含未拥有者，已拥有者被搬空。
+
+        判据四条：① 未拥有的 UP 独得全部质量（`up_b` = 1.0）；② 已拥有的 UP 归零
+        （`up_a` = 0），这一条同时证明**已拥有的 UP 落在 Q 内**（2026-10-07 用户
+        裁决：Q = 更低稀有度 ∪ `scope\\A`），若按 `scope\\featured` 取 Q，`up_a` 会
+        保留 0.3 的概率、本断言即红；③ 同稀有度常驻 `std` 也归零（它在 Q 内）；
+        ④ 分布归一（`Σ = 1`）。
+        """
+        engine, _pool, pity_state, _gs, sim, base = _g3_engine(
+            _G3_SKIP_TYPE, owns=('up_a',), counter=49)
+        # 夹具守卫：`up_a` 确在 featured 内、确为「已拥有」，且它在基础分布里**有正
+        # 概率**（否则 ② 的「归零」无判别力：池里本来就没有它）
+        assert 'up_a' in _G3_FEATURED
+        assert sim.owns('up_a') == 1 and sim.owns('up_b') == 0
+        assert base['up_a'] > 0
+
+        out = engine.before_draw('g3_pool', pity_state, dict(base), sim)
+
+        assert pity_state.get('g3', 'counter', 0) == 50, \
+            '本抽须已到 τ（否则下面的断言另有原因）'
+        assert out['up_b'] == pytest.approx(1.0)
+        assert out['up_a'] == pytest.approx(0.0)
+        assert out['std'] == pytest.approx(0.0)
+        assert sum(out.values()) == pytest.approx(1.0)
+
+    def test_g3_normal_draw_still_yields_owned_up(self):
+        """② **普通抽卡仍能产出已拥有的装备**（与 pool 层近似的分界，必须单独断言）。
+
+        `counter < τ`（本抽非保底抽）时该保底恒等：分布逐元素等于基础分布，已拥有的
+        UP 保留原概率。若有人把 G3 实现成 pool 层过滤、或把触发条件写成恒真，本断言
+        必红（那时 `up_a` 会是 0），而 ① 仍会通过，故 ①② 不可互替。
+        """
+        engine, _pool, pity_state, _gs, sim, base = _g3_engine(
+            _G3_SKIP_TYPE, owns=('up_a',), counter=0)
+
+        out = engine.before_draw('g3_pool', pity_state, dict(base), sim)
+
+        assert pity_state.get('g3', 'counter', 0) == 1, '本抽须未到 τ（counter 推进 0 → 1）'
+        assert pity_state.get('g3', 'counter', 0) < 50
+        for c in base:
+            assert out[c] == pytest.approx(base[c]), f'{c}: 非触发抽须恒等'
+        assert out['up_a'] > 0, '普通抽卡须仍能产出已拥有的 UP（pool 层近似会让它归零）'
+
+    def test_g3_all_owned_skip_keeps_identity(self):
+        """③a `hard_exclude_owned_skip`（形态 a）：全部 UP 已拥有 → 该次保底**不触发**（恒等）。
+
+        判据两条：① 分布逐元素等于基础分布（该次 τ 抽的「必出 UP」不发生）；
+        ② **对照**：同一夹具下只拥有一张 UP 时该保底**确实触发**（`up_b` = 1.0）。
+        第 ② 条是夹具守卫：没有它，① 无法与「counter 没到 τ」区分开（两处的
+        `counter_init=49` 经 advance 都到 50，断言的是同一个 τ）。
+        """
+        engine, _pool, pity_state, _gs, sim, base = _g3_engine(
+            _G3_SKIP_TYPE, owns=('up_a', 'up_b'), counter=49)
+
+        out = engine.before_draw('g3_pool', pity_state, dict(base), sim)
+
+        assert pity_state.get('g3', 'counter', 0) == 50, '本抽须已到 τ（否则恒等另有原因）'
+        assert sim.owns('up_a') and sim.owns('up_b'), '夹具：两张 UP 都须已拥有'
+        for c in base:
+            assert out[c] == pytest.approx(base[c]), f'{c}: 全拥有时形态 a 须恒等'
+
+        # 对照：同为 counter=49 / τ=50，只拥有一张 UP 时该保底触发
+        engine2, _p2, ps2, _g2, sim2, base2 = _g3_engine(
+            _G3_SKIP_TYPE, owns=('up_a',), counter=49)
+        out2 = engine2.before_draw('g3_pool', ps2, dict(base2), sim2)
+        assert out2['up_b'] == pytest.approx(1.0), '对照：未全拥有时须触发'
+
+    def test_g3_all_owned_any_still_gives_one_up(self):
+        """③b `hard_exclude_owned_any`（形态 b）：全部 UP 已拥有 → 目标集退化为全部 UP，仍给一件。
+
+        判据四条：① 常驻卡 `std` 归零（质量全进 UP 组）；② 两张已拥有的 UP 分摊全部
+        质量（各 > 0、和 = 1.0）：这是「仍给出一件 UP（不保证是未获得的）」的分布层
+        表述；③ 该分布**不等于**基础分布（与恒等可区分）；④ **对照**：同夹具下形态 a
+        恒等（`up_a` 保留 0.3），故两 type 在「全拥有」这一分支上真的分岔（形态 a / b
+        是一对并列假设，实现不得退化为同一个）。
+        """
+        engine, _pool, pity_state, _gs, sim, base = _g3_engine(
+            _G3_ANY_TYPE, owns=('up_a', 'up_b'), counter=49)
+
+        out = engine.before_draw('g3_pool', pity_state, dict(base), sim)
+
+        assert pity_state.get('g3', 'counter', 0) == 50, '本抽须已到 τ'
+        assert out['std'] == pytest.approx(0.0)
+        assert out['up_a'] > 0 and out['up_b'] > 0, '退化的目标集须仍是两张 UP'
+        assert out['up_a'] + out['up_b'] == pytest.approx(1.0)
+        assert any(abs(out[c] - base[c]) > 1e-12 for c in base), \
+            '形态 b 在全拥有时须真的改变分布（不得退化为恒等）'
+
+        # 对照：形态 a 在同一夹具下恒等
+        engine_a, _pa, ps_a, _ga, sim_a, base_a = _g3_engine(
+            _G3_SKIP_TYPE, owns=('up_a', 'up_b'), counter=49)
+        out_a = engine_a.before_draw('g3_pool', ps_a, dict(base_a), sim_a)
+        assert out_a['up_a'] == pytest.approx(base_a['up_a']), '对照：形态 a 须恒等'
+
+    def test_g3_initial_count_up_treated_as_owned(self):
+        """G3 补充用例（ISSUE-009）：**初始持有**的 UP 同样被视为「已拥有」并被排除。
+
+        `SimView.owns()` 是 `total_holding` 口径（= `initial_counts` + `acquired`），
+        故「已拥有」的判定必须把初始持有算进去。本夹具的 `up_a` **只**在
+        `initial_counts` 里（`acquired` 为空），A 列只剩 `up_b`。
+
+        判据四条：① 引擎侧 `sim.owns()` 认初始持有（与 `total_holding` 同值）；② A 列
+        排除它（`up_a` 归零、`up_b` 独得质量）；③ **反向守卫**：`gacha_state.acquired`
+        本身**仍不预填**该卡（P60 语义「本次模拟新获得」，由
+        `tests/service/test_gacha_service.py::test_initial_count_not_prepopulated` 钉住）
+        ，迁移的是**消费侧口径**，不是 `acquired` 的定义；④ 与「模拟内获得」那一档
+        （① 用例）结论一致：两条来源同口径。
+
+        **未覆盖的一半（登记，S9-5 的验收面）**：§六 本条还要求「跨层一致：策略侧
+        同样为 True」。策略侧 9 处判据（4 个内置策略文件的 `ctx.acquired.get(...)`）的
+        迁移归 **S9-5**；本步落地时实测该 9 处**仍是** `ctx.acquired`（不含初始持有），
+        故该半条在当前代码下**不可断言**，不在本步写成会红的断言。
+        """
+        engine, _pool, pity_state, gacha_state, sim, base = _g3_engine(
+            _G3_SKIP_TYPE, initial_counts={'up_a': 1}, counter=49)
+
+        assert gacha_state.acquired == {}, '初始持有不得预填 acquired（反向守卫）'
+        assert sim.owns('up_a') == gacha_state.total_holding('up_a') == 1
+
+        out = engine.before_draw('g3_pool', pity_state, dict(base), sim)
+
+        assert pity_state.get('g3', 'counter', 0) == 50
+        assert out['up_a'] == pytest.approx(0.0), '初始持有的 UP 须被排除出目标集'
+        assert out['up_b'] == pytest.approx(1.0)
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-4：S9 口径三条（sim / StateView / ctx.state 通道关闭，§六 / §3.10.2 / §3.10.3）
+# ══════════════════════════════════════════════════════════════════
+
+class TestS9SimAndStateViewScopes:
+    """§六「S9 口径 · sim」与「S9 口径 · StateView」两条的落地面。"""
+
+    def test_sim_reaches_every_registry_type(self):
+        """**所有**保底都能读到 `ctx.sim`（非 Optional、永远填充）：三个入口逐条验。
+
+        `sim` 的必填性与「缺参即 `TypeError`」由 S9-2 的
+        `test_pity_engine_requires_sim_argument` 钉住（构造面）。本用例补**送达面**：
+        对 `BEHAVIOR_REGISTRY` 的**全部**条目（动态取，新增 type 自动纳入）逐条跑真
+        管道，断言每个 behavior 在自己的 `ctx` 上拿到的 `sim` **就是**调用方传进去的
+        那个 `SimView` 实例（同一性），且三个入口各调度到它一次。
+
+        **强度上限（如实声明）**：这是**结构保证**的机器化，不是「每条保底都真的读了
+        sim」：只有 G3 的 `NotOwnedModifier` 会读它，其余条目的行为与 sim 无关。
+        本用例的判别力在于「某个入口漏填 / 填了别的对象」：漏填由 `TypeError` 拦
+        （构造期），填错对象由同一性断言拦。
+        """
+        from gacha_simulator.core.pity import BEHAVIOR_REGISTRY
+
+        types = sorted(BEHAVIOR_REGISTRY)
+        assert len(types) >= 13, f'registry 条目数异常（实测 {len(types)}）'
+        probe = _SimView(_GachaState(initial_counts={'up_a': 1}))
+
+        for t in types:
+            name = 'p_' + t
+            engine, pool, pity_state, base = _one_pity_pipeline(t, name=name)
+            bh = engine.behaviors[name]
+            seen = []
+            orig_before, orig_after = bh.before_draw, bh.after_draw
+
+            def spy_before(ctx, readonly=False, _o=orig_before):
+                seen.append(ctx.sim)
+                return _o(ctx, readonly=readonly)
+
+            def spy_after(ctx, _o=orig_after):
+                seen.append(ctx.sim)
+                _o(ctx)
+
+            bh.before_draw = spy_before
+            bh.after_draw = spy_after
+            try:
+                engine.before_draw(pool.id, pity_state, dict(base), probe)
+                engine.get_probabilities(pool.id, pity_state, dict(base), probe)
+                engine.after_draw(pool.id, pity_state, 'up_a', probe)
+            finally:
+                del bh.before_draw
+                del bh.after_draw
+
+            assert len(seen) == 3, \
+                f'{t}: 三个入口未各调度一次（实测 {len(seen)} 次，夹具或调度面变了）'
+            assert all(s is probe for s in seen), \
+                f'{t}: 有入口把别的对象（或 None）当 sim 传给了 behavior'
+
+    def test_stateview_isolation_keeps_depends_on_activation(self):
+        """§六「S9 口径 · StateView」第 2 条：`depends_on` 的激活传播不受 `StateView` 影响。
+
+        传播由**引擎**在 `PityEngine.after_draw` 里做（`state.set(dep_name, "_active", True)`，
+        写的是原始 `PityState`），不经过 Modifier，故与「Modifier 的 `view` 被限定在单个
+        命名空间」这条隔离无关（§3.10.3 末段「不影响 `depends_on`」）。判据四条：
+        ① 传播前依赖方 inactive；② 被依赖方命中后，**原始账本**上依赖方的 `_active`
+        为 True（引擎侧写入、不经 Modifier）；③ 依赖方自己的 `before_draw` 经 **`view`**
+        读到该 `_active` 为 True（隔离不挡本保底命名空间），且该 `view` 就是骨架交给
+        Modifier 的那个对象（探针同一性）；④ 同一个 `view` 读**被依赖方**命名空间里
+        确实存在的键返回 `default`（跨保底读仍关闭，与 S9-1 的负例同口径）。
+
+        **与 S9-1 用例的分工（不可互替）**：S9-1 验「隔离在架构上关闭」与「`ctx.state`
+        通道仍在」；本用例验「隔离**没有**把引擎侧的激活传播一起关掉」：若有人把
+        `_active` 的读取塞进 Modifier、或改由 view 承担传播，S9-1 全绿而本用例必红。
+        """
+        base = dict(_G3_BASE)
+        pool = Pool(
+            id='sv_pool', name='SV 池', cost={'gem': 1},
+            rewards=[
+                (Reward(id=c, name=c,
+                        extra_info={'rarity': 'SSR', 'featured': c in _G3_FEATURED}),
+                 base[c])
+                for c in _G3_SCOPE_CARDS
+            ],
+        )
+        scope_cards, featured_cards = compute_scope_mappings(pool)[:2]
+        spec = PoolPitySpec(
+            pity_names=('src', 'dep'),
+            scope_cards=scope_cards, featured_cards=featured_cards,
+            ssr_ids=set(_G3_SCOPE_CARDS), featured_ids=set(_G3_FEATURED),
+        )
+        state = PityState()
+        engine = PityEngine(
+            pool_specs={pool.id: spec},
+            pity_defs=[
+                PityDef(name='src', btype='rotating', scope='ssr'),
+                PityDef(name='dep', btype='hard', scope='ssr', threshold=90,
+                        depends_on='src'),
+            ],
+            state=state, rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
+        )
+
+        dep = engine.behaviors['dep']
+        assert state.get('dep', '_active', False) is False          # ①
+
+        engine.before_draw(pool.id, state, dict(base), _SIM)
+        engine.after_draw(pool.id, state, 'up_a', _SIM)             # src 命中 ssr
+        assert state.get('dep', '_active', False) is True           # ② 引擎侧写入原始账本
+
+        # 夹具守卫：被依赖方命名空间里确实有一个可辨的键（否则 ④ 是空断言）
+        state.set('src', 'src_only_key', 'src-value')
+        assert state.get('src', 'src_only_key') == 'src-value'
+
+        seen = {}
+
+        class _Probe(Modifier):
+            def compute_delta(self, view, dist, ctx):
+                seen['view'] = view
+                seen['own_active'] = view.get('_active')
+                seen['foreign'] = view.get('src_only_key', 'DEFAULT')
+                return None
+
+        dep._modifiers.append(_Probe())
+        engine.before_draw(pool.id, state, dict(base), _SIM)
+
+        assert 'view' in seen, '夹具失效：依赖方的 Modifier 未被调度'
+        assert seen['view'] is dep._view, '骨架交给 Modifier 的须是本保底的默认 view'
+        assert seen['view']._name == 'dep'
+        assert seen['own_active'] is True                           # ③ 隔离不挡自己的键
+        assert seen['foreign'] == 'DEFAULT'                         # ④ 跨保底读仍关闭
+
+
+class TestSimChannelBEquivalence:
+    """§六「`sim` 的两条送达通道」中**通道 B** 的独立验收（AUDIT-BREAK-9 追加，强制）。
+
+    通道 B（`StrategyContext.get_pity_probabilities` → `PityEngine.get_probabilities`
+    经 `_pity_cache`）**完全绕过 `Banner.draw`**，故通道 A 全绿推不出 B 正确。S9-2
+    只落了「填充点」断言（`test_channel_b_fills_sim_view`），**1e-12 的逐元素对照
+    归本步**（S8-6 收口的登记）。
+    """
+
+    def test_channel_b_matches_before_draw(self):
+        """通道 B 的分布与 `before_draw` 在**可比条件**下逐元素一致（容差 1e-12）。
+
+        **可比条件（本步自定口径，理由见下）**：两条通道对 counter 的推进不同：
+        `before_draw` 走 `readonly=False`、`CounterTracker.advance` 把 counter +1；
+        `get_probabilities` 走 `readonly=True`、advance 首行早退（no-op，§3.9.6「查询
+        不写计数」）。故「同刻」= **两条通道看到同一个 counter 值**，本用例据此构造：
+        A 侧 state 取 `counter_init = τ-1`（advance 后 = τ），B 侧 state 取
+        `counter_init = τ`（不 advance），两侧都断言到同一值 τ。
+
+        判据五条：① 两侧看到的 counter 相同（可比条件成立，否则下面的对照无意义）；
+        ② 键集相同；③ 逐元素差 ≤ 1e-12；④ 非退化为恒等 `base`（G3 在该抽确实触发，
+        否则「一致」可以由「两边都不生效」平凡满足）；⑤ 归一（和 = 1）。
+
+        **未覆盖（登记）**：本用例不判「通道 B 是否落后真实下一抽一格」。实测
+        `advance` 在 `readonly=True` 下是 no-op（`CounterTracker.advance` 首行早退，
+        另有 `test_n1_readonly_query_does_not_advance_counter` 钉住），故策略在「已抽
+        N 次」时查询得到的是 `counter = N` 的分布，而紧接着的那一抽看到 `N+1`：这是
+        **本计划之前既有的语义**（§3.9.6「查询不写计数」），本步只按计划断言「可比
+        条件下一致」，不改变该语义。
+        """
+        from gacha_simulator.core import AllPoolsEndCondition, TargetCardSet
+        from gacha_simulator.core.strategy import StrategyContext
+
+        # A 侧：counter_init = τ-1，before_draw 的 advance 把它推到 τ
+        engine_a, pool, ps_a, _gsa, sim_a, base = _g3_engine(
+            _G3_SKIP_TYPE, owns=('up_a',), counter=49)
+        out_a = engine_a.before_draw(pool.id, ps_a, dict(base), sim_a)
+
+        # B 侧：counter_init = τ，查询不推进（readonly），看到同一个 τ
+        engine_b, _pool_b, ps_b, gs_b, _sim_b, _base_b = _g3_engine(
+            _G3_SKIP_TYPE, owns=('up_a',), counter=50)
+        ctx = StrategyContext(
+            state=gs_b, current_pools=[pool], all_pools=[pool],
+            future_schedules=[], target_cards=TargetCardSet([]),
+            stop_condition=AllPoolsEndCondition(1000.0),
+            _pity_engine=engine_b, _pity_state=ps_b,
+        )
+        out_b = ctx.get_pity_probabilities(pool.id)
+
+        assert ps_a.get('g3', 'counter', 0) == ps_b.get('g3', 'counter', 0) == 50, \
+            '可比条件：两条通道须看到同一个 counter（A 侧 advance 后 = τ，B 侧不推进 = τ）'
+        assert set(out_a) == set(out_b), '两条通道的键集须相同'
+        for c in out_a:
+            assert abs(out_a[c] - out_b[c]) <= 1e-12, \
+                f'{c}: 通道 B 与 before_draw 不一致（{out_a[c]} vs {out_b[c]}）'
+        assert abs(out_b['up_b'] - 1.0) <= 1e-12 and out_b['up_a'] == 0.0, \
+            '非退化：G3 在该抽须确实触发（否则「一致」可由两边都不生效平凡满足）'
+        assert sum(out_b.values()) == pytest.approx(1.0)
+
+
+class TestCtxStateChannelClosed:
+    """§六「`ctx.state` 通道关闭（ISSUE-103）」的**机器守卫**（S9-4 落地）。
+
+    §3.10.3 的纪律：Modifier 只经 `view` 读状态，**禁止经 `ctx.state` 读任何状态键**
+    （含自身命名空间）。「架构上做不到」只对 `view` 形参成立，对 `ctx.state` 靠纪律，
+    故纪律需要机器守卫（S9-1 收口明写「6 个真 Modifier 的 AST 扫描由 S9-4 落」）。
+    """
+
+    @staticmethod
+    def _state_attr_reads(source, label):
+        """AST 扫描：源码内所有 `X.state` 属性读取节点的行号。"""
+        import ast as _ast
+        import textwrap as _tw
+
+        tree = _ast.parse(_tw.dedent(source), filename=label)
+        return [n.lineno for n in _ast.walk(tree)
+                if isinstance(n, _ast.Attribute) and n.attr == 'state']
+
+    def test_modifier_classes_never_read_state_attribute(self):
+        """6 个真 Modifier 的实现内**零** `X.state` 属性读取（含自身命名空间）。
+
+        判据两条：① 被测集合**恰为 6 个**具体 Modifier（自 `pity_modifier` 模块动态
+        发现，新增 Modifier 自动纳入，不必改本用例）；② 每个类的类源码 AST 内
+        `X.state` 属性读取数为 0。类源码经 `inspect.getsource` 取，**docstring 不计**
+        （AST 只认属性读取节点），故基类 docstring 里对 `ctx.state` 的说明不会误报。
+
+        **强度上限（如实声明）**：拦的是**字面**属性读取；把 `ctx` 先赋给别的名字再读
+        `state`（`c = ctx; c.state.get(...)`）可绕过静态扫描。该形态由
+        `test_modifier_compute_delta_runs_with_ctx_state_probe` 的运行期探针补。
+        """
+        import inspect as _inspect
+
+        from gacha_simulator.core import pity_modifier as pm
+
+        mods = sorted(
+            (c for c in vars(pm).values()
+             if isinstance(c, type) and issubclass(c, pm.Modifier)
+             and c is not pm.Modifier),
+            key=lambda c: c.__name__)
+        assert [c.__name__ for c in mods] == [
+            'HardModifier', 'NonFeaturedModifier', 'NotOwnedModifier',
+            'RotatingModifier', 'SelectedModifier', 'SoftModifier'], \
+            f'「6 个真 Modifier」的集合变了：{[c.__name__ for c in mods]}'
+
+        for c in mods:
+            hits = self._state_attr_reads(_inspect.getsource(c), c.__name__)
+            assert hits == [], (
+                f'{c.__name__}: 实现内出现 {len(hits)} 处 `X.state` 属性读取'
+                f'（行号 {hits}）：Modifier 只经 view 读状态（ISSUE-103）')
+
+    def test_pity_module_has_no_ctx_state_key_read(self):
+        """`pity.py` 内不再出现 `ctx.state.get(`（S9-1 收口给出的可机械复核判据）。
+
+        **不得按字面 `grep 'ctx.state'` 归零**（该判据恒不可达）：全文件代码命中还剩
+        `SoftPityMixin` 的 fork（`PityContext(draw=..., current=..., state=ctx.state)`）
+        与 `TargetedBehavior._selected_card` 的 `StateView(ctx.state, self._name)`，
+        两者都是**构造透传 / 视图构造**、不含键读取（§六 的口径限定）。故判据取三条：
+        ① 字面判据（**代码口径**）：`ctx.state.get(` 的文本命中全部落在注释 / 字符串内
+           （若日后文档里的同串被删，本判据退化为恒真，真值面只剩 ② ③）；
+        ② 加强判据（AST，对**任何**对象而非只看 `ctx`）：不存在以 `.state` 为接收者的
+           `.get(...)` 调用或下标读取；
+        ③ 站点判据：`ctx.state` 的出现点**恰为两处**，其直接父节点类型分别是 `Call`
+           （`StateView(ctx.state, ...)` 的实参）与 `keyword`（fork 的 `state=ctx.state`）
+           ：任何新增的 `ctx.state` 用法（读取、传参、赋值）都会让本断言红，须人工
+           复核后更新。
+        """
+        import ast as _ast
+        import io as _io
+        import tokenize as _tokenize
+
+        path = ROOT / 'gacha_simulator' / 'core' / 'pity.py'
+        src = path.read_text(encoding='utf-8')
+        # ① 字面判据**只在代码口径下成立**：`ctx.state.get(` 的全部文本命中须落在
+        #    注释 / 字符串（docstring）内。裸 `grep` 归零恒不可达（S9-1 收口的口径
+        #    限定：pity.py 的迁移说明 docstring 里就写着这个串），代码级归零由下面
+        #    的 AST 判据 ② 承担。
+        hits = [i for i, line in enumerate(src.splitlines(), 1)
+                if 'ctx.state.get(' in line]
+        masked = set()
+        for tok in _tokenize.generate_tokens(_io.StringIO(src).readline):
+            if tok.type in (_tokenize.COMMENT, _tokenize.STRING):
+                masked.update(range(tok.start[0], tok.end[0] + 1))
+        code_hits = [ln for ln in hits if ln not in masked]
+        assert code_hits == [], (
+            f'`ctx.state.get(` 出现在**代码**里（行号 {code_hits}）；'
+            f'文档 / 注释里的同串命中不算违规，代码里的算')
+
+        tree = _ast.parse(src, 'pity.py')
+        offenders = []
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute) \
+                    and node.func.attr in ('get', '__getitem__') \
+                    and isinstance(node.func.value, _ast.Attribute) \
+                    and node.func.value.attr == 'state':
+                offenders.append(node.lineno)
+            if isinstance(node, _ast.Subscript) \
+                    and isinstance(node.value, _ast.Attribute) \
+                    and node.value.attr == 'state':
+                offenders.append(node.lineno)
+        assert offenders == [], \
+            f'pity.py 出现以 .state 为接收者的键读取，行号 {offenders}'
+
+        sites = []
+        for parent in _ast.walk(tree):
+            for child in _ast.iter_child_nodes(parent):
+                if isinstance(child, _ast.Attribute) and child.attr == 'state' \
+                        and isinstance(child.value, _ast.Name) \
+                        and child.value.id == 'ctx':
+                    sites.append((child.lineno, type(parent).__name__))
+        assert sorted(t for _l, t in sites) == ['Call', 'keyword'], (
+            '`ctx.state` 的出现点须恰为两处（StateView 构造实参 + SoftPityMixin fork '
+            f'的构造透传），实测 {sites}')
+
+    def test_modifier_compute_delta_runs_with_ctx_state_probe(self):
+        """运行期补面：`ctx.state` 换成**任何访问即抛**的探针后，六个 Modifier 的
+        `compute_delta` 仍正常返回。
+
+        AST 扫描拦的是**字面**属性读取，绕过形态是先把 `ctx` 赋给别的名字；本用例把
+        `ctx.state` 换成抛异常的探针，故「该相位内触达 `ctx.state`」这一事实本身会让
+        本用例失败，别名绕过也拦得住。
+
+        **强度上限**：只覆盖本次调用走到的分支（六个 Modifier 都构造成「条件成立」
+        形态，即各自触发分支），未走到的分支仍只有 AST 扫描这一层。
+        """
+        from gacha_simulator.core.pity_modifier import (
+            HardModifier, NonFeaturedModifier, NotOwnedModifier, RotatingModifier,
+            SelectedModifier, SoftModifier,
+        )
+
+        ctx = PityContext(
+            draw=DrawInfo(
+                pool_id='g3_pool', pool_instance_id='g3_pool_0',
+                reward_id='', reward_rarity='', is_featured=False,
+                scope_cards={'ssr': _G3_SCOPE_CARDS},
+                featured_cards={'ssr': _G3_FEATURED},
+                base_probabilities=dict(_G3_BASE),
+                rarity_rank={'ssr': 0},
+            ),
+            current=dict(_G3_BASE),
+            state=_NoCtxStateRead(),      # 触达即 AssertionError（ISSUE-103 的机器面）
+            sim=_SimView(_GachaState(initial_counts={'up_a': 1})),
+        )
+
+        mods = [
+            ('HardModifier', HardModifier('ssr', threshold=0)),
+            ('SoftModifier', SoftModifier('ssr', deltas=((1, 5.0),))),
+            ('RotatingModifier', RotatingModifier('ssr')),
+            ('NonFeaturedModifier', NonFeaturedModifier('ssr')),
+            ('SelectedModifier', SelectedModifier('ssr', tau=1)),
+            ('NotOwnedModifier', NotOwnedModifier('ssr', threshold=0,
+                                                  on_all_owned='skip')),
+        ]
+        assert len(mods) == 6
+
+        results = {}
+        for label, mod in mods:
+            view = StateView(PityState(), 'x')
+            results[label] = mod.compute_delta(view, dict(_G3_BASE), ctx)
+
+        assert all(r is None or isinstance(r, dict) for r in results.values())
+        assert results['NotOwnedModifier'] is not None, (
+            '夹具失效：该相位须真的走到读 `ctx.sim` 的分支'
+            '（否则本用例的探针面是空的）')

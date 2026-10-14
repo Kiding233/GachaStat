@@ -770,7 +770,8 @@ def _registry_family_objects():
     `NotOwnedModifier`（S2a-2 交付）自 **S9-3**（2026-10-14）起**有产出方**：`core/pity.py`
     import 该类，两条 G3 preset（`_preset_hard_exclude_owned_skip` / `_any`）各产出一例，
     故上面的 `pities` 遍历 `BEHAVIOR_REGISTRY` 时**已含**它（`threshold=50`、两形态各一，
-    实测 2 例），该类的**类型出现性**由那一趟遍历承担、不再依赖本行。此处另直构一例
+    实测 2 例；连同本行直构的一例，该族共 3 例），该类的**类型出现性**由那一趟遍历承担、
+    不再依赖本行。此处另直构一例
     （`threshold=5`、`on_all_owned` 取默认 `'skip'`），多覆盖一组构造参数下的 round-trip。
     另三个（`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`）属
     **夹具选型**所致、并非不可达，理由见 `_REGISTRY_FAMILY_COVERAGE` 上方注释。

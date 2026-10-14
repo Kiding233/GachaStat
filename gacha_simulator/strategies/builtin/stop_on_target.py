@@ -1,4 +1,9 @@
-"""目标即停策略——抽到当期up/目标卡就停止。"""
+"""目标即停策略——抽到当期up/目标卡就停止。
+
+P64 S9-5（ISSUE-730/944）：本文件的「是否已拥有」判据一律取
+`ctx.state.total_holding(card_id)`（含 `initial_count` 初始持有）；`ctx.acquired`
+是 P60 语义「本次模拟新获得」，不含初始持有，不得用于该判据。
+"""
 from __future__ import annotations
 
 from gacha_simulator.core.strategy import (
@@ -27,7 +32,7 @@ class StopOnTargetStrategy(Strategy):
     def _pool_needs_target(self, banner_id: str, ctx: StrategyContext) -> bool:
         # P61（ISSUE-303/315）：匹配口径为 banner.id
         for t in ctx.target_cards.targets:
-            if banner_id in t.pool_ids and ctx.acquired.get(t.card_id, 0) < t.quantity_needed:
+            if banner_id in t.pool_ids and ctx.state.total_holding(t.card_id) < t.quantity_needed:
                 return True
         return False
 
@@ -38,11 +43,11 @@ class StopOnTargetStrategy(Strategy):
             return WaitAction(duration=next_event_wait(ctx))
         if self.stop_on_any_target:
             for t in ctx.target_cards.targets:
-                if ctx.acquired.get(t.card_id, 0) >= t.quantity_needed:
+                if ctx.state.total_holding(t.card_id) >= t.quantity_needed:
                     return WaitAction(duration=next_event_wait(ctx))
 
         for t in ctx.target_cards.targets:
-            if ctx.acquired.get(t.card_id, 0) >= t.quantity_needed:
+            if ctx.state.total_holding(t.card_id) >= t.quantity_needed:
                 continue
             for banner in ctx.all_banners:
                 pool = banner.active_pool

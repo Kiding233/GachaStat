@@ -1248,10 +1248,11 @@ class TestG3ExcludeOwned:
         ，迁移的是**消费侧口径**，不是 `acquired` 的定义；④ 与「模拟内获得」那一档
         （① 用例）结论一致：两条来源同口径。
 
-        **未覆盖的一半（登记，S9-5 的验收面）**：§六 本条还要求「跨层一致：策略侧
-        同样为 True」。策略侧 9 处判据（4 个内置策略文件的 `ctx.acquired.get(...)`）的
-        迁移归 **S9-5**；本步落地时实测该 9 处**仍是** `ctx.acquired`（不含初始持有），
-        故该半条在当前代码下**不可断言**，不在本步写成会红的断言。
+        **跨层半条（2026-10-14 已由 S9-5 补齐）**：§六 本条还要求「跨层一致：策略侧
+        同样为 True」。策略侧 9 处判据（4 个内置策略文件的 `ctx.acquired.get(...)`）
+        已于 **S9-5** 迁到 `ctx.state.total_holding(...)`；跨层断言落在本类的
+        `test_g3_engine_and_strategy_agree_on_owned_set`（同一 `GachaState` 上引擎侧
+        `sim.owns()` 与策略侧判据结论一致），本用例只保留引擎侧半条。
         """
         engine, _pool, pity_state, gacha_state, sim, base = _g3_engine(
             _G3_SKIP_TYPE, initial_counts={'up_a': 1}, counter=49)
@@ -1264,6 +1265,65 @@ class TestG3ExcludeOwned:
         assert pity_state.get('g3', 'counter', 0) == 50
         assert out['up_a'] == pytest.approx(0.0), '初始持有的 UP 须被排除出目标集'
         assert out['up_b'] == pytest.approx(1.0)
+
+    def test_g3_engine_and_strategy_agree_on_owned_set(self):
+        """G3 **跨层半条**（S9-5 收口，2026-10-14，ISSUE-730 / ISSUE-944）。
+
+        §六 G3 补充用例要求同一配置下两侧**同口径**：引擎侧 `SimView.owns()` 判
+        「已拥有」的卡集，与策略侧 `ctx.state.total_holding()` 判「已拥有」的卡集
+        一致，且**都含初始持有**。S9-4 落地时策略侧 9 处判据仍为 `ctx.acquired`
+        （不含初始持有），该半条不可断言；S9-5 迁移后两侧同源。
+
+        判据五条：① 夹具守卫：`up_a` **只**在 `initial_counts` 里（`acquired` 为空）；
+        ② 引擎侧：`sim.owns()` 判 `up_a` 已拥有，且 G3 保底触发时把它排除出 A 列；
+        ③ 两侧「已拥有」卡集**相等**；④ 策略侧：以**同一个 `GachaState`** 构造
+        `StrategyContext`，`stop_on_target` 同样判 `up_a` 已达标（`WaitAction`，
+        不为它抽卡）；⑤ 反向守卫：`gacha_state.acquired` 仍为空（P60 语义「本次模拟
+        新获得」不变，迁移的是消费侧）。
+
+        判别力：④ 是本条的关键。若策略侧判据退回 `ctx.acquired`，同一夹具下
+        `stop_on_target` 会判 `up_a` **未**达标并抽卡（`DrawAction`），而 ②③ 仍绿。
+        """
+        from gacha_simulator.core.action import WaitAction
+        from gacha_simulator.core.banner import Banner
+        from gacha_simulator.core.stop_condition import FixedActionCountCondition
+        from gacha_simulator.core.strategy import StrategyContext, create_strategy
+        from gacha_simulator.core.target_card import TargetCard, TargetCardSet
+
+        engine, pool, pity_state, gacha_state, sim, base = _g3_engine(
+            _G3_SKIP_TYPE, initial_counts={'up_a': 1}, counter=49)
+
+        # ① 夹具守卫：初始持有只写 `initial_counts`，`acquired` 为空
+        assert gacha_state.acquired == {}, '初始持有不得预填 acquired'
+        assert gacha_state.initial_counts == {'up_a': 1}
+
+        # ② 引擎侧：`owns` 认初始持有；G3 触发时排除该卡
+        owned_engine = {c for c in _G3_FEATURED if sim.owns(c) > 0}
+        assert owned_engine == {'up_a'}
+        out = engine.before_draw('g3_pool', pity_state, dict(base), sim)
+        assert pity_state.get('g3', 'counter', 0) == 50, '本抽须已到 τ'
+        assert out['up_a'] == pytest.approx(0.0), '引擎侧须把初始持有的 UP 排除出 A 列'
+
+        # ③ 两侧「已拥有」卡集相等
+        owned_strategy = {c for c in _G3_FEATURED if gacha_state.total_holding(c) > 0}
+        assert owned_strategy == owned_engine, '引擎侧与策略侧的「已拥有」卡集须一致'
+
+        # ④ 策略侧：同一 `GachaState` 上，`stop_on_target` 判 `up_a` 已达标
+        banner = Banner(id='g3_pool', name='G3 池', pools={'main': pool})
+        ctx = StrategyContext(
+            state=gacha_state,
+            current_pools=[pool], all_pools=[pool], future_schedules=[],
+            target_cards=TargetCardSet([
+                TargetCard(card_id='up_a', pool_ids=['g3_pool'], quantity_needed=1),
+            ]),
+            stop_condition=FixedActionCountCondition(100),
+            banners=[banner], all_banners=[banner],
+        )
+        assert isinstance(create_strategy('stop_on_target', {}).select_action(ctx), WaitAction), \
+            '策略侧须同样判 up_a 已达标（初始持有计入「已拥有」）'
+
+        # ⑤ 反向守卫：`acquired` 本身仍不含该卡
+        assert gacha_state.acquired == {}, '迁移的是消费侧，不是 acquired 的定义'
 
 
 # ══════════════════════════════════════════════════════════════════

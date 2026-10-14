@@ -3,6 +3,15 @@
 规则：card_counts / acquired_counts 只记录新抽到的卡（从0开始），
 不预填入 initial_count。initial_count 单独保留，用于 bonus 计算时
 确定总持有量（= initial_count + newly_acquired）。
+
+**P64 S9-5（2026-10-14，ISSUE-730/944）**：`state.acquired` 的上述语义**不变**
+（本文件多条用例钉住它），迁移的是**策略消费侧**：4 个内置策略的「是否已拥有」
+判据由 `ctx.acquired.get(...)` 改为 `ctx.state.total_holding(...)`（含初始持有）。
+故 `SmartStrategy` 的目标达成判定现在**计入** `initial_count`。受影响的三条既有
+用例（`test_initial_count_not_prepopulated` / `test_initial_count_multiple_cards` /
+`test_initial_count_feeds_overflow_bands`）已按新口径改造；原
+`test_initial_count_does_not_satisfy_target` 的 docstring「初始持有再高也不满足
+需求」正是被该裁决推翻的口径，已整条重写为 `test_initial_count_satisfies_target`。
 """
 import copy
 import os
@@ -41,7 +50,12 @@ def _make_pool(pool_id="test_pool"):
 
 
 def test_initial_count_not_prepopulated():
-    """initial_count > 0 不预填入 card_counts——只记录新抽到的"""
+    """initial_count > 0 不预填入 card_counts：只记录新抽到的。
+
+    P64 S9-5（2026-10-14）：策略侧达标判据已含初始持有，故 `quantity_needed=2`
+    配 `initial_count=1` 时只需再抽 1 张（迁移前为 2 张）。本用例的**意图**
+    （`card_counts` 只记新抽到的、不预填初始持有）不变。
+    """
     pool = _make_pool()
     strategy = SmartStrategy()
     stop_cond = AllPoolsEndCondition(1000.0)
@@ -54,9 +68,9 @@ def test_initial_count_not_prepopulated():
     state = GachaState(resources={"draw_resource": 100000})
     result = service.run_simulation_compact(state, max_iterations=200)
 
-    # 概率 100%，每抽必出 card_A → quantity_needed=2，抽2次后满足
-    # card_counts 只记新抽到的，应为 2（不含 initial_count）
-    assert result.card_counts.get("card_A", 0) == 2
+    # 概率 100%，每抽必出 card_A。初始持有 1 计入达标判据 → 只差 1 张，抽 1 次后
+    # 满足；card_counts 只记新抽到的，故为 1（不含 initial_count）
+    assert result.card_counts.get("card_A", 0) == 1
 
 
 def test_initial_count_zero_no_effect():
@@ -77,22 +91,39 @@ def test_initial_count_zero_no_effect():
 
 
 def test_initial_count_multiple_cards():
-    """多张卡有不同 initial_count——card_counts 只记新抽到"""
-    pool = Pool(
-        id="multi_pool",
-        name="Multi",
+    """多张卡有不同 initial_count：判据含初始持有，card_counts 只记新抽到。
+
+    P64 S9-5（2026-10-14）：card_A 初始持有 3 ≥ 需求 2，故**开局即判达标、一张不抽**；
+    card_B 初始持有 0 < 需求 1，仍抽 1 张。抽数恰为 1 次（B 达标即停）。
+
+    **夹具形态的改动及理由**：原夹具为单池 0.5 / 0.5 随机池，迁移后「card_A 是否被
+    抽到」成为随机量（抽到 B 之前可能随机出若干张 A），无法稳定断言；改用两池各自
+    100% 单卡（兑换池，`exchange_card_id` 指向该池唯一卡），抽数与 `card_counts`
+    均确定。
+    """
+    pool_a = Pool(
+        id="pool_a",
+        name="A池",
         cost=[{"draw_resource": 160}],
-        rewards=[(Reward(id="card_A", name="A"), 0.5), (Reward(id="card_B", name="B"), 0.5)],
+        rewards=[(Reward(id="card_A", name="A"), 1.0)],
+        exchange_card_id="card_A",
+    )
+    pool_b = Pool(
+        id="pool_b",
+        name="B池",
+        cost=[{"draw_resource": 160}],
+        rewards=[(Reward(id="card_B", name="B"), 1.0)],
+        exchange_card_id="card_B",
     )
     strategy = SmartStrategy()
     stop_cond = AllPoolsEndCondition(1000.0)
     target = TargetCardSet([
-        TargetCard(card_id="card_A", pool_ids=["multi_pool"], quantity_needed=2),
-        TargetCard(card_id="card_B", pool_ids=["multi_pool"], quantity_needed=1),
+        TargetCard(card_id="card_A", pool_ids=["pool_a"], quantity_needed=2),
+        TargetCard(card_id="card_B", pool_ids=["pool_b"], quantity_needed=1),
     ])
 
     service = GachaService(
-        [pool], strategy, stop_cond, target,
+        [pool_a, pool_b], strategy, stop_cond, target,
         card_defs=[
             {"card_id": "card_A", "initial_count": 3},
             {"card_id": "card_B", "initial_count": 0},
@@ -101,14 +132,27 @@ def test_initial_count_multiple_cards():
     state = GachaState(resources={"draw_resource": 100000})
     result = service.run_simulation_compact(state, max_iterations=300)
 
-    # card_A: initial=3, quantity=2 — 还需抽2张，card_counts只记新抽到
-    assert result.card_counts.get("card_A", 0) >= 2
-    # card_B: 无初始持有
-    assert result.card_counts.get("card_B", 0) >= 1
+    # card_A: initial=3 ≥ quantity=2 — 初始持有即达标，一张不抽
+    assert result.card_counts.get("card_A", 0) == 0
+    # card_B: 无初始持有，需抽 1 张；达标即停，故恰为 1
+    assert result.card_counts.get("card_B", 0) == 1
+    assert result.total_draws == 1
 
 
-def test_initial_count_does_not_satisfy_target():
-    """初始持有再高也不满足需求——必须从gacha中新抽到"""
+def test_initial_count_satisfies_target():
+    """初始持有计入达标判据：达标即不抽，未达标才抽。
+
+    **P64 S9-5 整条重写（2026-10-14）**：本用例原名
+    `test_initial_count_does_not_satisfy_target`，其 docstring「初始持有再高也不满足
+    需求」正是 2026-10-10 用户裁决所推翻的口径（策略侧判据迁到
+    `ctx.state.total_holding`，含初始持有），故按新口径整条重写，不留与现行口径相反的
+    用例。
+
+    判据两条（含反向守卫）：① `initial_count=5` ≥ `quantity_needed=1` → 开局即达标、
+    `total_draws == 0`、`card_counts` 为空；② 反向守卫 `initial_count=5` <
+    `quantity_needed=6` → 仍抽 1 张（证明判据是**比较**，不是「有初始持有即达标」）。
+    """
+    # ① 初始持有 ≥ 需求：一张不抽
     pool = _make_pool()
     strategy = SmartStrategy()
     stop_cond = AllPoolsEndCondition(1000.0)
@@ -121,10 +165,21 @@ def test_initial_count_does_not_satisfy_target():
     state = GachaState(resources={"draw_resource": 100000})
     result = service.run_simulation_compact(state, max_iterations=200)
 
-    # 100%出A，抽1次满足 quantity_needed=1
-    # card_counts 只记新抽到，不含初始持有
-    assert result.card_counts.get("card_A", 0) == 1
-    assert result.total_draws == 1
+    assert result.total_draws == 0, "初始持有已满足需求，策略不应再抽"
+    assert result.card_counts.get("card_A", 0) == 0, "card_counts 只记新抽到，不含初始持有"
+
+    # ② 反向守卫：初始持有不足需求 → 仍抽 1 张（100% 出 A）
+    pool2 = _make_pool()
+    target2 = TargetCardSet([TargetCard(card_id="card_A", pool_ids=["test_pool"], quantity_needed=6)])
+    service2 = GachaService(
+        [pool2], SmartStrategy(), AllPoolsEndCondition(1000.0), target2,
+        card_defs=[{"card_id": "card_A", "initial_count": 5}],
+    )
+    state2 = GachaState(resources={"draw_resource": 100000})
+    result2 = service2.run_simulation_compact(state2, max_iterations=200)
+
+    assert result2.total_draws == 1, "初始持有 5 < 需求 6，须抽 1 张补齐"
+    assert result2.card_counts.get("card_A", 0) == 1
 
 
 def test_initial_count_feeds_overflow_bands():
@@ -132,17 +187,18 @@ def test_initial_count_feeds_overflow_bands():
     `state.initial_counts`，溢出分档据此按 `total_holding`（**含初始持有**）定位。
 
     夹具：`card_A` 初始持有 1，分段表取两段互斥形态（`[1, 1]` → gem / `[2, ∞)` →
-    star）。目标需求 1 张，初始持有不满足需求（见
-    `test_initial_count_does_not_satisfy_target`），故恰好抽 1 次：`total_holding`
-    = 1 + 1 = 2 → 命中 `[2, ∞)` 得 star。若 `state.initial_counts` 未被赋值（空表），
-    `total_holding` = 1 会命中 `[1, 1]` 得 gem，本断言即红。
+    star）。**目标需求 2 张**（P64 S9-5 起策略判据含初始持有，需求须 > 初始持有才
+    会抽卡；原写 1 张在本块迁移后会开局达标、一张不抽，溢出无从触发），故恰好抽
+    1 次：`total_holding` = 1 + 1 = 2 → 命中 `[2, ∞)` 得 star。若
+    `state.initial_counts` 未被赋值（空表），`total_holding` = 1 会命中 `[1, 1]`
+    得 gem，本断言即红。
     """
     from gacha_simulator.core.overflow import OverflowBand
 
     pool = _make_pool()
     strategy = SmartStrategy()
     stop_cond = AllPoolsEndCondition(1000.0)
-    target = TargetCardSet([TargetCard(card_id="card_A", pool_ids=["test_pool"], quantity_needed=1)])
+    target = TargetCardSet([TargetCard(card_id="card_A", pool_ids=["test_pool"], quantity_needed=2)])
     bands = [
         OverflowBand(1, 1, {"gem": 10}),
         OverflowBand(2, None, {"star": 5}),

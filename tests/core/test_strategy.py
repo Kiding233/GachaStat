@@ -8,7 +8,7 @@ from gacha_simulator.core.strategy import (
 from gacha_simulator.core.action import DrawAction, WaitAction
 from gacha_simulator.core.state import GachaState
 from gacha_simulator.core.stop_condition import FixedActionCountCondition
-from gacha_simulator.core.target_card import TargetCardSet
+from gacha_simulator.core.target_card import TargetCard, TargetCardSet
 from gacha_simulator.core.banner import Banner
 
 
@@ -155,3 +155,193 @@ def test_priority_chain_strategy_exhausted_fallback():
     action = chain.select_action(_exhausted_ctx())
     assert isinstance(action, WaitAction)
     assert action.duration > 0
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-5：策略侧存量持有口径（`initial_count` 计入「是否已拥有」）
+# ══════════════════════════════════════════════════════════════════
+#
+# 判据面：`strategies/builtin/` 的 4 个策略文件共 9 处「是否已拥有」判据
+# （pity_reserve 2 / pool_quota 2 / smart 2 / stop_on_target 3）全部由
+# `ctx.acquired.get(t.card_id, 0)` 迁到 `ctx.state.total_holding(t.card_id)`。
+# `ctx.acquired` 的定义不变（P60 语义「本次模拟**新获得**」，不含初始持有），
+# 迁移的是**消费侧**。本组验**层内 9 处无遗漏**（逐策略覆盖）；跨层一致
+# （引擎侧与策略侧同口径）由 `tests/core/test_pity_integration.py` 的
+# `TestG3ExcludeOwned::test_g3_engine_and_strategy_agree_on_owned_set` 承担。
+#
+# **变异实测（2026-10-14，8 次，逐处还原）**：① `state.total_holding` 漏算
+# `initial_counts` → 本组 4 条 + 服务层 4 条 + G3 跨层条全红；② 逐处回退
+# `pity_reserve` s1 / s2、`pool_quota` s1 / s2、`smart` s1 / s2、
+# `stop_on_target` s2 → 各自只有对应策略的那一条红（逐策略可辨）。
+#
+# **未被任何变异覆盖的新断言（登记）**：(a) 各条的**对照组**（`initial_counts`
+# 为空 → `DrawAction` + `banner_id`）：作用是夹具判别力守卫，与迁移方向正交；
+# (b) 各条的夹具守卫 `ctx.state.acquired == {}`（P60 语义：初始持有不预填
+# `acquired`）；(c) `stop_on_target` 条的 ①（s1 直调）与 ③（默认配置主循环）
+# 只被 ① 号变异覆盖，未做「单处回退」隔离（`stop_on_target` 的 s1 / s3 未单独
+# 变异，受 8 次上限约束；两者形态与已隔离的 `pity_reserve` / `pool_quota` 的
+# s1 / s2 逐字相同）。
+
+_S95_CARD = 's95_card'
+_S95_BANNER = 's95_banner'
+
+
+def _s95_ctx(*, initial_counts=None, quantity=2, exchange=True, extra_targets=()):
+    """P64 S9-5 夹具：目标卡 `s95_card`（需求 `quantity`）+ 单 Banner 单池。
+
+    `exchange=True` 时池为兑换池（100% `s95_card`，`exchange_card_id` 指向它），
+    策略的「兑换优先」分支会命中它；`False` 时为 0.5 / 0.5 双卡随机池（非兑换），
+    只有 `_pool_needs_target` 一侧会命中。`acquired` 恒为空，初始持有只写
+    `initial_counts`（P60 语义：初始持有不预填 `acquired`）。
+
+    `extra_targets` 追加同池的目标卡 `(card_id, quantity_needed)`，用于需要
+    「一张已达标 + 一张未达标」的判据（`stop_on_target` 的 `stop_on_any_target`
+    分支只有在该形态下才与「跳过已达标、继续为未达标目标抽卡」区分得开）。
+    """
+    from gacha_simulator.core.pool import Pool, Reward
+
+    if exchange:
+        pool = Pool(id='main', name='S95', cost={'draw_resource': 160},
+                    rewards=[(Reward(_S95_CARD, 'S95'), 1.0)],
+                    exchange_card_id=_S95_CARD)
+    else:
+        pool = Pool(id='main', name='S95', cost={'draw_resource': 160},
+                    rewards=[(Reward(_S95_CARD, 'S95'), 0.5),
+                             (Reward('s95_other', 'Other'), 0.5)])
+    banner = Banner(id=_S95_BANNER, name='S95', pools={'main': pool})
+    state = GachaState(resources={'draw_resource': 100000},
+                       initial_counts=dict(initial_counts or {}))
+    targets = [TargetCard(card_id=_S95_CARD, pool_ids=[_S95_BANNER],
+                          quantity_needed=quantity)]
+    targets += [TargetCard(card_id=cid, pool_ids=[_S95_BANNER], quantity_needed=n)
+                for cid, n in extra_targets]
+    return StrategyContext(
+        state=state,
+        current_pools=[pool], all_pools=[pool], future_schedules=[],
+        target_cards=TargetCardSet(targets),
+        stop_condition=FixedActionCountCondition(100),
+        banners=[banner], all_banners=[banner],
+    )
+
+
+def test_pity_reserve_holding_includes_initial_count():
+    """P64 S9-5：`pity_reserve` 的 2 处判据均取含初始持有的口径。
+
+    ① `select_action` 首段的 `>= quantity_needed`：初始持有 2 = 需求 2 时，兑换池
+    虽可抽也**不抽**（`WaitAction`）；② `_pool_needs_target` 的 `< quantity_needed`
+    同口径判「不需要」。对照组（无初始持有）两处都判「需要」。
+    """
+    ctx = _s95_ctx(initial_counts={_S95_CARD: 2})
+    assert ctx.state.acquired == {}, '夹具：初始持有不得预填 acquired（P60 语义）'
+    assert ctx.state.total_holding(_S95_CARD) == 2
+
+    assert isinstance(create_strategy('pity_reserve', {}).select_action(ctx), WaitAction), \
+        '初始持有已达标，不应再抽兑换池'
+
+    action0 = create_strategy('pity_reserve', {}).select_action(_s95_ctx())
+    assert isinstance(action0, DrawAction), '对照：无初始持有时应抽卡'
+    assert action0.banner_id == _S95_BANNER
+
+    assert create_strategy('pity_reserve', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(initial_counts={_S95_CARD: 2}, exchange=False)) is False
+    assert create_strategy('pity_reserve', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(exchange=False)) is True
+
+
+def test_pool_quota_holding_includes_initial_count():
+    """P64 S9-5：`pool_quota` 的 2 处判据均取含初始持有的口径。
+
+    ① `select_action` 首段的 `>= quantity_needed`（兑换池路径）；
+    ② `_pool_needs_target` 的 `< quantity_needed`。
+
+    **覆盖边界（如实声明）**：本策略的第三段「配额未尽则任意抽」在非兑换池上
+    不读 `_pool_needs_target`，故 ② 的**行为**在 `select_action` 里被该段遮蔽
+    （判 True 走第二段抽、判 False 走第三段也抽，同一 banner 下不可区分）。此处
+    以**直调 `_pool_needs_target`** 覆盖 ② 的口径，`select_action` 只覆盖 ①。
+    """
+    ctx = _s95_ctx(initial_counts={_S95_CARD: 2})
+    assert ctx.state.acquired == {}
+
+    assert isinstance(create_strategy('pool_quota', {}).select_action(ctx), WaitAction), \
+        '初始持有已达标，不应再抽兑换池'
+
+    action0 = create_strategy('pool_quota', {}).select_action(_s95_ctx())
+    assert isinstance(action0, DrawAction), '对照：无初始持有时应抽卡'
+    assert action0.banner_id == _S95_BANNER
+
+    assert create_strategy('pool_quota', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(initial_counts={_S95_CARD: 2}, exchange=False)) is False
+    assert create_strategy('pool_quota', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(exchange=False)) is True
+
+
+def test_smart_holding_includes_initial_count():
+    """P64 S9-5：`smart` 的 2 处判据均取含初始持有的口径。
+
+    ① `_get_needed_card_exchange` 的 `>= quantity_needed`（兑换优先分支）；
+    ② `_pool_needs_target` 的 `< quantity_needed`（中间赋值形态 `ac_val`）。
+
+    **覆盖边界（如实声明）**：`select_action` 的兑换分支与 `_pool_needs_target`
+    两条路径在本夹具下判据取值相同（同一张卡、同一需求），单跑 `select_action`
+    无法分辨是哪一处生效；故 ① 由 `select_action`（兑换池夹具）覆盖、② 由直调
+    `_pool_needs_target`（随机池夹具）覆盖，逐处可辨。
+    """
+    ctx = _s95_ctx(initial_counts={_S95_CARD: 2})
+    assert ctx.state.acquired == {}
+
+    assert isinstance(create_strategy('smart', {}).select_action(ctx), WaitAction), \
+        '初始持有已达标，不应再抽兑换池'
+
+    action0 = create_strategy('smart', {}).select_action(_s95_ctx())
+    assert isinstance(action0, DrawAction), '对照：无初始持有时应抽卡'
+    assert action0.banner_id == _S95_BANNER
+
+    assert create_strategy('smart', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(initial_counts={_S95_CARD: 2}, exchange=False)) is False
+    assert create_strategy('smart', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(exchange=False)) is True
+
+
+def test_stop_on_target_holding_includes_initial_count():
+    """P64 S9-5：`stop_on_target` 的 3 处判据均取含初始持有的口径。
+
+    ① `_pool_needs_target` 的 `< quantity_needed`（直调覆盖）；
+    ② `stop_on_any_target` 分支的 `>= quantity_needed`：**任一**目标达标即整场停手。
+    该分支的语义是「任意目标」而非「所有目标」，故夹具须另有一张**未达标**的目标卡
+    （`s95_other`），否则「整场停手」与「跳过已达标目标、继续为未达标目标抽卡」
+    的产出相同、变异不可辨（实测：单目标夹具下把 ② 回退仍返回 `WaitAction`）；
+    ③ `select_action` 主循环的 `>= quantity_needed`。
+    """
+    # ③ 主循环（默认配置：stop_on_featured=True / stop_on_any_target=False）
+    ctx = _s95_ctx(initial_counts={_S95_CARD: 2})
+    assert ctx.state.acquired == {}
+    assert isinstance(create_strategy('stop_on_target', {}).select_action(ctx), WaitAction), \
+        '初始持有已达标，不应再抽兑换池'
+
+    action0 = create_strategy('stop_on_target', {}).select_action(_s95_ctx())
+    assert isinstance(action0, DrawAction), '对照：无初始持有时应抽卡'
+    assert action0.banner_id == _S95_BANNER
+
+    # ② `stop_on_any_target` 分支：card_A 由初始持有达标 → 整场停手（card_B 仍缺也不抽）
+    any_cfg = {'stop_on_any_target': True}
+    pair_kw = dict(exchange=False, extra_targets=[('s95_other', 1)])
+    assert isinstance(
+        create_strategy('stop_on_target', any_cfg).select_action(
+            _s95_ctx(initial_counts={_S95_CARD: 2}, **pair_kw)), WaitAction), \
+        'stop_on_any_target：初始持有已达标的任一目标即令整场停手'
+    # 对照甲：关掉该分支 → 继续为未达标的 card_B 抽卡（证明上一条确为 ② 之功）
+    assert isinstance(
+        create_strategy('stop_on_target', {}).select_action(
+            _s95_ctx(initial_counts={_S95_CARD: 2}, **pair_kw)), DrawAction), \
+        '对照：stop_on_any_target=False 时应继续为未达标的 card_B 抽卡'
+    # 对照乙：无初始持有时 ② 不触发
+    assert isinstance(
+        create_strategy('stop_on_target', any_cfg).select_action(
+            _s95_ctx(**pair_kw)), DrawAction), \
+        '对照：无初始持有时不停手'
+
+    # ① `_pool_needs_target`
+    assert create_strategy('stop_on_target', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(initial_counts={_S95_CARD: 2}, exchange=False)) is False
+    assert create_strategy('stop_on_target', {})._pool_needs_target(
+        _S95_BANNER, _s95_ctx(exchange=False)) is True

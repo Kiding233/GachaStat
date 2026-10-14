@@ -861,8 +861,8 @@ def _preset_btype_list():
 
 @pytest.mark.parametrize('btype', _preset_btype_list())
 def test_every_registry_type_runs_without_false_alarm(btype):
-    """**校验器可用性的前提**：11 个 registry 类型各跑一段抽卡序列，四层判据全程
-    不得报错。
+    """**校验器可用性的前提**：`BEHAVIOR_REGISTRY` 的每个类型各跑一段抽卡序列，四层
+    判据全程不得报错。
 
     「生产关闭」不等于「启用即炸」：本层若对合法配置假警报（ISSUE-011 / ISSUE-903
     的形态），它就只是噪声源。故对每个类型单独造一台引擎（一池一保底，避免组合

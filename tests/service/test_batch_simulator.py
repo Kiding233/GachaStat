@@ -736,16 +736,18 @@ class TestFourFamilyPickleRoundtrip:
 #:    下面三个**可达但未纳入夹具**的类：`StreakTracker`（`rotating_cr` 族）、
 #:    `NonFeaturedModifier`（`rotating_inverse`，产出方 `_preset_rotating_inverse`）、
 #:    `DependentFiniteActive`（同一 `PityDef` 上同时给 `max_triggers` 与 `depends_on`）。
-#: ② **`NotOwnedModifier` 在任何 env 中都不可达**：该类在 M1 **无 preset 产出方**
-#:    （`core/pity.py` 连 import 都没有它；消费方是 M2 的 S9-3），故**只有本组**能覆盖
-#:    它。这是硬理由，不随夹具怎么选而变。
+#: ② **`NotOwnedModifier` 自 S9-3 起有产出方**（2026-10-14 订正）：S9-3 之前该类在 M1
+#:    无 preset 产出方（`core/pity.py` 未 import 它），旧表述据此称它「任何 env 都不可
+#:    达」；**该前提已不成立**：`core/pity.py` 现已 import 该类，两条 G3 preset
+#:    （`_preset_hard_exclude_owned_skip` / `_preset_hard_exclude_owned_any`）各产出一例，
+#:    故该类**可达**，只是 env 夹具（`_FAMILY_PITY_DEFS` 五条保底）不含 G3 类型，
+#:    env 的 pickle 图里仍不会出现它。
 #:
-#: **两类性质不同，不可混为一谈**：`NonFeaturedModifier` **有**产出方
-#: （`_preset_rotating_inverse`），属「env 夹具未纳入」；`NotOwnedModifier` **无**产出方，
-#: 属「任何 env 都不可达」。
+#: **`NonFeaturedModifier` 与 `NotOwnedModifier` 的覆盖理由相同**：前者的产出方是
+#: `_preset_rotating_inverse`，后者是上面两条 G3 preset，即**都有**产出方、都不在 env
+#: 夹具里；本组（注册表全量直构）对二者的覆盖理由一致：补 env 夹具未纳入的零件类。
 #:
-#: 覆盖的 btype 数为 **11**（`BEHAVIOR_REGISTRY` 实测 11 条，含 S6a 新增的
-#: `rotating_inverse`）。
+#: 覆盖的 btype 数为 `len(BEHAVIOR_REGISTRY)`（不写死条数：该集合随注册表增长）。
 _REGISTRY_FAMILY_COVERAGE = {
     'pity': {'Pity'},
     'tracker': {'CounterTracker', 'FlagTracker', 'StreakTracker', 'FateTracker',
@@ -762,13 +764,16 @@ _LIFECYCLE_VARIANTS = ({}, {'max_triggers': 2}, {'depends_on': 'x'},
 
 
 def _registry_family_objects():
-    """直构**注册表全量**的四族对象（11 个 btype + 4 个生命周期组合 + 无产出方的类）。
+    """直构**注册表全量**的四族对象（`BEHAVIOR_REGISTRY` 全量 btype + 4 个生命周期
+    组合 + 另直构的一例 `NotOwnedModifier`）。
 
-    `NotOwnedModifier`（S2a-2 交付）在 M1 **无 preset 产出方**（`core/pity.py` 未 import
-    该类；消费方是 M2 的 S9-3 `ForceNotOwnedModifier`），故任何 env 的 pickle 图里都不会
-    出现它；此处直构补齐，使「四族成员无禁令形态」的确认覆盖到它。另三个
-    （`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`）属**夹具选型**
-    所致、并非不可达，两类理由见 `_REGISTRY_FAMILY_COVERAGE` 上方注释。
+    `NotOwnedModifier`（S2a-2 交付）自 **S9-3**（2026-10-14）起**有产出方**：`core/pity.py`
+    import 该类，两条 G3 preset（`_preset_hard_exclude_owned_skip` / `_any`）各产出一例，
+    故上面的 `pities` 遍历 `BEHAVIOR_REGISTRY` 时**已含**它（`threshold=50`、两形态各一，
+    实测 2 例），该类的**类型出现性**由那一趟遍历承担、不再依赖本行。此处另直构一例
+    （`threshold=5`、`on_all_owned` 取默认 `'skip'`），多覆盖一组构造参数下的 round-trip。
+    另三个（`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`）属
+    **夹具选型**所致、并非不可达，理由见 `_REGISTRY_FAMILY_COVERAGE` 上方注释。
 
     构造后调 `_bind_counter_to_pickle_graph`：同 env 夹具，`Counter` 不显式绑一次就
     不在图里（`CounterTracker._counter` 构造期为 `None`）。
@@ -793,7 +798,7 @@ def _registry_family_objects():
 
 
 class TestRegistryWidePickleCoverage:
-    """§四 禁令与 round-trip 的**全量**覆盖面（补 env 夹具未纳入与不可达的零件类）。"""
+    """§四 禁令与 round-trip 的**全量**覆盖面（补 env 夹具未纳入的零件类）。"""
 
     def test_pickle_registry_types_roundtrip_without_forbidden_member(self):
         """注册表全量零件：无禁令成员 + round-trip 逐字段相等。
@@ -801,8 +806,8 @@ class TestRegistryWidePickleCoverage:
         与 `TestFourFamilyPickleRoundtrip` 的分工：那一组走**真实 env 的 pickle 图**
         （计划 S7b 的验收形态），本组走**注册表全量直构**，把 env 夹具未纳入的类
         （`StreakTracker` / `NonFeaturedModifier` / `DependentFiniteActive`，夹具选型
-        所致）与**任何 env 都不可达**的 `NotOwnedModifier` 一并纳入「无 lambda / 闭包 /
-        不可 pickle 成员」的确认面。
+        所致）与同为「env 夹具未纳入」的 `NotOwnedModifier`（产出方为两条 G3 preset）
+        一并纳入「无 lambda / 闭包 / 不可 pickle 成员」的确认面。
         """
         fams = _registry_family_objects()
         got = {fam: {type(o).__name__ for o in objs} for fam, objs in fams.items()}

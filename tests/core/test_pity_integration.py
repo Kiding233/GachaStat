@@ -1478,12 +1478,17 @@ class TestCtxStateChannelClosed:
         """6 个真 Modifier 的实现内**零** `X.state` 属性读取（含自身命名空间）。
 
         判据两条：① 被测集合**恰为 6 个**具体 Modifier（自 `pity_modifier` 模块动态
-        发现，新增 Modifier 自动纳入，不必改本用例）；② 每个类的类源码 AST 内
+        发现：**发现机制本身**会把新增 Modifier 自动纳入，但下面的等式断言写死了名单，
+        故新增 Modifier 时**本用例的集合断言须同步扩表**）；② 每个类的类源码 AST 内
         `X.state` 属性读取数为 0。类源码经 `inspect.getsource` 取，**docstring 不计**
         （AST 只认属性读取节点），故基类 docstring 里对 `ctx.state` 的说明不会误报。
 
-        **强度上限（如实声明）**：拦的是**字面**属性读取；把 `ctx` 先赋给别的名字再读
-        `state`（`c = ctx; c.state.get(...)`）可绕过静态扫描。该形态由
+        **强度上限（如实声明）**：拦的是**字面**属性读取（属性名 `state` 落在
+        `Attribute` 节点上）；把键名写成**字符串常量**的形态拦不住，如
+        `getattr(ctx, 'state')` / `vars(ctx)['state']` / `ctx.__dict__['state']`
+        （AST 里没有 `attr == 'state'` 的节点，实测扫描结果为空）。反之把 `ctx` 先赋给
+        别的名字再读 `state`（`c = ctx; c.state.get(...)`）**拦得住**：属性名仍是
+        `state`，扫描照常命中。字符串键形态由
         `test_modifier_compute_delta_runs_with_ctx_state_probe` 的运行期探针补。
         """
         import inspect as _inspect
@@ -1573,9 +1578,12 @@ class TestCtxStateChannelClosed:
         """运行期补面：`ctx.state` 换成**任何访问即抛**的探针后，六个 Modifier 的
         `compute_delta` 仍正常返回。
 
-        AST 扫描拦的是**字面**属性读取，绕过形态是先把 `ctx` 赋给别的名字；本用例把
-        `ctx.state` 换成抛异常的探针，故「该相位内触达 `ctx.state`」这一事实本身会让
-        本用例失败，别名绕过也拦得住。
+        AST 扫描拦的是**字面**属性读取（属性名 `state` 落在 `Attribute` 节点上），拦不住
+        把键名写成**字符串常量**的形态（`getattr(ctx, 'state')` / `vars(ctx)['state']` /
+        `ctx.__dict__['state']`）；本用例把 `ctx.state` 换成抛异常的探针（`_NoCtxStateRead`
+        的 `__getattr__` 对任何属性名即抛），故「该相位内触达 `ctx.state`」这一事实本身会
+        让本用例失败，字符串键形态也拦得住（取到探针后读它的任何键都要过一次
+        `__getattr__`）。
 
         **强度上限**：只覆盖本次调用走到的分支（六个 Modifier 都构造成「条件成立」
         形态，即各自触发分支），未走到的分支仍只有 AST 扫描这一层。

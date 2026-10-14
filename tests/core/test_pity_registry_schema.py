@@ -19,7 +19,7 @@
 消费者断言、「工厂不是模块级常量实例」、三个 `_soft` 类型的 `NamespaceTracker` 载体与
 `X_soft._active` 落点、事件驱动族一律不写 `target=`、以及 `rotating_cr` 的
 **`[StreakTracker, FlagTracker]` 顺序契约**（语义级用例，顺序对调即 `cr_counter`
-恒为 0）。**GATE-3 收口断言**（10 条目一律 `class: None` + 可调用 `preset`）亦在本段。
+恒为 0）。**GATE-3 收口断言**（全条目一律 `class: None` + 可调用 `preset`）亦在本段。
 
 **S4-3 收口已完成的删除面**：`TestValidateRegistryTransition`（过渡判据的三条用例：
 现有条目经旧判据通过 / 未迁移条目 `class` 置 `None` 必抛 / 未迁移条目 `class`
@@ -547,7 +547,9 @@ _C43_TYPES = ('rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft',
               'targeted', 'targeted_soft')
 # P64 S6a：G1 反向轮换（新增机制，无旧类，故不进等价性装置的比对面）
 _C44_TYPES = ('rotating_inverse',)
-_ALL_TYPES = _C42_TYPES + _C43_TYPES + _C44_TYPES   # 11 条目全集
+# P64 S9-3：G3 排除已获得的两条 preset 形态（`NotOwnedModifier` 的两个产出方）
+_C94_TYPES = ('hard_exclude_owned_skip', 'hard_exclude_owned_any')
+_ALL_TYPES = _C42_TYPES + _C43_TYPES + _C44_TYPES + _C94_TYPES   # 条目全集（新增 type 须并入本元组）
 _SOFT_FAMILY = ('rotating_soft', 'rotating_cr_soft', 'targeted_soft')
 
 # ── 夹具：ssr（含 featured）/ sr / r 三稀有度池（与 S1b 起的 tracker 单测同形）──
@@ -604,7 +606,7 @@ class TestEventPresetsS43:
     """六类 preset 工厂本体（§3.2 / §3.10.3 / §七 S4-3 的验收面）。"""
 
     def test_gate3_all_entries_preset_form(self):
-        """**GATE-3 收口**：10 条目一律 `class: None` + 可调用 `preset`（ISSUE-015 终局）。
+        """**GATE-3 收口**：`_ALL_TYPES` 列出的全条目一律 `class: None` + 可调用 `preset`（ISSUE-015 终局）。
 
         收口后 `_validate_registry()` 的「无 `preset` 键」过渡分支已删除，
         故本断言与导入期判据是同一条纪律的两面：条目既无 `preset` 又无 `class`
@@ -618,7 +620,7 @@ class TestEventPresetsS43:
         _validate_registry()          # 显式重跑收口判据（不只靠导入期那一次）
 
     def test_all_presets_construct_in_engine(self):
-        """全部类型（`_ALL_TYPES`，现 11 条）经 `PityEngine` 构造后 `len(engine.behaviors) == 1`（§六 ISSUE-204）。
+        """`_ALL_TYPES` 列出的全部类型经 `PityEngine` 构造后 `len(engine.behaviors) == 1`（§六 ISSUE-204）。
 
         S4-5 之前 `PityEngine.__init__` 对 preset 构造失败只 `logger.warning` 后
         **跳过**（不抛），跳过会让 `_resolve_order` / `_validate_behaviors` 在截断后的

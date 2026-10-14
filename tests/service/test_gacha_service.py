@@ -127,6 +127,40 @@ def test_initial_count_does_not_satisfy_target():
     assert result.total_draws == 1
 
 
+def test_initial_count_feeds_overflow_bands():
+    """S9-2 收口（端到端）：`run_simulation` 把 `card_defs.initial_count` 落到
+    `state.initial_counts`，溢出分档据此按 `total_holding`（**含初始持有**）定位。
+
+    夹具：`card_A` 初始持有 1，分段表取两段互斥形态（`[1, 1]` → gem / `[2, ∞)` →
+    star）。目标需求 1 张，初始持有不满足需求（见
+    `test_initial_count_does_not_satisfy_target`），故恰好抽 1 次：`total_holding`
+    = 1 + 1 = 2 → 命中 `[2, ∞)` 得 star。若 `state.initial_counts` 未被赋值（空表），
+    `total_holding` = 1 会命中 `[1, 1]` 得 gem，本断言即红。
+    """
+    from gacha_simulator.core.overflow import OverflowBand
+
+    pool = _make_pool()
+    strategy = SmartStrategy()
+    stop_cond = AllPoolsEndCondition(1000.0)
+    target = TargetCardSet([TargetCard(card_id="card_A", pool_ids=["test_pool"], quantity_needed=1)])
+    bands = [
+        OverflowBand(1, 1, {"gem": 10}),
+        OverflowBand(2, None, {"star": 5}),
+    ]
+
+    service = GachaService(
+        [pool], strategy, stop_cond, target,
+        card_defs=[{"card_id": "card_A", "initial_count": 1}],
+        card_overflow_map={"card_A": bands},
+    )
+    state = GachaState(resources={"draw_resource": 100000})
+    result = service.run_simulation_compact(state, max_iterations=200)
+
+    assert result.total_draws == 1
+    assert result.total_gained.get("star", 0) == 5
+    assert result.total_gained.get("gem", 0) == 0
+
+
 def test_card_defs_none_handled():
     """不传 card_defs 时应正常运行"""
     pool = _make_pool()

@@ -1298,8 +1298,9 @@ class Pity(PityBehavior):
 
     1. 收集零件声明的命名空间（`trackers` / `modifiers` / `lifecycle` 的 `namespace`
        属性去 `None`）；
-    2. 汇总三族声明键集 `_declared_keys`（S10-2 / S11 的唯一输入）并跑 S10-2 的
-       两条构造期判据（§3.12.2，非法组合抛 `ConfigError`，先于任何 state 写入）；
+    2. 汇总三族声明键集 `_declared_keys`（S10-2 / S11 的唯一输入）并跑同层的两条
+       构造期校验（§3.12.2 的 S10-2 组合判据 + §3.10.2 的 `uses_sim` 注解校验：非法
+       组合 / 未知源名抛 `ConfigError`，均先于任何 state 写入）；
     3. `Lifecycle.initialize(state, name, namespaces)`——写初始 `_active`。**须先于
        `_view` 创建**：`initialize` 只写 state、不依赖 view；
     4. 建默认 view（`self._name`）与零件命名空间 view（`self._ns_views`）；

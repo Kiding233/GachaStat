@@ -46,8 +46,9 @@ class MilestoneEngine:
 
         调用方（gacha_service）负责消费 bonus：
           - card 类型 → state.add_card(cid, path="milestone_gift",
-              overflow_bands=card_overflow_map.get(cid),
-              initial_counts=_initial_counts)
+              overflow_bands=card_overflow_map.get(cid))
+              （P64 S9-2：`initial_counts` 形参已删，改由当场的 `state.initial_counts`
+              字段承载）
           - resource 类型 → 注入 state.resources（方案 C，2026-08-03；不并入当抽 combined_gained）
           - collector.on_bonus(...)
 

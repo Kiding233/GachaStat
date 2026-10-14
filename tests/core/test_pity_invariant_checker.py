@@ -13,7 +13,7 @@
 | 分布 | `check_after_before_draw` | `TestDistributionLayer` |
 | 状态 | `check_after_after_draw` | `TestStateLayer` |
 | 生命周期 | `check_after_after_draw` | `TestLifecycleLayer` |
-| 增量 | `check_delta`（**M1 不接调用点**） | `TestDeltaLayer` |
+| 增量 | `check_delta`（**S8-6 已接线**，调用点 = 骨架内循环） | `TestDeltaLayer` |
 
 **与 S10-1 的判据口径关系（S8-2 起）**：两边的归一性判据都是**恒等断言
 `Σp = 1`**（ISSUE-903 的反转义务已落地：S8 起 `_apply_delta` 无条件归一化，M1 的
@@ -656,7 +656,7 @@ class TestLifecycleLayer:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 七、增量层（§3.12.1 增量合法性行；M1 只实现、不接调用点）
+# 七、增量层（§3.12.1 增量合法性行；S8-6 已接线：调用点 = 骨架内循环）
 # ══════════════════════════════════════════════════════════════════
 
 class TestDeltaLayer:
@@ -684,25 +684,57 @@ class TestDeltaLayer:
         checker = InvariantChecker(enabled=True)
         checker.check_delta(_POOL, {'sr': 0.0, 'r': 0.0}, {'sr': 0.0, 'r': 0.0})
 
-    def test_delta_entry_is_not_wired_into_the_two_engine_entries(self, monkeypatch):
-        """**M1 硬约束**：增量层**不复用**两个入口（§3.13「增量层的入口与调用点」段：
-        两个入口的第二实参只有分布、取不到该步的 δ），调用点随 S8-6 落在
-        `_apply_delta()` 内部。本用例把 `check_delta` 换成「一被调用就炸」的探针，
-        跑一遍引擎的两个入口：探针不得被命中。"""
+    def test_delta_entry_is_wired_into_the_skeleton_inner_loop(self, monkeypatch):
+        """增量层的调用点：**骨架内循环**（S8-6 接线）；两个引擎入口仍**不**调用它。
+
+        原用例（M1）断言「跑一遍引擎的两个入口，`check_delta` 零命中」，依据是计划
+        §3.13 的「M1 不接调用点」硬约束（M1 槽位级管道没有增量表示，两个入口的第二
+        实参只有分布）。S8-6 按计划落地该层的调用点后，该断言的前半**必然反转**：
+        `engine.before_draw` 现在会命中 `check_delta`（骨架内循环逐 Modifier 判一次）。
+        故本用例改写为**三条并列事实**，判据面比原来更宽：
+
+        ① **正面**：`enabled=True` 时跑一次 `engine.before_draw`，探针**必被命中**
+           恰一次（`hard(scope='sr')` 首抽即触发、δ 非空），且两个实参同键空间。
+           原用例无法区分「已接线」与「接线被删」；本条即补上那个方向。
+        ② **边界**：**单独**调用两个入口 `check_after_before_draw` /
+           `check_after_after_draw` 时，探针**仍零命中**（§3.13「增量层不复用两个
+           入口」的理由未变：两个入口的第二实参只有分布、取不到该步的 δ）。
+        ③ **关闭态**：`invariants=None`（生产默认）时探针零命中。
+
+        **与计划原文的落点差异**：§3.13 与 S8-6 写「由 `_apply_delta()` 内部调用」，
+        而 S8-1 已把该函数迁到叶子层、签名收为 `(dist, d)`，**取不到 `pool_id` 与
+        校验器**，故不可执行；三条候选的裁决与理由见 `Pity.before_draw` 的内循环注记
+        （取「调用点移到骨架内循环」）。
+        """
         hits = []
 
         def _probe(self, pool_id, dist, delta):
             hits.append((pool_id, dict(dist), dict(delta)))
 
         monkeypatch.setattr(InvariantChecker, 'check_delta', _probe)
+
+        # ① 正面：骨架内循环真的走到增量层（探针本身可用的阳性对照即本断言）
         engine, state = _engine(invariants=InvariantChecker(enabled=True))
         engine.before_draw(_POOL, state, dict(_BASE))
-        engine.after_draw(_POOL, state, 'sr_std')
-        assert hits == [], f'M1 不得把增量层接进两个入口，实测命中 {hits}'
+        assert len(hits) == 1, (
+            f'骨架内循环须命中增量层恰一次（hard(scope=sr) 首抽即触发），实测 {hits}')
+        pool_id, dist, delta = hits[0]
+        assert pool_id == _POOL, f'pool_id 须取自 ctx.draw.pool_id，实测 {pool_id!r}'
+        assert set(delta) <= set(dist), (
+            f'增量层的两个实参须同键空间（卡级），实测 δ 多出 {set(delta) - set(dist)}')
 
-        # 阳性对照：探针本身可用（直接调用即命中）
-        InvariantChecker(enabled=True).check_delta(_POOL, {'sr': 1.0}, {'sr': 0.0})
-        assert len(hits) == 1
+        # ② 边界：两个入口单独调用时不得命中增量层
+        hits.clear()
+        checker = InvariantChecker(enabled=True)
+        checker.check_after_before_draw(_POOL, dict(_BASE), engine)
+        checker.check_after_after_draw(_POOL, state, engine)
+        assert hits == [], f'两个入口不得调用增量层，实测命中 {hits}'
+
+        # ③ 关闭态：invariants=None 时连调用点都不进（生产零开销）
+        hits.clear()
+        engine_off, state_off = _engine(invariants=None)
+        engine_off.before_draw(_POOL, state_off, dict(_BASE))
+        assert hits == [], f'invariants=None 时不得命中增量层，实测 {hits}'
 
 
 # ══════════════════════════════════════════════════════════════════

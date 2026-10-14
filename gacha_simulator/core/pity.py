@@ -1412,6 +1412,21 @@ class Pity(PityBehavior):
         语义）。`PityEngine.get_probabilities` 以 `readonly=True` 走本方法，Modifier
         据此复刻「查询不体现 CR 拦截」的旧语义（消费方当前一处：`RotatingModifier`
         的 `extra_flag` 抑制）。
+
+        **增量层校验的调用点（S8-6 接线，§3.13 增量行）**：`ctx.invariants` 非 `None`
+        时，每个 Modifier 的增量在**作用到分布之前**经 `check_delta(pool_id, out, d)`
+        判一遍（`p + δ ≥ 0`；δ 在 `p` 的支撑上不全为 0）。**三条候选的裁决（S8-6）**：
+        计划 §3.13 与 S8-6 原写「调用点在 `_apply_delta()` 内部」，而该函数已随 S8-1
+        迁到叶子层、签名收为 `(dist, d)`，**取不到 `pool_id` 与校验器**，故不可执行。
+        候选 ② （把 checker 作为形参传入 `_apply_delta`）会让**叶子层**知道校验器这一
+        实现层概念、并额外多出 `pool_id` 形参，与 §3.1.6「叶子层只依赖标准库」相抵；
+        候选 ③（在骨架内循环里包一层）与候选 ① 同源但需另立一个只此一处消费的包装
+        函数。**取候选 ①**：调用点落在骨架内循环（`p` 与 `δ` 同时在手、`pool_id` 由
+        `ctx.draw.pool_id` 可得），校验器经 `PityContext.invariants` 进骨架。**唯一
+        通道的理由**：给 `before_draw` 加形参会同时打到保留到发布前的 10 个旧类
+        （它们不接受该形参），而 ctx 是旧新两族共用的载体。
+        **零开销**：生产传 `invariants=None`，引擎不建实例、`ctx.invariants` 为 `None`
+        （每抽一次属性读，不逐 Modifier 重复读）。
         """
         ctx.readonly = readonly
         if not self._lifecycle.is_active(self._state, self._name):
@@ -1421,11 +1436,15 @@ class Pity(PityBehavior):
         for tr in self._trackers:            # N1 中段：抽前需读 state 并消费随机源的零件
             tr.prepare(ctx, self._state, self._name, readonly=readonly)
         out = ctx.current.copy()
+        checker = ctx.invariants               # 增量层校验器（None = 未接线，生产默认）
         for mod in self._modifiers:
             # ISSUE-407 / ISSUE-505：按零件命名空间取 view，**不得写死 `self._view`**
             # （声明了 `namespace` 的零件必须读到自己的命名空间）。
             d = mod.compute_delta(self._view_for(mod), out, ctx)
             if d is not None:
+                if checker is not None:
+                    # 增量层：判在「p 与 δ 同时在手、尚未归一化」处（§3.13）。
+                    checker.check_delta(ctx.draw.pool_id, out, d)
                 out = _apply_delta(out, d)   # (out + d) / Σ(out + d)
         return out
 
@@ -2182,6 +2201,11 @@ class PityEngine:
             rarity_rank=self._rarity_rank,
         )
         ctx = PityContext(draw=draw_info, current=base_probabilities.copy(), state=state)
+
+        # ── P64 S8-6：增量层校验器的 per-call 引用。**只在本入口写**：
+        #    `get_probabilities` 按 §3.13 已登记的「四层覆盖边界」不在判据面内
+        #    （该入口不调任何一层），故不得同批写入。`None` = 生产默认（零开销）。 ──
+        ctx.invariants = self._invariants
 
         # 按池过滤调度
         for pname, bh in self._behaviors_for_pool(pool_id):

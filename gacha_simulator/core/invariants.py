@@ -25,13 +25,22 @@
 |------|--------|----------|
 | `check_after_before_draw(pool_id, dist, engine)` | 分布层 | 池的管道输出分布 |
 | `check_after_after_draw(pool_id, state, engine)` | 状态层 + 生命周期层 | per-call `PityState` |
-| `check_delta(pool_id, dist, delta)`（**M1 不接调用点**，随 S8-6 落地） | 增量层 | 单步的 `p` 与 `δ` |
+| `check_delta(pool_id, dist, delta)`（**S8-6 已接线**） | 增量层 | 单步的 `p` 与 `δ` |
 
 分布层归前一个入口、状态与生命周期两层归后一个入口，按**实参可得性**分：`dist`
 只在前者的实参面内，`state` 只在后者的实参面内（§3.13 只给了两个入口的签名，未
 逐层指派入口，该分工是本模块的定稿）。增量层**不复用**这两个入口的理由见 §3.13
 的「增量层的入口与调用点」段：两个入口的第二实参只有分布，取不到该步的 δ；故它
-自带第三个入口，由 `_apply_delta()` 内部在 `p` 与 `δ` 同时在手处调用。
+自带第三个入口。**该入口的调用点在 S8-6 落地（与计划原文不同，见下）**。
+
+**增量层调用点的最终形态（S8-6，2026-10-14，与原写不符）**：计划 §3.13 写「由
+`_apply_delta()` 内部在 `p` 与 `δ` 同时在手处调用」，而 S8-1 已把 `_apply_delta`
+迁到叶子层 `pity_primitives.py`、签名收为 `(dist, d)`，**取不到 `pool_id` 与校验器**，
+故该写法不可执行（S8 审查 F5 登记，S8-6 裁决）。三条候选的取舍与理由写在
+`Pity.before_draw` 的内循环注记：**取「调用点移到骨架内循环」**，校验器经
+`PityContext.invariants` 进骨架（引擎只在 `before_draw` 写该字段，`get_probabilities`
+按下方「四层覆盖边界」不写）。故本模块实例有**三**个可达路径：两个引擎入口 + 骨架
+内循环里的增量层。
 
 **四层覆盖边界（S11 审查收口，2026-10-13，逐条实测）**：
 
@@ -173,17 +182,20 @@ class InvariantChecker:
         self._check_counters_monotonic(state, pities)
         self._check_active_whitelist(state, engine)
 
-    # ── 入口三：增量层（M1 只实现、不接调用点；S8-6 在 _apply_delta 内调用）──
+    # ── 入口三：增量层（S8-6 已接线：调用点 = `Pity.before_draw` 的内循环）──
 
     def check_delta(self, pool_id: str, dist: Mapping[str, float],
                     delta: Mapping[str, float]) -> None:
         """增量层（§3.13 增量行 / §3.12.1 增量合法性行）：`p + δ ≥ 0`；δ 在 p 的
         支撑上不全为 0。
 
-        **M1 不接调用点**（计划 §七 S11 的硬约束）：M1 槽位级管道没有增量表示，
-        两个入口的第二实参只有分布、取不到该步的 δ；本方法随 S8-6 由
-        `_apply_delta()` 内部调用（那里 `p` 与 `δ` 同时在手）。此刻仅由
-        `tests/core/test_pity_invariant_checker.py` 直接驱动。
+        **调用点（S8-6 落地，2026-10-14）**：`Pity.before_draw` 的内循环，在每个
+        Modifier 的增量**作用到分布之前**调用（`p` 与 `δ` 同时在手、尚未归一化），
+        校验器经 `PityContext.invariants` 进骨架。**M1 期只实现、不接调用点**
+        （计划 §七 S11 的硬约束）：M1 槽位级管道没有增量表示，两个入口的第二实参只有
+        分布、取不到该步的 δ。**计划原文「由 `_apply_delta()` 内部调用」不可执行**
+        （S8-1 已把它迁到叶子层、签名收为 `(dist, d)`，取不到 `pool_id` 与校验器），
+        三条候选的裁决与理由见 `Pity.before_draw` 的内循环注记。
         """
         if not self.enabled:
             return
@@ -227,8 +239,9 @@ class InvariantChecker:
           一律是缺陷，没有「合法的例外值」需要枚举。
 
         **判据域的两条已知边界（S8 后仍成立）**：本入口按定义只看得见**输出分布**，
-        看不见中间步（`Σ(p + δ) ≠ 1` 之类的步级异常由增量层 `check_delta` 在
-        `_apply_delta` 内部判）；`PityEngine.get_probabilities`（只读查询入口）不经
+        看不见中间步（`Σ(p + δ) ≠ 1` 之类的步级异常由增量层 `check_delta` 在骨架内循环
+        的调用点判，见本模块 docstring 的「增量层调用点的最终形态」段）；
+        `PityEngine.get_probabilities`（只读查询入口）不经
         本入口，其输出不在判据面内（模块 docstring 的「四层覆盖边界」段）。
         """
         names = [name for name, _bh in pities]

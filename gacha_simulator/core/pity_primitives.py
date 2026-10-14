@@ -64,12 +64,26 @@ class PityContext:
     `RotatingModifier` 据此抑制 `extra_flag`（复刻旧 `RotatingCRBehavior` 的只读查询
     语义：查询不体现 CR 拦截）。**Trackers 侧的 `readonly`（`advance` / `prepare` 形参）
     是另一条通路**，不经本字段、不受本条影响。
+
+    **`invariants` 是增量层校验器的 per-call 引用（P64 S8-6 接线，§3.13 增量行）**：
+    计划 §3.13 原写「增量层由 `_apply_delta()` 内部调用」，而 S8-1 把 `_apply_delta`
+    迁到本叶子层、签名收为 `(dist, d)`，**取不到 `pool_id` 与校验器**，故该写法不可
+    执行。三条候选的裁决与理由见 `Pity.before_draw` 的内循环注记：取「调用点移到骨架
+    内循环」，本字段即校验器进入骨架的**唯一通道**（行为层与引擎之间现无其他通道，
+    而给 `before_draw` 加形参会同时打到保留到发布前的 10 个旧类，它们不接受该形参）。
+    **类型写作 `Any` 而非 `InvariantChecker`**：本层只依赖标准库（§3.1.6），
+    `invariants.py` 反向 import 本层，故此处不得 import 它；消费面只要求
+    `check_delta(pool_id, dist, delta)` 这一个鸭子类型方法。
+    写入者是 `PityEngine.before_draw`（**只在该入口**：`get_probabilities` 按
+    `core/invariants.py` 已登记的「四层覆盖边界」不在判据面内）；`None` = 未接线
+    （生产默认，连实例都不建）。
     """
 
     draw: DrawInfo
     current: Dict[str, float]
     state: 'PityState'
     readonly: bool = False
+    invariants: Optional[Any] = None
 
 
 # ── P60 新增：Counter / Flag 微抽象 ──

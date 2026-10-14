@@ -107,9 +107,14 @@ Tracker 的 `did_reset`」的自洽断言，超出等价性装置的对拍面。
 
 from __future__ import annotations
 
+import ast
 import dataclasses
+import inspect
 import math
+import os
 import random
+import tempfile
+import textwrap
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -117,9 +122,16 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
+from gacha_simulator.core.config_toml import load_toml
+from gacha_simulator.core.invariants import InvariantChecker, InvariantError
+from gacha_simulator.core.pity_modifier import Modifier
 from gacha_simulator.core.pity import (
+    AlwaysActive,
+    CounterTracker,
     DrawInfo,
+    HardModifier,
     HardPityBehavior,
+    Pity,
     PityContext,
     PityEngine,
     PityState,
@@ -131,8 +143,10 @@ from gacha_simulator.core.pity import (
     SoftStepBehavior,
     TargetedBehavior,
     TargetedSoftBehavior,
+    _apply_delta,
     _build_pity_state_init,
     create_behavior,
+    transfer_linear,
 )
 
 # ══════════════════════════════════════════════════════════════════
@@ -2683,3 +2697,956 @@ class TestS5cH4RandomConsumption:
             f'「除再乘往返」不再逐位同源）')
         assert all(first[k] == 0.0 for k in non_featured), (
             f'命中抽的 scope 非 featured 槽未清零：{first}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# 十四、S8-6 验收块（§七 S8-6 的 ① 至 ⑦ 条 + 承接的 ⑨ 条）
+# ══════════════════════════════════════════════════════════════════
+#
+# 本节的用例名一律含 `s8`（GATE-6 的收集守卫：本文件为 S5a 新建，过滤词零命中时
+# pytest 以 exit code 5 结束、会被误读为通过）。逐条对应：
+#
+# | 计划条 | 用例组 |
+# |--------|--------|
+# | ① S8 口径（对 S5 产物容差 1e-12） | `TestS8CaliberAgainstS5Products` |
+# | ② 单卡定向（双 UP 池定轨） | `TestS8SingleCardTargeting` |
+# | ③ (a) 已登记允许差异（`⟨m,p⟩ ≠ 1`） | `TestS8RegisteredDifferenceNonUnitSum` |
+# | ③ (g) / ⑦ `priority` 覆盖下 `hard` 的 A 侧形状 | `TestS8RegisteredDifferencePriorityShape` |
+# | ④ 遍历点命名空间（ISSUE-505） | `TestS8NamespaceViewDispatch` |
+# | ⑤ ISSUE-903 反转的复核 | **不在本节**：判据已随 S8-1/2/3 提前执行，本步只复核 |
+# | ⑥ 六场景逐卡对照 | `TestS8SixScenarioCardLevel` |
+# | ⑨ 「Σ 偏离 1」形态（S8-5 审查转来） | `TestS8NonUnitSumCoverage` |
+#
+# **本节的断言对象层级**：① 走既有等价性装置（旧类 vs 新骨架逐场对拍）；② 与 ⑦ 走
+# **引擎全管道**（`PityEngine.before_draw`，含排序、Tracker、preset）；⑥ 走**机制级**
+# （`HardModifier.compute_delta` + `_apply_delta`，与旧类的单次 `before_draw` 对称）；
+# ④ 走**骨架级**（`Pity` + 自定义 Modifier）；③ 走**槽位投影级**（旧类槽位输出 vs
+# 新侧投影）。四层各有捕获面，不重复。
+
+#: §3.14.3.1 实测所用的池：**刻意让 featured 组含两张卡**，使「A 组内如何分配」这一
+#: 层真正起作用（单卡 A 下 `current` 与 `declared` 同值、分辨不出形状错误）。
+S8_SIX_CARDS: Tuple[Tuple[str, str, bool, float], ...] = (
+    ('f1', 'ssr', True, 0.004),
+    ('f2', 'ssr', True, 0.002),
+    ('s1', 'ssr', False, 0.005),
+    ('sr1', 'sr', False, 0.05),
+    ('r1', 'r', False, 0.939),
+)
+
+#: 双 UP 池（§六 的「S8 单卡定向」/ §3.7 的槽位粒度约束）：两张 UP 卡同处一个
+#: `ssr_featured` 槽位、一张非 featured 的 SSR 标准卡、一张 scope 外的 SR 卡。
+S8_DUAL_UP_CARDS: Tuple[Tuple[str, str, bool, float], ...] = (
+    ('up_a', 'ssr', True, 0.25),
+    ('up_b', 'ssr', True, 0.25),
+    ('std', 'ssr', False, 0.25),
+    ('low', 'sr', False, 0.25),
+)
+
+
+def _s8_six_shape() -> PoolShape:
+    return make_pool_shape(S8_SIX_CARDS)
+
+
+def _s8_dual_up_shape() -> PoolShape:
+    return make_pool_shape(S8_DUAL_UP_CARDS)
+
+
+def _s8_lower_cards(scope: str, shape: PoolShape) -> tuple:
+    """`rarity_rank` 中 rank 大于 `rank(scope)` 的稀有度下的**全部卡**（§3.1.2 的 Q）。
+
+    本助手是**独立重述**（不复用 `pity_modifier._lower_rarities`）：被测对象的 Q 若
+    取错集合（§3.1.5.2.4 的错误 ② 形态），逐卡期望值必须能与它分开。
+    """
+    rank = shape.rarity_rank.get(scope, 99)
+    out: List[str] = []
+    for rarity, r in shape.rarity_rank.items():
+        if r > rank:
+            out.extend(shape.scope_cards.get(rarity, ()))
+    return tuple(out)
+
+
+def _s8_dedup(*groups) -> tuple:
+    """保序去重（独立重述 `pity_modifier._cards` 的规范化口径）。"""
+    seen: List[str] = []
+    for group in groups:
+        for c in group:
+            if c not in seen:
+                seen.append(c)
+    return tuple(seen)
+
+
+def _s8_expected_card_level(scope: str, tf: bool,
+                            shape: PoolShape) -> Dict[str, float]:
+    """**独立重述** §3.1.2 机制表第 1/2 行的逐卡期望（不调用 `transfer_linear`）。
+
+    A 内每卡 `+ amount * u_A(c)`、Q 内每卡 `- amount * p_c / p(Q)`、其余不写；
+    `u_A` 由 A 侧形状定（`current` = `p_c / p(A)`，`declared` = `w_c / w(A)`，
+    `w` = 卡级声明权重）。末尾按框架口径归一化（转移族下 `Σδ = 0`，归一化退化为
+    恒等，但这里仍写出来，以便「配平被破坏」也能显形）。
+
+    与 `pity_modifier._lower_rarities` / `_cards` 是两份独立实现，故「A 侧形状取错」
+    与「Q 取错集合」两类机制错误会被逐卡比出来。
+    """
+    base = shape.card_probabilities
+    scope_cards = tuple(shape.scope_cards.get(scope, ()))
+    featured = tuple(shape.featured_cards.get(scope, ()))
+    if tf:
+        A = _s8_dedup(featured or scope_cards)
+        Q = _s8_dedup(_s8_lower_cards(scope, shape),
+                      tuple(c for c in scope_cards if c not in set(A)))
+    else:
+        A = _s8_dedup(scope_cards)
+        Q = _s8_lower_cards(scope, shape)
+    p_q = sum(base[c] for c in Q)
+    if not A or p_q <= 0:
+        return dict(base)                       # 恒等（空目标集 / 无货可取）
+    if tf:
+        w_a = sum(base[c] for c in A)           # `declared`：w 即卡级声明权重
+        if w_a <= 0:
+            return dict(base)
+        u_a = {c: base[c] / w_a for c in A}
+    else:
+        p_a = sum(base[c] for c in A)
+        if p_a <= 0:
+            return dict(base)
+        u_a = {c: base[c] / p_a for c in A}
+    out = dict(base)
+    for c in A:
+        out[c] += p_q * u_a[c]
+    for c in Q:
+        out[c] -= base[c]
+    total = sum(out.values())
+    return {c: v / total for c, v in out.items()}
+
+
+def _s8_old_hard_slots(scope: str, tf: bool, shape: PoolShape) -> Dict[str, float]:
+    """跑一次旧 `HardPityBehavior`（**槽位级**），返回其槽位级输出。
+
+    `threshold=1` 使首次 `before_draw` 即触发（`CounterBasedBehavior.before_draw` 在
+    非只读路径先 `incr()`）；`_rebind_state` 是装置纪律（旧类不在构造期绑定 Counter）。
+    """
+    pdef = counter_fixture(name='s8_old', btype='hard', scope=scope,
+                           threshold=1, target_featured=tf)
+    state = initial_state(pdef)
+    bh = build_old(pdef, state)
+    bh._rebind_state(state)
+    return bh.before_draw(_ctx(shape, state, space='slot'))
+
+
+def _s8_old_hard_card_level(scope: str, tf: bool, shape: PoolShape) -> Dict[str, float]:
+    """旧实现到**卡级**的还原（`banner.py` 的 `scale_factors` 段口径，§3.14.3.1）。
+
+    `scale = new_slot / old_slot`，每张卡乘其所在槽位的 scale，即「整槽同乘」、
+    组内比例不变。**基槽概率为 0 的槽不参与**（scale 无定义），故调用方须先确认
+    该池的每个槽基础概率都大于 0（`S8_SIX_CARDS` 满足）。
+    """
+    slots = _s8_old_hard_slots(scope, tf, shape)
+    out: Dict[str, float] = {}
+    for card, p in shape.card_probabilities.items():
+        slot = shape.card_to_slot[card]
+        old_slot = shape.base_probabilities[slot]
+        assert old_slot > 0, f'槽 {slot!r} 的基础概率为 0，scale 因子无定义'
+        out[card] = p * (slots.get(slot, 0.0) / old_slot)
+    return out
+
+
+def _s8_new_hard_card_level(scope: str, tf: bool, shape: PoolShape) -> Dict[str, float]:
+    """S8 卡级管道的**机制级**产物：`HardModifier.compute_delta` + `_apply_delta`。
+
+    与被测生产路径同一组合（`Pity.before_draw` 的内循环就是这两步），但不经 Tracker
+    与引擎，以便与旧类的单次 `before_draw` 对称对照。
+    """
+    mod = HardModifier(scope, threshold=1, target='featured' if tf else 'scope')
+    base = dict(shape.card_probabilities)
+    ctx = _ctx(shape, PityState(), space='card')
+    d = mod.compute_delta({'counter': 1}, dict(base), ctx)
+    return _apply_delta(dict(base), d or {})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ① S8 口径：卡级管道产物 vs **S5 产物**（容差 1e-12 + 快照完全一致）
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestS8CaliberAgainstS5Products:
+    """§六「S8 口径」：卡级管道产物与 **S5 产物**逐场对比。
+
+    **三条口径的显式登记（S8-6 落盘，待回写计划 §六）**：
+
+    1. **比对口径是「原始值逐元素」，不是「归一化后分布」**。§六 的 (a) 项原文写
+       「对比口径为归一化后分布」，而本装置（S5a 交付）实际按原始值逐元素比：两者
+       在 `Σ = 1` 的形状上同值，`Σ ≠ 1` 时装置**更严**（归一化会把 Σ 偏离先抹掉）。
+       该不一致已由 S8 收口在 (a) 项内登记，本节把它钉在用例上（见
+       `test_s8_harness_caliber_is_raw_per_element`）。
+    2. **比对面的键空间投影**：旧类是槽位级、新骨架是卡级，故装置把**新侧**按
+       `card_to_slot` **求和**投影到槽位级（`_to_slot_space`）。投影是求和而非按
+       声明权重展开，它不引入任何假设；代价是组内结构在槽位分辨率下不可见，而
+       本装置的两个池形**每槽恰含一张卡**（投影即双射），故该代价为零。组内结构
+       （如 S8 的单卡定向）由 `TestS8SingleCardTargeting` 的卡级对比组覆盖。
+    3. **「S5 产物」= S5a 装置现跑旧类产出**（ISSUE-502 口径）：旧保底类与
+       `_redistribute_scope` 本体均保留至发布前，故本条不需要固化的 golden 快照。
+       若将来改为读快照，须同步在 S5a 登记快照文件与重生成命令。
+
+    状态快照一列取**位级一致**（`SnapshotPolicy` 的精确集合白名单，多退少补都报错）。
+    """
+
+    def test_s8_harness_caliber_is_raw_per_element(self):
+        """口径 1 的**判别性**断言：装置按原始值比对，而非先归一化。
+
+        构造两份「归一化后相同、原始值不同」的分布（`0.5/0.5` 对 `0.4/0.4`）：
+        原始口径必须报出 2 处超容差；若谁把装置改成「先归一化再比」，本用例即红。
+        后半段是**反证**：手工归一化后两份分布确实相等，故上面的差异只能来自口径。
+        """
+        a = {'x': 0.5, 'y': 0.5}
+        b = {'x': 0.4, 'y': 0.4}
+        mismatches, worst, bit = _diff_probs([a], [b], FLOAT_ORDER)
+        assert len(mismatches) == 2, (
+            f'原始值逐元素口径须报出 2 处差异，实测 {len(mismatches)}')
+        assert worst == pytest.approx(0.1), f'最大差应为 0.1，实测 {worst!r}'
+        assert bit is False
+        norm_a = {k: v / sum(a.values()) for k, v in a.items()}
+        norm_b = {k: v / sum(b.values()) for k, v in b.items()}
+        assert norm_a == norm_b == {'x': 0.5, 'y': 0.5}, (
+            '归一化后两份分布必须相等，否则本用例没有把「口径」与「数值」分开')
+
+    def test_s8_projection_is_bijective_on_the_harness_shape(self):
+        """口径 2 的前提守卫：装置池形**每槽恰含一张卡**（投影即双射）。
+
+        该前提一旦被破坏（有人往 `DEFAULT_CARDS` 加第二张同槽卡），投影就会把组内
+        结构压掉、「逐元素一致」随之失去意义，故显式钉住。
+        """
+        shape = _default_shape()
+        slots = [shape.card_to_slot[c] for c in shape.card_probabilities]
+        assert len(slots) == len(set(slots)), (
+            f'装置池形必须每槽恰含一张卡（投影是双射），实测 {shape.card_to_slot}')
+        assert len(shape.card_to_slot) == len(shape.card_probabilities)
+
+    def test_s8_card_level_matches_s5_products_within_1e_12(self):
+        """① 的主断言：卡级管道与 **S5 产物**（现跑旧类）容差 1e-12 一致、快照位级一致。
+
+        取 `hard(scope='ssr')`（`m = 0`，§六 差异类 (a) 不适用）作代表配置：它是
+        两侧**同口径可比**的一档，故本条是「重构未退化」的正面证据。非空转两侧守卫
+        一并断言（任一侧恒等时「一致」不构成证据）。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='s8_caliber', btype='hard', scope='ssr',
+                               threshold=6)
+        report = compare_runs(pdef, DRAW_SEQUENCE, shape=shape,
+                              tolerance=FLOAT_ORDER)
+        assert report.is_equivalent(), report.failure_messages()
+        # 口径 3：对照基准是**现跑旧类**，不是固化快照
+        assert report.old.name.startswith('old:'), (
+            f'「S5 产物」须为现跑旧类产出（ISSUE-502 口径），实测 {report.old.name!r}')
+        # 非空转：两侧都真的改了分布
+        assert report.old.changed_beyond_ulp and report.new.changed_beyond_ulp, (
+            f'两侧都须真的改动分布（old={report.old.changed_beyond_ulp} '
+            f'new={report.new.changed_beyond_ulp}）')
+        # 状态快照一列：位级一致（精确集合白名单，无多出、无缺失）
+        assert report.snapshot_mismatches == []
+        assert report.extra_new_keys == frozenset()
+        assert report.missing_new_keys == frozenset()
+        assert report.max_prob_diff <= FLOAT_ORDER.atol, (
+            f'最大逐元素差 {report.max_prob_diff!r} 超出 §六 的 S8 容差'
+            f'{FLOAT_ORDER.atol!r}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ② 单卡定向（§六「S8 单卡定向」/ §3.7 的槽位粒度约束）
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestS8SingleCardTargeting:
+    """双 UP 池定轨：`targeted` 锁定其中一张，必中触发时该卡拿到**整个 scope**。
+
+    **已有用例面的核实（S8-6）**：本条的 Modifier 级面与骨架级面已随 S8-1/2/3 提前
+    落地（`tests/core/test_pity_modifier.py::TestSelectedModifier::test_targets_single_card_not_the_whole_featured_group`
+    断言 Modifier 输出、`tests/core/test_pity_targeted.py::TestTargetedState::test_guaranteed_targets_selected_card_slot`
+    断言骨架输出）。本节补的是**引擎全管道**这一层（含 preset 装配、排序、
+    `selected_card` 经 `_build_pity_state_init` 注入），并同时钉住旧类的 50/50 事实
+    （§3.7 登记的槽位粒度约束），故与既有两条不同层级、无重复。
+    """
+
+    def test_s8_dual_up_targeted_reaches_full_scope_share(self):
+        """必中触发时定轨卡收下**整个 scope**，兄弟 UP 卡归零；旧类侧是同槽平摊。
+
+        池形 `S8_DUAL_UP_CARDS` 下 scope 总量 0.75（两张 UP 各 0.25、标准卡 0.25），
+        scope 外的 `low`（0.25）不参与（`targeted` 只在 scope 内重分配，新旧两侧
+        一致）。旧类的槽位粒度约束（§3.7）使 `ssr_featured` 槽内按基础权重平摊，
+        实测 `up_a = up_b = 0.375`（即槽内 50/50）；S8 的卡级管道使 `up_a` 独得
+        0.75（槽内 100%）。
+        """
+        shape = _s8_dual_up_shape()
+        pdef = counter_fixture(name='s8_dual_up', btype='targeted', scope='ssr',
+                               fate_threshold=1, guaranteed_init=True,
+                               selected_card_init='up_a')
+        state = _build_pity_state_init([pdef])
+        engine = PityEngine({'s8_up_pool': _engine_pool_spec(pdef, shape)}, [pdef],
+                            rarity_rank=shape.rarity_rank, state=state)
+        probs = engine.before_draw('s8_up_pool', state, dict(shape.card_probabilities))
+
+        scope_total = sum(shape.card_probabilities[c]
+                          for c in shape.scope_cards['ssr'])
+        assert scope_total == pytest.approx(0.75), '夹具前提：scope 总量 0.75'
+        assert probs['up_a'] == pytest.approx(scope_total), (
+            f'定轨卡须收下整个 scope（{scope_total}），实测 {probs["up_a"]!r}')
+        assert probs['up_b'] == pytest.approx(0.0), (
+            f'同 scope 的兄弟 UP 卡须归零，实测 {probs["up_b"]!r}')
+        assert probs['std'] == pytest.approx(0.0)
+        assert probs['low'] == pytest.approx(0.25), 'scope 外的卡不参与重分配'
+
+        # 旧类的对照：槽位级 + 整槽同乘还原到卡级 → 两张 UP 各得槽内 50%
+        old_state = initial_state(pdef)
+        old = build_old(pdef, old_state)
+        old._rebind_state(old_state)
+        old_slots = old.before_draw(_ctx(shape, old_state, space='slot'))
+        slot = shape.card_to_slot['up_a']
+        assert shape.card_to_slot['up_b'] == slot, '夹具前提：两张 UP 同处一个槽位'
+        scale = old_slots[slot] / shape.base_probabilities[slot]
+        old_up_a = shape.card_probabilities['up_a'] * scale
+        old_up_b = shape.card_probabilities['up_b'] * scale
+        assert old_up_a == pytest.approx(old_up_b), (
+            f'旧类侧须是槽内平摊（§3.7 的槽位粒度约束），实测 {old_up_a!r} / {old_up_b!r}')
+        assert old_up_a == pytest.approx(0.375), (
+            f'旧类侧实测值应为 0.375（槽内 50%），实测 {old_up_a!r}')
+        assert probs['up_a'] != pytest.approx(old_up_a), (
+            '两侧同值说明本用例没有钉住 S8 的语义提升')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ③ (a) 已登记允许差异：`⟨m,p⟩ ≠ 1`（`hard` 的 scope 低于最高稀有度）
+# ══════════════════════════════════════════════════════════════════
+
+#: 差异类 (a) 的两个退化形状（`m` = 高于 scope 的稀有度质量 = 0.4）。
+#: 前者是「Σ > 1 的归一化」（(a)(i)），后者是「目标组当前无概率」（(a)(ii) 的
+#: `p(A) = 0` 支）。两者都刻意取 `m = 0.4`：§六 (a) 的订正段即以该量级给出上界。
+S8_NON_UNIT_SUM_CARDS: Tuple[Tuple[str, str, bool, float], ...] = (
+    ('f1', 'ssr', True, 0.2),
+    ('s1', 'ssr', False, 0.2),
+    ('sr1', 'sr', False, 0.1),
+    ('r1', 'r', False, 0.5),
+)
+
+S8_ZERO_TARGET_CARDS: Tuple[Tuple[str, str, bool, float], ...] = (
+    ('f1', 'ssr', True, 0.2),
+    ('s1', 'ssr', False, 0.2),
+    ('sr1', 'sr', False, 0.0),
+    ('r1', 'r', False, 0.6),
+)
+
+
+def _s8_slot_diff(old_slots: Dict[str, float], new_cards: Dict[str, float],
+                  shape: PoolShape) -> Tuple[float, Dict[str, float]]:
+    """旧槽位级输出（归一化后）与**新侧投影到槽位级**的逐槽差。
+
+    两侧键空间不同（旧槽位 / 新卡级），故新侧按 `card_to_slot` 求和投影；本节的池形
+    每槽恰含一张卡，投影是双射。返回 `(最大绝对差, 逐槽差)`。
+    """
+    total = sum(old_slots.values())
+    old_norm = {k: v / total for k, v in old_slots.items()}
+    new_slots = _to_slot_space(new_cards, shape.card_to_slot)
+    diffs = {k: old_norm.get(k, 0.0) - new_slots.get(k, 0.0)
+             for k in set(old_norm) | set(new_slots)}
+    return max(abs(v) for v in diffs.values()), diffs
+
+
+class TestS8RegisteredDifferenceNonUnitSum:
+    """§六 差异归因清单 (a)：`hard` 的 scope 低于最高稀有度时的**已登记允许差异**。
+
+    **这不是回归**（S8 收口已登记，量级由该条的订正段给出两条上界）：
+
+    | 子机制 | 形态 | 归一化后逐元素差的上界 |
+    |--------|------|----------------------|
+    | (i) `Σ > 1` 的归一化 | 旧实现的「目标集绝对赋值 + 更高稀有度豁免」造出 `Σ = 1 + m`，新实现 `Σδ = 0` | `m²/(1+m)`（在目标卡上取到） |
+    | (ii) `p(A) = 0`（或 `p(Q) = 0`） | 新实现按 §3.9.5 拒绝转移、旧实现仍绝对赋值**造质量** | `1/(1+m)`（在目标槽上取到） |
+
+    `m` = **高于 scope 的稀有度质量**。本节取 `m = 0.4`（与 (a) 订正段的量级一致）：
+    `m²/(1+m) = 0.114286`、`1/(1+m) = 0.714286`。
+
+    **(a)(ii) 的 `p(Q) = 0` 支**不在本节：`hard(scope='r')`（最低稀有度，Q 为空）在
+    `TestS8SixScenarioCardLevel` 的 `scope='r'` 两档上以逐卡闭式覆盖（其实测差同样是
+    `m²/(1+m)`，`m = 0.061`）。
+    """
+
+    def test_s8_registered_difference_a_i_sum_above_one_is_normalized(self):
+        """(a)(i)：旧侧 `Σ = 1 + m`、新侧 `Σ = 1`，归一化后最大差恰为 `m²/(1+m)`。"""
+        shape = make_pool_shape(S8_NON_UNIT_SUM_CARDS)
+        m = 0.4
+        old_slots = _s8_old_hard_slots('sr', False, shape)
+        new = _s8_new_hard_card_level('sr', False, shape)
+
+        assert sum(old_slots.values()) == pytest.approx(1.0 + m, abs=1e-12), (
+            f'旧侧须造出 Σ = 1 + m（这是 (a) 的成因），实测 {sum(old_slots.values())!r}')
+        assert sum(new.values()) == pytest.approx(1.0, abs=FLOAT_ORDER.atol)
+        assert new['sr1'] == pytest.approx(0.6), (
+            f'新侧 A（sr 卡）须收下 p(Q) = 0.5，实测 {new["sr1"]!r}')
+
+        worst, diffs = _s8_slot_diff(old_slots, new, shape)
+        bound = m ** 2 / (1 + m)
+        assert worst == pytest.approx(bound, rel=1e-9), (
+            f'归一化后最大差应为 m²/(1+m) = {bound!r}，实测 {worst!r}（逐槽 {diffs}）')
+        assert diffs['sr'] == pytest.approx(bound, rel=1e-9), (
+            f'上界须在目标槽上取到，实测 {diffs["sr"]!r}')
+
+    def test_s8_registered_difference_a_ii_zero_target_group_is_refused(self):
+        """(a)(ii)：目标组当前无概率时新侧**拒绝转移**（恒等），旧侧仍绝对赋值。
+
+        旧侧在该形状上走 `HardPityBehavior` 的「兜底：均分」分支（目标槽的声明权重
+        和为 0），把整个 scope 赋给目标槽；新侧 `transfer_linear` 的 `shape='current'`
+        在 `p(A) = 0` 时返回 `None`（§3.9.5 第 1 行的「来源一」处置）。两侧差在目标槽
+        上取到 `1/(1+m)`。
+        """
+        shape = make_pool_shape(S8_ZERO_TARGET_CARDS)
+        m = 0.4
+        assert shape.card_probabilities['sr1'] == 0.0, '夹具前提：目标组当前无概率'
+        old_slots = _s8_old_hard_slots('sr', False, shape)
+        new = _s8_new_hard_card_level('sr', False, shape)
+
+        assert new == shape.card_probabilities, (
+            f'新侧须恒等（p(A) = 0 → 不转移），实测 {new}')
+        worst, diffs = _s8_slot_diff(old_slots, new, shape)
+        bound = 1.0 / (1 + m)
+        assert worst == pytest.approx(bound, rel=1e-9), (
+            f'归一化后最大差应为 1/(1+m) = {bound!r}，实测 {worst!r}（逐槽 {diffs}）')
+        assert diffs['sr'] == pytest.approx(bound, rel=1e-9), (
+            f'上界须在目标槽上取到，实测 {diffs["sr"]!r}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ③ (g) / ⑦ `priority` 覆盖下 `hard` 的 A 侧形状
+# ══════════════════════════════════════════════════════════════════
+
+
+def _s8_pool_spec(names, shape: PoolShape) -> PoolPitySpec:
+    """多保底池的 `PoolPitySpec`（`_engine_pool_spec` 是单保底版本）。"""
+    return PoolPitySpec(
+        pity_names=list(names),
+        featured_ids=set(shape.featured_ids()),
+        ssr_ids=set(shape.scope_cards.get(shape.scope, ())),
+        scope_cards=shape.scope_cards,
+        featured_cards=shape.featured_cards,
+        scope_slots=shape.scope_slots,
+        featured_slots=shape.featured_slots,
+        card_to_slot=shape.card_to_slot,
+    )
+
+
+class TestS8RegisteredDifferencePriorityShape:
+    """§六 差异归因清单 (g) / S8-6 第 ⑦ 条验收面：`hard` 的 A 侧形状语义取向。
+
+    **形态**：形状改变型算子（`rotating` / `targeted`）经 `priority` 排在 `hard`
+    **之前**、且同 scope 时，`hard` 的 A 侧取 `current`（§3.1.2 机制表的「A 侧形状」
+    列）即**保留前序算子已造成的形状**；旧实现在槽级按 `w_s / Σw`（声明权重）赋值，
+    故会把前序形状**重置**为声明比例。两侧实测差 **0.5**（S8 收口登记）。
+
+    **性质**：实现忠于 §3.1.2 的机制表，是**机制表与旧实现分岔**，故不改实现、只登记。
+    **可达性**：真实 `config.toml` 无 `hard`，且 `_BTYPE_ORDER` 下 `hard` 默认排在
+    `rotating` / `targeted` 之前，故须**显式写 `priority`** 才可达；本用例同时断言
+    排序结果（缺该守卫时「`priority` 未生效」会让本用例**假绿**：两种顺序的终态
+    恰好相同，见下）。
+    """
+
+    def test_s8_priority_ordered_rotating_then_hard_keeps_current_shape(self):
+        """`rotating`（`priority=1`）先跑出 featured 独占，`hard` 保留该形状。
+
+        终态与「`hard` 先跑」恰好相同（两种顺序都得到 `{f1: 1.0}`），故**排序断言是
+        本用例的牙齿所在**：少了它，`priority` 失效也照样通过。而 A 侧形状的判别力
+        在 `current` 与 `declared` 之间：若 `hard` 取 `declared`（旧口径），终态会是
+        `{f1: 0.7, s1: 0.3}`。
+        """
+        shape = _default_shape()
+        rot = counter_fixture(name='s8_g_rot', btype='rotating', scope='ssr',
+                              guaranteed_init=True, priority=1)
+        hard = counter_fixture(name='s8_g_hard', btype='hard', scope='ssr',
+                               threshold=1, priority=0)
+        state = _build_pity_state_init([rot, hard])
+        engine = PityEngine({'s8_g_pool': _s8_pool_spec((rot.name, hard.name), shape)},
+                            [rot, hard], rarity_rank=shape.rarity_rank, state=state)
+
+        order = [pname for pname, _bh in engine.get_behaviors_for_pool('s8_g_pool')]
+        assert order == [rot.name, hard.name], (
+            f'本用例的前提是「rotating 经 priority 排在 hard 之前」，实测顺序 {order}')
+
+        probs = engine.before_draw('s8_g_pool', state, dict(shape.card_probabilities))
+        assert probs['f1'] == pytest.approx(1.0), (
+            f'hard 的 A 侧须取当前形状（保留 rotating 造成的 f1 独占），实测 {probs}')
+        assert probs['s1'] == pytest.approx(0.0), (
+            f'取 declared 会把 A 侧重置为声明比例（f1 = 0.7 / s1 = 0.3），实测 {probs}')
+        assert probs['sr1'] == pytest.approx(0.0)
+        assert probs['r1'] == pytest.approx(0.0)
+
+        # 旧类侧：同样的顺序（槽位级），整槽同乘还原到卡级 → A 侧被重置为声明比例
+        old_state = PityState()
+        rot_old = RotatingBehavior('s8_g_rot', old_state, scope='ssr',
+                                   guaranteed_init=True)
+        rot_old._rebind_state(old_state)
+        hard_old = HardPityBehavior('s8_g_hard', old_state, scope='ssr',
+                                    btype='hard', threshold=1)
+        hard_old._rebind_state(old_state)
+        ctx = _ctx(shape, old_state, space='slot')
+        after_rot = rot_old.before_draw(ctx)
+        ctx2 = PityContext(draw=ctx.draw, current=after_rot, state=old_state)
+        old_slots = hard_old.before_draw(ctx2)
+        assert old_slots['ssr_featured'] == pytest.approx(0.5), (
+            f'旧类侧须把 A 侧重置为声明比例（0.5 / 0.5），实测 {old_slots}')
+
+        old_cards = {c: shape.card_probabilities[c]
+                     * (old_slots.get(shape.card_to_slot[c], 0.0)
+                        / shape.base_probabilities[shape.card_to_slot[c]])
+                     for c in shape.card_probabilities}
+        old_norm = {c: v / sum(old_cards.values()) for c, v in old_cards.items()}
+        assert old_norm['f1'] == pytest.approx(0.5) and old_norm['s1'] == pytest.approx(0.5)
+        worst = max(abs(old_norm[c] - probs[c]) for c in probs)
+        assert worst == pytest.approx(0.5, rel=1e-9), (
+            f'(g) 项登记的实测差为 0.5，实测 {worst!r}（旧 {old_norm} 新 {probs}）')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ④ 遍历点命名空间（ISSUE-505）
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestS8NamespaceViewDispatch:
+    """S8 骨架的 Modifier 遍历点一律经 `self._view_for(mod)` 取 view（ISSUE-505）。
+
+    **已有用例面的核实（S8-6）**：`tests/core/test_pity_modifier.py::TestNamespaceViewDispatch`
+    的两条已随 S8-1 提前落地（单零件行为面 + `before_draw` 源码的 AST 面）。本节补两
+    处不同面：① **链中位置**（namespaced 零件排在**第二个**、前面还有一个默认命名空间
+    的零件，断言两者各自读对）；② **AST 判据的扫描面从 `before_draw` 扩大到整个 `Pity`
+    类**（将来在别处新增调用点时也拦得住）。
+    """
+
+    def test_s8_namespaced_modifier_in_a_chain_reads_its_own_namespace(self):
+        """链中第二个零件（声明了命名空间）读自己的命名空间，第一个读默认命名空间。
+
+        两个零件的 `compute_delta` 都记录收到的 view 名与探针键值。判别力三条：
+        ① 两个 view 名分别为 `'p'` 与 `'s8_ns'`（写死 `self._view` 时第二条即红）；
+        ② 探针值各自来自对应命名空间（同名键在两处放不同值）；
+        ③ 命名空间零件的增量**真的作用到了输出**（不是被静默跳过的空操作）。
+        """
+        seen: Dict[str, Any] = {}
+
+        class _DefaultNsProbe(Modifier):
+            def compute_delta(self, view, dist, ctx):
+                seen['default'] = (view._name, view.get('probe'))
+                return None
+
+        class _NamespacedProbe(Modifier):
+            namespace = 's8_ns'
+
+            def compute_delta(self, view, dist, ctx):
+                seen['ns'] = (view._name, view.get('probe'))
+                if view.get('probe') != 'part-ns':
+                    return None
+                return {'f1': 0.1}
+
+        state = PityState()
+        state.set('p', 'probe', 'default-ns')
+        state.set('s8_ns', 'probe', 'part-ns')
+        pity = Pity(name='p', state=state, scope='ssr', btype='hard',
+                    trackers=[], modifiers=[_DefaultNsProbe(), _NamespacedProbe()],
+                    lifecycle=AlwaysActive())
+        shape = _default_shape()
+        base = dict(shape.card_probabilities)
+        out = pity.before_draw(_ctx(shape, state, space='card'))
+
+        assert seen['default'] == ('p', 'default-ns'), (
+            f'默认命名空间的零件须拿到 `Pity` 的 view，实测 {seen.get("default")}')
+        assert seen['ns'] == ('s8_ns', 'part-ns'), (
+            f'声明了命名空间的零件须拿到自己的 view，实测 {seen.get("ns")}')
+        assert out != base, (
+            '命名空间零件的增量须真的作用到输出（否则本用例只证明「没崩」）')
+        assert out['f1'] == pytest.approx((base['f1'] + 0.1) / 1.1), (
+            f'不配平增量经 `_apply_delta` 归一化，实测 {out["f1"]!r}')
+
+    def test_s8_skeleton_has_no_direct_self_view_compute_delta_call(self):
+        """AST 判据：整个 `Pity` 类内**无** `mod.compute_delta(ctx, self._view, ...)` 直写形态。
+
+        扫描面取**整个类**（不是只 `before_draw`）：`compute_delta` 的调用点若将来
+        挪到别的方法里，写死默认 view 同样让声明命名空间的零件静默失效。
+        """
+        src = textwrap.dedent(inspect.getsource(Pity))
+        tree = ast.parse(src)
+        calls = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute)
+                 and node.func.attr == 'compute_delta']
+        assert calls, '骨架内须有 compute_delta 调用点（否则本判据无对象）'
+        for node in calls:
+            assert len(node.args) == 3, (
+                f'`compute_delta` 是**三参**（`view, dist, ctx`，2026-10-08 裁决），'
+                f'实测 {ast.dump(node)}')
+            first = ast.dump(node.args[0])
+            assert 'self' in first and '_view_for' in first, (
+                f'首个实参须为 `self._view_for(mod)`，实测 {first}')
+            for arg in node.args:
+                dumped = ast.dump(arg)
+                assert '_view' not in dumped.replace('_view_for', ''), (
+                    f'不得写死 `self._view`：{dumped}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑥ `transfer_linear` 六场景逐卡对照（§3.14.3.1 的 `scope` × `tf` 全组合）
+# ══════════════════════════════════════════════════════════════════
+
+#: 「浮点噪声」判据（4 ULP），与 `SideTrace.changed_beyond_ulp` 同源。
+S8_FLOAT_NOISE = 4 * math.ulp(1.0)
+
+
+def _s8_scenarios() -> Tuple[Tuple[str, bool], ...]:
+    return tuple((scope, tf)
+                 for scope in ('ssr', 'sr', 'r') for tf in (False, True))
+
+
+def _s8_scenario_id(scenario) -> str:
+    scope, tf = scenario
+    return f'{scope}-tf{int(tf)}'
+
+
+def _s8_higher_mass(scope: str, shape: PoolShape) -> float:
+    """`m` = **高于 scope 的稀有度**的全部卡的概率和（§六 (a) 的 `m`）。"""
+    rank = shape.rarity_rank[scope]
+    return sum(shape.card_probabilities[c]
+               for rarity, r in shape.rarity_rank.items() if r < rank
+               for c in shape.scope_cards.get(rarity, ()))
+
+
+def _s8_a_cards(scope: str, tf: bool, shape: PoolShape) -> tuple:
+    scope_cards = tuple(shape.scope_cards.get(scope, ()))
+    featured = tuple(shape.featured_cards.get(scope, ()))
+    return _s8_dedup(featured or scope_cards) if tf else _s8_dedup(scope_cards)
+
+
+def _s8_card_rank(card: str, shape: PoolShape) -> int:
+    """卡所属稀有度的 rank（由 `scope_cards` 反查，`scope_cards` 是卡集合的真相源）。"""
+    for rarity, cards in shape.scope_cards.items():
+        if card in cards:
+            return shape.rarity_rank[rarity]
+    raise KeyError(f'卡 {card!r} 不在任何稀有度的 scope_cards 内')
+
+
+class TestS8SixScenarioCardLevel:
+    """§六「S8 口径 3 的回归断言」/ S8-6 第 ⑥ 条：六场景**逐卡**对照（强制）。
+
+    **两条断言，牙齿各在不同方向**：
+
+    1. `test_s8_six_scenarios_match_mechanism_table_per_card`：新侧逐卡 == **独立重述**
+       的机制表期望（不调用 `transfer_linear`）。这是对「A 侧形状取错」（§3.1.5.2.4
+       的错误 ① 形态）与「Q 取错集合」（错误 ② 形态）的捕获面：**只断言目标组总量
+       = 1.0 对两者恒通过**，故本节一律逐卡。
+    2. `test_s8_six_scenarios_against_old_hard_per_card`：与旧 `HardPityBehavior`
+       **逐卡**对照。
+
+    **与计划原文的一处不符（S8-6 实测登记，已回写报告）**：计划第 ⑥ 条要求「断言
+    **逐卡**结果与旧 `HardPityBehavior` 一致」，而该一致性**只对 `m = 0` 的两档成立**
+    （`scope = 'ssr'`）。`m > 0` 的四档（`scope` 为 `sr` / `r`）正是 §六 差异类 (a)
+    登记的配置（旧实现「绝对赋值 + 更高稀有度豁免」造出 `Σ = 1 + m`，新实现配平转移
+    得 `Σ = 1`），**两侧本就不等价**，其逐卡差有闭式：目标卡 `+m²/(1+m)`、更高稀有度
+    的卡 `-p_c·m/(1+m)`、Q 内的卡 `0`。故本组对 `m > 0` 的四档断言的是**该闭式**
+    （即差异类 (a) 的已知差异断言），不是「一致」。原句写在 2026-10-09，早于 S8 的
+    增量实现落地（当时两侧都是「绝对赋值 + 豁免」的 M1 形态，故 6/6 逐位一致）。
+    """
+
+    @pytest.mark.parametrize('scope,tf', _s8_scenarios(),
+                             ids=[_s8_scenario_id(s) for s in _s8_scenarios()])
+    def test_s8_six_scenarios_match_mechanism_table_per_card(self, scope, tf):
+        """逐卡 == 独立重述的机制表期望；并断言「真的改了分布」或「该档本就恒等」。"""
+        shape = _s8_six_shape()
+        new = _s8_new_hard_card_level(scope, tf, shape)
+        expected = _s8_expected_card_level(scope, tf, shape)
+        for card in shape.card_probabilities:
+            assert new[card] == pytest.approx(expected[card], rel=1e-12, abs=1e-15), (
+                f'{scope}/tf={tf} 的卡 {card!r}：实测 {new[card]!r}，'
+                f'机制表期望 {expected[card]!r}（全量 新 {new} / 期望 {expected}）')
+        assert sum(new.values()) == pytest.approx(1.0, abs=FLOAT_ORDER.atol)
+        if scope == 'r':
+            assert new == shape.card_probabilities, (
+                '最低稀有度 scope 的 Q 为空 → S8 恒等（§3.9.5 的 p(Q) = 0 行）：'
+                f'实测 {new}')
+        else:
+            assert new != shape.card_probabilities, (
+                f'{scope}/tf={tf} 的机制须真的触发，否则本参数无判别力')
+
+    @pytest.mark.parametrize('scope,tf', _s8_scenarios(),
+                             ids=[_s8_scenario_id(s) for s in _s8_scenarios()])
+    def test_s8_six_scenarios_against_old_hard_per_card(self, scope, tf):
+        """逐卡与旧 `HardPityBehavior` 对照（`m = 0` 一致、`m > 0` 按 (a) 的闭式分岔）。"""
+        shape = _s8_six_shape()
+        new = _s8_new_hard_card_level(scope, tf, shape)
+        old_cards = _s8_old_hard_card_level(scope, tf, shape)
+        total = sum(old_cards.values())
+        old_norm = {c: v / total for c, v in old_cards.items()}
+        m = _s8_higher_mass(scope, shape)
+
+        assert total == pytest.approx(1.0 + m, abs=1e-12), (
+            f'旧侧原始总量须为 1 + m（m = {m}），实测 {total!r}')
+        assert sum(new.values()) == pytest.approx(1.0, abs=FLOAT_ORDER.atol)
+
+        rank = shape.rarity_rank[scope]
+        a_cards = _s8_a_cards(scope, tf, shape)
+        for card in shape.card_probabilities:
+            diff = old_norm[card] - new[card]
+            if m == 0.0:
+                assert abs(diff) <= S8_FLOAT_NOISE, (
+                    f'{scope}/tf={tf}（m = 0）的卡 {card!r} 须在浮点噪声内一致，'
+                    f'实测差 {diff!r}（旧 {old_norm[card]!r} / 新 {new[card]!r}）')
+                continue
+            if card in a_cards:
+                # 目标卡：旧侧绝对赋值 1.0（归一化后 1/(1+m)）对新侧 1 - m
+                want = m ** 2 / (1 + m)
+            elif _s8_card_rank(card, shape) < rank:
+                # 更高稀有度：旧侧被归一化缩放，新侧不写增量即保留
+                want = -shape.card_probabilities[card] * m / (1 + m)
+            else:
+                want = 0.0
+            assert diff == pytest.approx(want, rel=1e-9, abs=1e-15), (
+                f'{scope}/tf={tf} 的卡 {card!r}：与旧侧的差应为 {want!r}（差异类 (a) 的'
+                f'闭式），实测 {diff!r}')
+        worst = max(abs(old_norm[c] - new[c]) for c in new)
+        assert worst == pytest.approx(m ** 2 / (1 + m), rel=1e-9), (
+            f'最大差应为 m²/(1+m)（(a)(i) 的上界，在目标卡上取到），实测 {worst!r}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑨ 「Σ 偏离 1」形态的覆盖（S8-5 审查转来的责任）
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestS8NonUnitSumCoverage:
+    """「输入分布 `Σ ≠ 1`」这一形态的**判别性**覆盖（S8-5 审查转来）。
+
+    **背景（S8-5 审查的实测结论）**：S8-5 的 6 条 `abs(Σout - 1) < 1e-12` 断言
+    **零判别力**（`_apply_delta` 的无条件归一化使其成为**结构保证**），且该形态
+    **由输入产生**（如池内重复 id，实测 `Σ = 0.8`）而非由算子产生（转移族恒有
+    `Σδ = 0`）。故「Σ 偏离」不可能由任何转移族算子造出，本节给出它**唯一可能**的
+    三条观测面与各自的口径：
+
+    | 面 | 口径 | 用例 |
+    |----|------|------|
+    | 有增量作用时 | 输入偏离被归一化**吸收**（`Σout = 1`） | `test_s8_apply_delta_absorbs_non_unit_input` |
+    | 无增量作用时 | 输入偏离**原样穿过**（`Σout = Σin`），即 `Σ = 1` 的保证是**有条件的** | `test_s8_pipeline_passes_non_unit_input_through` |
+    | 由谁保证 | 分布层判据 `Σp = 1`（`InvariantChecker`），在无增量的那一格上抛 `InvariantError` | `test_s8_non_unit_input_is_caught_by_the_invariant_layer` |
+
+    **如实自报的强度上限**：「增量作用后 `Σ == 1`」一条**只是结构保证**（无条件归一
+    化），单看它没有判别力；本节的第一条用例之所以有牙齿，是因为它同时断言**吸收后
+    的具体取值**（`0.5/0.8` 与 `0.3/0.8`），故「删掉归一化」（S8-4 变异 8 未被杀死的
+    形态）会红。
+    """
+
+    def test_s8_apply_delta_absorbs_non_unit_input(self):
+        """有增量作用时：`Σ = 0.8` 的输入被归一化吸收为 `Σ = 1`，且取值按总和对齐。
+
+        判别性：不做归一化时 `Σout = 0.8`（**这正是 S8-4 变异 8「去掉归一化」未被
+        杀死的形态**），故本条同时断言吸收后的逐卡取值而非只断言 `Σ == 1`。
+        """
+        dist = {'a': 0.4, 'b': 0.4}
+        delta = {'a': 0.1, 'b': -0.1}
+        assert sum(dist.values()) == pytest.approx(0.8)
+        naive = {c: dist[c] + delta.get(c, 0.0) for c in dist}
+        assert sum(naive.values()) == pytest.approx(0.8), (
+            '夹具前提：未归一化的裸相加仍偏离 1（否则本用例无判别力）')
+
+        out = _apply_delta(dist, delta)
+        assert sum(out.values()) == pytest.approx(1.0, abs=FLOAT_ORDER.atol)
+        assert out['a'] == pytest.approx(0.5 / 0.8) and out['b'] == pytest.approx(0.3 / 0.8), (
+            f'吸收后的逐卡取值须按输入总和对齐，实测 {out}')
+
+    def test_s8_pipeline_passes_non_unit_input_through(self):
+        """无增量作用时：骨架把输入分布**原样返回**（`Σ = 1` 不是无条件保证）。
+
+        这一格是「Σ 偏离」唯一能活着走出管道的形态，也是分布层判据的捕获对象。
+        判别性：若谁在骨架出口补一次无条件归一化（把「兜底」变成「恒等化」），本
+        用例即红。
+        """
+        shape = _default_shape()
+        base = dict(shape.card_probabilities)
+        scaled = {c: 0.8 * v for c, v in base.items()}
+
+        class _Noop(Modifier):
+            def compute_delta(self, view, dist, ctx):
+                return None
+
+        state = PityState()
+        pity = Pity(name='s8_sigma_noop', state=state, scope='ssr', btype='hard',
+                    trackers=[], modifiers=[_Noop()], lifecycle=AlwaysActive())
+        ctx = dataclasses.replace(_ctx(shape, state, space='card'), current=dict(scaled))
+        out = pity.before_draw(ctx)
+        assert out == scaled, (
+            f'无增量作用时骨架须原样返回输入（含 Σ 偏离），实测 {out}')
+        assert sum(out.values()) == pytest.approx(0.8), (
+            '输出总量须与输入同（0.8），即 Σ = 1 的保证是有条件的')
+
+    def test_s8_non_unit_input_passes_the_engine_silently_when_checker_off(self):
+        """生产默认（`invariants=None`）下：偏离**不报错、原样到达下游**。
+
+        与上一条互为反面，合起来才是完整口径：`Σ = 1` 在「无增量」那一格上**没有
+        无条件兜底**，唯一的守卫是可选的不变式校验器（生产默认关闭）。这不是缺陷，
+        而是 §六 (a) 登记的「Σ 偏离由输入产生」这一前提：`pool.draw` 的
+        `_adjusted_total_weight` 隐含归一化，故偏离只影响绝对量、不影响抽样比。
+        **判别性**：若谁在骨架出口补一次无条件归一化，本用例即红。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='s8_sigma_off', btype='hard', scope='sr',
+                               threshold=99)
+        state = initial_state(pdef)
+        engine = PityEngine({'s8_sigma_off_pool': _engine_pool_spec(pdef, shape)},
+                            [pdef], rarity_rank=shape.rarity_rank, state=state,
+                            invariants=None)
+        scaled = {c: 0.8 * v for c, v in shape.card_probabilities.items()}
+        out = engine.before_draw('s8_sigma_off_pool', state, dict(scaled))
+        assert out == scaled, (
+            f'校验器关闭时偏离须原样穿过（不报错、不归一化），实测 {out}')
+
+    def test_s8_non_unit_input_is_caught_by_the_invariant_layer(self):
+        """由谁保证：分布层判据 `Σp = 1` 在「无增量」的那一格上抛 `InvariantError`。
+
+        构造：`hard(scope='sr', threshold=99)` 全程不触发（故无增量作用、输入偏离
+        原样穿过），输入分布取 `0.8 × 基础`（S8-5 实测的「池内重复 id」形态）。
+        判别性：把分布层判据退回 M1 的取值集形态（或删掉该判据）时本用例即红。
+        """
+        shape = _default_shape()
+        pdef = counter_fixture(name='s8_sigma', btype='hard', scope='sr', threshold=99)
+        state = initial_state(pdef)
+        checker = InvariantChecker(enabled=True)
+        engine = PityEngine({'s8_sigma_pool': _engine_pool_spec(pdef, shape)}, [pdef],
+                            rarity_rank=shape.rarity_rank, state=state,
+                            invariants=checker)
+        scaled = {c: 0.8 * v for c, v in shape.card_probabilities.items()}
+        with pytest.raises(InvariantError) as excinfo:
+            engine.before_draw('s8_sigma_pool', state, dict(scaled))
+        message = str(excinfo.value)
+        assert "'Σp'" in message and '期望 1.0' in message, (
+            f'须由分布层的归一性判据拦下，实测 {message}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑥（续）空目标集 / `declared` 形状的「来源一 / 来源二」/ scope 白名单
+# ══════════════════════════════════════════════════════════════════
+#
+# S8-6 第 ⑥ 条的「另两条」与「`declared` 分支须至少一条正例与一条负例」在本节。
+# **层级选择**：逐机制的空目标集断言与 Modifier 级的 `declared` 正负例已随
+# S8-1/2/3 提前落地（`tests/core/test_pity_modifier.py::test_empty_target_set_returns_none`
+# 的 7 条参数化、`test_declared_shape_transfers_when_pA_is_zero` /
+# `test_declared_shape_returns_none_when_wA_is_zero`），故本节改在**组合面**与
+# **助手面**覆盖，与既有两条不同层级、无重复。
+
+#: scope 白名单用例的 TOML（`[rarities].ranks` 只有 SSR / SR / R）。
+_S8_SCOPE_TOML = """[meta]
+version = "2.3.0"
+
+[rarities]
+ranks = [
+    ["SSR"],
+    ["SR"],
+    ["R"],
+]
+
+[[banner]]
+id = "test_pool"
+name = "测试池"
+start_day = 0
+end_day = 21
+
+[[banner.pool]]
+id = "main"
+cost = "draw_resource:160"
+
+[[banner.pool.reward]]
+card_id = "c1"
+probability = 1.0
+rarity = "SSR"
+featured = true
+
+[[pity]]
+name = "p_scope"
+type = "hard"
+scope = "{scope}"
+threshold = 90
+"""
+
+
+def _s8_load_toml(toml_str):
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.toml', delete=False,
+                                     encoding='utf-8') as f:
+        f.write(toml_str)
+        path = f.name
+    try:
+        return load_toml(path)
+    finally:
+        os.unlink(path)
+
+
+class TestS8EmptyTargetSetAndDeclaredShape:
+    """空目标集（恒等）与 `declared` 形状的两个来源（§3.9.5 / §3.1.5.6.1）。"""
+
+    def test_s8_empty_target_set_yields_identity_pipeline_output(self):
+        """空目标集 → `compute_delta` 返 `None` → **管道输出 = 输入**（恒等）。
+
+        `assert mod.compute_delta(...) is None` 那一面的逐机制覆盖已随 S8-1/2/3 落地
+        （`test_empty_target_set_returns_none` 的 7 条参数化）；本节补**组合面**：
+        `None` 经 `Pity.before_draw` 的内循环确实不写分布（`if d is not None` 守卫），
+        故「机制触发但目标集为空」与「机制未触发」在输出上同值。判别力：把该守卫
+        写成无条件 `_apply_delta(out, d or {})` 时，`d = None` 会被当成空增量并**归一化**
+        输入分布，本用例即红。
+        """
+        shape = make_pool_shape((('sr1', 'sr', False, 0.5), ('r1', 'r', False, 0.5)))
+        base_dist = dict(shape.card_probabilities)
+        for tf in (False, True):
+            state = PityState()
+            mod = HardModifier('ssr', threshold=1,
+                               target='featured' if tf else 'scope')
+            pity = Pity(name=f's8_empty_{tf}', state=state, scope='ssr', btype='hard',
+                        trackers=[CounterTracker(scope='ssr', reset_on='ssr')],
+                        modifiers=[mod], lifecycle=AlwaysActive())
+            pity._rebind_state(state)          # 装置纪律：直驱前须补一次 rebind
+            out = pity.before_draw(_ctx(shape, state, space='card'))
+            assert out == base_dist, (
+                f'tf={tf}：该 scope 无卡（空目标集）时管道须恒等，实测 {out}')
+
+    def test_s8_declared_shape_source_two_transfers_when_pA_zero(self):
+        """**来源二**（§3.1.5.6.1）：`p(A) = 0` 但 `w(A) > 0` 时 `declared` 仍能转移。
+
+        助手级：`shape='declared'` 的 `u_A` 取 `w_c / w(A)`，与当前分布无关，故目标组
+        当前无概率时照常分配（这是 `declared` 唯一的用武之地）。**对照**：同输入下
+        `shape='current'` 返 `None`（来源一的处置），两条并置才算钉住了分支差异。
+        """
+        dist = {'a': 0.0, 'b': 0.5, 'q': 0.5}
+        weights = {'a': 0.3, 'b': 0.7, 'q': 1.0}
+        d_declared = transfer_linear(dist, ('a',), ('q',), 0.5,
+                                     shape='declared', weights=weights)
+        assert d_declared is not None, '来源二：p(A) = 0 且 w(A) > 0 时须照常转移'
+        assert d_declared['a'] == pytest.approx(0.5), (
+            f'A 侧按 w 分配（u_A = 1.0 因单卡），实测 {d_declared}')
+        assert d_declared['q'] == pytest.approx(-0.5)
+        assert transfer_linear(dist, ('a',), ('q',), 0.5,
+                               shape='current') is None, (
+            '对照：`current` 在 p(A) = 0 时须返 None（§3.9.5 第 1 行）')
+
+    def test_s8_declared_shape_source_one_returns_none_when_wA_zero(self):
+        """**来源一**（池子声明该组不可获得）：`w(A) = 0` → `declared` 返 `None`。
+
+        正对照（把 `w(a)` 抬起来即照常转移）一并给，防「一律返 None」通过。
+        """
+        dist = {'a': 0.5, 'q': 0.5}
+        assert transfer_linear(dist, ('a',), ('q',), 0.5, shape='declared',
+                               weights={'a': 0.0, 'q': 1.0}) is None, (
+            '来源一：w(A) = 0 时须返 None（不转移）')
+        d = transfer_linear(dist, ('a',), ('q',), 0.5, shape='declared',
+                            weights={'a': 1.0, 'q': 1.0})
+        assert d is not None and d['a'] == pytest.approx(0.5), (
+            f'正对照：w(A) > 0 时须照常转移，实测 {d}')
+
+    def test_s8_scope_outside_rarity_ranks_raises_config_error(self):
+        """`scope` 不在 `[rarities].ranks` 内时 TOML 层抛 `ConfigError`（白名单硬拒）。
+
+        **本步新增的覆盖**：该白名单（`config_toml._build_pity` 的 scope 校验）此前
+        零测试消费者（全库 grep 该异常文案无命中），而 S8-6 的第 ⑥ 条把它列为必覆盖项。
+        正对照：同结构下 `scope = "ssr"` 载入成功，防「一律拒绝」通过。
+        """
+        with pytest.raises(ConfigError) as excinfo:
+            _s8_load_toml(_S8_SCOPE_TOML.format(scope='ur'))
+        message = str(excinfo.value)
+        assert "'ur'" in message and '未在 [rarities] 中注册' in message, (
+            f'异常信息须点名出错取值与该白名单，实测 {message}')
+
+        store = _s8_load_toml(_S8_SCOPE_TOML.format(scope='ssr'))
+        assert store.pity.pities[0].scope == 'ssr', '正对照：合法 scope 须正常载入'

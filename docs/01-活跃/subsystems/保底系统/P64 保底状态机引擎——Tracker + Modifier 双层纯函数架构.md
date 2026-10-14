@@ -356,7 +356,7 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 | `RotatingModifier` | `guaranteed` | `featured_cards[scope]` | `scope\featured` | `p(Q)` | `current` |
 | `NonFeaturedModifier`（G1） | `forced_loss` | `scope\featured` | `featured_cards[scope]` | `p(Q)` | `declared` |
 | `SelectedModifier`（targeted） | `guaranteed ∨ fate_ready` | `(selected,)` | `scope\selected` | `p(Q)` | `declared` |
-| `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\A` | `p(Q)` | `current` |
+| `NotOwnedModifier`（G3） | `counter >= τ` | `featured_cards[scope]` 中未拥有者 | 更低稀有度 ∪ `scope\A` | `p(Q)` | **`declared`**（**F7 裁决落地，2026-10-14**，见本表下方的裁决记录） |
 
 **五样都是 `compute_delta()` 方法体内的局部量**，不是构造形参、不进接口。「更低稀有度」= `rarity_rank` 中 `rank > rank(scope)` 的稀有度下的全部卡；「`scope\X`」= scope 卡集去掉 X。
 
@@ -367,7 +367,7 @@ Modifier 是 pure 函数（裁决 6B 后**无例外**：原先唯一消费 RNG �
 > **A 侧形状（2026-10-08 用户裁决）**：`current` = A 内按当前比例 `p_c/p(A)` 分配增量；`declared` = A 内按声明权重 `w_c/w(A)` 分配（`w` 由 `ctx.base_probabilities` 传入，见 §3.9.4 的 `weights` 形参）。**分发依据**（三案推演 §8.4 的穷举）：**可能遇到 `p(A) = 0` 的机制取 `declared`**（`HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier`，它们的 A 是 featured 的真子集，会被同 scope 的 counter 驱动算子清空），**其余取 `current`**（`soft` 只加总量不动形状，其余机制的 A 不会整组归零）。`declared` 在 `p(A) = 0` 时仍可分配，这是它唯一的用武之地；`w(A) = 0`（池子声明该组不可获得）时它返回 `None`，与 `current` 同。**Q 侧形状不可指定，恒为当前形状**（否则在 `p_c → 0` 时产出负概率）。
 
 <!-- P64-S8-CLOSURE -->
-> **`NotOwnedModifier`（G3）的 A 侧形状在计划内部不自洽（S8 收口登记，2026-10-14，待 S9-3 裁决）**：上表的「A 侧形状」列给它 **`current`**，而同节上方「A 侧形状（2026-10-08 用户裁决）」段的**分发依据**写「**可能遇到 `p(A) = 0` 的机制取 `declared`**（`HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier`，它们的 A 是 featured 的真子集，会被同 scope 的 counter 驱动算子清空）」。G3 的 A = featured 中**未拥有**者，**正是 featured 的真子集**，按该依据应取 `declared`；M1 交付的形态也正是 `declared` 一侧，S8 按表改为 `current`。**须在 S9-3 接线前裁决**：维持 `current` 则「来源二」在 G3 上被静默吃掉；改 `declared` 须同步上表与 §3.1.5.4。
+> **`NotOwnedModifier`（G3）的 A 侧形状在计划内部不自洽（S8 收口登记，2026-10-14，待 S9-3 裁决）**：上表的「A 侧形状」列给它 **`current`**，而同节上方「A 侧形状（2026-10-08 用户裁决）」段的**分发依据**写「**可能遇到 `p(A) = 0` 的机制取 `declared`**（`HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier`，它们的 A 是 featured 的真子集，会被同 scope 的 counter 驱动算子清空）」。G3 的 A = featured 中**未拥有**者，**正是 featured 的真子集**，按该依据应取 `declared`；M1 交付的形态也正是 `declared` 一侧，S8 按表改为 `current`。**已于 S9-3 接线前裁决（2026-10-14，主 agent）**：**取 `declared`**，上表该格已随之改为 `declared`。三条理由：① 本段的**分发依据**（「可能遇到 `p(A) = 0` 的机制取 `declared`（…它们的 A 是 featured 的真子集，会被同 scope 的 counter 驱动算子清空）…`declared` 在 `p(A) = 0` 时仍可分配，这是它唯一的用武之地」）**正指向 G3**，故表内该格原与本段的推导依据冲突，冲突时以依据为准；② **语义**：G3 的意图是「τ 抽**必出**未获得的 UP」，取 `current` 时该保证恰在被前序算子清空目标组的情形下**静默失效**（`transfer_linear` 返 `None`）；③ **M1 交付的形态本就是 `declared`**（S8 审查实测 `a5f1b1c` 的 `apply` 末尾即按 `w/total_w` 分配），故取 `declared` 是**回归 M1 口径**，`current` 才是一次未登记的语义变更。**代价已被压到最低**：`NotOwnedModifier` 在 S9-3 之前**无任何 registry 条目或 preset 构造它**（零生产可达配置）。**可推翻**（见报告 §八）。
 
 > **边界一：`hard` 的 scope 为最低稀有度时，本族表达不了（2026-10-06 实测）**。`Q = 更低稀有度` 为空 → `amount = 0` → `transfer_linear` 返回恒等，**保底完全不生效**。旧实现靠「绝对赋值 + 更高稀有度豁免」造出 Σ > 1 的分布（实测 `hard(scope='r')` 得 Σ = 1.061），这是**造质量**，不属于「A 加 Q 减」族。**手册无此配置**（全部 `hard` 的 scope 为 `ssr`，除 `sr_pity` 为 `sr`），故登记为**边界**而非缺口。真要支持，须另写一个 `compute_delta()`（直接返回自定义增量表），**接口不变**。
 
@@ -850,7 +850,7 @@ Q 内每卡  − amount · p_c / p(Q)
 其余      不写（= 0）
 ```
 
-`amount` 是从 Q 搬到 A 的概率质量；`u_A` 是 A 上的单位分布（即「形状」），取值由 §3.9.4 的 `shape` 参数决定（七个机制中四个取 `'current'`，即 `u_A(c) = p_c / p(A)`；三个取 `'declared'`，即 `u_A(c) = w_c / w(A)`，见 §3.1.2 表的「A 侧形状」列）。两种形状都在 U 内**配平**（`Σδ = 0`），故 `Σ(p + δ) = 1`，归一化退化为恒等。
+`amount` 是从 Q 搬到 A 的概率质量；`u_A` 是 A 上的单位分布（即「形状」），取值由 §3.9.4 的 `shape` 参数决定（七个机制中**三个**取 `'current'`，即 `u_A(c) = p_c / p(A)`；**四个**取 `'declared'`，即 `u_A(c) = w_c / w(A)`（**计数订正（S9-3，2026-10-14）**：`NotOwnedModifier` 随 F7 裁决取 `declared`），见 §3.1.2 表的「A 侧形状」列）。两种形状都在 U 内**配平**（`Σδ = 0`），故 `Σ(p + δ) = 1`，归一化退化为恒等。
 
 **这不是定义，是一个族。** 三条前提都不是「Modifier 必须如此」：
 
@@ -880,7 +880,7 @@ Q 内每卡  − amount · p_c / p(Q)
 | `F(T)` | 夺取型：A = T，Q = 全池减 A 再减更高稀有度，`amount = p(Q)` |
 | `B_β(T; Q)` | soft 型：A = T，Q = 源集。**改前实现取 `amount = β·p(Q)`（相对量）**（2026-10-06 前）；**改后已按修正 ① 改为绝对百分点**（`amount = boost/100`，见 §3.1.5.2.2）——**该修正已落地于 `SoftStepBehavior`，不是待办**（§3.4.1）。这一口径差异正是 §3.1.5.5 推论表「soft + soft（异 scope）」由可交换变为不可交换的原因 |
 
-旧实现跑在**槽位级**。<!-- P64-S8-LANDED -->~~目标恒为单槽~~ **该半句经实测为假（订正，2026-10-14）**：旧实现取 `target_slots = scope_slots[scope]`（[pity.py:436](gacha_simulator/core/pity.py#L436)），同一 scope 内含**多个槽**（如 `ssr_featured` 与 `ssr`），且目标槽位概率按 `w_s / Σw`（**声明权重**）分配，故「A 内按什么分」在旧实现里**已有规则**。S8 降到卡级后 |A| 可大于 1，问题变成「**哪一种分法对**」，两者分岔的实测见 §六 差异清单的 (g) 项。**本族的答案是：A 内形状由机制声明**（§3.1.2 的「A 侧形状」列；四个取 `current` 即保持当前比例，三个取 `declared` 即按声明权重），依据见 §3.1.5.4 的表与三案推演 §8.4 的穷举。
+旧实现跑在**槽位级**。<!-- P64-S8-LANDED -->~~目标恒为单槽~~ **该半句经实测为假（订正，2026-10-14）**：旧实现取 `target_slots = scope_slots[scope]`（[pity.py:436](gacha_simulator/core/pity.py#L436)），同一 scope 内含**多个槽**（如 `ssr_featured` 与 `ssr`），且目标槽位概率按 `w_s / Σw`（**声明权重**）分配，故「A 内按什么分」在旧实现里**已有规则**。S8 降到卡级后 |A| 可大于 1，问题变成「**哪一种分法对**」，两者分岔的实测见 §六 差异清单的 (g) 项。**本族的答案是：A 内形状由机制声明**（§3.1.2 的「A 侧形状」列；**三个**取 `current` 即保持当前比例，**四个**取 `declared` 即按声明权重（**计数订正（S9-3，2026-10-14）**：随 F7 裁决反转）），依据见 §3.1.5.4 的表与三案推演 §8.4 的穷举。
 
 ##### 3.1.5.2.4 本轮修正的两处实现错误（2026-10-05）
 
@@ -1070,7 +1070,7 @@ p_c / p(C_s) = w_c / w(C_s)      （对每个槽 s 及其卡集 C_s）
 
 **来源二在新框架下的可达性（2026-10-08 重新穷举）**：原实测的 `hard → hard → soft` 链依赖旧 `hard` 的「造质量」（`Σ = 2.0`），而新 `hard` 是夺取型、`⟨m,p⟩ ≡ 1`，且 `hard(scope=最低稀有度)` 的 Q 为空会空转（§3.1.2 边界一），故该链**不可达**。但另一条链**可达**：`NF(ssr)` / `Sel(ssr)` 清空 UP 之后 `H_tfT(ssr)` 要保 UP，此时 `p(A) = 0` 而 `p(Q) > 0`。这类组合全部是语义对撞（夺 UP 与保 UP），穷举结果见三案推演 §8.4 与 `.recycle_bin/probe_pA0_reach.py`。
 
-**`shape = 'declared'` 已启用（2026-10-08 用户裁决）**：按声明权重分配对 `p_c = 0` 安全（`δ_c = t·w_c/w(A)` 不依赖 `p_c`），故 `HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier` 三个机制取它（§3.1.2 表的「A 侧形状」列），来源二在冲突配置下由此生效。`w` 取自 `ctx.base_probabilities`（2026-10-08 新增的 `ctx` 字段；它归一化后就是初始分布，见 §3.1.2 的字段表）。其余四个机制仍取 `current`。
+**`shape = 'declared'` 已启用（2026-10-08 用户裁决）**：按声明权重分配对 `p_c = 0` 安全（`δ_c = t·w_c/w(A)` 不依赖 `p_c`），故 `HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier` / `NotOwnedModifier` **四个**机制取它（**计数订正（S9-3，2026-10-14）**：末者随 F7 裁决加入）（§3.1.2 表的「A 侧形状」列），来源二在冲突配置下由此生效。`w` 取自 `ctx.base_probabilities`（2026-10-08 新增的 `ctx` 字段；它归一化后就是初始分布，见 §3.1.2 的字段表）。其余四个机制仍取 `current`。
 
 **三条「支持换加法」的实测事实的现状**（2026-10-08 复核）：
 
@@ -1174,7 +1174,8 @@ preset 工厂**接受一个形参 `pdef`**（`PityDef` 实例），签名统一�
 
 | 类型 | `target_featured = true` 时 |
 |------|---------------------------|
-| `hard` / `hard_exclude_owned_skip` / `hard_exclude_owned_any` | 正常生效（目标集 = scope 内 featured 卡集），10 处机制全部在此 |
+| `hard` | 正常生效（目标集 = scope 内 featured 卡集），10 处机制全部在此 |
+| `hard_exclude_owned_skip` / `hard_exclude_owned_any` | **该字段对它们静默无效**（**订正（S9-3 审查，2026-10-14）**：实测两条 type 的 preset 均**不消费** `target_featured`，其 `NotOwnedModifier` 只有 `_scope` / `_threshold` / `_on_all_owned` 三个属性；成因是 G3 的 A **恒为**「featured 中未拥有者」（§3.10.4 机制表第 7 行），故该键对它们无可作用面。**不是**与 `hard` 同列的「正常生效」。**另**：`target_featured` 的消费者全库**只有** `HardModifier`（`_target_of(pdef)` 的唯一调用点在 `_preset_hard`），故这一「接受并忽略」的形态对 `rotating` / `targeted` / `soft_*` 等**同样成立**（`soft_*` 由裁决 7B 单独硬拒），本行只订正两个新 type 的误列 |
 | `soft_interval` / `soft_additive` / `soft_step` | **抛 `ConfigError`** |
 
 **为什么 soft 侧可删而不丢能力**：`soft(target_featured=True)` 可**等价分解**为两步转移（原按 §3.1.5.2 的 `share` 语义写出，2026-10-08 迁到增量词汇；该形态已于裁决 7B 从配置面移除，本段按历史记录保留）：
@@ -1991,7 +1992,7 @@ class SelectedModifier(Modifier):                      # targeted：A 侧取 dec
 
 | 情形 | 处理 | 依据 |
 |------|------|------|
-| `p(A) == 0`（目标组当前无概率） | **`shape = 'current'` 时返回 `None`（恒等，不转移）**：`u_A = p_c/p(A)` 未定义。**这是「来源一」（池子声明该组不可获得）的正确处置**，抬起来会与池子的声明冲突。**`shape = 'declared'` 的三个机制不受此限**：它们按 `w` 分配，`p(A) = 0` 时仍能转移（这正是来源二在冲突配置下生效的路径），只有 `w(A) = 0` 才返 `None` | §3.1.5.6.1。**2026-10-08 由因子改为增量时重写**：原表按 `share` / `assign` 分两支（前者跳过目标因子、后者返恒等），增量形式下**两分支合一**。原记录的旧码行为（`SoftStepBehavior` 的 `steal·w/Σw` 会把零概率目标槽从 0 抬起）在新框架下不出现，故「为对齐旧行为而保留源侧写因子」的理由随之消失。**须在 S8 验收中专项覆盖** |
+| `p(A) == 0`（目标组当前无概率） | **`shape = 'current'` 时返回 `None`（恒等，不转移）**：`u_A = p_c/p(A)` 未定义。**这是「来源一」（池子声明该组不可获得）的正确处置**，抬起来会与池子的声明冲突。**`shape = 'declared'` 的四个机制不受此限**（**计数订正（S9-3，2026-10-14）**：`NotOwnedModifier` 随 F7 裁决取 `declared`）：它们按 `w` 分配，`p(A) = 0` 时仍能转移（这正是来源二在冲突配置下生效的路径），只有 `w(A) = 0` 才返 `None` | §3.1.5.6.1。**2026-10-08 由因子改为增量时重写**：原表按 `share` / `assign` 分两支（前者跳过目标因子、后者返恒等），增量形式下**两分支合一**。原记录的旧码行为（`SoftStepBehavior` 的 `steal·w/Σw` 会把零概率目标槽从 0 抬起）在新框架下不出现，故「为对齐旧行为而保留源侧写因子」的理由随之消失。**须在 S8 验收中专项覆盖** |
 | `p(Q) == 0`（无货可取） | 返回 `None`（恒等） | 同 §3.1.5.6 的「支撑上全为零」行 |
 | `p(Q) == amount`（源组被搬空） | 正常执行：`δ_Q = −amount·p_c/p(Q) = −p_c`，源组归零；`δ_A = +amount·u_A` 照常 | 原 `P − T == 0` 行。**增量形式下该情形由公式自然涵盖，无分支**。原记录的实测（现码把零概率槽 `b` 从 0 造到 0.25、卡级版保持 0）在新框架下不再出现。**须在 S8 验收中专项覆盖** |
 | **目标集为空**（`target_cards == ()`） | **返回 `None`（恒等）**，现址为 §3.9.4 的 `transfer_linear` 代码与其前置条件表（原写「§3.9.4.1 的守卫、§3.9.4.2 的守卫、§3.14.2 的说明」，那两个子节与 `ConditionalModifier` 包装器均已随 2026-10-06 改判消失） | **2026-10-05 补守卫**。原稿的 `return m or None` **不构成**该保证：`target_cards` 为空时 `T = 0`、`P − T = P > 0`，走 `ratio >= 1` 分支把**整个 U 写 0**，返回 `{'…': 0.0}` 而非 `None`。实测 `factor_redistribute(dist, ('ssr_featured','ssr'), (), 1.0)` 得 `{'ssr_featured': 0.0, 'ssr': 0.0}`，`_apply_factor` 归一化后全 scope 归零。**（本条为 2026-10-05 的历史记录，其中的 `factor_redistribute`、因子 `m` 与 `_apply_factor` 都是当时形态；表示已于 2026-10-08 改为增量，但本条的结论「目标集为空必须返回 `None`」不变。）****触发路径真实存在**：`rotating` 绑定到无 featured 卡的池（`PityDef.pools` 默认 `('*',)`，见 §3.9.5 的 scope 键缺失行）时 `featured_cards.get(scope, ())` 返空集 |
@@ -3069,8 +3070,17 @@ class RotatingModifier(Modifier):
     **④ 用例计数过时**：§六 与本行记的「该文件现存 12 条用例」应改为 **32**（29 既有 + 3 新增），或按 §七 S9-1 的建议去掉写死条数。
     **⑤ 通道 B 的用例名与分工**：计划建议的 `test_channel_b_matches_before_draw` 实际落地为 **`test_channel_b_fills_sim_view`**（`-k channel_b` 仍匹配）；本步只落「**填充点**」断言，**1e-12 逐元素对照归 S9-4**，S9-4 不得误以为已覆盖。
     - 验收命令（GATE-6 补，块级最小验收）：`pytest -q tests/core/test_pity_integration.py -k sim_view`——**用例名须在计划内写死**（建议 `test_sim_view_owns_includes_initial_counts`：断言 `SimView.owns()` 取 `total_holding` 口径（含初始持有）；`test_sim_view_annotation_unknown_source_raises_config_error`：断言 `uses_sim` 注解名不在已知源集合（`owns`）时抛 `ConfigError`），落地时先 `--collect-only` 确认收集到 ≥1 条且命中项**全部为本步新增**（`-k` 零命中时 pytest 以 **exit code 5** 假通过，纪律见 §七 引言的「验收命令与断言对象绑定纪律」）<!-- REVIEW-R1-FIX: GATE-6-测试策略 -->。**两通道填充点各一条断言**（本步目标文件已列）：`core/banner.py`（通道 A）与 `core/strategy.py`（通道 B）各断言 `sim` 被实际传入；详尽的通道 B 独立验收（同刻分布逐元素一致，容差 1e-12）归 S9-4。
-  - [ ] S9-3 `NotOwnedModifier` 新零件 + **两个新 type（G3 双实现，2026-09-30 裁决）** `hard_exclude_owned_skip` / `hard_exclude_owned_any`（`BEHAVIOR_REGISTRY` 两条注册；GUI 下拉**自动出现**——**前提 = S6a 的 `_PITY_TYPES` 生成式改造已落地**，未落地则本步手工追加这两个 type）<!-- REVIEW-R1-FIX: ISSUE-929 -->+ **「关于」页面两处文本改为 registry 生成**（§3.10.4 配套第 4 条）+ G3 配置示例 + 手册 §7.3 / §21 缺口归属更正（登记为**一条**待确认项、两个候选实现）（~0.9 人时，原 0.7 因增第二个 type 与关于页两处；§3.10.4）｜目标文件 `core/pity_modifier.py`（`on_all_owned` 构造参数）+ `core/pity.py`（两条 registry 条目）+ `gui/config_panel.py`（下拉）+ **`gui/about_dialog.py`**（`:67` 与 `:207` 两处文本）+ `tests/gui/test_about_dialog.py`（新增）+ **`tests/gui/test_config_panel_p56.py`**（**ISSUE-912**：其 [:53](tests/gui/test_config_panel_p56.py#L53) 的 `assert len(panel._PITY_TYPES) == 10` 与 [:48-53](tests/gui/test_config_panel_p56.py#L48) 的 `test_pity_types_has_10_entries` 会被本步（+2 个 type）与 S6a（+`rotating_inverse`）共同打破；`_PITY_TYPES` 自 S6a 起改为 registry 生成，该断言须改为 `== len(BEHAVIOR_REGISTRY)` 并去掉写死的数量名——**且该改写必须在 S6a 就完成**（S6a 的 `rotating_inverse` 已使它由 10 变 11），否则 S6a 的 commit 一落地即红）<!-- REVIEW-R1-FIX: ISSUE-929 -->+ `config/config.toml` + 手册。**已删除 `core/config_toml.py`（校验）**：该白名单不存在，见 §3.10.4 配套第 2 条
-    - **契约表同批扩（2026-10-09）**：本步在 `core/config_toml.py` **同 commit 扩 `_PITY_TYPE_KEYS`（新增 `hard_exclude_owned_skip` / `hard_exclude_owned_any` 两条，键集含 `on_all_owned`）**——两条新 type 的 `[[pity]]` 段否则被 S4c 的未知键硬拒；与 S4c 的一致性测试「反向断言契约表 ⊆ `_build_pity` 读取面」互为约束。<!-- REVIEW-R1-FIX: GATE-2-文件清单 -->
+  - [x] S9-3（**已落地**：`86c1a89`）`NotOwnedModifier` 新零件 + **两个新 type（G3 双实现，2026-09-30 裁决）** `hard_exclude_owned_skip` / `hard_exclude_owned_any`（`BEHAVIOR_REGISTRY` 两条注册；GUI 下拉**自动出现**——**前提 = S6a 的 `_PITY_TYPES` 生成式改造已落地**，未落地则本步手工追加这两个 type）<!-- REVIEW-R1-FIX: ISSUE-929 -->+ **「关于」页面两处文本改为 registry 生成**（§3.10.4 配套第 4 条）+ G3 配置示例 + 手册 §7.3 / §21 缺口归属更正（登记为**一条**待确认项、两个候选实现）（~0.9 人时，原 0.7 因增第二个 type 与关于页两处；§3.10.4）｜目标文件 `core/pity_modifier.py`（`on_all_owned` 构造参数）+ `core/pity.py`（两条 registry 条目）+ `gui/config_panel.py`（下拉）+ **`gui/about_dialog.py`**（`:67` 与 `:207` 两处文本）+ `tests/gui/test_about_dialog.py`（新增）+ **`tests/gui/test_config_panel_p56.py`**（**ISSUE-912**：其 [:53](tests/gui/test_config_panel_p56.py#L53) 的 `assert len(panel._PITY_TYPES) == 10` 与 [:48-53](tests/gui/test_config_panel_p56.py#L48) 的 `test_pity_types_has_10_entries` 会被本步（+2 个 type）与 S6a（+`rotating_inverse`）共同打破；`_PITY_TYPES` 自 S6a 起改为 registry 生成，该断言须改为 `== len(BEHAVIOR_REGISTRY)` 并去掉写死的数量名——**且该改写必须在 S6a 就完成**（S6a 的 `rotating_inverse` 已使它由 10 变 11），否则 S6a 的 commit 一落地即红）<!-- REVIEW-R1-FIX: ISSUE-929 -->+ `config/config.toml` + 手册。**已删除 `core/config_toml.py`（校验）**：该白名单不存在，见 §3.10.4 配套第 2 条
+    <!-- P64-S9-3-LANDED -->
+    **S9-3 落地实测（`86c1a89`，2026-10-14）**：10 文件 **+691/-42**；全量 **`3007 passed / 35 skipped`**（+40 = 24 条新函数 + 16 条新参数化实例）；`ruff` 与 `refcheck` 通过；`p79_verify` 与 `p82_baseline --verify` PASS 零漂移；9 处变异逐处还原（超上限 1 处，已登记）。交付：`NotOwnedModifier` 接线（`on_all_owned` 形参 + **A 侧形状改 `declared`（F7 裁决）**）、两条 registry 条目（四键齐全 / `threshold` 默认 50 / `display_name` 带形态括注 / `reset_on = pdef.reset or _norm_scope(pdef)` / `tau` 缺省回退 50）、`_HARD_TYPES` 与 `_BTYPE_ORDER` 同步、GUI 下拉**零改动自动出现**（实测 13 项、两条新 type 在第 5/6 位）、「关于」页两处文本改由 registry 生成（占位符替换、版式未动、运行期无 `@@` 残留）、手册 §7.2/§7.3/§7.4/§21/目录与 `config.toml` 的注释示例同步。
+    **四条订正（S9-3 审查，2026-10-14）**：
+    **① 契约表条删去「键集含 `on_all_owned`」**（**pre-ruling 残留**）：`PityDef` 无该字段、`_build_pity` 不读它，实测把该键登记进 `_PITY_TYPE_KEYS` 会被计划**自己的反向一致性不变式**拒收（`test_contract_subset_of_build_pity_read_face` 报「幽灵键」）。两条键集与 `hard` 逐键同形（`{'threshold'}`）。
+    **② 验收命令的过滤词须放宽**：`-k exclude_owned` **只命中 2 条**（对 `TestHardExcludeOwned` 不匹配），而本步新增 **11 条**断言；实测「`reset_on` 写死 `'scope'`」这一变异在该命令下**全绿**（回归盲区）。**订正为 `-k "HardExcludeOwned or exclude_owned"`**（实测命中 11 条，全为本步新增）。
+    **③ 目标文件清单的两处订正**：删 `gui/config_panel.py` 与 `tests/gui/test_config_panel_p56.py`（S6a 已落地、本步零改动即生效）；并订正本行的**内部矛盾**（本行写「已删除 `core/config_toml.py`（校验）」，而契约表条又要求本步改它，实测本步确改了它）。
+    **④ 用例计数**：本行写的「当前 **12** 条既有用例」实测为 **14** 条（与 S9-1 的「12 / 实为 26」同族的计数漂移，建议去掉写死条数）。
+    **另两条登记**：**(i)** `tests/gui/test_about_dialog.py` 在计划里被本行与 §七 S9-4 行**双重登记**，本步已新建（8 例）；**S9-4 行的「（新增）」应去掉**，并注明「语义断言归 S9-4」（其验收命令仍有效，不需调整）。**(ii)** 「关于」页原文本的 `分段软保底 (RLE deltas)` 说明随生成化消失（registry 的 `display_name` 无此后缀），属**单一真相源的既定代价**，登记备查。
+    **③ 文档同步的计数项**：`CLAUDE.md`（**每次会话自动加载**）、`CLAUDE.md` 另一处、`docs/01-活跃/subsystems/保底系统/02-实施.md` 两处、`00-档案.md` 一处写「`BEHAVIOR_REGISTRY`（11 条目）」的句子在 +2 后失真，**文档同步块（ISSUE-017）须把「registry 条目数 11 → 13」列为显式回写项**。
+    - **契约表同批扩（2026-10-09）**：本步在 `core/config_toml.py` **同 commit 扩 `_PITY_TYPE_KEYS`（新增 `hard_exclude_owned_skip` / `hard_exclude_owned_any` 两条，~~键集含 `on_all_owned`~~（**该半句为 pre-ruling 残留，见上方订正①**））**——两条新 type 的 `[[pity]]` 段否则被 S4c 的未知键硬拒；与 S4c 的一致性测试「反向断言契约表 ⊆ `_build_pity` 读取面」互为约束。<!-- REVIEW-R1-FIX: GATE-2-文件清单 -->
     - 验收命令（GATE-6 补，块级最小验收）：`pytest -q tests/core/test_pity_validate_behaviors.py -k exclude_owned`——两条 registry 条目（`hard_exclude_owned_skip` / `hard_exclude_owned_any`）的 `create_behavior` 构造用例各一（`on_all_owned` 形态随构造参数正确落到 `ForceNotOwnedModifier`；**G3 的「全拥有」行为断言随 §3.10.4 的待确认项挂起，本命令只验构造与接线**）<!-- REVIEW-R1-FIX: ISSUE-931 --> **GATE-6-测试策略（2026-10-01 补：收集守卫）**：用例名须含 `exclude_owned`（两条 registry 条目各一，建议 `test_create_behavior_hard_exclude_owned_skip` / `test_create_behavior_hard_exclude_owned_any`）。实测 `-k exclude_owned` 在当前 12 条既有用例下**零命中**（pytest **exit code 5**），落地时确认收集到 ≥1 条 <!-- REVIEW-R1-FIX: GATE-6-测试策略 -->
 <!-- REVIEW-FIX-PREV: ISSUE-009 -->
 <!-- REVIEW-FIX-PREV: ISSUE-013 -->

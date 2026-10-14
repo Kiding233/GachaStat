@@ -183,9 +183,11 @@ def test_priority_chain_strategy_exhausted_fallback():
 # s1 / s2 逐字相同）；(d) `test_g3_engine_and_strategy_agree_on_owned_set` 的
 # ①（`initial_counts` 夹具守卫）、③（**口径同一性守卫**：`SimView.owns` 与
 # `GachaState.total_holding` 是同一对象的同一函数，无独立判别力）与 ⑤
-# （`acquired` 仍为空的反向守卫）；该用例的 ④ 在本夹具下同样无判别力
-# （`_g3_engine` 的 `GachaState` 无 `resources` → `can_afford_batch` 恒 False）。
-# 遮蔽关系与两项实测（2026-10-14 审查收口）见该用例 docstring。
+# （`acquired` 仍为空的反向守卫）；该用例的 ④ **有判别力**，其牙齿由 s1 承担
+# （策略侧迁移**整体回退**或**单处回退 s1** 时 ④ 红），但**单处回退 s3 仍不可辨**
+# （`pool.is_exchange=False` 使兑换分支整体落空，s3 不决定是否返回 `DrawAction`）。
+# 该夹具原缺 `resources`（`can_afford_batch` 恒 False，④ 退化为恒真）已于本步就地
+# 补上池消耗的 `gem`；遮蔽关系与三档实测（2026-10-14 审查收口）见该用例 docstring。
 
 _S95_CARD = 's95_card'
 _S95_BANNER = 's95_banner'

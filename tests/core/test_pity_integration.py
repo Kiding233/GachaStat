@@ -1286,15 +1286,16 @@ class TestG3ExcludeOwned:
         （`WaitAction`，不为它抽卡）；⑤ 反向守卫：`gacha_state.acquired` 仍为空
         （P60 语义「本次模拟新获得」不变，迁移的是消费侧）。
 
-        ④ 的遮蔽关系与判别力（2026-10-14 审查收口实测订正）：④ 的牙齿**不在 s3**
+        ④ 的遮蔽关系与判别力（2026-10-14 审查收口实测）：④ 的牙齿**不在 s3**
         （`stop_on_target` 主循环的 `>= quantity_needed`），而在 **s1**（第二段 banner
         循环的 `_pool_needs_target`）：`pool.is_exchange=False` 使兑换分支整体落空，
-        s3 只决定第一段是否跳过该目标，不决定是否返回 `DrawAction`。探针实测（不改
-        生产代码）：**本夹具的 `GachaState` 无 `resources`，`can_afford_batch` 恒
-        False**，故第二段无论 s1 取何值都不返回 `DrawAction`，④ 在「仅回退 s1」「仅
-        回退 s3」「策略侧 3 处全回退」下**都仍绿**（本夹具下 ④ 无判别力，已登记）；
-        把 `gem` 补给 state 后复测，仅回退 s1 → `DrawAction`（④ 红）、仅回退 s3 →
-        仍 `WaitAction`（④ 绿），遮蔽关系成立。
+        s3 只决定第一段是否跳过该目标，不决定是否返回 `DrawAction`。故 ④ 的判别力
+        前提是 state **可支付**：`_g3_engine` 不传 `resources`，`can_afford_batch` 恒
+        False，第二段无论 s1 取何值都不返回 `DrawAction`，④ 会退化为恒真断言（策略侧
+        9 处**整体回退**后本条仍全绿）。本夹具为此**就地补上池消耗的 `gem`**（见 ④
+        段首行；不动共享夹具 `_g3_engine`，避免牵连其余 G3 用例）。补资源后实测：
+        策略侧迁移**整体回退** → `DrawAction`（④ 红）；仅回退 s1 → `DrawAction`
+        （④ 红）；仅回退 s3 → 仍 `WaitAction`（④ 绿，不可辨）。
         """
         from gacha_simulator.core.action import WaitAction
         from gacha_simulator.core.banner import Banner
@@ -1322,6 +1323,10 @@ class TestG3ExcludeOwned:
             'SimView.owns 与 GachaState.total_holding 的口径不得分叉'
 
         # ④ 策略侧：同一 `GachaState` 上，`stop_on_target` 判 `up_a` 已达标
+        # 夹具补足资源（池消耗 `{'gem': 1}`）：`_g3_engine` 不传 `resources`，
+        # 不补则 `can_afford_batch` 恒 False，第二段 banner 循环无论 s1 取何值都不
+        # 返回 `DrawAction`，④ 退化为恒真断言（实测策略侧整体回退后本条仍全绿）
+        gacha_state.resources['gem'] = 1
         banner = Banner(id='g3_pool', name='G3 池', pools={'main': pool})
         ctx = StrategyContext(
             state=gacha_state,

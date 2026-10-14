@@ -202,7 +202,12 @@ class PityState:
 # `CounterBasedBehavior`（保留为同对象别名）、`config_toml` 的同名拷贝
 # （由 tests/core/test_pity_config_toml.py::TestDuplicatedConstants 钉住相等）。
 _SOFT_TYPES = frozenset({'soft_interval', 'soft_additive', 'soft_step'})
-_HARD_TYPES = frozenset({'hard'})
+# P64 S9-3：G3 的两条 type 是 counter 驱动型硬保底（`counter >= τ`），与 `hard`
+# 同族，故入本集合（§3.10.4 的「注册面补全」④）。**缺它会让
+# `_validate_behaviors` 规则 2「同 scope 两个硬保底」对这两条 type 失效**，
+# 而它们本是互斥的一对并列假设（不该同池共存）。
+_HARD_TYPES = frozenset({'hard', 'hard_exclude_owned_skip',
+                         'hard_exclude_owned_any'})
 # ISSUE-105：`rotating_inverse`（G1 幻塔连中后必歪）是**事件驱动型**，故本集合的
 # 内容须追加它，不是原样迁移。落地先于该类型的注册（S6a），提前列出无副作用。
 _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'targeted', 'targeted_soft',

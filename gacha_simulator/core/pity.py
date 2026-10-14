@@ -22,8 +22,8 @@ from .pity_tracker import (  # noqa: F401
     StreakTracker, Tracker,
 )
 from .pity_modifier import (  # noqa: F401
-    KNOWN_SIM_SOURCES, HardModifier, Modifier, NonFeaturedModifier, RotatingModifier,
-    SelectedModifier, SoftModifier,
+    KNOWN_SIM_SOURCES, HardModifier, Modifier, NonFeaturedModifier, NotOwnedModifier,
+    RotatingModifier, SelectedModifier, SoftModifier,
 )
 # P64 S11（ISSUE-003）：校验层由编排层**单向**引用——本模块 import 它，它不 import
 # 本模块（checker 的 `engine` 一律经实参传入），故不成环。类的定义归 `core/invariants.py`。
@@ -867,6 +867,69 @@ def _preset_hard(pdef):
     )
 
 
+# ── P64 S9-3：G3 硬保底·排除已获得 preset（2 条，§3.10.4 配套第 1 条）──
+#
+# 本族是**新增机制**（旧实现有 `ForceNotOwnedModifier`，但 M1 期零可达配置，
+# §3.10.4 按「历史机制建模能力」交付），故不进等价性装置的比对面。
+#
+# 两条 type 是**一对并列的建模假设**（§3.10.4 的 2026-09-30 用户裁决）：
+# 「全部已拥有」时的退化分支**零直接信源**（四个候选均未被证实也未被排除），
+# 两形态并列、谁也不是已确认等价，故各由一个 type 承载、由用户按需选择。
+# **债务登记**：手册 §7.3 / §21 登记为**一条**待确认项、两个候选实现（不得登记成
+# 两条独立缺口）；日后若查证定稿为其中一方，删去被否的那个 type 即可（registry
+# 条目 + preset 工厂 + GUI 下拉 + 关于页措辞随 `display_name` 自动同步）。
+#
+# **形态不是配置键**（S9-3 判定，2026-10-14）：形态写进 **type key** 本身（TOML 里
+# 自解释）与 `display_name`，由本族两个工厂各自硬编码；`PityDef` 无 `on_all_owned`
+# 字段。理由见 §3.10.4 末段「双实现的形态选择」（参数化方案要连带 `PityDef` 新字段
+# + 解析 + round-trip + GUI 控件四处，而该字段只为这一条保底存在）。
+
+def _preset_hard_exclude_owned(pdef, on_all_owned: str):
+    """`hard_exclude_owned_*` 两条 preset 的**共同实现**（差异只有 `on_all_owned` 一处）。
+
+    | 形参 | 取值来源（§3.10.4 配套第 1 条） |
+    |------|--------------------------------|
+    | `CounterTracker.reset_on` | `pdef.reset or _norm_scope(pdef)`。**不得写死 `"scope"`**：写死会让 `reset` 配置被静默忽略（§3.2 取值来源表已定该口径，`_preset_hard` 同式） |
+    | `NotOwnedModifier.threshold` | `pdef.threshold if pdef.threshold is not None else 50`。`PityDef.threshold` 默认 `None`（`_build_pity` 直取 `p.get('threshold')`），不回退则 TOML 不写该键时条件成 `counter >= None`（`TypeError`） |
+    | `on_all_owned` | 本形参（两条 type 的**唯一差异**；形态写进 type key 自解释） |
+
+    **四键齐全**（trackers / modifiers / lifecycle / counters），对照 `_preset_hard`：
+    `lifecycle` 缺则该类保底的 `deactivate_on_early_hit` / `depends_on` /
+    `max_triggers` 全部静默失效（`create_behavior` 有 `ConfigError` 防线）；
+    `counters` 缺则「已垫抽数」静默归零。
+
+    **`modifiers` 不写 `target=`**：本机制的目标集 A = 「featured 中未拥有者」，由
+    `ctx.sim` 决定，与 `PityDef.target_featured` 无关（§3.10.4 的机制表第 7 行）。
+    """
+    _scope = _norm_scope(pdef)
+    tau = pdef.threshold if pdef.threshold is not None else 50
+    return dict(
+        lifecycle=build_lifecycle(pdef),                               # ISSUE-301
+        trackers=[CounterTracker(scope=_scope, reset_on=pdef.reset or _scope,
+                                 init=pdef.counter_init)],
+        modifiers=[
+            NotOwnedModifier(_scope, threshold=tau, on_all_owned=on_all_owned),
+        ],
+        counters={"counter": pdef.counter_init},
+    )
+
+
+def _preset_hard_exclude_owned_skip(pdef):
+    """硬保底·排除已获得（**全拥有时保底不触发**，形态 a）——§3.10.4 的候选 a。
+
+    该次保底退化为恒等（`NotOwnedModifier` 在目标集为空时 `return None`）。
+    """
+    return _preset_hard_exclude_owned(pdef, 'skip')
+
+
+def _preset_hard_exclude_owned_any(pdef):
+    """硬保底·排除已获得（**全拥有时仍给一件 UP**，形态 b）——§3.10.4 的候选 b。
+
+    目标集退化为**全部** featured 卡（仍给出一件，不保证是「未获得」的）。
+    """
+    return _preset_hard_exclude_owned(pdef, 'any')
+
+
 # ── P64 S4-3：事件驱动 preset 工厂（6 类，§3.2 映射表 / §3.10.3 配套 1）──
 #
 # 六类共用三条纪律，缺一则语义漂移或静默失效：
@@ -1135,6 +1198,32 @@ BEHAVIOR_REGISTRY: Dict[str, dict] = {
         "default_scope": "ssr",
         "params": {
             "threshold": {"type": "int", "display_name": "保底抽数", "default": 90, "min": 1},
+        },
+        "ui_params": ["threshold"],
+    },
+    # ── P64 S9-3：G3 硬保底·排除已获得（2 条，§3.10.4 的双实现）──
+    # 两条除 `on_all_owned` 取值外**完全同构**（trackers / lifecycle / counters /
+    # 条件极性 / F 语义全部共享）。**形态写进 type key 与 `display_name`**（TOML
+    # 与 GUI 下拉里自解释，两条不得同名），**不是配置键**：`PityDef` 无
+    # `on_all_owned` 字段，形态由 type 本身决定、preset 各自硬编码（理由见 §3.10.4
+    # 末段「双实现的形态选择」）。`threshold` 默认 **50**（与机制一致，`hard` 为 90）。
+    "hard_exclude_owned_skip": {
+        "class": None,
+        "preset": _preset_hard_exclude_owned_skip,
+        "display_name": "硬保底·排除已获得（全拥有时保底不触发）",
+        "default_scope": "ssr",
+        "params": {
+            "threshold": {"type": "int", "display_name": "保底抽数", "default": 50, "min": 1},
+        },
+        "ui_params": ["threshold"],
+    },
+    "hard_exclude_owned_any": {
+        "class": None,
+        "preset": _preset_hard_exclude_owned_any,
+        "display_name": "硬保底·排除已获得（全拥有时仍给一件 UP）",
+        "default_scope": "ssr",
+        "params": {
+            "threshold": {"type": "int", "display_name": "保底抽数", "default": 50, "min": 1},
         },
         "ui_params": ["threshold"],
     },
@@ -1681,6 +1770,10 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
 _BTYPE_ORDER = {
     'soft_interval': 0, 'soft_additive': 0, 'soft_step': 0,
     'hard': 1,
+    # P64 S9-3：G3 的两条 type 是 counter 驱动型，与 `hard` 同级取 1（§3.10.4 的
+    # 「注册面补全」④）。缺键时 `_resolve_order` 的 `.get(btype, 99)` 落到 99，
+    # P82 接线后排序键是概率管道顺序的唯一来源，故缺键会静默改序。
+    'hard_exclude_owned_skip': 1, 'hard_exclude_owned_any': 1,
     'rotating_soft': 2, 'rotating_cr': 2, 'rotating_cr_soft': 2,
     'rotating': 3, 'targeted': 3, 'targeted_soft': 3,
     'rotating_inverse': 3,   # G1 幻塔连中后必歪（ISSUE-105，随 S1a 的集合内容同批）

@@ -22,6 +22,8 @@ import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
 from gacha_simulator.core.pity import (
+    BEHAVIOR_REGISTRY,
+    Pity,
     PityEngine,
     PityState,
     _validate_behaviors,
@@ -202,3 +204,183 @@ class TestEngineConstructFailure:
         """
         with pytest.raises(ConfigError, match='未知类型'):
             _engine([PityDef(name='u', btype='未知类型', scope='ssr')])
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-3：G3 双实现的两个 type（§3.10.4 配套第 1 条）
+# ══════════════════════════════════════════════════════════════════
+
+_SKIP_TYPE = 'hard_exclude_owned_skip'
+_ANY_TYPE = 'hard_exclude_owned_any'
+
+
+class TestHardExcludeOwned:
+    """`hard_exclude_owned_skip` / `hard_exclude_owned_any` 的 registry 接线。
+
+    **本组只验构造与接线**（GATE-6 的块级最小验收）：两条 type 经 `create_behavior`
+    能构造出 `Pity`、`on_all_owned` 形态随构造参数正确落到 `NotOwnedModifier`、preset
+    四键齐全（trackers / modifiers / lifecycle / counters）、`threshold` 缺省回退 50、
+    `CounterTracker.reset_on` 取 `pdef.reset or scope`（**不得写死 `"scope"`**）。
+
+    **G3 的「全拥有」行为断言随 §3.10.4 的待确认项挂起**：该分支（候选 a / 候选 b）
+    零直接信源、两形态并列，机制定稿前均不作为已定稿验收，故归 S9-4（§六 G3 专项
+    ③a / ③b）。本组不断言两形态的语义后果。
+    """
+
+    @staticmethod
+    def _wired(btype, want, scope='ssr', **kw):
+        """构造一次并返回（preset 产出的 dict, behavior 实例）。"""
+        pdef = PityDef(name='g3_' + want, btype=btype, scope=scope, **kw)
+        built = BEHAVIOR_REGISTRY[btype]['preset'](pdef)
+        return built, create_behavior(pdef, PityState())
+
+    def _assert_common(self, btype, want, **kw):
+        from gacha_simulator.core.pity import CounterTracker
+        from gacha_simulator.core.pity_modifier import NotOwnedModifier
+
+        entry = BEHAVIOR_REGISTRY[btype]
+        assert entry['class'] is None, f'{btype}: class 未置 None'
+        assert callable(entry['preset']), f'{btype}: preset 不可调用'
+        assert entry['default_scope'] == 'ssr', f'{btype}: default_scope 须为 ssr'
+        assert entry['params']['threshold']['default'] == 50, (
+            f'{btype}: threshold 的 params 默认值须为 50（与机制一致，hard 为 90）')
+
+        built, bh = self._wired(btype, want, **kw)
+        # 四键齐全（§3.10.4 配套第 1 条，对照 _preset_hard）
+        assert set(built) == {'trackers', 'modifiers', 'lifecycle', 'counters'}, (
+            f'{btype}: preset 须四键齐全，实得 {sorted(built)}')
+
+        assert isinstance(bh, Pity), f'{btype}: 未走 preset 分支'
+        assert bh._btype == btype
+        assert bh.is_hard is True, f'{btype}: 须在 _HARD_TYPES 内（同 scope 互斥判据）'
+        assert bh.is_soft is False and bh.is_event_driven is False
+
+        assert len(bh._modifiers) == 1
+        mod = bh._modifiers[0]
+        assert isinstance(mod, NotOwnedModifier), (
+            f'{btype}: modifiers[0] 须为 NotOwnedModifier，实得 {type(mod).__name__}')
+        assert mod._on_all_owned == want, (
+            f'{btype}: 形态未随构造参数落到 NotOwnedModifier '
+            f'（实得 {mod._on_all_owned!r}，期望 {want!r}）')
+        assert mod._scope == 'ssr'
+        assert mod.uses_sim == ('owns',), f'{btype}: 须申报读取 ctx.sim 的 owns 源'
+        assert mod.state_keys() == ('counter',)
+
+        assert len(bh._trackers) == 1
+        tr = bh._trackers[0]
+        assert isinstance(tr, CounterTracker), f'{btype}: trackers[0] 须为 CounterTracker'
+        assert tr._scope == 'ssr'
+        assert bh._lifecycle is not None, f'{btype}: lifecycle 缺则生命周期三字段静默失效'
+        return bh, mod
+
+    def test_create_behavior_hard_exclude_owned_skip(self):
+        """`hard_exclude_owned_skip`（形态 a）的构造与接线（§3.10.4 候选 a）。"""
+        _bh, mod = self._assert_common(_SKIP_TYPE, 'skip')
+        assert mod._threshold == 50, 'threshold 缺省须回退 50（PityDef.threshold 默认 None）'
+
+    def test_create_behavior_hard_exclude_owned_any(self):
+        """`hard_exclude_owned_any`（形态 b）的构造与接线（§3.10.4 候选 b）。"""
+        _bh, mod = self._assert_common(_ANY_TYPE, 'any')
+        assert mod._threshold == 50, 'threshold 缺省须回退 50（PityDef.threshold 默认 None）'
+
+    def test_two_forms_differ_only_in_on_all_owned(self):
+        """两条 type **除 `on_all_owned` 取值外完全同构**（§3.10.4 配套第 1 条）。
+
+        逐项对照 preset 产出：键集、tracker / modifier 的类与构造实参、lifecycle 的
+        类与两维字段全部相同；唯一差异是 `_on_all_owned`。
+        """
+        pdef_kw = dict(threshold=37, counter_init=4, reset='featured')
+        built_s, bh_s = self._wired(_SKIP_TYPE, 'skip', **pdef_kw)
+        built_a, bh_a = self._wired(_ANY_TYPE, 'any', **pdef_kw)
+
+        assert set(built_s) == set(built_a)
+        assert type(bh_s._lifecycle).__name__ == type(bh_a._lifecycle).__name__
+        assert bh_s._lifecycle.state_keys() == bh_a._lifecycle.state_keys()
+        assert type(bh_s._trackers[0]).__name__ == type(bh_a._trackers[0]).__name__
+        assert (bh_s._trackers[0]._scope, bh_s._trackers[0]._reset_on) == \
+               (bh_a._trackers[0]._scope, bh_a._trackers[0]._reset_on)
+        assert type(bh_s._modifiers[0]).__name__ == type(bh_a._modifiers[0]).__name__
+        assert bh_s._modifiers[0]._threshold == 37
+        assert bh_a._modifiers[0]._threshold == 37
+        # 唯一差异
+        assert (bh_s._modifiers[0]._on_all_owned,
+                bh_a._modifiers[0]._on_all_owned) == ('skip', 'any')
+
+    def test_threshold_param_is_consumed(self):
+        """`threshold` 经 `PityDef.threshold` 直取（`tau` 的唯一来源）。"""
+        _, bh = self._wired(_SKIP_TYPE, 'skip', threshold=50)
+        assert bh._modifiers[0]._threshold == 50
+        _, bh2 = self._wired(_ANY_TYPE, 'any', threshold=120)
+        assert bh2._modifiers[0]._threshold == 120
+
+    def test_reset_on_follows_pitydef_reset(self):
+        """`CounterTracker.reset_on` 取 `pdef.reset or _norm_scope(pdef)`。
+
+        **不得写死 `"scope"`**：写死会让 `reset` 配置被静默忽略（§3.2 取值来源表）。
+        判别性：`reset='never'`（G16）与缺省 `''`（回退 scope）在写死形态下同值。
+        """
+        _, bh_never = self._wired(_SKIP_TYPE, 'skip', reset='never')
+        assert bh_never._trackers[0]._reset_on == 'never'
+        _, bh_default = self._wired(_ANY_TYPE, 'any')
+        assert bh_default._trackers[0]._reset_on == 'ssr'
+        _, bh_featured = self._wired(_ANY_TYPE, 'any', reset='featured')
+        assert bh_featured._trackers[0]._reset_on == 'featured'
+
+    def test_counters_init_is_consumed(self):
+        """`counters` 键的消费：`counter_init` 非零时写进 per-call state。
+
+        缺该键则「已垫抽数」静默归零（§3.10.4 配套第 1 条明列该键为原稿遗漏项）。
+        """
+        _, bh = self._wired(_SKIP_TYPE, 'skip', counter_init=7)
+        assert bh._state.get(bh._name, 'counter', 0) == 7
+
+    def test_display_names_carry_form_and_are_distinct(self):
+        """两条 `display_name` **带形态括注且不得同名**（§3.10.4 的命名口径，强制）。
+
+        「形态写进 type key 与 display_name」（GUI 下拉与「关于」页面同源呈现）：
+        只差一个字的短名会让用户读不出形态。
+        """
+        name_s = BEHAVIOR_REGISTRY[_SKIP_TYPE]['display_name']
+        name_a = BEHAVIOR_REGISTRY[_ANY_TYPE]['display_name']
+        assert name_s != name_a
+        for nm in (name_s, name_a):
+            assert '全拥有' in nm, f'display_name 须带形态括注，实得 {nm!r}'
+            assert '排除已获得' in nm, f'display_name 须点明机制，实得 {nm!r}'
+
+    def test_scope_normalized_from_pitydef(self):
+        """scope 经 `_norm_scope` 归一（ISSUE-503）：骨架与零件同源，不得分叉。"""
+        _, bh = self._wired(_SKIP_TYPE, 'skip', scope='SSR')
+        assert bh._scope == 'ssr'
+        assert bh._trackers[0]._scope == 'ssr'
+        assert bh._modifiers[0]._scope == 'ssr'
+
+    def test_two_forms_same_scope_conflict(self):
+        """两条 type 同 scope 共存被规则 2 拒（它们是一对**互斥**的并列假设）。
+
+        判据来自 `_HARD_TYPES`（`is_hard`）：缺该集合的注册时本用例必红，即
+        「形态 a 与形态 b 同时生效」这一无意义配置不再静默通过。
+        """
+        with pytest.raises(ConfigError, match='两个硬保底'):
+            _engine([
+                PityDef(name='g3_s', btype=_SKIP_TYPE, scope='ssr'),
+                PityDef(name='g3_a', btype=_ANY_TYPE, scope='ssr'),
+            ])
+
+    def test_g3_types_construct_in_engine(self):
+        """两条 type 经 `PityEngine` 各自可构造（不抛，behavior 数正确）。"""
+        engine = _engine([PityDef(name='g3_s', btype=_SKIP_TYPE, scope='ssr')])
+        assert len(engine.behaviors) == 1
+        engine2 = _engine([PityDef(name='g3_a', btype=_ANY_TYPE, scope='ssr')])
+        assert len(engine2.behaviors) == 1
+
+    def test_btype_order_tier_is_one(self):
+        """`_BTYPE_ORDER` 两条同取 1（counter 驱动，与 `hard` 同级，§3.10.4 注册面补全④）。
+
+        缺键时 `_resolve_order` 的 `.get(btype, 99)` 落到 99（排全部已知类型之后）；
+        P82 接线后排序键是概率管道顺序的唯一来源，故缺键会静默改序。
+        """
+        from gacha_simulator.core.pity import _BTYPE_ORDER
+
+        assert _BTYPE_ORDER[_SKIP_TYPE] == 1
+        assert _BTYPE_ORDER[_ANY_TYPE] == 1
+        assert _BTYPE_ORDER[_SKIP_TYPE] == _BTYPE_ORDER['hard']

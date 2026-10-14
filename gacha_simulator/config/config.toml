@@ -1105,6 +1105,34 @@ reset = "featured"
 start = 80
 end = 90
 
+# ── G3 保底·排除已获得（P64 S9-3，可选段，此处为注释示例）──
+# 崩坏3 精准补给（历史卡池，2016-10 ~ 2024-11 已下线）：「每 50 抽必出一件**未获得**的
+# UP 装备」。与 `hard` 的差别是目标集 A = **featured 中未拥有者**（由引擎直接提供
+# 玩家持有，无需声明读取），Q = 更低稀有度 ∪ scope 减 A（已拥有的 UP 落在 Q 内、
+# 本抽被搬空）。**形态不是配置键**：形态写进 type 本身，故有两个 type 并列。
+# 启用时移除段首 # 号（该示例绑定 banner 须存在于本配置，默认配置不含 bh3_* 池）。
+#
+# ⚠️ 「全部已拥有」时的退化行为**待确认**（零直接信源，手册 §7.3 / §21 登记为一条
+#    待确认项、两个候选实现），故两条 type 并列，谁也不是已确认等价的实现：
+#    hard_exclude_owned_skip = 候选 a：该次保底不触发（恒等）
+#    hard_exclude_owned_any  = 候选 b：目标集退化为全部 UP，仍给出一件（不保证是「未获得」的）
+#
+# [[pity]]
+# name = "bh3_precision_up_exclude_owned"
+# type = "hard_exclude_owned_skip"   # 或 "hard_exclude_owned_any"（两形态并列，见上）
+# scope = "ssr"
+# threshold = 50                     # 本机制为 50 抽（`hard` 默认 90）
+# pools = ["bh3_precision_a"]        # 仅绑定 A 池 → 不继承
+#
+# 同规则的第二实例「演武精备」（2024-07 ~ 2025-01 已下线）多一条「仅本期生效 1 次」：
+# [[pity]]
+# name = "bh3_yanwu_up_exclude_owned"
+# type = "hard_exclude_owned_skip"
+# scope = "ssr"
+# threshold = 50
+# max_triggers = 1                   # 对应「仅本期生效 1 次」
+# pools = ["bh3_yanwu_period"]
+
 [[milestone]]
 name = "milestone_example_every"
 threshold = 10

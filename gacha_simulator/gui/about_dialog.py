@@ -7,6 +7,44 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont
 
 
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-3（§3.10.4 配套第 4 条）：「关于」页两处文本改由 BEHAVIOR_REGISTRY 生成
+# ══════════════════════════════════════════════════════════════════
+# 改前：本页的「保底机制」条目硬编码 4 种（P56 交付的 6 种事件驱动型至今未登记），
+# 配置指南的 `type = "..."` 注释硬编码 6 种。硬编码列表已漂移过一次，而「声明与
+# 承接分居两处」是本计划审查中出现频率最高的缺陷形态，故改为由 registry 生成：
+# 新增 type（含 G3 的两个形态）随 `display_name` / 键自动进入本页，单一真相源。
+# 两处**只改文本来源，不改版式**（占位符在字面量内原地替换）。
+
+#: 保底机制清单的占位符（填入 `display_name`，供人阅读）。
+_PITY_NAMES_SLOT = '@@PITY_DISPLAY_NAMES@@'
+#: 合法 `type` 取值清单的占位符（填入 registry **键**，供人抄写）。
+_PITY_KEYS_SLOT = '@@PITY_TYPE_KEYS@@'
+
+
+def _pity_display_names() -> str:
+    """「关于」页保底机制条目：`BEHAVIOR_REGISTRY` 各条目的 `display_name`。"""
+    from ..core.pity import BEHAVIOR_REGISTRY
+    return ' / '.join(v['display_name'] for v in BEHAVIOR_REGISTRY.values())
+
+
+def _pity_type_keys() -> str:
+    """配置指南的 `type = "..."` 一行：`BEHAVIOR_REGISTRY` 的**键**。
+
+    **用键而非 `display_name`**：该行是给用户抄写的合法 `type` 取值（显示名不是
+    合法取值），换成显示名会让这条注释失去作用。两处因此同源不同形（§3.10.4 的
+    「两处改为由 `display_name` 生成」按本处用途收窄为「由 registry 生成」）。
+    """
+    from ..core.pity import BEHAVIOR_REGISTRY
+    return ' | '.join(BEHAVIOR_REGISTRY)
+
+
+def _fill_registry_slots(html: str) -> str:
+    """把 HTML 字面量里的两个占位符换成 registry 生成的文本（其余内容原样保留）。"""
+    return (html.replace(_PITY_NAMES_SLOT, _pity_display_names())
+                .replace(_PITY_KEYS_SLOT, _pity_type_keys()))
+
+
 class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,14 +95,14 @@ class AboutDialog(QDialog):
         layout = QVBoxLayout(widget)
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
-        browser.setHtml("""
+        browser.setHtml(_fill_registry_slots("""
         <h3>GachaStat</h3>
         <p>一个灵活的蒙特卡洛抽卡模拟与多维分析工具，支持多种保底机制、策略配置和统计分析。</p>
 
         <h4>核心功能</h4>
         <ul>
             <li><b>灵活的模拟引擎</b>：支持多池、多保底、多策略的抽卡模拟</li>
-            <li><b>保底机制</b>：区间软保底 / 累加软保底 / 分段软保底 (RLE deltas) / 硬保底；featured/standard 槽位分离；多保底管道排序</li>
+            <li><b>保底机制</b>：@@PITY_DISPLAY_NAMES@@；featured/standard 槽位分离；多保底管道排序</li>
             <li><b>策略系统</b>：7 种策略（按需追卡、指定池配额、保底预留、目标即停、指定池追卡、固定次数、不抽卡基线）</li>
             <li><b>停止条件系统</b>：6 种停止条件（所有池结束、固定次数、资源阈值、目标达成、抽到指定卡、时间限制）</li>
             <li><b>广义出率（GDR）</b>：17 种可配置的广义出率指标</li>
@@ -92,7 +130,7 @@ class AboutDialog(QDialog):
         <h4>许可证</h4>
         <p>本项目拟采用 <b>GNU General Public License v3.0 (GPLv3)</b>，但最终许可方式尚未确定。</p>
         <p>GPLv3 允许自由使用、修改和分发，但要求衍生作品必须以相同许可证开源。</p>
-        """)
+        """))
         layout.addWidget(browser)
         return widget
 
@@ -131,7 +169,7 @@ class AboutDialog(QDialog):
         layout = QVBoxLayout(widget)
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
-        browser.setHtml("""
+        browser.setHtml(_fill_registry_slots("""
         <h3>配置文件指南</h3>
         <p>所有配置集中在单一 <code>config.toml</code> 文件中，使用标准 TOML 格式。</p>
 
@@ -204,7 +242,7 @@ target = "free_10pull"     # switch_to 目标池</pre>
         <h4>[[pity]] — 保底规则</h4>
         <pre>[[pity]]
 name = "ssr_soft"
-type = "soft_interval"   # soft_interval | soft_additive | soft_step | hard | rotating | targeted
+type = "soft_interval"   # @@PITY_TYPE_KEYS@@
 scope = "ssr"
 start = 80
 end = 90
@@ -228,7 +266,7 @@ desire = 2.0
 miss_cost = 1.2
 card_value = 1.5</pre>
         <p>所有卡默认权重 1.0。desire_weight 影响前进法排序，miss_cost_weight 影响后退法排序，card_value 影响出卡价值计算。</p>
-        """)
+        """))
         layout.addWidget(browser)
         return widget
 

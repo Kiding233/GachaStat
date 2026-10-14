@@ -516,7 +516,20 @@ class NotOwnedModifier(Modifier):
     | A（加组） | `featured_cards[scope]` 中**未拥有**者（**动态目标**） |
     | Q（减组） | 更低稀有度 ∪ `scope\A` |
     | 转移量 | `p(Q)` |
-    | A 侧形状 | `current` |
+    | A 侧形状 | `declared` |
+
+    **A 侧形状取 `declared`（2026-10-14 裁决，S9-3 落地）**：§3.1.2 机制表第 7 行原
+    写 `current`，与同节「A 侧形状（2026-10-08 用户裁决）」段的分发依据冲突。三条
+    理由取 `declared`：① 该依据明写「**可能遇到 `p(A) = 0` 的机制取 `declared`**」，
+    而 G3 的 A = featured 中未拥有者**正是 featured 的真子集**（与
+    `HardModifier(target_featured=true)` / `NonFeaturedModifier` / `SelectedModifier`
+    同形，会被同 scope 的 counter 驱动算子清空），依据是推导、表格是结果，冲突时以
+    依据为准；② 语义上本机制的意图是「τ 抽**必出**未获得的 UP」，取 `declared` 时该
+    保证在前序算子清空目标组时**仍然成立**，取 `current` 时 `transfer_linear` 在该
+    情形返 `None`、保证**静默失效**（恰在最需要它的时候）；③ M1 交付的形态本就是
+    `declared`（S8 审查实测），取 `declared` 是回归 M1 口径，`current` 是一次未登记的
+    语义变更。**代价与风险**：本类在 S9-3 之前无任何 registry 条目构造它，故该改动
+    在改动当时**不可观测**（零可达配置），成本最低。
 
     **Q 含已拥有的 UP（§3.10.4 的 2026-10-07 用户裁决）**：A = featured 中未拥有者，故
     `scope\A` = (featured 中已拥有者) ∪ `scope\featured`。**已拥有的 UP 落在 Q 内、本抽
@@ -528,14 +541,30 @@ class NotOwnedModifier(Modifier):
     （`total_holding` 口径、**含初始持有**），0 即未拥有。该节明令**直接读、无 `None`
     兜底**（`sim` 非 Optional、永远填充；ISSUE-013 的兜底要求已随该节改判取消）。
     **时序说明**：`PityContext.sim` 字段由 **S9-2（M2）** 落在 `pity_primitives.py`，
-    本类（S2a-2，M1）先交付读取方；M1 期本类**无消费者**（G3 的两个 type 与 preset 工厂
-    归 S9-3），其单测自行提供 `sim` 替身。
+    本类（S2a-2，M1）先交付读取方；**消费方自 S9-3（M2，2026-10-14）起存在**——G3 的
+    两个 type（`hard_exclude_owned_skip` / `hard_exclude_owned_any`）与其 preset 工厂
+    已注册，本类自此在生产路径上可达（S9-3 之前它零可达配置，其单测自行提供 `sim` 替身）。
 
-    **「全部已拥有」的退化分支取形态 a**（§3.10.4）：A 为空 → `return None`（该次保底
-    不触发、恒等）。形态 b（目标集退化为全部 featured、仍给出一件）由 **S9-3** 以
-    `on_all_owned` 构造形参承载（该形参列在 §七 S9-3 的目标文件清单内，本步不提前落）。
-    该分支是 §3.10.4 登记的**待确认项**（零直接信源、两形态并列，谁也不是已确认等价），
-    本步只交付形态 a 的行为。
+    **「全部已拥有」的退化分支由 `on_all_owned` 构造形参承载**（§3.10.4）：该分支是
+    §3.10.4 登记的**待确认项**（零直接信源、两形态并列，谁也不是已确认等价），故两个
+    形态各由一个独立 type 承载（`hard_exclude_owned_skip` / `hard_exclude_owned_any`，
+    §3.10.4 配套第 1 条与末段「双实现的形态选择」），本形参即两 type 的唯一差异：
+
+      - `'skip'`（形态 a）：目标集为空 → `return None`（该次保底不触发、恒等）
+      - `'any'` （形态 b）：目标集退化为**全部** featured 卡（仍给出一件，不保证是
+        「未获得」的）
+
+    **两形态的取值不是配置键**（S9-3 判定，2026-10-14）：形态写进 **type key** 本身
+    （TOML 里自解释）与 `display_name`，preset 工厂各自硬编码；`PityDef` 无
+    `on_all_owned` 字段。理由见 §3.10.4 末段「双实现的形态选择」（参数化方案要连带
+    `PityDef` 新字段 + 解析 + round-trip + GUI 控件四处，且该字段只为这一条保底存在）。
+    **非法取值在构造期抛 `ValueError`**：静默落回某一形态会让「形态 a / 形态 b」这对
+    建模假设在配置侧不可区分，与本项目一律按阻塞级处理的静默降级同类。
+
+    **`scope` 键缺失与「全部已拥有」不是同一分支**（§3.10.4 的 `_t_not_owned`）：
+    `featured_cards` 无该 scope 键（或该 scope 的 featured 为空）时，**两形态都返
+    `None`**（ISSUE-016：无目标可言，恒等），`'any'` 的退化只在「有 featured 且全已
+    拥有」时发生。
 
     **S8 形态（增量法）**：A 加 `p(Q)`、Q 减 `p(Q)`（`Σδ = 0`），**更高稀有度不写增量
     即精确保留**。M1 的「A 取绝对 1.0 + 更高稀有度豁免」形态（scope 非最高稀有度时
@@ -546,11 +575,21 @@ class NotOwnedModifier(Modifier):
     #: 本零件读 `ctx.sim` 的哪个源（§3.10.2 的注解形态）：只读「是否拥有」。
     uses_sim = ('owns',)
 
-    def __init__(self, scope: str, threshold: int = 50):
+    def __init__(self, scope: str, threshold: int = 50, on_all_owned: str = 'skip'):
         self._scope = scope
         # 缺省 50：§3.10.4 配套第 1 条的 `tau = pdef.threshold if pdef.threshold is not
         # None else 50`（`hard` 为 90，本机制为 50 抽）
         self._threshold = threshold
+        # 两形态的合法取值（§3.10.4 的 `_t_not_owned`）：'skip' = 全拥有时返空集、
+        # 该次保底不触发（恒等）；'any' = 目标集退化为全部目标卡、仍给出一件。
+        # **构造期硬拒非法值**（S9-3 自定，见类 docstring）：不拒则任何拼写错误会
+        # 静默落进 `'any'` 分支，而这两个形态是一对**并列的建模假设**，静默择一
+        # 会让配置侧读不出实际形态。
+        if on_all_owned not in ('skip', 'any'):
+            raise ValueError(
+                f"NotOwnedModifier: on_all_owned={on_all_owned!r} 不是合法取值"
+                f"（可用：'skip' / 'any'）")
+        self._on_all_owned = on_all_owned
 
     def state_keys(self) -> tuple:
         return ('counter',)
@@ -567,10 +606,20 @@ class NotOwnedModifier(Modifier):
         featured = ctx.draw.featured_cards.get(self._scope, ())
         A = _cards(c for c in featured if ctx.sim.owns(c) == 0)
         if not A:
-            # 空目标集（含「全部已拥有」形态 a）→ 恒等（§3.9.5 / §3.10.4）
-            return None
+            # 「全部已拥有」的两形态在此分岔（§3.10.4 的 `_t_not_owned`）：
+            #   'skip' → 恒等；'any' → A 退化为全部 featured（仍给出一件）。
+            # **无 featured 可退时两形态同返恒等**（ISSUE-016：scope 键缺失/空集
+            # 无目标可言），故本分支的判据含 `featured` 非空。
+            if not featured or self._on_all_owned != 'any':
+                return None
+            A = _cards(featured)
         Q = _cards(tuple(c for c in scope if c not in set(A)),
                    _lower_rarities(ctx, self._scope))
         if not Q:
             return None
-        return transfer_linear(dist, A, Q, sum(dist[c] for c in Q))
+        # A 侧形状取 `declared`（2026-10-14 裁决，见类 docstring 的三条理由）：
+        # 目标组可能已被同 scope 的 counter 驱动算子清空，`current` 在该情形下
+        # `transfer_linear` 返 `None`、保证静默失效。
+        return transfer_linear(dist, A, Q, sum(dist[c] for c in Q),
+                               shape='declared',
+                               weights=ctx.draw.base_probabilities)

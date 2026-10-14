@@ -697,10 +697,102 @@ class TestNotOwnedModifier:
     def test_all_owned_returns_none(self):
         """「全部已拥有」的退化分支取**形态 a**（§3.10.4）：A 为空 → 恒等。
 
-        形态 b（仍给出一件）由 S9-3 的 `on_all_owned` 构造形参承载，本步不提前落。
+        形态 b（仍给出一件）由 `on_all_owned='any'` 承载（S9-3），其**语义断言**随
+        §3.10.4 的待确认项挂起、归 S9-4（§六 G3 专项 ③a / ③b），本组只验形态参数
+        的落点与两形态的分岔点存在（见 `test_on_all_owned_switches_the_degenerate_branch`）。
         """
         assert _delta(NotOwnedModifier(SCOPE, threshold=5), _view(counter=5),
                       ctx=self._two_up_ctx(owned=('f1', 'f2'))) is None
+
+    def test_a_side_shape_is_declared(self):
+        """A 侧形状取 **`declared`（声明权重）**，不是 §3.1.2 机制表第 7 行写的 `current`。
+
+        裁决与三条理由见 `NotOwnedModifier` 的类 docstring（2026-10-14，S9-3 落地）：
+        ① 同节「A 侧形状（2026-10-08 用户裁决）」的**分发依据**明写「可能遇到
+        `p(A) = 0` 的机制取 `declared`」，而 G3 的 A = featured 中未拥有者**正是
+        featured 的真子集**，依据是推导、表格是结果，冲突时以依据为准；② 取 `current`
+        时，前序 counter 驱动算子清空目标组后 `transfer_linear` 返 `None`、
+        「τ 抽必出未获得 UP」的保证**静默失效**（恰在最需要它的时候）；③ M1 交付的
+        形态本就是 `declared`，取它是回归 M1 口径。
+
+        **夹具的判别性**：A 的两张 UP 卡**当前比例 3:1**（0.30 / 0.10）而**声明权重
+        1:1**（0.2 / 0.2），两形状因此给出不同增量（`p(Q) = 0.6`）：
+          `declared` → f1 / f2 各 +0.30
+          `current`  → f1 +0.45、f2 +0.15
+        把 `shape` 改回 `current`（或删掉 `shape=` / `weights=` 两个实参）本用例必红。
+        """
+        scope_cards = {'ssr': ('f1', 'f2', 's1')}
+        featured_cards = {'ssr': ('f1', 'f2')}
+        dist = {'f1': 0.30, 'f2': 0.10, 's1': 0.60}
+        base = {'f1': 0.2, 'f2': 0.2, 's1': 0.6}
+        ctx = _ctx_with_sim(dist, owned=(), scope_cards=scope_cards,
+                            featured_cards=featured_cards, base=base)
+        delta = _delta(NotOwnedModifier(SCOPE, threshold=5), _view(counter=5),
+                       dist=dist, ctx=ctx)
+        assert delta['f1'] == pytest.approx(0.30), (
+            'declared：A 内按声明权重 0.2/0.4 = 0.5 分配（current 会给 0.45）')
+        assert delta['f2'] == pytest.approx(0.30)
+        assert delta['s1'] == pytest.approx(-0.60), 'Q 侧减量仍按当前形状'
+
+    def test_declared_shape_survives_zero_probability_target(self):
+        """**「来源二」在 G3 上生效**（`declared` 的唯一用武之地，§3.1.5.6.1）。
+
+        A 的两张 UP 卡当前概率均为 0（被同 scope 的前序 counter 驱动算子清空）、
+        声明权重非零：`declared` 仍能按声明权重把 p(Q) 分给它们；`current` 下
+        `transfer_linear` 因 `p(A) <= 0` 返 `None`、保底**静默失效**。
+        """
+        scope_cards = {'ssr': ('f1', 'f2', 's1')}
+        featured_cards = {'ssr': ('f1', 'f2')}
+        dist = {'f1': 0.0, 'f2': 0.0, 's1': 1.0}
+        base = {'f1': 0.2, 'f2': 0.2, 's1': 0.6}
+        ctx = _ctx_with_sim(dist, owned=(), scope_cards=scope_cards,
+                            featured_cards=featured_cards, base=base)
+        delta = _delta(NotOwnedModifier(SCOPE, threshold=5), _view(counter=5),
+                       dist=dist, ctx=ctx)
+        assert delta is not None, 'p(A) = 0 时 declared 仍须转移（来源二）'
+        assert delta['f1'] == pytest.approx(0.5)
+        assert delta['f2'] == pytest.approx(0.5)
+        assert delta['s1'] == pytest.approx(-1.0)
+
+    def test_on_all_owned_switches_the_degenerate_branch(self):
+        """`on_all_owned` 两形态的**分岔点存在**（接线面，S9-3）。
+
+        同一输入（两张 UP 全已拥有）下，`'skip'` 返 `None`（恒等）、`'any'` 返非空
+        增量（目标集退化为全部 featured）。**本断言不是形态定稿验收**：该分支是
+        §3.10.4 登记的待确认项（零直接信源、两形态并列），语义验收归 S9-4 的
+        §六 G3 专项 ③a / ③b；此处只保证「接线接上了」，即 `'any'` 不是死分支。
+        """
+        ctx = self._two_up_ctx(owned=('f1', 'f2'))
+        assert _delta(NotOwnedModifier(SCOPE, threshold=5, on_all_owned='skip'),
+                      _view(counter=5), ctx=ctx) is None
+        d_any = _delta(NotOwnedModifier(SCOPE, threshold=5, on_all_owned='any'),
+                       _view(counter=5), ctx=ctx)
+        assert d_any is not None, "'any' 形态在目标集为空时须退化为全部 featured"
+        assert d_any['f1'] > 0.0 and d_any['f2'] > 0.0
+        assert sum(d_any.values()) == pytest.approx(0.0), '转移族恒有 Σδ = 0'
+
+    def test_on_all_owned_rejects_unknown_value(self):
+        """非法 `on_all_owned` 在构造期抛 `ValueError`（S9-3 自定，见类 docstring）。
+
+        不拒则任何拼写错误静默落进 `'any'` 分支，而这两个形态是一对**并列的建模
+        假设**，静默择一会让配置侧读不出实际形态。
+        """
+        with pytest.raises(ValueError, match='on_all_owned'):
+            NotOwnedModifier(SCOPE, threshold=5, on_all_owned='skpi')
+
+    def test_any_form_falls_back_to_none_without_featured(self):
+        """**无 featured 可退时两形态同返恒等**（ISSUE-016：scope 键缺失/空集）。
+
+        与「全部已拥有」是两个不同分支：前者无目标可言（恒等），后者是待确认的
+        退化分支。若把两者混为一谈，`'any'` 会在 scope 键缺失时也触发。
+        """
+        ctx = _ctx_with_sim({'f1': 0.2, 's1': 0.8}, owned=(),
+                            scope_cards={'ssr': ('f1', 's1')},
+                            featured_cards={}, base={'f1': 0.2, 's1': 0.8})
+        for form in ('skip', 'any'):
+            assert _delta(NotOwnedModifier(SCOPE, threshold=5, on_all_owned=form),
+                          _view(counter=5), dist=dict(ctx.current),
+                          ctx=ctx) is None, form
 
     def test_below_threshold_returns_none(self):
         """条件极性：`counter >= tau`（**不是恒真**）——τ 未到即恒等。
@@ -716,6 +808,13 @@ class TestNotOwnedModifier:
         """scope 非最高稀有度时更高稀有度**逐位保留**（S8 的「不写增量」形态）。
 
         旧 M1 形态下此处输出 `Σ > 1`（豁免），S8 起 `Σ ≡ 1`（§3.9.5）。
+
+        **夹具修复（S9-3，2026-10-14）**：`ctx` 的 `base_probabilities` 原为默认
+        `BASE`（键集 `ssr_up` / `ssr_std` / `sr_std` / `r_std`），与本用例的 `dist`
+        （含 `sr_up`）**不同键空间**。A 侧形状改为 `declared` 后该键成为承重输入
+        （`w(A) = 0` → 返 `None` → 恒等），故按本文件的夹具纪律「`ctx` 与 `dist`
+        必须同源」补 `base=dist`。**断言未变**：A = (`sr_up`,) 是单卡，`declared`
+        与 `current` 同值，故期望值 0.99 逐位不动。
         """
         scope_cards = {'ssr': ('ssr_up', 'ssr_std'), 'sr': ('sr_up', 'sr_std'),
                        'r': ('r_std',)}
@@ -723,7 +822,7 @@ class TestNotOwnedModifier:
         dist = {'ssr_up': 0.006, 'ssr_std': 0.004, 'sr_up': 0.02, 'sr_std': 0.03,
                 'r_std': 0.94}
         ctx = _ctx_with_sim(dist, owned=(), scope_cards=scope_cards,
-                            featured_cards=featured_cards)
+                            featured_cards=featured_cards, base=dist)
         out = _applied(NotOwnedModifier('sr', threshold=5), _view(counter=5), dist=dist,
                        ctx=ctx)
         assert out['ssr_up'] == dist['ssr_up'] and out['ssr_std'] == dist['ssr_std']

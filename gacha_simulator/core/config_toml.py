@@ -702,10 +702,17 @@ def legal_reset_values(rarity_rank_map: dict) -> set:
 # `rotating_cr` 缺 `cr_state_probs`、四个 init 键与 `reset` / `pools` /
 # `lifecycle` / `target_featured` 均不在其中，照抄会把合法键报成未知。
 #
-# **扩表编辑点只有两处**：S6a 的 `rotating_inverse`、S9-3 的
-# `hard_exclude_owned_skip` / `hard_exclude_owned_any`（键集含 `on_all_owned`）
-# 入 `_PITY_TYPE_KEYS`。（原「三处」中的 S4-4 之 `max_triggers` 已于 2026-10-11
-# 落地，见 `_PITY_COMMON_KEYS`。）
+# **扩表编辑点只有两处**：S6a 的 `rotating_inverse`（已落地）、S9-3 的
+# `hard_exclude_owned_skip` / `hard_exclude_owned_any`（已落地）入 `_PITY_TYPE_KEYS`。
+# （原「三处」中的 S4-4 之 `max_triggers` 已于 2026-10-11 落地，见 `_PITY_COMMON_KEYS`。）
+#
+# **S9-3 订正（2026-10-14）**：本注释原写 S9-3 两条的「键集含 `on_all_owned`」，该句是
+# **pre-ruling 设计的残留**，与 §3.10.4 末段「双实现的形态选择」冲突（该段明写形态由
+# 两个 type 承载、**不在 `PityDef` 上加枚举字段**）。实测判定：`PityDef` 无
+# `on_all_owned` 字段、`_build_pity` 不读该键，形态由 type key 本身与 preset 工厂
+# 硬编码决定，故**它不是配置键**；若登记入表，`TestPityKeyContract` 的
+# `test_contract_subset_of_build_pity_read_face`（契约 ⊆ 读侧）会把它判为幽灵键。
+# 两条的键集因此与 `hard` 同形（`threshold`）。
 # 写侧产出按本表过滤，故扩表后写侧自动跟随，无需第二处编辑。
 
 # 跨类型的通用键（任何 btype 均合法）。
@@ -745,6 +752,12 @@ _PITY_TYPE_KEYS = {
     'soft_additive': frozenset({'start', 'increment', 'deltas'}),
     'soft_step': frozenset({'deltas'}),
     'hard': frozenset({'threshold'}),
+    # P64 S9-3（G3 双实现）：键集与 `hard` 同形。**`on_all_owned` 不入表**——它是
+    # 两个 type 的**形态差异**，写进 type key 本身（TOML 里自解释），由 preset
+    # 工厂各自硬编码；`PityDef` 无该字段、`_build_pity` 不读它（详见上方「扩表
+    # 编辑点」处的 S9-3 订正）。
+    'hard_exclude_owned_skip': frozenset({'threshold'}),
+    'hard_exclude_owned_any': frozenset({'threshold'}),
     # ── 事件驱动型 ──
     'rotating': frozenset(),
     # P64 S6a（G1）：键集同 `rotating`。本类型无类型专用 PityDef 字段

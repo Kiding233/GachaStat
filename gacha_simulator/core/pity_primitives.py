@@ -81,6 +81,12 @@ class PityContext:
 
     draw: DrawInfo
     current: Dict[str, float]
+    # ISSUE-103（P64 S9-1 登记）：本字段**保持 `PityState`**，不是 `StateView`——
+    # 状态键的读取只经 Modifier 的 `view` 形参（`StateView`，只含自身命名空间），
+    # 命名空间隔离全部由该形参承担；本字段是同一份账本的另一条通道，它**仍可**读到
+    # 他人命名空间的键，故由纪律关闭：Modifier 不得经 `ctx.state` 读任何状态键
+    # （含自身命名空间）。注记须与真实类型一致（引擎与 `SoftPityMixin` 的 fork 透传
+    # 的都是原始 `PityState`）。
     state: 'PityState'
     readonly: bool = False
     invariants: Optional[Any] = None

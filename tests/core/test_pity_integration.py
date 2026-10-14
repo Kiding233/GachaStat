@@ -18,12 +18,14 @@ from pathlib import Path
 
 import pytest
 from gacha_simulator.core.pity import (
-    PityState, PityEngine, DrawInfo, PityContext,
+    AlwaysActive, Pity, PityState, PityEngine, DrawInfo, PityContext,
+    StateView,
     compute_scope_mappings,
     PoolPitySpec,
     # P64 S6b（G5）：排序键的直测面
     _BTYPE_ORDER, _resolve_order, create_behavior,
 )
+from gacha_simulator.core.pity_modifier import Modifier
 from gacha_simulator.core.config_store import PityDef
 from gacha_simulator.core.pool import Pool, Reward
 
@@ -778,3 +780,120 @@ class TestP82OrderWiringBaseline:
         assert result.returncode == 0, result.stdout + result.stderr
         assert '等价对照结果：PASS' in result.stdout
         assert result.stdout.count('draw_pity_names 不变') == 9
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-1：`StateView` 限定 Modifier 状态视野（§3.10.3 / §七 S9-1）
+# ══════════════════════════════════════════════════════════════════
+
+class _NoCtxStateRead:
+    """`ctx.state` 通道探针：**任何**属性访问即判失败。
+
+    S9-1 的正例要证明「Modifier 读自己命名空间的值，**不经** `ctx.state` 也拿得到」。
+    把 `ctx.state` 换成本对象后，路径上任何一处 `ctx.state.get(...)` / `ctx.state.data`
+    都会抛 `AssertionError`，故「值确实来自 `view`」不再是一句声明，而是可判事实。
+    """
+
+    def __getattr__(self, item):
+        raise AssertionError(
+            f'本用例中 ctx.state 通道不可用，却被读到了 ctx.state.{item}：'
+            f'状态键只许经 view 读（ISSUE-103 纪律）'
+        )
+
+
+class TestStateViewCrossPityReadClosed:
+    """S9-1 验收：跨保底读在架构上关闭，且隔离**只由 `view` 形参承担**。
+
+    `StateView.get` 只取 `data[self._name]`，故 Modifier 读他人命名空间的键恒返回
+    `default`（不抛 `KeyError`、也不报错、更不泄露他人值）。`ctx.state` 是同一份账本
+    的另一条通道，**仍能**读到他人键（ISSUE-103 登记的事实），本类用一条对照断言把它
+    钉住：若哪天有人把隔离做到 `ctx.state` 上，该对照会红，说明「隔离只由 view 承担」
+    这一分工已被改变，须同步改本节与 §3.10.3。
+
+    两条用例的 Modifier 都走**真管道**（`Pity.before_draw` → `_view_for(mod)` →
+    `compute_delta`），不是直构 `StateView` 的探针，故断言对象就是骨架实际交给
+    Modifier 的那个对象。
+    """
+
+    PITY_NAME = 's9_self'
+    FOREIGN_NAME = 's9_other'
+
+    @classmethod
+    def _make(cls, state, mod):
+        return Pity(name=cls.PITY_NAME, state=state, scope='ssr', btype='hard',
+                    trackers=[], modifiers=[mod], lifecycle=AlwaysActive())
+
+    @staticmethod
+    def _ctx(state):
+        draw = DrawInfo(
+            pool_id='p1', pool_instance_id='p1_0',
+            reward_id='', reward_rarity='', is_featured=False,
+            scope_cards={'ssr': ('c1',)},
+            featured_cards={'ssr': ('c1',)},
+            base_probabilities={'c1': 1.0},
+            rarity_rank={'ssr': 0},
+        )
+        return PityContext(draw=draw, current={'c1': 1.0}, state=state)
+
+    def test_stateview_reads_own_namespace_without_ctx_state(self):
+        """正例：Modifier 经 `view` 读**自己**命名空间的键 → 拿到真值，且不经 `ctx.state`。
+
+        判据三条：① 实参是 `StateView`（不是原始 `PityState`）；② 它的命名空间是本
+        保底；③ 读到的值等于账本里的值，**且这一读不经 `ctx.state`**（`ctx.state` 被
+        换成任何访问即抛的探针）。故「骨架把 `ctx.state` 当 view 传」或「`StateView`
+        回退成全账本读」两种形态都会让本用例立即红。
+        """
+        seen = {}
+
+        class _ProbeMod(Modifier):
+            def compute_delta(self, view, dist, ctx):
+                seen['view'] = view
+                seen['value'] = view.get('counter')
+                return None
+
+        state = PityState()
+        state.set(self.PITY_NAME, 'counter', 7)
+        pity = self._make(state, _ProbeMod())
+
+        pity.before_draw(self._ctx(_NoCtxStateRead()))
+
+        assert isinstance(seen['view'], StateView), \
+            'Modifier 的 view 形参须是 StateView（不是原始 PityState）'
+        assert seen['view']._name == self.PITY_NAME, '默认 view 须指向本保底命名空间'
+        assert seen['value'] == 7, '经 view 须读到自己命名空间里的真值'
+
+    def test_stateview_other_pity_key_returns_default_not_keyerror(self):
+        """负例：Modifier 经 `view` 读**别的保底**命名空间的键 → 返回 `default`。
+
+        判据三条：① 该键在账本里**确实存在**（夹具守卫，否则本用例无验收面）；
+        ② 经 `view` 读到的是 `default`（既不抛 `KeyError`，也不泄露他人值）；
+        ③ **对照**：同一个键经 `ctx.state` 仍能读到。第 ③ 条正是 ISSUE-103 登记的
+        那条通道，用来把「隔离只由 `view` 形参承担、`ctx.state` 靠纪律关闭」这一事实
+        钉住（隔离若被做到 `ctx.state` 上，本断言必红）。
+        """
+        DEFAULT = object()
+        seen = {}
+
+        class _ProbeMod(Modifier):
+            def compute_delta(self, view, dist, ctx):
+                seen['view'] = view
+                seen['own'] = view.get('counter', DEFAULT)
+                seen['foreign'] = view.get('foreign_key', DEFAULT)
+                return None
+
+        state = PityState()
+        state.set(self.PITY_NAME, 'counter', 3)
+        state.set(self.FOREIGN_NAME, 'foreign_key', 'other-pity-value')
+        # 夹具守卫：他人命名空间的键确实存在且值可辨（否则负例退化为空断言）
+        assert state.get(self.FOREIGN_NAME, 'foreign_key') == 'other-pity-value'
+
+        pity = self._make(state, _ProbeMod())
+        ctx = self._ctx(state)
+        pity.before_draw(ctx)
+
+        assert seen['view']._name == self.PITY_NAME
+        assert seen['own'] == 3, '自己命名空间的键仍须读到'
+        assert seen['foreign'] is DEFAULT, \
+            '读他人命名空间的键须返回 default（跨保底读在架构上关闭）'
+        # 对照（ISSUE-103）：隔离只由 view 承担，ctx.state 通道仍在
+        assert ctx.state.get(self.FOREIGN_NAME, 'foreign_key') == 'other-pity-value'

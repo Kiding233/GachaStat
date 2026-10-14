@@ -713,6 +713,21 @@ class TargetedBehavior(PityBehavior):
         self._lost_flag = Flag(state, self._name, "lost_rotating")
         self._fate_points = Counter(state, self._name, "fate_points")
 
+    def _selected_card(self, ctx):
+        """`selected_card` 经 `StateView` 读（P64 S9-1 / ISSUE-103，§3.10.3）。
+
+        §3.10.3 的「三处存量迁移」：原三处 `ctx.state.get(self._name,
+        "selected_card")` 改为 `StateView(ctx.state, self._name).get("selected_card")`。
+        两式**逐字等价**（同名同键、缺省同为 `None`；`StateView.get` 就是
+        `state.data.get(name, {}).get(key, default)`），故 S1–S5 的「逐场一致」口径
+        不受影响。本迁移的唯一目的是让 `pity.py` 内的「`ctx.state` 状态键读取点」
+        归零（余下 `SoftPityMixin.before_draw` 的 fork 是**构造透传**而非读取，计划
+        显式豁免，§3.10.3），使「Modifier / 行为类只经 view 读状态」这条纪律可被
+        静态核对。本类保留至 ISSUE-502 的「发布前一次性移除旧类」commit，本迁移
+        随该 commit 一并消失。
+        """
+        return StateView(ctx.state, self._name).get("selected_card")
+
     def before_draw(self, ctx, readonly=False):
         total = self._scope_total_prob(ctx)
         if total <= 0:
@@ -720,7 +735,7 @@ class TargetedBehavior(PityBehavior):
         featured_slots = self._featured_slots(ctx)
         if not featured_slots:
                 return ctx.current.copy()
-        selected = ctx.state.get(self._name, "selected_card")
+        selected = self._selected_card(ctx)
         if self._guaranteed.is_set() or (selected and self._fate_points.value() >= self._fate_threshold):
             featured_ratio = 1.0
             targeted_slots = self._resolve_selected_slots(selected, featured_slots, ctx)
@@ -732,7 +747,7 @@ class TargetedBehavior(PityBehavior):
     def after_draw(self, ctx):
         if not self._is_trigger_rarity(ctx.draw.reward_rarity, ctx):
                 return
-        selected = ctx.state.get(self._name, "selected_card")
+        selected = self._selected_card(ctx)
         if selected is None:
                 return
         if self._is_hit(ctx):
@@ -746,7 +761,7 @@ class TargetedBehavior(PityBehavior):
         self._lost_flag.set()
         self._losses.incr()
     def _is_hit(self, ctx):
-        selected = ctx.state.get(self._name, "selected_card")
+        selected = self._selected_card(ctx)
         if selected is None:
                 return False
         return ctx.draw.reward_id == selected
@@ -1248,8 +1263,11 @@ class StateView:
     配合 `Pity._rebind_state` 重建 view（§3.1.4），worker 内同一 engine 连跑 N 场
     模拟时每场读到的都是当场的账本。
 
-    S9 才切断 `name` 之外的读取（跨保底读在架构上关闭）；本薄版的接口面与 S9 定稿
-    一致（`get(key, default)`），故收紧只改可读面、不改签名。
+    **S9-1（2026-10-14）事实确认**：本薄版**已是 S9 定稿的可读面**——`get` 只取
+    `data[self._name]`，读他人命名空间的键自始返回 `default`（跨保底读在架构上
+    关闭）。故原稿「S9 才切断 `name` 之外的读取、收紧只改可读面、不改签名」与代码
+    事实不符：本类本体在 S9-1 **无代码增量**，S9-1 的实质是「`view` 形参确为本类」
+    的接线确认、`ctx.state` 通道的存量读取迁移（§3.10.3 的三处）与验收面。
     """
 
     def __init__(self, state: 'PityState', name: str):

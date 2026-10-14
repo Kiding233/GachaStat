@@ -97,8 +97,11 @@ class Modifier:
 
         **三参数是定稿（2026-10-06 用户裁决），不得再增形参**（§3.1.2）。
 
-        - `view`：状态视图。当前是 `PityState` 的薄包装（可读全部命名空间），
-          S9 后收紧为「只含自身命名空间」的 StateView（§3.10.3）。
+        - `view`：状态视图，**S9-1 起确认已是 `StateView`**（§3.10.3）：只含本零件
+          的自身命名空间（声明了 `namespace` 即该空间，否则为本保底命名空间），
+          读他人命名空间的键恒返回 `default`（跨保底读在架构上关闭）。**状态键只经
+          本形参读**，禁止经 `ctx.state` 读（ISSUE-103 的纪律：`ctx.state` 仍是原始
+          `PityState`，那条通道由纪律关闭而非架构关闭）。
         - `dist`：当前分布 `{card_id: p}`（卡级，D20）。
         - `ctx` ：本次抽卡的静态事实（`scope_cards` / `featured_cards` /
           `rarity_rank` / `base_probabilities` / `sim`，以及只读查询标记

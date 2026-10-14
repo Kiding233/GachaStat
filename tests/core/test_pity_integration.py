@@ -75,10 +75,6 @@ class TestSelectedTargetResolution:
             reward_id='', reward_rarity='', is_featured=False,
             scope_cards={'ssr': ('f1', 'f2', 's1')},
             featured_cards={'ssr': ('f1', 'f2')},
-            scope_slots={'ssr': ('ssr_featured_a', 'ssr_featured_b', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured_a', 'ssr_featured_b')},
-            card_to_slot={'f1': 'ssr_featured_a', 'f2': 'ssr_featured_b',
-                          's1': 'ssr_standard'},
             base_probabilities={'f1': 0.2, 'f2': 0.2, 's1': 0.6},
             rarity_rank={'ssr': 0},
         )
@@ -160,8 +156,9 @@ class TestDependsOnIntegration:
             ],
         )
 
-        scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = \
-            compute_scope_mappings(pool)
+        # S8-7：只取卡集合两项。`compute_scope_mappings` 的五元组形态保留至发布前
+        # （ISSUE-901），本文件不再消费它的槽位产出。
+        scope_cards, featured_cards = compute_scope_mappings(pool)[:2]
 
         source_def = PityDef(name='source', btype='rotating', scope='ssr')
         dep_def = PityDef(name='dependent', btype='hard', scope='ssr',
@@ -169,10 +166,8 @@ class TestDependsOnIntegration:
 
         pool_spec = PoolPitySpec(
             scope_cards=scope_cards, featured_cards=featured_cards,
-            scope_slots=scope_slots, featured_slots=featured_slots,
             pity_names=('source', 'dependent'),
             ssr_ids={'f1', 's1'}, featured_ids={'f1'},
-            card_to_slot=card_to_slot,
         )
 
         engine = PityEngine(
@@ -233,17 +228,15 @@ class TestMultiPityCoordination:
             ],
         )
 
-        scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot =             compute_scope_mappings(pool)
+        scope_cards, featured_cards = compute_scope_mappings(pool)[:2]
 
         rot_def = PityDef(name='rot', btype='rotating', scope='ssr')
         hard_def = PityDef(name='hard90', btype='hard', scope='ssr', threshold=90)
 
         pool_spec = PoolPitySpec(
             scope_cards=scope_cards, featured_cards=featured_cards,
-            scope_slots=scope_slots, featured_slots=featured_slots,
             pity_names=('rot', 'hard90'),
             ssr_ids={'f1', 's1'}, featured_ids={'f1'},
-            card_to_slot=card_to_slot,
         )
 
         engine = PityEngine(
@@ -292,9 +285,6 @@ def _mk_draw(reward_id, rarity, is_featured):
         reward_id=reward_id, reward_rarity=rarity, is_featured=is_featured,
         scope_cards={'ssr': ('f1',), 'sr': ('sf1',)},
         featured_cards={'ssr': ('f1',), 'sr': ('sf1',)},
-        scope_slots={'ssr': ('ssr_featured',), 'sr': ('sr_featured',)},
-        featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr_featured',)},
-        card_to_slot={'f1': 'ssr_featured', 'sf1': 'sr_featured'},
         base_probabilities={},
         rarity_rank={'ssr': 0, 'sr': 1},
     )

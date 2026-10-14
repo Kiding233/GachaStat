@@ -66,6 +66,8 @@ def test_scope_mappings_put_sr_featured_in_its_own_scope():
             (Reward(id='r_a', name='RA', extra_info={'rarity': 'R'}), 0.95),
         ],
     )
+    # S8-7：只消费五元组的卡集合两项，槽位三项以 `_` 前缀显式丢弃。
+    # `compute_scope_mappings` 的五元组形态与槽位产出保留至发布前（ISSUE-901）。
     scope_cards, featured_cards, _scope_slots, _featured_slots, _card_to_slot = \
         compute_scope_mappings(pool)
     assert scope_cards == {'ssr': ('ssr_up',), 'sr': ('sr_up',), 'r': ('r_a',)}

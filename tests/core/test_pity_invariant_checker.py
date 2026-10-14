@@ -139,15 +139,14 @@ _HIGHER_CARDS = ('ssr_up', 'ssr_std')
 
 
 def _spec(pity_names=('p_hard',)) -> PoolPitySpec:
+    """标准池形。**S8-7 起不构造槽位三字段**：它们只服务保留到发布前的旧保底类与
+    等价性装置（ISSUE-901），本文件经 `PityEngine` 走的是卡级管道。
+    """
     return PoolPitySpec(
         pity_names=list(pity_names),
         scope_cards={'ssr': ('ssr_up', 'ssr_std'), 'sr': ('sr_std',),
                      'r': ('r_std',)},
         featured_cards={'ssr': ('ssr_up',)},
-        scope_slots={'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr',), 'r': ('r',)},
-        featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr',), 'r': ('r',)},
-        card_to_slot={'ssr_up': 'ssr_featured', 'ssr_std': 'ssr',
-                      'sr_std': 'sr', 'r_std': 'r'},
         featured_ids={'ssr_up'},
         ssr_ids={'ssr_up', 'ssr_std'},
     )
@@ -160,12 +159,6 @@ def _wide_spec(pity_names) -> PoolPitySpec:
         scope_cards={'ssr': ('ssr_up', 'ssr_std'), 'sr': ('sr_up', 'sr_std'),
                      'r': ('r_std',)},
         featured_cards={'ssr': ('ssr_up',), 'sr': ('sr_up',)},
-        scope_slots={'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr', 'sr_featured'),
-                     'r': ('r',)},
-        featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr_featured',),
-                        'r': ('r',)},
-        card_to_slot={'ssr_up': 'ssr_featured', 'ssr_std': 'ssr',
-                      'sr_up': 'sr_featured', 'sr_std': 'sr', 'r_std': 'r'},
         featured_ids={'ssr_up', 'sr_up'},
         ssr_ids={'ssr_up', 'ssr_std'},
     )

@@ -384,12 +384,10 @@ class TestNonSnapshotState:
             is_featured=False,
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
             featured_cards={},
-            scope_slots={'ssr': ('ssr',)}, featured_slots={'ssr': ('ssr',)},
-            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
-            base_probabilities={'ssr': 0.006, 'r': 0.994},
+            base_probabilities={'ssr_card': 0.006, 'r_card': 0.994},
             rarity_rank={'ssr': 0, 'r': 1},
         )
-        return PityContext(draw=draw, current={'ssr': 0.006, 'r': 0.994},
+        return PityContext(draw=draw, current={'ssr_card': 0.006, 'r_card': 0.994},
                            state=state)
 
     def test_non_snapshot_state_silent_degradation(self):

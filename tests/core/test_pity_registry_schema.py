@@ -557,6 +557,17 @@ _FX_BASE = {'up': 0.006, 'std': 0.004, 'sr1': 0.05, 'r1': 0.94}
 
 
 def _fx_draw(rarity='ssr', featured=False):
+    """**双用途夹具**：同一个 `draw` 同时喂新骨架与旧 `RotatingCRBehavior`。
+
+    槽位三字段**必须保留**：旧类的 `before_draw` 经 `_featured_slots(ctx)` /
+    `_scope_total_prob(ctx)` 读它们，空表即早退（`if not featured_slots: return
+    ctx.current.copy()`），「新旧逐位对照」的含义随之被静默削弱。故本夹具**不在
+    S8-7 的槽位剥离面内**（ISSUE-901：槽位字段保留至「发布前一次性移除旧保底类」
+    的 commit）。
+
+    **该保留是语义性的、不是断言承重的（S8-7 实测）**：删掉三个实参后本文件仍
+    全绿（205 passed），因为对照断言读的是 `cr_counter` 轨迹而非分布。
+    """
     return DrawInfo(
         pool_id='p', pool_instance_id='p_0', reward_id='std',
         reward_rarity=rarity, is_featured=featured,

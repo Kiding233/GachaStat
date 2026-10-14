@@ -37,8 +37,6 @@ from gacha_simulator.core.pity import (
 _SSR_PROBS = {'ssr_card': 0.006, 'sr_card': 0.051, 'r_card': 0.943}
 _SSR_RANK = {'ssr': 0, 'sr': 1, 'r': 2}
 _SSR_CARDS = {'ssr': ('ssr_card',), 'sr': ('sr_card',), 'r': ('r_card',)}
-_SSR_SLOTS = {'ssr': ('ssr',), 'sr': ('sr',), 'r': ('r',)}
-_SSR_C2S = {'ssr_card': 'ssr', 'sr_card': 'sr', 'r_card': 'r'}
 
 
 def _ssr_draw():
@@ -46,17 +44,14 @@ def _ssr_draw():
 
     S8 起 A 列是**卡集合**、`dist` 是**卡级**分布，两者同键空间（D20），
     故夹具的卡 id 必须与分布键一致；合成 spec 少一个键时保底会**静默恒等**
-    （`d.get(c, 0.0)` 对未出现的键取 0），故夹具必须给全。槽位三字段保留
-    （ISSUE-901：旧保底类仍读它们），但**不是**本管道键空间。
+    （`d.get(c, 0.0)` 对未出现的键取 0），故夹具必须给全。**S8-7 起不再构造槽位
+    三字段**：它们只服务保留到发布前的旧保底类与等价性装置（ISSUE-901）。
     """
     return DrawInfo(
         pool_id='t', pool_instance_id='t', reward_id='', reward_rarity='',
         is_featured=False,
         scope_cards=dict(_SSR_CARDS),
         featured_cards={},
-        scope_slots=dict(_SSR_SLOTS),
-        featured_slots=dict(_SSR_SLOTS),
-        card_to_slot=dict(_SSR_C2S),
         base_probabilities=dict(_SSR_PROBS),
         rarity_rank=dict(_SSR_RANK),
     )
@@ -288,9 +283,6 @@ class TestPityEngineReset:
             ssr_ids={'ssr_card', 'featured_card'},
             featured_ids={'featured_card'},
             scope_cards={'ssr': ('ssr_card', 'featured_card')},
-            scope_slots={'ssr': ('ssr',)},
-            featured_slots={'ssr': ('ssr',)},
-            card_to_slot={'ssr_card': 'ssr', 'featured_card': 'ssr'},
         )
         engine = PityEngine(
             pool_specs={'test_pool': spec},
@@ -348,11 +340,6 @@ class TestPityEngineReset:
             ssr_ids={'ssr_card'},
             featured_ids=set(),
             scope_cards={'ssr': ('ssr_card',)},
-            scope_slots={'ssr': ('ssr',)},
-            featured_slots={'ssr': ('ssr',)},
-            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
-            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
-            card_to_slot={'ssr_card': 'ssr'},
         )
         eng2 = PityEngine(
             pool_specs={'test_pool': spec2},
@@ -386,11 +373,6 @@ class TestPityEngineBeforeDraw:
             pity_names=['test_pity'],
             ssr_ids={'ssr_card'},
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
-            scope_slots={'ssr': ('ssr',)},
-            featured_slots={'ssr': ('ssr',)},
-            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
-            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
-            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         engine = PityEngine(
             pool_specs={'pool': spec},
@@ -446,11 +428,6 @@ class TestMultiPityStacking:
             pity_names=['soft', 'hard'],
             ssr_ids={'ssr_card'},
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
-            scope_slots={'ssr': ('ssr',)},
-            featured_slots={'ssr': ('ssr',)},
-            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
-            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
-            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         engine = PityEngine(
             pool_specs={'pool': spec},
@@ -491,11 +468,6 @@ class TestMultiPityStacking:
             pity_names=['s', 'h'],
             ssr_ids={'ssr_card'},
             scope_cards={'ssr': ('ssr_card',), 'r': ('r_card',)},
-            scope_slots={'ssr': ('ssr',)},
-            featured_slots={'ssr': ('ssr',)},
-            # S8 起 A 列（`scope_cards` 的卡）与分布键空间同键，`card_to_slot`
-            # 仅为槽位字段的完整性保留（旧保底类读它，ISSUE-901）。
-            card_to_slot={'ssr_card': 'ssr', 'r_card': 'r'},
         )
         eng3 = PityEngine(
             pool_specs={'pool': spec3}, pity_defs=[spdef, hpdef],

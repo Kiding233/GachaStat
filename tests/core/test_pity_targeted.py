@@ -42,8 +42,8 @@ def _make_draw(reward_id, rarity='ssr', is_featured=False, selected=None):
 
     **S8 起基础分布是卡级**（§3.9.1）：`base_probabilities` 与 `current` 的键即卡 id
     （旧稿写槽位名 `ssr_featured` / `ssr_standard`，卡级管道下 `transfer_linear` 取
-    `dist[c]` 会直接 `KeyError`）。槽位三字段保留（ISSUE-901：旧保底类仍读它们），
-    但**不是**本管道键空间。
+    `dist[c]` 会直接 `KeyError`）。**S8-7 起不再构造槽位三字段**：它们只服务保留
+    到发布前的旧保底类与等价性装置（ISSUE-901），本文件测的是卡级管道。
     `rarity_rank` 方向为「rank 小 = 稀有度更高」（对齐 `config_store._parse_rarities`；
     旧稿写成 `{'ssr': 3, ...}` 会让 `_lower_rarities` 恒返空集、软保底静默恒等）。
     """
@@ -54,10 +54,6 @@ def _make_draw(reward_id, rarity='ssr', is_featured=False, selected=None):
         reward_id=reward_id, reward_rarity=rarity, is_featured=is_featured,
         scope_cards={'ssr': all_cards},
         featured_cards=featured_cards,
-        scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-        featured_slots={'ssr': ('ssr_featured',)},
-        card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured',
-                       's1': 'ssr_standard', 's2': 'ssr_standard'},
         base_probabilities={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
         rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
     )

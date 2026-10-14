@@ -46,9 +46,6 @@ NAME = 'ssr_hard'
 RARITY_RANK = {'ssr': 0, 'sr': 1, 'r': 2}
 SCOPE_CARDS = {'ssr': ('ssr_up', 'ssr_std'), 'sr': ('sr_std',), 'r': ('r_std',)}
 FEATURED_CARDS = {'ssr': ('ssr_up',)}
-SCOPE_SLOTS = {'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr',), 'r': ('r',)}
-FEATURED_SLOTS = {'ssr': ('ssr_featured',), 'sr': ('sr',), 'r': ('r',)}
-CARD_TO_SLOT = {'ssr_up': 'ssr_featured', 'ssr_std': 'ssr', 'sr_std': 'sr', 'r_std': 'r'}
 #: 卡级基础分布（Σ = 1.0）。它同时是 `ctx.base_probabilities`（`declared` 形状的 `w` 来源）。
 BASE = {'ssr_up': 0.006, 'ssr_std': 0.004, 'sr_std': 0.05, 'r_std': 0.94}
 
@@ -58,21 +55,18 @@ TWO_UP_FEATURED = {'ssr': ('f1', 'f2')}
 TWO_UP_BASE = {'f1': 0.2, 'f2': 0.2, 's1': 0.6}
 
 
-def _draw(rarity_rank=None, scope_cards=None, featured_cards=None, base=None,
-          scope_slots=None, featured_slots=None, card_to_slot=None):
+def _draw(rarity_rank=None, scope_cards=None, featured_cards=None, base=None):
     """构造一次抽卡的 `DrawInfo`（卡级分布所需的全部映射齐备）。
 
-    槽位三字段仍填入（ISSUE-901：旧保底类与等价性装置读它们，删除点推迟到
-    「发布前一次性移除旧保底类」的 commit），但**不是**本管道键空间。
+    **S8-7 起不再构造槽位三字段**（`scope_slots` / `featured_slots` / `card_to_slot`）：
+    它们只服务保留到发布前的旧保底类与等价性装置（ISSUE-901），本文件测的是卡级
+    管道，三个字段在 S8 之后零读者。
     """
     return DrawInfo(
         pool_id='p', pool_instance_id='p_0', reward_id='sr_std',
         reward_rarity='sr', is_featured=False,
         scope_cards=scope_cards if scope_cards is not None else SCOPE_CARDS,
         featured_cards=featured_cards if featured_cards is not None else FEATURED_CARDS,
-        scope_slots=scope_slots if scope_slots is not None else SCOPE_SLOTS,
-        featured_slots=featured_slots if featured_slots is not None else FEATURED_SLOTS,
-        card_to_slot=card_to_slot if card_to_slot is not None else CARD_TO_SLOT,
         base_probabilities=base if base is not None else BASE,
         rarity_rank=rarity_rank if rarity_rank is not None else RARITY_RANK,
     )

@@ -48,9 +48,7 @@ class TestDeactivateOnEarlyHit:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='f1', reward_rarity='ssr', is_featured=True,
             scope_cards={'ssr': ('f1',)}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured',)}, featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured'},
-            base_probabilities={'ssr_featured': 0.01}, rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.01}, rarity_rank={'ssr': 0},
         )
         ctx = PityContext(draw=draw, current={}, state=state)
         # counter 低于 threshold

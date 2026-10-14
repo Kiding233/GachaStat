@@ -477,6 +477,22 @@ CR_NAME = 'ssr_cr'
 
 
 def _cr_ctx(rarity='sr', is_featured=False, state=None, current=None):
+    """**双用途夹具**：既喂新零件 `StreakTracker`，也喂旧 `RotatingCRBehavior`。
+
+    槽位三字段与槽位名键的 `current` **必须保留**：`RotatingCRBehavior.before_draw`
+    经 `_featured_slots(ctx)` / `_scope_total_prob(ctx)` 读它们，空表即走
+    `if not featured_slots: return ctx.current.copy()` 早退，对照腿随即退化为
+    「新侧有调整 vs 旧侧恒等」的比较。故本夹具**不在 S8-7 的槽位剥离面内**
+    （ISSUE-901：槽位字段保留至「发布前一次性移除旧保底类」的 commit，届时本夹具
+    随旧类对照腿一并消失）。
+
+    **该保留是语义性的、不是断言承重的（S8-7 实测登记）**：本文件的断言读的是
+    **随机消费次数**与 `cr_counter` 轨迹，两者都由 `(rarity, is_featured)` 与
+    `cr_state_probs` 驱动、**不读分布**，故把本夹具的槽位字段删掉后本文件仍全绿
+    （实测 205 passed，含 `test_pity_registry_schema.py` 的同类变异）。即：删掉
+    不会让任何用例变红，只会静默削弱「逐位对照」的含义。这正是保留它的理由，
+    也是 GATE-5 末条不得顺手删它的理由。
+    """
     st = state if state is not None else PityState()
     draw = DrawInfo(
         pool_id='p', pool_instance_id='p_0', reward_id=f'{rarity}_card',

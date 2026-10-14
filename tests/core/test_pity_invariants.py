@@ -141,35 +141,28 @@ _PITY_NAME = 's10_combo'
 
 @dataclass(frozen=True)
 class _Shape:
-    """一个池子的槽位映射 + 基础分布（`DrawInfo` 的全部映射齐备）。
+    """一个池子的卡集合映射 + 基础分布（`DrawInfo` 的卡级映射齐备）。
 
     **S8-2 起 `base` 是卡级分布**（键即卡 id）：驱动层从调整后的分布抽一张卡、
-    该卡即本次奖励（与「先定分布、再抽奖励」的引擎同形）。槽位三字段仍保留
-    （ISSUE-901：旧保底类与等价性装置读它们），但**不是**本文件的分布键空间。
+    该卡即本次奖励（与「先定分布、再抽奖励」的引擎同形）。**S8-7 起不再携带槽位
+    三字段**：它们只服务保留到发布前的旧保底类与等价性装置（ISSUE-901），本文件
+    测的是卡级零件组合，三个字段零读者。
     """
 
     label: str
     rarity_rank: Dict[str, int]
     scope_cards: Dict[str, tuple]
     featured_cards: Dict[str, tuple]
-    scope_slots: Dict[str, tuple]
-    featured_slots: Dict[str, tuple]
-    card_to_slot: Dict[str, str]
     base: Dict[str, float]
 
 
 #: 标准池形（与 `tests/core/test_pity_modifier.py` 的夹具同形，即
-#: `compute_scope_mappings` 对「只有 ssr 有 featured 卡」的池子的真实产出：
-#: 无 featured 卡的稀有度其 `featured_slots[r] == (r,)`）。
+#: `compute_scope_mappings` 对「只有 ssr 有 featured 卡」的池子的真实卡集合产出）。
 STANDARD_SHAPE = _Shape(
     label='std',
     rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
     scope_cards={'ssr': ('ssr_up', 'ssr_std'), 'sr': ('sr_std',), 'r': ('r_std',)},
     featured_cards={'ssr': ('ssr_up',)},
-    scope_slots={'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr',), 'r': ('r',)},
-    featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr',), 'r': ('r',)},
-    card_to_slot={'ssr_up': 'ssr_featured', 'ssr_std': 'ssr',
-                  'sr_std': 'sr', 'r_std': 'r'},
     base={'ssr_up': 0.006, 'ssr_std': 0.004, 'sr_std': 0.05, 'r_std': 0.94},
 )
 
@@ -185,11 +178,6 @@ WIDE_SHAPE = _Shape(
     scope_cards={'ssr': ('ssr_up', 'ssr_std'), 'sr': ('sr_up', 'sr_std'),
                  'r': ('r_std',)},
     featured_cards={'ssr': ('ssr_up',), 'sr': ('sr_up',)},
-    scope_slots={'ssr': ('ssr', 'ssr_featured'), 'sr': ('sr', 'sr_featured'),
-                 'r': ('r',)},
-    featured_slots={'ssr': ('ssr_featured',), 'sr': ('sr_featured',), 'r': ('r',)},
-    card_to_slot={'ssr_up': 'ssr_featured', 'ssr_std': 'ssr',
-                  'sr_up': 'sr_featured', 'sr_std': 'sr', 'r_std': 'r'},
     base={'ssr_up': 0.006, 'ssr_std': 0.004, 'sr_up': 0.01, 'sr_std': 0.04,
           'r_std': 0.94},
 )
@@ -631,8 +619,6 @@ def _ctx(shape: _Shape, state: PityState, *, sim: _Sim,
         reward_rarity=step.rarity if step else '',
         is_featured=step.is_featured if step else False,
         scope_cards=shape.scope_cards, featured_cards=shape.featured_cards,
-        scope_slots=shape.scope_slots, featured_slots=shape.featured_slots,
-        card_to_slot=shape.card_to_slot,
         base_probabilities=dict(shape.base) if step is None else {},
         rarity_rank=shape.rarity_rank,
     )

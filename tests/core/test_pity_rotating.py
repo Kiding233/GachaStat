@@ -50,6 +50,11 @@ def base_ctx(state):
     Σ = 1 也使 `_apply_delta` 的归一化退化为恒等（与生产路径同形）。
     `rarity_rank` 方向为「rank 小 = 稀有度更高」（旧稿写 `{'ssr': 3, ...}` 会让
     `_lower_rarities` 恒返空集、软保底静默恒等）。
+
+    **S8-7 起本夹具不再构造槽位三字段**：它们只服务保留到发布前的旧保底类与等价性
+    装置（ISSUE-901），本夹具喂的是卡级管道。同文件里仍构造槽位的是 `slot_ctx`
+    （只服务 `TestRedistributeScope`，见其 docstring）与 `TestTransferLinear` 的
+    单卡夹具（喂 `_redistribute_scope`）。
     """
     draw = DrawInfo(
         pool_id='test_pool',
@@ -59,10 +64,6 @@ def base_ctx(state):
         is_featured=False,
         scope_cards={'ssr': ('f1', 'f2', 's1', 's2')},
         featured_cards={'ssr': ('f1', 'f2')},
-        scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-        featured_slots={'ssr': ('ssr_featured',)},
-        card_to_slot={'f1': 'ssr_featured', 'f2': 'ssr_featured',
-                       's1': 'ssr_standard', 's2': 'ssr_standard'},
         base_probabilities={'f1': 0.25, 'f2': 0.25, 's1': 0.25, 's2': 0.25},
         rarity_rank={'ssr': 0, 'sr': 1, 'r': 2},
     )
@@ -139,13 +140,10 @@ class TestRotatingPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
-        miss_ctx = PityContext(draw=draw_miss, current={'ssr_featured': 0.005, 'ssr_standard': 0.005}, state=state)
+        miss_ctx = PityContext(draw=draw_miss, current={'f1': 0.005, 's1': 0.005}, state=state)
         pity.after_draw(miss_ctx)
         assert state.get('test_rot', 'guaranteed', False) is True
 
@@ -162,11 +160,8 @@ class TestRotatingPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
         miss_ctx = PityContext(draw=draw_miss, current={}, state=state)
         pity.after_draw(miss_ctx)
@@ -177,11 +172,8 @@ class TestRotatingPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='f1', reward_rarity='ssr', is_featured=True,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
         hit_ctx = PityContext(draw=draw_hit, current={}, state=state)
         pity.after_draw(hit_ctx)
@@ -193,8 +185,8 @@ class TestRotatingPity:
         draw = DrawInfo(
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='r1', reward_rarity='sr', is_featured=False,
-            scope_cards={}, featured_cards={}, scope_slots={}, featured_slots={},
-            card_to_slot={}, base_probabilities={}, rarity_rank={'ssr': 3, 'sr': 2},
+            scope_cards={}, featured_cards={},
+            base_probabilities={}, rarity_rank={'ssr': 0, 'sr': 1},
         )
         ctx = PityContext(draw=draw, current={}, state=state)
         pity.after_draw(ctx)
@@ -215,9 +207,7 @@ class TestRotatingPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='f1', reward_rarity='ssr', is_featured=True,
             scope_cards={'ssr': ('f1',)}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured',)}, featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured'},
-            base_probabilities={'ssr_featured': 0.01}, rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.01}, rarity_rank={'ssr': 0},
         )
         ctx_hit = PityContext(draw=draw_hit, current={}, state=state)
         assert pity.did_fire(ctx_hit) is True
@@ -226,9 +216,7 @@ class TestRotatingPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
             scope_cards={'ssr': ('s1',)}, featured_cards={'ssr': ()},
-            scope_slots={'ssr': ('ssr_standard',)}, featured_slots={'ssr': ()},
-            card_to_slot={'s1': 'ssr_standard'},
-            base_probabilities={'ssr_standard': 0.01}, rarity_rank={'ssr': 3},
+            base_probabilities={'s1': 0.01}, rarity_rank={'ssr': 0},
         )
         ctx_miss = PityContext(draw=draw_miss, current={}, state=state)
         assert pity.did_fire(ctx_miss) is False
@@ -248,11 +236,8 @@ class TestRotatingCRPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
         ctx = PityContext(draw=draw, current={}, state=state)
         pity.after_draw(ctx)
@@ -267,11 +252,8 @@ class TestRotatingCRPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
         pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
         assert state.get('test_cr', 'cr_counter', 0) == 1
@@ -282,11 +264,8 @@ class TestRotatingCRPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='f1', reward_rarity='ssr', is_featured=True,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
         pity.after_draw(PityContext(draw=hit_draw, current={}, state=state))
         assert state.get('test_cr', 'guaranteed', False) is False  # 大保底清除
@@ -387,9 +366,7 @@ class TestRotatingSoftPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='f1', reward_rarity='ssr', is_featured=True,
             scope_cards={'ssr': ('f1',)}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured',)}, featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured'},
-            base_probabilities={'ssr_featured': 0.01}, rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.01}, rarity_rank={'ssr': 0},
         )
         hit_ctx = PityContext(draw=hit_draw, current={}, state=state)
         pity.after_draw(hit_ctx)
@@ -409,11 +386,8 @@ class TestRotatingSoftPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
         pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
         assert state.get('test_rs', 'guaranteed', False) is True
@@ -439,11 +413,8 @@ class TestRotatingCRSoftPity:
             pool_id='test_pool', pool_instance_id='test_pool_0',
             reward_id='s1', reward_rarity='ssr', is_featured=False,
             scope_cards={'ssr': ('f1', 's1')}, featured_cards={'ssr': ('f1',)},
-            scope_slots={'ssr': ('ssr_featured', 'ssr_standard')},
-            featured_slots={'ssr': ('ssr_featured',)},
-            card_to_slot={'f1': 'ssr_featured', 's1': 'ssr_standard'},
-            base_probabilities={'ssr_featured': 0.005, 'ssr_standard': 0.005},
-            rarity_rank={'ssr': 3},
+            base_probabilities={'f1': 0.005, 's1': 0.005},
+            rarity_rank={'ssr': 0},
         )
         pity.after_draw(PityContext(draw=miss_draw, current={}, state=state))
         assert state.get('test_crs', 'cr_counter', 0) == 1
@@ -497,7 +468,12 @@ class TestRedistributeScope:
 # `transfer_linear` 是卡级、返回**增量向量**（§3.9.4）。
 
 class TestTransferLinear:
-    """`transfer_linear(dist, A, Q, amount, shape, weights)` 的双分支与全部守卫。"""
+    """`transfer_linear(dist, A, Q, amount, shape, weights)` 的双分支与全部守卫。
+
+    **本类的单卡夹具（`test_transfer_linear_matches_scope_equivalent`）保留槽位三
+    字段**：它把 `_redistribute_scope`（槽位级、保留至发布前，ISSUE-502）与新助手
+    放在同一输入上对照，槽位映射正是旧函数的输入，故不在 S8-7 的槽位剥离面内。
+    """
 
     def test_transfer_linear_matches_scope_equivalent(self):
         """单卡 A / 单卡 Q 且取值是二进制精确数时，与 `_redistribute_scope` 逐元素相等。

@@ -184,6 +184,16 @@ def _engine(invariants=None, *, threshold=1, pities=None, state=None, spec=None)
     return engine, state
 
 
+def _preset_counter(state: PityState, name: str = 'p_hard', value: int = 1) -> None:
+    """把某保底的计数预置到阈值（`_engine` 的默认 `threshold=1`）。
+
+    只读查询路径不推进计数（`CounterTracker.advance` 在 `readonly=True` 时早退），
+    故「查询时该保底已达阈值」只能靠预置 state 得到；不预置则该保底在查询路径上
+    恒不触发、增量层探针恒零命中（见 `test_get_probabilities_stays_outside_the_delta_layer`）。
+    """
+    state.set(name, 'counter', value)
+
+
 def _assert_three_elements(message: str, name: str, key: str) -> None:
     """异常信息的三要素（§六 S11 负例条）：**保底名 + 键 + 期望值 / 实际值**。"""
     assert name in message, f'异常信息缺保底名 {name!r}：{message}'
@@ -735,6 +745,102 @@ class TestDeltaLayer:
         engine_off, state_off = _engine(invariants=None)
         engine_off.before_draw(_POOL, state_off, dict(_BASE))
         assert hits == [], f'invariants=None 时不得命中增量层，实测 {hits}'
+
+    def test_get_probabilities_stays_outside_the_delta_layer(self, monkeypatch):
+        """**边界守卫**（S8-6 审查收口补）：只读查询入口 `PityEngine.get_probabilities`
+        不写 `ctx.invariants`，故该路径**不在增量层的判据面内**。
+
+        `check_delta` 的调用点只有一个（骨架内循环，读 `ctx.invariants`），而该字段
+        **只由 `PityEngine.before_draw` 写**（`pity.py:2208`）：`get_probabilities` 虽
+        同样以骨架的 `before_draw(ctx, readonly=True)` 调度，但不写该字段，故校验器
+        挂上后只读查询仍零命中。这是 §3.13 已登记的「四层覆盖边界」（只读查询不在
+        判据面内），此前**零守卫**（S8-6 审查实测：把 `before_draw` 里那一行
+        `ctx.invariants = self._invariants` 复制进 `get_probabilities`，全量测试 0 红）。
+
+        两条并列断言：① 增量层探针零命中（**探针的非恒真**由紧随其后的阳性对照钉住：
+        同一探针在同引擎的 `before_draw` 上必命中）；② 查询输出与「校验器关闭」时
+        **一致**（防将来无声扩边把查询路径也纳入判据面，或反过来让返回随开关而变）。
+
+        **夹具须预置计数（`_preset_counter`）**：只读查询不推进计数
+        （`CounterTracker.advance` 在 `readonly=True` 时早退），计数留在 0 则
+        `compute_delta` 恒返 `None`、内循环根本不进增量层，于是「探针零命中」对
+        该变异**恒真**（S8-6 审查实测：不预置时该变异不被本用例捕获）。预置到阈值后
+        查询路径上该保底确实产出增量，探针才有判别力。
+        """
+        hits = []
+
+        def _probe(self, pool_id, dist, delta):
+            hits.append((pool_id, dict(dist), dict(delta)))
+
+        monkeypatch.setattr(InvariantChecker, 'check_delta', _probe)
+
+        # ① 只读查询路径不得进入增量层
+        engine, state = _engine(invariants=InvariantChecker(enabled=True))
+        _preset_counter(state)
+        queried = engine.get_probabilities(_POOL, state, dict(_BASE))
+        assert hits == [], f'只读查询不得进入增量层，实测命中 {hits}'
+
+        # 阳性对照：同一探针在 before_draw 上必命中（否则上面那条恒真）
+        engine.before_draw(_POOL, state, dict(_BASE))
+        assert len(hits) == 1, (
+            f'探针自身失灵（同引擎的 before_draw 也未命中增量层）：{hits}')
+
+        # ② 查询输出不随校验器开关变化
+        off_engine, off_state = _engine(invariants=None)
+        _preset_counter(off_state)
+        off_queried = off_engine.get_probabilities(_POOL, off_state, dict(_BASE))
+        assert queried == off_queried, (
+            f'只读查询的输出不得随校验器开关变化，实测 {queried} vs {off_queried}')
+
+    def test_delta_entry_argument_face_is_pinned_by_values(self, monkeypatch):
+        """增量层**实参面**（S8-6 审查收口补）：`check_delta(pool_id, dist, delta)` 的
+        两个实参由**两条独立通道**逐键取值比对，故「两个实参对调」这一变异必红，且
+        红的理由**不是键集大小**。
+
+        **为什么既有断言不够**：同组 `test_delta_entry_is_wired_into_the_skeleton_inner_loop`
+        只判 `set(delta) <= set(dist)`（同键空间），而判据本体 `p + δ ≥ 0` **对 p 与
+        δ 对称**，对调后照样成立；该对调在本组夹具下**只是偶然**被那条键集断言命中
+        （`out` 的键集恰比该步的 `d` 大）。本用例改判**值**，与键集是否等大无关：
+
+        - `dist` 实参 == 该步的输入分布（`_BASE` 的原值，即归一化**之前**的 p）；
+        - `delta` 实参 == `HardModifier.compute_delta` 的返回值。
+
+        两条期望值都不由被判对象给出：前者是测试自带的常量，后者由另一次插桩记录。
+        """
+        hits = []
+        returned = []
+
+        monkeypatch.setattr(InvariantChecker, 'check_delta',
+                            lambda self, pool_id, dist, delta:
+                            hits.append((pool_id, dict(dist), dict(delta))))
+        original_compute_delta = HardModifier.compute_delta
+
+        def _spy(self, view, dist, ctx):
+            d = original_compute_delta(self, view, dist, ctx)
+            returned.append(None if d is None else dict(d))
+            return d
+
+        monkeypatch.setattr(HardModifier, 'compute_delta', _spy)
+
+        engine, state = _engine(invariants=InvariantChecker(enabled=True))
+        engine.before_draw(_POOL, state, dict(_BASE))
+
+        assert len(hits) == 1 and len(returned) == 1, (
+            f'该步须恰有一次增量层调用与一次 Modifier 求值，实测 {hits} / {returned}')
+        _pool_id, dist, delta = hits[0]
+
+        expected_input = dict(_BASE)
+        for key in sorted(set(dist) | set(expected_input)):
+            assert dist.get(key, 0.0) == expected_input.get(key, 0.0), (
+                f'{key!r} 键：dist 实参须是该步的输入分布（归一化之前），'
+                f'实测 {dist.get(key, 0.0)!r}，期望 {expected_input.get(key, 0.0)!r}')
+
+        expected_delta = returned[0]
+        assert expected_delta is not None, '该步的 Modifier 须产出增量，否则本用例无判别力'
+        for key in sorted(set(delta) | set(expected_delta)):
+            assert delta.get(key, 0.0) == expected_delta.get(key, 0.0), (
+                f'{key!r} 键：delta 实参须是 compute_delta 的返回值，'
+                f'实测 {delta.get(key, 0.0)!r}，期望 {expected_delta.get(key, 0.0)!r}')
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -3584,11 +3584,17 @@ class TestS8EmptyTargetSetAndDeclaredShape:
         `assert mod.compute_delta(...) is None` 那一面的逐机制覆盖已随 S8-1/2/3 落地
         （`test_empty_target_set_returns_none` 的 7 条参数化）；本节补**组合面**：
         `None` 经 `Pity.before_draw` 的内循环确实不写分布（`if d is not None` 守卫），
-        故「机制触发但目标集为空」与「机制未触发」在输出上同值。判别力：把该守卫
-        写成无条件 `_apply_delta(out, d or {})` 时，`d = None` 会被当成空增量并**归一化**
-        输入分布，本用例即红。
+        故「机制触发但目标集为空」与「机制未触发」在输出上同值。
+
+        **判别力对夹具的要求（S8-6 审查收口订正）**：该守卫的变异形态是把它写成无条件
+        `_apply_delta(out, d or {})`，而 `_apply_delta(dist, {})` **只在 `Σdist = 1` 时才
+        是恒等**（`Σ ≠ 1` 时按 `Σ` 归一化：实测 `{'a': 0.4, 'b': 0.4}` 被改成
+        `{'a': 0.5, 'b': 0.5}`，而 `{'a': 0.5, 'b': 0.5}` 原样返回）。故夹具的 Σ
+        **必须不为 1**：本用例取 `0.4 + 0.4`（`Σ = 0.8`），该变异下输出被归一化成
+        `0.5 / 0.5`，与 `base_dist` 不等而变红。**原夹具 `0.5 + 0.5`（`Σ = 1`）下该
+        变异恒等、用例仍绿**（审查实测），判别力为零，已订正。
         """
-        shape = make_pool_shape((('sr1', 'sr', False, 0.5), ('r1', 'r', False, 0.5)))
+        shape = make_pool_shape((('sr1', 'sr', False, 0.4), ('r1', 'r', False, 0.4)))
         base_dist = dict(shape.card_probabilities)
         for tf in (False, True):
             state = PityState()

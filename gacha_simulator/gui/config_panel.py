@@ -2214,12 +2214,19 @@ class ConfigPanel(QWidget):
     # 「原样保留」兜底（见 `_populate_reset_combo()`）——三者都不发生静默改写。
     # 构造期的静态填充（下方 `pity_reset_combo` 初始化）在 store 就位前执行，
     # 直接用本表；store 就位后每次选中条目都由 `_populate_reset_combo()` 重建。
+    #
+    # 显示名一律用「出 X」形态（2026-10-15 用户裁定）：旧文案写作「X 出金」，
+    # 而「出金」在抽卡语境里专指**最高稀有度**；`reset` 的取值却可以是任意稀有度
+    # （`sr` / `r` 均合法），故「SR 出金」这类说法语义错误。空串一项的含义是
+    # 「抽到该保底作用稀有度（即 `scope`）的卡就重置」——实现口径为
+    # `CounterTracker(reset_on=pdef.reset or _norm_scope(pdef))`（`core/pity.py`
+    # 的 preset 工厂），即空串落回 `scope`，故显示名直接点名「作用稀有度」。
     _PITY_RESET_CHOICES = [
-        ('', '跟随稀有度'),
-        ('featured', '仅 Featured 出金'),
-        ('ssr', 'SSR 出金'),
-        ('sr', 'SR 出金'),
-        ('r', 'R 出金'),
+        ('', '出作用稀有度'),
+        ('featured', '仅出 Featured'),
+        ('ssr', '出 SSR'),
+        ('sr', '出 SR'),
+        ('r', '出 R'),
         ('never', '永不重置'),
     ]
 
@@ -3544,19 +3551,21 @@ N > 0：触发 N 次后不再参与概率修正（与「依赖」正交，可同
     def _pity_reset_choices(self) -> list:
         """reset 下拉的 (取值, 显示名) 表：基础表 ∩ 白名单 + `store.rarity_rank` 的额外稀有度。
 
-        基础表给出「跟随稀有度 / 仅 Featured 出金 / 永不重置」这类有意义的中文
-        显示名，故不从白名单集合直接生成；但**必须先按 `legal_reset_values()`
+        基础表给出「出作用稀有度 / 仅出 Featured / 出 SSR / 永不重置」这类有意义的
+        中文显示名，故不从白名单集合直接生成；但**必须先按 `legal_reset_values()`
         过滤**：`store.rarity_rank` 不含 sr / r 时（如只配 SSR / UR），基础表里
         的 `sr` / `r` 是 loader 硬拒的取值，不过滤即「下拉可选、选中即写出、
         重载抛 ConfigError」，与 AUDIT-BREAK-1 属同一失效形态（2026-10-10 审查
-        端到端复现：ranks 改为 {SSR, UR} 后选「SR 出金」，保存出的配置重载即
+        端到端复现：ranks 改为 {SSR, UR} 后选「出 SR」，保存出的配置重载即
         `reset='sr' 不是合法取值`）。
 
         `store.rarity_rank` 为空时回退默认三级 SSR/SR/R（与
         `_populate_card_rarity_combos()` 同型；`set_config` 的 `clear()` 之后
         可达）——该形态下 loader 的 `_parse_rarities()` 同样补默认三级，故回退
         集仍是白名单的子集。`[rarities].ranks` 里未列出的稀有度名（如 ranks 含
-        `ur` 时白名单放行的 `reset='ur'`）以 `{名} 出金` 补入。
+        `ur` 时白名单放行的 `reset='ur'`）以 `出 {名}` 补入；稀有度名取自
+        `rank_map`（键已小写归一，与白名单同源），显示时 `.upper()` 以与基础表
+        的大写形态一致——**只影响显示名，写回的取值仍是小写原名**。
 
         取值面与 `config_toml.legal_reset_values()` 同源，本函数不自持第二份
         白名单。
@@ -3575,7 +3584,7 @@ N > 0：触发 N 次后不再参与概率修正（与「依赖」正交，可同
         known = {v for v, _ in choices}
         for name in sorted(rank_map):
             if name not in known:
-                choices.append((name, f'{name} 出金'))
+                choices.append((name, f'出 {name.upper()}'))
                 known.add(name)
         return choices
 
@@ -3583,10 +3592,10 @@ N > 0：触发 N 次后不再参与概率修正（与「依赖」正交，可同
         """按当前条目的 reset 取值重建下拉并选中（G16-1）。
 
         取值表外的取值（TOML 逐项合法、但 GUI 基础表与 `[rarities]` 都未列出）
-        补一项**原样保留**，不退回落回「跟随稀有度」：原实现把未知取值一律落成
-        下标 0，此后该行任一次编辑触发的 flush（`_flush_pity_current_detail` /
-        `_apply_pity_edit`）都会把它静默改写成空串——无提示的数据丢失。
-        调用点已 `blockSignals(True)`，重建不触发 flush。
+        补一项**原样保留**，不退回落回「出作用稀有度」（下标 0 那项）：原实现把
+        未知取值一律落成下标 0，此后该行任一次编辑触发的 flush
+        （`_flush_pity_current_detail` / `_apply_pity_edit`）都会把它静默改写成
+        空串——无提示的数据丢失。调用点已 `blockSignals(True)`，重建不触发 flush。
         """
         combo = self.pity_reset_combo
         combo.clear()

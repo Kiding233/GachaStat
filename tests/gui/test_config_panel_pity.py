@@ -409,6 +409,31 @@ class TestPityResetCombo:
         assert idx >= 0, 'reset 下拉缺「永不重置」项'
         assert combo.itemText(idx) == '永不重置'
 
+    def test_reset_combo_labels_are_chu_form(self, qapp):
+        """下拉显示名一律「出 X」形态，不得出现「X 出金」（2026-10-15 用户裁定）。
+
+        「出金」在抽卡语境里专指**最高稀有度**，而 `reset` 的取值可以是任意稀有度
+        （`sr` / `r` 均合法），故旧文案「SR 出金」语义错误。空串一项的含义是
+        「抽到该保底作用稀有度（scope）的卡就重置」，故显示名点明「作用稀有度」。
+
+        本用例逐项钉住显示名（而不只是「不含出金」）——显示名是用户唯一可见的
+        取值说明，措辞回归不会被任何其它门控发现。
+        """
+        panel = _make_panel()
+        panel.pity_list.setCurrentRow(0)
+        panel._populate_reset_combo('')
+
+        combo = panel.pity_reset_combo
+        labels = {combo.itemData(i): combo.itemText(i) for i in range(combo.count())}
+        assert labels[''] == '出作用稀有度'
+        assert labels['featured'] == '仅出 Featured'
+        assert labels['ssr'] == '出 SSR'
+        assert labels['sr'] == '出 SR'
+        assert labels['r'] == '出 R'
+        assert labels['never'] == '永不重置'
+        assert not any('出金' in t for t in labels.values()), \
+            f'下拉仍含「出金」说法（语义错误，专指最高稀有度）：{labels}'
+
     def test_reset_combo_never_roundtrip(self, qapp, tmp_path):
         """选中「永不重置」→ 应用 → store → TOML 往返，`reset='never'` 保值。"""
         from gacha_simulator.core.config_toml import load_toml, save_toml
@@ -435,13 +460,13 @@ class TestPityResetCombo:
 
         combo = panel.pity_reset_combo
         assert combo.currentData() == 'ur'
-        assert combo.currentText() == 'ur 出金'
+        assert combo.currentText() == '出 UR'
         assert panel._pity_defs[0]['reset'] == 'ur'
 
     def test_reset_combo_preserves_unlisted_value(self, qapp):
         """取值表外的取值补「原样保留」项，不被静默改写为空串。
 
-        旧实现把未知取值一律落成下标 0（「跟随稀有度」），此后任一次编辑触发的
+        旧实现把未知取值一律落成下标 0（「出作用稀有度」），此后任一次编辑触发的
         flush（`_flush_pity_current_detail` / `_apply_pity_edit`）都会把它静默
         改写为空串，是无提示的数据丢失。样本取 `set_config` 的 `store.clear()`
         之后的形态（`rarity_rank` 已清空），此时取值表收缩为六项基础表。
@@ -463,7 +488,7 @@ class TestPityResetCombo:
 
         基础表把 ssr / sr / r 硬编码在内；不按白名单过滤时它是白名单的**超集**。
         实测（2026-10-10 独立审查端到端复现）：ranks 改为 {SSR, UR} 后下拉仍给出
-        「SR 出金」，选中即写出 `reset = "sr"`，重载抛 `ConfigError: reset='sr'
+        「出 SR」，选中即写出 `reset = "sr"`，重载抛 `ConfigError: reset='sr'
         不是合法取值`——配置保存后无法再打开，与 AUDIT-BREAK-1 同一失效形态。
         """
         from gacha_simulator.core.config_toml import load_toml, save_toml

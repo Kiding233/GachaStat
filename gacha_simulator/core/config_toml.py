@@ -662,7 +662,9 @@ def legal_reset_values(rarity_rank_map: dict) -> set:
 
     四类：空串（不透传给 `create_behavior` → `_should_reset` 落回
     `reward_rarity == scope` 的兜底分支，即「出 scope 稀有度即重置」）/
-    `'featured'`（仅 featured 出金重置）/ `'never'`（永不重置，G16）/
+    `'featured'`（抽到 featured 卡即重置，**不限定稀有度**——`CounterTracker`
+    的 `featured` 分支只看 `is_featured`、无 scope 门控，池内 featured 的 SR 卡
+    同样触发）/ `'never'`（永不重置，G16）/
     **稀有度名**（即 `[rarities].ranks` 的键）。
 
     参数 `rarity_rank_map` 须为**小写归一**后的 `{稀有度名: rank}`（与
@@ -913,8 +915,8 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
 
         # reset 取值白名单（G16-1 / ISSUE-928，与上方 scope 校验同层同形态的硬拒）。
         # 合法取值四类：空串（create_behavior 不外传 → 回退 scope 兜底分支，
-        # 即「出 scope 稀有度即重置」）、'featured'（仅 featured 出金重置）、
-        # 稀有度名（[rarities].ranks 的键）、'never'（永不重置，G16）。
+        # 即「出 scope 稀有度即重置」）、'featured'（抽到 featured 卡即重置，
+        # 不限定稀有度）、稀有度名（[rarities].ranks 的键）、'never'（永不重置，G16）。
         # 未知值（含拼写错误如 'nevr'）经 _should_reset 的兜底分支
         # `reward_rarity == reset` 恒 False，即静默等价于 'never'，两种语义
         # 不可区分且不报错，故与 scope 同样升级为硬拒。

@@ -18,6 +18,8 @@
 对应断言见 `TestNameDuplicate` 与 `TestScopeWired`。
 """
 
+import fnmatch
+
 import pytest
 
 from gacha_simulator.core.config_store import ConfigError, PityDef
@@ -26,11 +28,29 @@ from gacha_simulator.core.pity import (
     Pity,
     PityEngine,
     PityState,
+    PoolPitySpec,
     _validate_behaviors,
     create_behavior,
 )
 
 _RARITY = {'ssr': 0, 'sr': 1, 'r': 2}
+
+
+def _engine_with_pools(pity_defs, pool_ids):
+    """按 `PityDef.pools` 的 fnmatch 口径生成 `pool_specs` 后构造引擎。
+
+    生成式与 `service/batch_simulator.py` 的 `spec_pity_names` 段同源（全限定键
+    `{banner_id}.{pool_id}` + `pools == ('*',)` 短路 + `fnmatch.fnmatch`），
+    故本辅助产出的 `pity_names` 就是运行时那份「哪个保底绑哪个池」的事实。
+    """
+    pool_specs = {}
+    for pid in pool_ids:
+        names = [d.name for d in pity_defs
+                 if d.pools == ('*',)
+                 or any(fnmatch.fnmatch(pid, ptn) for ptn in d.pools)]
+        pool_specs[pid] = PoolPitySpec(pity_names=names)
+    return PityEngine(pool_specs=pool_specs, pity_defs=pity_defs,
+                      state=PityState(), rarity_rank=_RARITY)
 
 
 def _engine(pity_defs):
@@ -170,9 +190,11 @@ class TestEngineConstructFailure:
             calls.append(('resolve', [getattr(b, '_name', None) for b in behaviors]))
             return real_resolve(behaviors, rarity_rank)
 
-        def _spy_validate(behaviors):
+        def _spy_validate(behaviors, pool_specs=None):
+            # 签名与调用点同步（缺陷 13 起 `_validate_behaviors` 收 `pool_specs`
+            # 第二实参）：替身不改判据，只记录「谁被传了进来」。
             calls.append(('validate', [getattr(b, '_name', None) for b in behaviors]))
-            return real_validate(behaviors)
+            return real_validate(behaviors, pool_specs)
 
         monkeypatch.setattr(pity_mod, '_resolve_order', _spy_resolve)
         monkeypatch.setattr(pity_mod, '_validate_behaviors', _spy_validate)
@@ -384,3 +406,152 @@ class TestHardExcludeOwned:
         assert _BTYPE_ORDER[_SKIP_TYPE] == 1
         assert _BTYPE_ORDER[_ANY_TYPE] == 1
         assert _BTYPE_ORDER[_SKIP_TYPE] == _BTYPE_ORDER['hard']
+
+
+# ══════════════════════════════════════════════════════════════════
+# 缺陷 13（2026-10-15 修复）：规则 2/3/4 下沉为「按池分组后的组内判据」
+# ══════════════════════════════════════════════════════════════════
+# 缺陷本体（`docs/01-活跃/subsystems/保底系统/04-问题.md` 缺陷 13）：`_validate_behaviors`
+# 在 `PityEngine.__init__` 里对**全部** behaviors 执行，而**概率管道是池级**的
+# （`_pool_order` 按 `PoolPitySpec.pity_names` 过滤，池间保底从不共同执行）。故互斥
+# 判据的适用域应是「同一池内」：两条同 scope 保底若 `pools` **完全不相交**，它们永不
+# 同时执行，不该被判互斥。真实游戏「角色池一个硬保底、武器池一个硬保底」是常态，
+# 手册 §1.4 的原神旗舰示例正是这个形状（修复前无法加载）。
+#
+# 修复口径：规则 2/3/4 改为**按池分组后的组内判据**（组 = 该池 `pity_names` 里的保底，
+# 与运行时绑定同源）；**部分重叠仍互斥**（存在共同匹配的池即同组，`('*',)` 与任何具体
+# 池都相交）；**规则 1（重名）保持全局**（`name` 是 `engine.behaviors` 与 `PityState`
+# 命名空间的键）。无池信息（`pool_specs` 缺省或空）时回退为单一全局组，即既有语义。
+
+
+class TestPoolScopedMutexRules:
+    """规则 2/3/4 的适用域下沉到池级（缺陷 13）。"""
+
+    def test_disjoint_pools_are_accepted(self):
+        """① 两条同 scope `hard` 各绑一池（池集完全不相交）→ **放行**。
+
+        这是缺陷 13 的最小复现形态：修复前抛
+        `ConfigError: 同 scope 'ssr' 存在两个硬保底`。
+        """
+        defs = [
+            PityDef(name='hard_a', btype='hard', scope='ssr', threshold=90,
+                    pools=('pool_a',)),
+            PityDef(name='hard_b', btype='hard', scope='ssr', threshold=90,
+                    pools=('pool_b',)),
+        ]
+        engine = _engine_with_pools(defs, ['pool_a', 'pool_b'])
+        assert set(engine.behaviors) == {'hard_a', 'hard_b'}
+        assert engine.get_behaviors_for_pool('pool_a')[0][0] == 'hard_a'
+        assert engine.get_behaviors_for_pool('pool_b')[0][0] == 'hard_b'
+
+    def test_overlapping_pools_are_still_rejected(self):
+        """② 两条同 scope `hard` 绑**同一池** → 仍拒（组内判据不变）。"""
+        defs = [
+            PityDef(name='hard_a', btype='hard', scope='ssr', threshold=90,
+                    pools=('pool_a',)),
+            PityDef(name='hard_b', btype='hard', scope='ssr', threshold=80,
+                    pools=('pool_a',)),
+        ]
+        with pytest.raises(ConfigError, match='两个硬保底'):
+            _engine_with_pools(defs, ['pool_a'])
+
+    def test_partially_overlapping_pools_are_still_rejected(self):
+        """② 部分重叠（`hard_b` 同时绑两池）→ 仍拒：它们在 `pool_a` 内共同执行。"""
+        defs = [
+            PityDef(name='hard_a', btype='hard', scope='ssr', threshold=90,
+                    pools=('pool_a',)),
+            PityDef(name='hard_b', btype='hard', scope='ssr', threshold=80,
+                    pools=('pool_a', 'pool_b')),
+        ]
+        with pytest.raises(ConfigError, match='两个硬保底'):
+            _engine_with_pools(defs, ['pool_a', 'pool_b'])
+
+    def test_wildcard_pattern_intersects_any_concrete_pool(self):
+        """③ `('*',)` 与具体池**必相交**（`*` 匹配任何全限定键）→ 仍拒。
+
+        推论：`('*',)` 与任何保底都同组，故「默认绑全部池的保底」与「显式绑某池的
+        保底」仍互斥。这是正确行为（它们确实会在该池内同时执行）。
+        """
+        defs = [
+            PityDef(name='hard_all', btype='hard', scope='ssr', threshold=90),
+            PityDef(name='hard_b', btype='hard', scope='ssr', threshold=80,
+                    pools=('pool_b',)),
+        ]
+        with pytest.raises(ConfigError, match='两个硬保底'):
+            _engine_with_pools(defs, ['pool_a', 'pool_b'])
+
+    def test_duplicate_name_stays_global_across_disjoint_pools(self):
+        """④ 规则 1（重名）**保持全局**：池集不相交也拒（`name` 是引擎与状态命名
+        空间的键，与池无关）。"""
+        defs = [
+            PityDef(name='dup', btype='hard', scope='ssr', threshold=90,
+                    pools=('pool_a',)),
+            PityDef(name='dup', btype='rotating', scope='ssr',
+                    pools=('pool_b',)),
+        ]
+        with pytest.raises(ValueError, match='重复的保底 name'):
+            _engine_with_pools(defs, ['pool_a', 'pool_b'])
+
+    def test_event_driven_and_soft_rules_are_pool_scoped(self):
+        """规则 3 / 规则 4 同批下沉：不相交池的两条事件驱动型 / 两条同 btype 软
+        保底均放行。"""
+        defs = [
+            PityDef(name='rot_a', btype='rotating', scope='ssr', pools=('pool_a',)),
+            PityDef(name='rot_b', btype='rotating', scope='ssr', pools=('pool_b',)),
+            PityDef(name='soft_a', btype='soft_additive', scope='ssr',
+                    soft_start=74, soft_increment=6.0, pools=('pool_a',)),
+            PityDef(name='soft_b', btype='soft_additive', scope='ssr',
+                    soft_start=63, soft_increment=6.0, pools=('pool_b',)),
+        ]
+        engine = _engine_with_pools(defs, ['pool_a', 'pool_b'])
+        assert set(engine.behaviors) == {'rot_a', 'rot_b', 'soft_a', 'soft_b'}
+
+    def test_genshin_flagship_shape_from_manual_loads(self):
+        """⑤ 手册 §1.4 的原神旗舰示例形状（角色池 / 武器池各一 hard + 各一 soft，
+        池集不相交）→ **可加载**。
+
+        手册片段用裸池名（`pools = ["char_limited"]`，P61 之前的写法），现行口径是
+        全限定键 `{banner_id}.{pool_id}` + fnmatch，故本用例按**等价构造**书写：
+        `char_*` 组绑 `char_1.main` / `standard.main` / `beginner.main`，`weapon_*`
+        组绑 `weapon_1.main`，两组池集不相交。同 scope 的 `char_rotating` 与
+        `epitomized_weapon`（规则 3）、两条 `soft_additive`（规则 4）一并覆盖。
+        """
+        char_pools = ('char_1.main', 'standard.main', 'beginner.main')
+        weapon_pools = ('weapon_1.main',)
+        defs = [
+            PityDef(name='char_soft', btype='soft_additive', scope='ssr',
+                    soft_start=74, soft_increment=6.0, pools=char_pools),
+            PityDef(name='char_rotating', btype='rotating', scope='ssr',
+                    pools=('char_1.main',)),
+            PityDef(name='char_hard', btype='hard', scope='ssr',
+                    target_featured=True, threshold=90, pools=char_pools),
+            PityDef(name='weapon_soft', btype='soft_additive', scope='ssr',
+                    soft_start=63, soft_increment=6.0, pools=weapon_pools),
+            PityDef(name='epitomized_weapon', btype='targeted', scope='ssr',
+                    fate_threshold=1, switch_allowed=True,
+                    switch_resets_progress=True, pools=weapon_pools),
+            PityDef(name='weapon_hard', btype='hard', scope='ssr',
+                    target_featured=True, threshold=80, pools=weapon_pools),
+        ]
+        engine = _engine_with_pools(
+            defs, ['char_1.main', 'standard.main', 'beginner.main', 'weapon_1.main'])
+        assert set(engine.behaviors) == {
+            'char_soft', 'char_rotating', 'char_hard',
+            'weapon_soft', 'epitomized_weapon', 'weapon_hard'}
+        char_names = {n for n, _bh in engine.get_behaviors_for_pool('char_1.main')}
+        weapon_names = {n for n, _bh in engine.get_behaviors_for_pool('weapon_1.main')}
+        assert char_names == {'char_soft', 'char_rotating', 'char_hard'}
+        assert weapon_names == {'weapon_soft', 'epitomized_weapon', 'weapon_hard'}
+
+    def test_no_pool_info_falls_back_to_global_scope(self):
+        """无池信息（`pool_specs` 缺省 / 空）时回退单一全局组，即既有语义不放松。"""
+        with pytest.raises(ConfigError, match='两个硬保底'):
+            _engine([
+                PityDef(name='hard_a', btype='hard', scope='ssr', threshold=90),
+                PityDef(name='hard_b', btype='hard', scope='ssr', threshold=80),
+            ])
+        with pytest.raises(ConfigError, match='两个硬保底'):
+            PityEngine(pool_specs={}, pity_defs=[
+                PityDef(name='hard_a', btype='hard', scope='ssr', threshold=90),
+                PityDef(name='hard_b', btype='hard', scope='ssr', threshold=80),
+            ], state=PityState(), rarity_rank=_RARITY)

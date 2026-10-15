@@ -1867,56 +1867,115 @@ def _resolve_order(behaviors, rarity_rank=None):
     return sorted(behaviors, key=_sort_key)
 
 
-def _validate_behaviors(behaviors):
-    """PityEngine 层校验——第二道防线（TOML 解析层为第一道）。
+def _validate_behaviors(behaviors, pool_specs=None):
+    """PityEngine 层校验：第二道防线（TOML 解析层为第一道）。
 
     校验规则：
-      1. name 重名 → ValueError
-      2. 同 scope 两个 hard → ConfigError（互斥）
-      3. 同 scope 两个事件驱动型 → ConfigError（互斥）
-      4. 同 scope 同 btype 两个 soft → ConfigError（重复配置）
-    """
-    from .config_store import ConfigError
-    seen_names = {}
-    scope_hard = set()
-    scope_event = set()
-    scope_soft = {}
+      1. name 重名 → ValueError（**全局**，与池无关）
+      2. 同 scope 两个 hard → ConfigError（互斥，**组内判据**）
+      3. 同 scope 两个事件驱动型 → ConfigError（互斥，组内判据）
+      4. 同 scope 同 btype 两个 soft → ConfigError（重复配置，组内判据）
 
+    **缺陷 13 修复（2026-10-15，用户裁定）**：规则 2/3/4 的适用域由「全部 behaviors」
+    下沉为「**按池分组后的组内**」。缺陷本体：本函数在 `PityEngine.__init__` 里对全部
+    behaviors 执行，而**概率管道是池级**的（`_pool_order` 按 `PoolPitySpec.pity_names`
+    过滤，池间保底从不共同执行），故两条同 scope 保底只要 `pools` **完全不相交**就
+    永不共同执行、不该被判互斥（真实游戏「角色池一个硬保底、武器池一个硬保底」是常态，
+    手册 §1.4 的原神旗舰示例正是这个形状）。
+
+    **组的定义与匹配口径**：组的成员取自 `PoolPitySpec.pity_names`（即运行时那份
+    「哪个保底绑哪个池」的事实，由 `batch_simulator` / `worst_impact` 按 `PityDef.pools`
+    的 `fnmatch` 口径生成），故**判据与运行时同源**、不另写一套匹配。**部分重叠仍互斥**
+    （两条保底若存在任何一个共同匹配的池，它们在该池内同时执行）；推论是 `('*',)` 与
+    任何具体池都相交，故「默认绑全部池的保底」与「显式绑某池的保底」仍互斥。
+
+    **回退**：`pool_specs` 缺省（`None`）或为空 dict 时退化为**单一全局组**，即既有语义
+    （该形态见于直调本函数的单元测试；生产路径恒有池）。
+
+    **不放松**：除规则 2/3/4 的适用域外，其余校验（规则 1 重名、`scope` 白名单、
+    键契约）一律不动。
+    """
+    # ── 规则 1：name 重名（**全局**：`name` 是 `engine.behaviors` 与 `PityState`
+    #    命名空间的键，与池绑定无关）──
+    seen_names = {}
     for bh in behaviors:
         name = getattr(bh, '_name', id(bh))
-        scope = getattr(bh, '_scope', '')
-        btype = getattr(bh, '_btype', '')
-
-        # 规则 1：name 重名
         if name in seen_names:
             raise ValueError(
-                f"PityEngine._validate_behaviors: 重复的 behavior name '{name}'——"
+                f"PityEngine._validate_behaviors: 重复的 behavior name '{name}'："
                 f"已由 '{seen_names[name].__class__.__name__}' 注册。"
                 f"每个 behavior 必须有唯一的 name。"
             )
         seen_names[name] = bh
 
-        # 规则 2-4：scope 重叠校验
+    # ── 规则 2-4：按池分组的组内判据（缺陷 13）──
+    for group in _pool_scoped_groups(behaviors, pool_specs):
+        _check_scope_overlap(group)
+
+
+def _pool_scoped_groups(behaviors, pool_specs):
+    """把 behaviors 按「共同执行的池」分组（缺陷 13 的组定义）。
+
+    返回 `List[List[behavior]]`：每个元素是一个池的成员（组内按 `behaviors` 的既有
+    顺序排列，故报错消息里「先注册的那条」与排序结果一致）。`pool_specs` 缺省或为空时
+    返回「单一全局组」，即既有语义。
+
+    **顺序**：组的成员顺序取 `behaviors` 的传入顺序（`PityEngine` 传的是
+    `_resolve_order` 的输出），不用 `spec.pity_names` 的 TOML 顺序，以免同一份配置在
+    「报错指向哪一条」上依赖书写顺序。
+    """
+    if not pool_specs:
+        return [list(behaviors)]
+
+    order = {getattr(bh, '_name', None): _i for _i, bh in enumerate(behaviors)}
+    groups = []
+    for _pool_id, spec in pool_specs.items():
+        members = {n for n in (getattr(spec, 'pity_names', None) or ()) if n in order}
+        if not members:
+            continue
+        groups.append([bh for bh in behaviors if getattr(bh, '_name', None) in members])
+    return groups
+
+
+def _check_scope_overlap(group):
+    """组内规则 2/3/4（原全局判据，缺陷 13 起按池分组调用）。
+
+    判据本体逐字保留（同 scope 两个 hard / 同 scope 两个事件驱动型 / 同 scope 同 btype
+    两个 soft）；`group` 是一个池的成员集（`_pool_scoped_groups` 的产物）。
+    """
+    from .config_store import ConfigError
+
+    scope_hard = {}
+    scope_event = {}
+    scope_soft = {}
+
+    for bh in group:
+        name = getattr(bh, '_name', id(bh))
+        scope = getattr(bh, '_scope', '')
+        btype = getattr(bh, '_btype', '')
+
         if getattr(bh, 'is_hard', False):
             if scope in scope_hard:
                 raise ConfigError(
                     f"同 scope '{scope}' 存在两个硬保底："
-                    f"'{next(n for n, b in seen_names.items() if getattr(b,'_scope','')==scope and getattr(b,'is_hard',False))}'"
-                    f" 与 '{name}'——每个稀有度最多一个硬保底"
+                    f"'{scope_hard[scope]}' 与 '{name}'"
+                    f"（每个稀有度最多一个硬保底）"
                 )
-            scope_hard.add(scope)
+            scope_hard[scope] = name
         elif getattr(bh, 'is_event_driven', False):
             if scope in scope_event:
                 raise ConfigError(
-                    f"同 scope '{scope}' 存在两个事件驱动型保底——每个稀有度最多一个事件驱动型"
+                    f"同 scope '{scope}' 存在两个事件驱动型保底"
+                    f"（每个稀有度最多一个事件驱动型）："
+                    f"'{scope_event[scope]}' 与 '{name}'"
                 )
-            scope_event.add(scope)
+            scope_event[scope] = name
         elif getattr(bh, 'is_soft', False):
             key = (scope, btype)
             if key in scope_soft:
                 raise ConfigError(
                     f"同 scope '{scope}' 同 type '{btype}' 存在两个软保底："
-                    f"'{scope_soft[key]}' 与 '{name}'——请合并或使用不同 type"
+                    f"'{scope_soft[key]}' 与 '{name}'：请合并或使用不同 type"
                 )
             scope_soft[key] = name
 
@@ -2186,7 +2245,10 @@ class PityEngine:
 
         # 排序 + 校验
         ordered = _resolve_order(list(self.behaviors.values()), self._rarity_rank)
-        _validate_behaviors(ordered)
+        # 缺陷 13（2026-10-15）：把 `pool_specs` 传进校验，使规则 2/3/4 落在「按池分组
+        # 后的组内」判据上（概率管道是池级的，池间保底从不共同执行）。规则 1（重名）
+        # 仍在 `_validate_behaviors` 内全局执行。
+        _validate_behaviors(ordered, self.pool_specs)
         self._pity_defs_list = pity_defs  # P56
         self._behavior_list: List[PityBehavior] = ordered
 

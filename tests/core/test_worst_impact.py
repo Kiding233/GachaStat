@@ -3,6 +3,7 @@ import pytest
 from gacha_simulator.core.config_store import PityDef as _PityDef
 from gacha_simulator.core.worst_impact import (
     ConditionalResourceDistribution,
+    WorstImpactAnalyzer,
     WorstImpactResult,
 )
 # P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
@@ -817,3 +818,128 @@ def test_worst_impact_boundary_readonly_query_suppresses_cr_intercept():
     drawn = engine.before_draw(key, st_draw, probs, sim=_SIM)
     assert drawn != probs, '抽卡前未体现拦截（① 的恒等断言随之空转）'
     assert abs(sum(drawn.values()) - 1.0) < 1e-12
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 2026-10-15：覆盖倍数（`pity_coverage`）的两条护栏
+#
+# 引入背景（P64 报告 §八「待复测」段的登记）：该指标**此前无任何 golden / 测试
+# 钉住**（`grep -rn pity_coverage tests/ scripts/` 只命中一个 dataclass 构造用例），
+# 故读数漂移不会被任何门控发现；同批登记的第二条是分母取错池。两条都在此收口。
+# ═══════════════════════════════════════════════════════════════════
+
+def _default_store():
+    """随包默认配置的 `ConfigStore`（每个用例独立 deepcopy，互不污染）。"""
+    import copy
+    from pathlib import Path
+    from gacha_simulator.core.config_toml import load_toml
+
+    cfg_path = (Path(__file__).resolve().parents[2]
+                / 'gacha_simulator' / 'config' / 'config.toml')
+    return copy.deepcopy(load_toml(str(cfg_path)))
+
+
+def test_pity_cost_unit_uses_reference_pool_not_first_pool():
+    """`_get_pity_cost` 的分母单价取**参照池**，不是 `store.pools[0]`。
+
+    参照池 = `_prepare_pool_info` 选定的 `pool_entries[-1]`（最后一个 enabled 池），
+    它也是分析实际使用的池（`_parsed_cost` / `_resource_name` / `_rewards` 都由它
+    派生）。原实现固定读 `store.pools[0].cost`（**第一个**池），池成本异构时分母
+    取到一个与分析无关的单价。
+
+    **默认配置 8 池同价，故该缺陷在随包配置上不可见**——按 2026-10-15 的原则，
+    「随包配置跑不到」不构成不修的理由，严重度按「存在语义合理的配置能触发它」判。
+    """
+    store = _default_store()
+    banners = store.banner.banners
+    assert len(banners) >= 2, '本用例需要至少两个 Banner（池成本异构）'
+
+    banners[0].pools[0].cost = 'draw_resource:999'      # 第一个池：旧实现的取值来源
+    banners[-1].pools[0].cost = 'draw_resource:320'     # 参照池：_prepare_pool_info 选它
+
+    analyzer = WorstImpactAnalyzer([], {}, store)
+    analyzer._prepare_pool_info()
+
+    assert analyzer._ref_pool_entry is not None, '本用例的前置：参照池须已选定'
+    assert analyzer._ref_pool_entry.cost == 'draw_resource:320', \
+        '本用例的前置：参照池应是最后一个 enabled 池'
+    assert store.pools[0].cost == 'draw_resource:999', \
+        '本用例的前置：第一个池的成本须与参照池不同（否则断言无判别力）'
+
+    max_end = max(analyzer._get_pity_end(p) for p in store.pity.pities)
+    assert analyzer._get_pity_cost() == max_end * 320, (
+        f'分母单价取错池：期望参照池的 320 × {max_end}，'
+        f'实际 {analyzer._get_pity_cost()}（第一个池为 999 × {max_end} = '
+        f'{max_end * 999}）'
+    )
+    # 单价本身也单列一条：把「取错池」与「max_end 算错」两类失效分开
+    assert analyzer._draw_unit_cost() == 320
+
+
+def test_pity_coverage_golden_default_config():
+    """默认配置 + GUI 默认口径的覆盖倍数 golden（α=0.05 / N=1000 / seed=42）。
+
+    **口径**（与 GUI 面板默认完全同形，2026-10-15 实测复现）：
+    - 主模拟：随包 `config.toml`、策略 `smart`（`[strategy].key`）、N=1000、seed=42
+    - 最差影响：条件=成功、广义出率=面板默认 `target_achievement`、阈值 1.00、
+      α=0.05、池形状取最后一个 enabled 池（面板 `_load_last_pool_config` 的口径）
+    - 读数：`worst_resource`（成功组资源分布的 α 分位）/ `pity_cost`
+      （`max_end × 单价` = 90 × 160）
+
+    **只跑到分子与分母，不跑 `analyze()` 的第二段**（99 池判定模拟）：覆盖倍数在
+    `analyze()` 里于第二段**之前**算定（`pity_coverage = self._compute_pity_coverage(
+    worst_resource)`），故第二段不影响本读数，省下的时间用于把 golden 放进默认
+    测试集。
+
+    **为什么值得跑一次真模拟**：分子不是常量而是主模拟结果的 α 分位，只有真跑才
+    能发现「主模拟结果漂移 → 读数漂移」；把 3060 写死成字面量只能验公式，验不出
+    读数。分母另由配置现算（`_get_pity_cost()`），故两类漂移各有一条断言。
+    """
+    store = _default_store()
+    from gacha_simulator.service.batch_simulator import (
+        SimulationEnvBuilder, run_batch_parallel)
+
+    env = SimulationEnvBuilder.from_config_store(store)
+    env.return_compact = False                       # 与 GUI 主模拟同形
+    target_specs = {tc.card_id: tc.quantity for tc in store.target_cards}
+    batch = run_batch_parallel(
+        env=env, target_specs=target_specs,
+        initial_resources=env.initial_resources,
+        num_simulations=1000, max_workers=4, seed=42,
+        strategy_key=store.strategy_key,
+        strategy_params=store.strategy_params,
+    )
+    aggregates = batch.extraction.get('aggregates', [])
+    assert len(aggregates) == 1000, f'主模拟应产出 1000 条结果，实际 {len(aggregates)}'
+
+    pe = [p for p in store.pools if p.enabled][-1]
+    analyzer = WorstImpactAnalyzer(
+        aggregates, target_specs, store,
+        gdr_key='target_achievement', gdr_threshold=1.0,
+        custom_pool_config={
+            'duration_days': pe.end_day - pe.start_day,
+            'cost': pe.cost,
+            'distribution': [
+                {'card_id': de.card_id, 'probability': de.probability,
+                 'rarity': de.rarity, 'featured': de.featured,
+                 'resources_gained': dict(de.resources_gained) if de.resources_gained else {}}
+                for de in pe.distribution
+            ],
+        },
+    )
+    analyzer._prepare_pool_info()
+
+    checker = analyzer._build_success_checker(
+        target_specs=target_specs, ssr_ids=analyzer._main_ssr_ids)
+    dist = ConditionalResourceDistribution(
+        aggregates, checker.is_success, resource=analyzer._resource_name)
+    worst_resource = dist.get_worst_case_resource('success', 0.05)
+
+    assert worst_resource == 3060.0, (
+        f'分子漂移：成功组 α=0.05 分位期望 3060，实际 {worst_resource}'
+        f'（n_failure={len(dist.failure_resources)}）')
+    assert analyzer._get_pity_cost() == 14400, (
+        f'分母漂移：期望 90 × 160 = 14400，实际 {analyzer._get_pity_cost()}')
+    assert analyzer._compute_pity_coverage(worst_resource) == pytest.approx(0.2125), (
+        f'覆盖倍数漂移：期望 3060 / 14400 = 0.2125，'
+        f'实际 {analyzer._compute_pity_coverage(worst_resource)}')

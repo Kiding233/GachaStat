@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 from collections import defaultdict
 
 from .distribution import EmpiricalDistribution
@@ -87,6 +87,10 @@ class WorstImpactAnalyzer:
         self._pool_duration = 21 * DAY
         self._parsed_cost = [{'draw_resource': 160}]
         self._resource_name = 'draw_resource'
+        # 单抽消耗单价（覆盖倍数分母的单价因子）。由 `_prepare_pool_info` /
+        # `_apply_custom_pool_config` 按**参照池**写入；None = 参照池不可得
+        # （两条选择路径都早退），此时 `_draw_unit_cost()` 走原回退。
+        self._unit_cost: Optional[int] = None
         self._rewards = []
         self._main_ssr_ids: Set[str] = set()
         for cd in store.card_defs:
@@ -347,18 +351,55 @@ class WorstImpactAnalyzer:
 
     def _get_pity_cost(self):
         if not self.store.pity.enabled or not self.store.pity.pities:
+            # 保底关闭时的退化分母，保持既有口径不变（与参照池无关）
             return 90 * 160
         # 取所有 PityDef 中最大的 end 值（替代仅读 pities[0]）
         max_end = max((self._get_pity_end(p) for p in self.store.pity.pities), default=90)
-        cost = 160
+        return max_end * self._draw_unit_cost()
+
+    def _draw_unit_cost(self) -> int:
+        """单抽消耗（覆盖倍数分母的单价因子）——取**参照池**的成本。
+
+        「参照池」= `_prepare_pool_info` 选定的那个池（非自定义池路径下是
+        `pool_entries[-1]`，自定义池路径下是 `custom_pool_config['cost']`）——
+        两条路径都把它的消耗解析进 `self._parsed_cost` 并据它定
+        `self._resource_name`，本函数从同一份解析结果取单价，故与参照池同源。
+
+        **原实现固定读 `store.pools[0].cost`（第一个池）**：池成本异构时分母取到
+        一个与分析无关的单价，覆盖倍数随之失真（默认配置 8 池同价，故在随包配置上
+        不可见；2026-10-15 修复）。
+
+        参照池不可得时（无 enabled 池且无自定义池配置 → 两条选择路径都早退）
+        保留原回退：读 `store.pools[0].cost`，仍不可解析则用 160。
+        """
+        if self._unit_cost is not None:
+            return self._unit_cost
         if self.store.pools:
             c = self.store.pools[0].cost
             if isinstance(c, str) and ':' in c:
                 try:
-                    cost = int(c.split(':')[1])
+                    return int(c.split(':')[1])
                 except ValueError:
                     pass
-        return max_end * cost
+        return 160
+
+    def _parse_unit_cost(self) -> Optional[int]:
+        """从 `self._parsed_cost` 取 `self._resource_name` 的单价（参照池口径）。
+
+        `_parsed_cost` 是 `parse_cost_string()` 的产物（OR 分支列表，每支一个
+        `{资源: 数量}`），`_resource_name` 已定为**首支**里的分析资源名，故首支
+        里它的数量就是单抽消耗。解析不出（空成本串 / 非数值）返回 None——调用方
+        据此保留 `_unit_cost = None`，走 `_draw_unit_cost()` 的原回退。
+        """
+        if not self._parsed_cost:
+            return None
+        option = self._parsed_cost[0]
+        if not isinstance(option, dict):
+            return None
+        try:
+            return int(option.get(self._resource_name))
+        except (TypeError, ValueError):
+            return None
 
     def _prepare_pool_info(self):
         if self.custom_pool_config and self.custom_pool_config.get('distribution'):
@@ -381,6 +422,7 @@ class WorstImpactAnalyzer:
             self._resource_name = parsed_rid
         else:
             self._resource_name = list(self._parsed_cost[0].keys())[0] if self._parsed_cost else 'draw_resource'
+        self._unit_cost = self._parse_unit_cost()   # 参照池单价（覆盖倍数分母）
 
         rewards = []
         if pe.distribution:
@@ -442,6 +484,7 @@ class WorstImpactAnalyzer:
             self._resource_name = parsed_rid
         else:
             self._resource_name = list(self._parsed_cost[0].keys())[0] if self._parsed_cost else 'draw_resource'
+        self._unit_cost = self._parse_unit_cost()   # 参照池（自定义池配置）单价
 
         rewards = []
         for d in cfg.get('distribution', []):

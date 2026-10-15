@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
 from gacha_simulator.core.gdr import populate_gdr_combo, get_default_threshold
+from gacha_simulator.core.worst_impact import coverage_trace_text
 from .config_panel import PoolDistributionDialog
 from .chart_webview import ChartWebView
 
@@ -123,20 +124,18 @@ class PityCoverageGauge(QWidget):
 
 def _coverage_trace_text(alpha=None, n=None, worst_resource=None,
                          pity_cost=None) -> str:
-    """覆盖倍数读数的可追溯后缀：`α=0.05 · N=1000 · 保守资源 3060 · 大保底成本 14400`。
+    """覆盖倍数读数的可追溯后缀（**薄壳**：实现在 `core/worst_impact.py`）。
 
-    缺项即略（`analyze()` 未产出 / 分母不可得），不写占位符——不臆造未观测到的值。
+    `α=0.05 · N=1000 · 保守资源 3060 · 大保底成本 14400`。
+
+    **2026-10-15 下沉**：原先本函数自持一份实现，而 WebUI 侧的同一展示
+    （`webui/worst_impact_service.analyze_worst_dist` 的 gauge 段）没有该行，两处
+    口径不一致。实现下沉到 `core/worst_impact.coverage_trace_text` 后，GUI 与 WebUI
+    取**同一函数**，不再有「改一处另一处静默分叉」的失效模式。本壳保留函数名，
+    既有调用点（`set_value` / `_on_finished`）不变。
     """
-    parts = []
-    if alpha is not None:
-        parts.append(f"α={alpha:g}")
-    if n is not None:
-        parts.append(f"N={n}")
-    if worst_resource is not None:
-        parts.append(f"保守资源 {worst_resource:.0f}")
-    if pity_cost is not None:
-        parts.append(f"大保底成本 {pity_cost:.0f}")
-    return " · ".join(parts)
+    return coverage_trace_text(alpha=alpha, n=n, worst_resource=worst_resource,
+                               pity_cost=pity_cost)
 
 
 class WorstImpactWorker(QThread):

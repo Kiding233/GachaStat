@@ -597,3 +597,34 @@ class WorstImpactAnalyzer:
         rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
         return PityEngine(pool_specs, pity_defs_list,
                         state=state, rarity_rank=rr)
+
+
+def coverage_trace_text(alpha=None, n=None, worst_resource=None,
+                        pity_cost=None) -> str:
+    """覆盖倍数读数的**可追溯后缀**（GUI 与 WebUI 共用的一处实现，2026-10-15）。
+
+    覆盖倍数对 α **极敏感**（同一版本 α=0.05 读 0.2125、α=0.15 读 0.2792，P64 报告
+    §八 实测），而 α / N 原先只存在于面板的输入控件里，读数一旦离开界面就无法回溯
+    自己对应哪套参数。故把 α / N 与两个原始量（分子 `worst_resource`、分母
+    `pity_cost`）拼成一串，印在读数旁。
+
+    **两处展示共用本函数**：GUI 的 `PityCoverageGauge` 经
+    `gui/worst_impact_panel._coverage_trace_text` 调用它，WebUI 的 `analyze_worst_dist`
+    经 `webui/worst_impact_service` 调用它。此前 GUI 侧有一份实现、WebUI 侧**没有**
+    该展示（口径不一致）；下沉到本层后是**一处实现**，WebUI 侧的读数与 GUI 侧逐字
+    同构，也不再有「同一展示两处实现、改一处另一处静默分叉」的失效模式（同型先例：
+    缺陷 12 的 `infer_rarity_from_spec` 与 `_infer_rarity` 两份实现）。
+
+    **纯展示**：不参与任何计算。缺项即略（`analyze()` 未产出 / 分母不可得时不写
+    占位符，不臆造未观测到的值）。
+    """
+    parts = []
+    if alpha is not None:
+        parts.append(f"α={alpha:g}")
+    if n is not None:
+        parts.append(f"N={n}")
+    if worst_resource is not None:
+        parts.append(f"保守资源 {worst_resource:.0f}")
+    if pity_cost is not None:
+        parts.append(f"大保底成本 {pity_cost:.0f}")
+    return " · ".join(parts)

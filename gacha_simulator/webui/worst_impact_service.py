@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from gacha_simulator.core.worst_impact import WorstImpactAnalyzer, ConditionalResourceDistribution, MAX_POOLS
+from gacha_simulator.core.worst_impact import (WorstImpactAnalyzer, ConditionalResourceDistribution,
+                                               MAX_POOLS, coverage_trace_text)
 from gacha_simulator.core.gdr import is_resource_gdr
 from gacha_simulator.visualization.chart_spec import ChartSpec, BarData
 from gacha_simulator.core.config_store import ConfigStore, BannerEntry, BannerPoolEntry, TargetCardEntry
@@ -175,8 +176,24 @@ def analyze_worst_dist(dataset, store, params: dict) -> dict:
         except Exception:
             pity_coverage = None
         if pity_coverage is not None and np.isfinite(pity_coverage):
-            sections.append({'key': 'gauge', 'title': '大保底资源覆盖', 'value': round(pity_coverage, 2),
-                             'desc': '覆盖倍数（≥1 = 初始资源可覆盖一次大保底）'})
+            # 读数可追溯（2026-10-15，对齐 GUI 的 `PityCoverageGauge`）：覆盖倍数对 α
+            # **极敏感**、N 决定分位估计的噪声，而两者此前只存在于前端输入控件里，
+            # 读数一旦离开界面就无法回溯自己对应哪套参数。α / N 与两个原始量（分子 =
+            # 本次分析用的初始资源、分母 = 大保底成本）由 `core.worst_impact` 的
+            # **唯一实现** `coverage_trace_text()` 拼成一串，GUI 侧调用同一函数，
+            # 故两侧口径逐字一致（不再有「同一展示两处实现」的失效模式）。
+            # **纯展示**：不参与任何计算；α 缺失即略（不臆造未观测到的值）。
+            try:
+                _alpha = (float(params.get('alpha'))
+                          if params.get('alpha') is not None else None)
+            except (TypeError, ValueError):
+                _alpha = None
+            _trace = coverage_trace_text(alpha=_alpha, n=len(agg),
+                                         worst_resource=init_res,
+                                         pity_cost=analyzer._get_pity_cost())
+            sections.append({'key': 'gauge', 'title': '大保底资源覆盖',
+                             'value': round(pity_coverage, 2),
+                             'desc': f'覆盖倍数（≥1 = 初始资源可覆盖一次大保底）；{_trace}'})
         cond_label = {'all': '全部', 'success': '成功', 'failure': '失败'}.get(cond, cond)
         sections.append({'key': 'summary', 'title': '新池子数分布',
                          'items': {'期望连续新池子数': f'{expected:.2f}',

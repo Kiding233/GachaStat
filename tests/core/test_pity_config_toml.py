@@ -520,7 +520,9 @@ class TestDuplicatedConstants:
 # ══════════════════════════════════════════════════════════════════
 # P64 G16-1 / ISSUE-928：`[[pity]].reset` 取值白名单
 # ══════════════════════════════════════════════════════════════════
-# 白名单 = 空串 / `featured` / 稀有度名（`[rarities].ranks` 的键）/ `never`，
+# 白名单 = 空串 / `featured` / 稀有度名（`[rarities].ranks` 的键）/ `never` /
+# `on_effective`（2026-10-15 用户裁定新增；**取值面**合法，**类型面**另有
+# `create_behavior` 的硬拒，只有阈值触发型可用，见 `test_pity_reset_on_effective.py`），
 # 其余取值一律抛 `ConfigError`。被测面是 `_build_pity` 的校验分支与其取值来源
 # `legal_reset_values()`；未知值（含拼写错误如 `'nevr'`）在旧实现里经
 # `_should_reset` 的兜底分支（`reward_rarity == reset`）恒为 False，即**静默
@@ -543,10 +545,17 @@ class TestResetValueWhitelist:
         return _write_and_load(toml)
 
     @pytest.mark.parametrize('reset_value',
-                             ['', 'featured', 'never', 'ssr', 'sr', 'r'],
-                             ids=['empty', 'featured', 'never', 'ssr', 'sr', 'r'])
+                             ['', 'featured', 'never', 'on_effective', 'ssr', 'sr', 'r'],
+                             ids=['empty', 'featured', 'never', 'on_effective',
+                                  'ssr', 'sr', 'r'])
     def test_reset_whitelist_accepts_legal_values(self, reset_value):
-        """四类合法取值（空串 / featured / 稀有度名 / never）均可载入。"""
+        """五类合法取值（空串 / featured / 稀有度名 / never / on_effective）均可载入。
+
+        **`on_effective` 只验取值面**：`_build_pity` 的白名单是取值面，类型面
+        （哪些 type 真正可用）由 `create_behavior` 的硬拒把关，故本用例的
+        `type = "hard"` 是合法组合；非阈值触发型配该取值必抛的负例见
+        `test_pity_reset_on_effective.py::TestTypeWhitelist`。
+        """
         store, path = self._load(reset_value)
         try:
             assert store.pity.pities[0].reset == reset_value
@@ -596,11 +605,18 @@ class TestResetValueWhitelist:
             os.unlink(path)
 
     def test_reset_whitelist_shared_with_legal_reset_values(self):
-        """取值集合与 `legal_reset_values()` 同源（白名单不在两处各写一份）。"""
+        """取值集合与 `legal_reset_values()` 同源（白名单不在两处各写一份）。
+
+        **集合快照随语义变更更新（2026-10-15）**：`'on_effective'` 由用户裁定
+        新增（幻塔「每 N 抽白送一个」的等价表达），故本断言的内容快照随之增加
+        一项。这是**语义变更的预期更新**而非放宽判据：断言仍是精确集合相等
+        （既拦「少一项」也拦「多一项」），且 `'nevr'` / `'any_ssr'` /
+        `'featured_ssr'` 的拒收用例未动。
+        """
         from gacha_simulator.core.config_toml import legal_reset_values
 
         assert legal_reset_values({'ssr': 0, 'sr': 1, 'r': 2}) == {
-            '', 'featured', 'never', 'ssr', 'sr', 'r'}
+            '', 'featured', 'never', 'on_effective', 'ssr', 'sr', 'r'}
 
 
 # ══════════════════════════════════════════════════════════════════

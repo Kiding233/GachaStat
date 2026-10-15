@@ -19,7 +19,7 @@ import random
 from typing import Optional
 
 from .pity_primitives import (
-    Counter, Flag, LifecycleConfig, PityContext, PityState,
+    Counter, Flag, LifecycleConfig, PityContext, PityState, _EFFECTIVE_KEY,
 )
 
 __all__ = ['Tracker', 'CounterTracker', 'FlagTracker', 'StreakTracker',
@@ -135,7 +135,7 @@ class CounterTracker(Tracker):
     | 形参 | 语义 | 取值来源（§3.2 取值来源表） |
     |------|------|------------------------------|
     | `scope` | 触发稀有度 | `pdef.scope` |
-    | `reset_on` | `'scope'`（出触发稀有度即重置）/ `'featured'`（仅 featured 重置）/ `'never'`（永不重置，G16） | `pdef.reset`，空串回退 `scope` |
+    | `reset_on` | `'scope'`（出触发稀有度即重置）/ `'featured'`（仅 featured 重置）/ `'never'`（永不重置，G16）/ `'on_effective'`（**仅本抽该保底真的改动了分布时重置**，2026-10-15 用户裁定） | `pdef.reset`，空串回退 `scope` |
     | `init` | 计数初值 | `pdef.counter_init` |
 
     **N1 相位**：`counter` 属**计数型**，在 `before_draw` 的 `advance` 段推进，
@@ -149,6 +149,23 @@ class CounterTracker(Tracker):
     统一」的范围内（§3.1.1 三点声明第 2 条）。
 
     **G16 自然落位**：`reset_on='never'` 去掉重置规则即可，无需特殊分支。
+
+    **`'on_effective'`（幻塔「每 N 抽白送一个」的等价表达，2026-10-15）**：判据
+    不是出卡事件、也不是「触发条件成立」（`counter >= τ`），而是**本抽该保底是否
+    真的改动了分布**（`compute_delta()` 返回非 `None` 且非全零的增量）。故
+    `reset_on='on_effective'` 下 `_reset_condition` **读本保底命名空间的
+    `_effective` 键**（`pity_primitives._EFFECTIVE_KEY`）：
+
+    - **写入方是骨架**（`Pity.before_draw` 的 Modifier 链内，见该方法 docstring），
+      不是本 Tracker：本 Tracker 在 `before_draw` 只推进 `counter`（`advance` 段
+      在 Modifier 链**之前**），拿不到本抽的分布结论。
+    - **本 Tracker 只读它**（`commit` 相位），并把该键纳入 `state_keys()`，因为
+      「本保底命名空间下与本 Tracker 语义绑定的键」只有这一处归属方（S11 状态层的
+      允许集由声明集派生，不声明即被判为未声明键）。
+    - **`state_keys()` 只在 `reset_on='on_effective'` 时含它**：其它取值的保底
+      不写该键，声明面与写入面逐项对应。
+    - **不消费 `skip_reset` 之外的例外**：`skip_reset=True`（`deactivate_on_early_hit`
+      的例外通道）对本取值同形生效，判定顺序不变。
     """
 
     def __init__(self, scope: str, reset_on: Optional[str] = None, init: int = 0):
@@ -174,25 +191,39 @@ class CounterTracker(Tracker):
                skip_reset: bool = False) -> None:
         if skip_reset:
             return
-        if self._reset_condition(ctx):
+        if self._reset_condition(ctx, state, name):
             self._counter.reset()
 
     def did_reset(self, ctx: PityContext, state: PityState, name: str) -> bool:
-        return self._reset_condition(ctx)
+        return self._reset_condition(ctx, state, name)
 
     def state_keys(self) -> tuple:
+        # `_effective` 只在 `on_effective` 型上声明（见类 docstring 的
+        # 「`'on_effective'`」段）：声明面与写入面逐项对应。
+        if self._reset_on == 'on_effective':
+            return ('counter', _EFFECTIVE_KEY)
         return ('counter',)
 
     # ── 内部 ──
 
-    def _reset_condition(self, ctx: PityContext) -> bool:
-        """本次抽卡是否满足重置条件（`commit` 与 `did_reset` 的唯一判据）。"""
+    def _reset_condition(self, ctx: PityContext, state: PityState,
+                         name: str) -> bool:
+        """本次抽卡是否满足重置条件（`commit` 与 `did_reset` 的唯一判据）。
+
+        **三实参（`state` / `name` 于 2026-10-15 补入）**：`on_effective` 分支的
+        判据落在**本保底命名空间**的状态键上，取不到 state 即无从判定。前三个分支
+        不读 state，补参不改变它们的语义。
+        """
         if self._reset_on == "featured":
             # 有意保留的不对称：只看 is_featured、无 scope 门控
             return ctx.draw.is_featured
         if self._reset_on == "never":
             # G16 幻塔「出金不重置」
             return False
+        if self._reset_on == "on_effective":
+            # 骨架在本次抽卡的 before_draw 相位写入，缺键即「本抽未生效」。
+            # 不清键会残留上一抽（清除由骨架在每次 before_draw 开头做）。
+            return bool(state.get(name, _EFFECTIVE_KEY, False))
         return ctx.draw.reward_rarity == self._reset_on
 
 

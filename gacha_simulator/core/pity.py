@@ -9,6 +9,10 @@ import random
 from .pity_primitives import (  # noqa: F401
     Counter, Flag, DrawInfo, PityContext, LifecycleConfig, PityState,
     _SOFT_TYPES, _HARD_TYPES, _EVENT_DRIVEN_TYPES, _EXTERNAL_STATE_KEYS,
+    # 2026-10-15（`reset = "on_effective"`）：本抽「是否真的改动了分布」的账本键。
+    # 骨架是它唯一的写入方（Modifier 链内），`CounterTracker` 是唯一读取方，
+    # 故两处从叶子层取同一对象（与 `_EXTERNAL_STATE_KEYS` 同形）。
+    _EFFECTIVE_KEY,
     # P64 S8-1 / S8-3：卡级增量管道的两个本原函数。**定义**住叶子层
     # （`pity_primitives.py`），此处 re-export 使其在编排层可见：
     # `_apply_delta` 的另一个消费方是**实现层**的 `Modifier.apply` 默认实现，
@@ -1445,6 +1449,14 @@ class Pity(PityBehavior):
             'lifecycle': tuple(lifecycle.state_keys()),
         }
 
+        # 2026-10-15（`reset = "on_effective"`）：本抽「是否真的改动了分布」的账本
+        # 开关。判据取**声明面**（`_effective` 是否在 Tracker 的声明键集内）而非遍历
+        # 零件的私有形参：`CounterTracker` 在 `reset_on='on_effective'` 时把它纳入
+        # `state_keys()`（`pity_tracker.py`），故「声明了该键」即「本保底需要记账」。
+        # 这样骨架不读零件的私有属性、不新增配置面，且**不配该取值的保底不写该键**
+        # （其它保底的 `PityState` 逐键不变，快照口径不受影响）。
+        self._tracks_effective = _EFFECTIVE_KEY in self._declared_keys['trackers']
+
         # S10-2（§3.12.2）：两条合法组合判据的**检查点**。数据是 per-Pity 的
         # （`_declared_keys` 由本保底三族给出），无需引擎上下文，故落在本构造器。
         # 位置须在 `Lifecycle.initialize` **之前**：非法组合在此抛 `ConfigError`，
@@ -1559,10 +1571,31 @@ class Pity(PityBehavior):
         **约定零件不得消费它**（零件要判据只能用各自已有的相位钩子）。
         **零开销**：生产传 `invariants=None`，引擎不建实例、`ctx.invariants` 为 `None`
         （每抽一次属性读，不逐 Modifier 重复读）。
+
+        **`_effective` 账本（2026-10-15，`reset = "on_effective"`）**：本方法是该键
+        **唯一的写入方与清除方**（`self._tracks_effective` 为真时，见 `__init__`）。
+
+        - **清除**：`is_active` 早退之后、Modifier 链**之前**，把本保底命名空间下的
+          该键**删掉**（不是写 `False`：未生效的抽不留键，`PityState` 快照不被污染）。
+          位置在早退之后是必须的（早退路径不跑 Modifier 链、本抽无结论可言，且早退
+          时 `commit` 也早退、不消费该键）；`readonly=True` 时不清除也不置位（只读
+          查询不是抽卡，改状态即污染）。
+        - **置位**：Modifier 链内，某零件的 `compute_delta()` 返回**非 `None` 且非
+          全零**的增量时写 `True`。判据是「真的改动了分布」，**不是**「触发条件
+          成立」（`counter >= τ`）：目标集为空时 `HardModifier` 返 `None`、分布未变，
+          该抽不算生效（§3.9.5 的恒等分支）。
+        - **为何经 state 而不经形参**：Modifier 在本相位、`CounterTracker.commit` 在
+          `after_draw` 相位，两个相位之间没有零件级通道，故账本落在**本保底命名空间**
+          （与 `_active` 同族、同命名空间），由 `CounterTracker._reset_condition` 读取。
         """
         ctx.readonly = readonly
         if not self._lifecycle.is_active(self._state, self._name):
             return ctx.current.copy()
+        if self._tracks_effective and not readonly:
+            # 本抽生效账本的清零点（见上方 docstring 的「`_effective` 账本」段）
+            _ns = self._state.data.get(self._name)
+            if _ns:
+                _ns.pop(_EFFECTIVE_KEY, None)
         for tr in self._trackers:            # N1 首段：计数型先在 before 侧推进
             tr.advance(ctx, self._state, self._name, readonly=readonly)
         for tr in self._trackers:            # N1 中段：抽前需读 state 并消费随机源的零件
@@ -1577,6 +1610,9 @@ class Pity(PityBehavior):
                 if checker is not None:
                     # 增量层：判在「p 与 δ 同时在手、尚未归一化」处（§3.13）。
                     checker.check_delta(ctx.draw.pool_id, out, d)
+                if (self._tracks_effective and not readonly
+                        and any(v != 0 for v in d.values())):
+                    self._state.set(self._name, _EFFECTIVE_KEY, True)
                 out = _apply_delta(out, d)   # (out + d) / Σ(out + d)
         return out
 
@@ -1655,6 +1691,28 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
             f"保底 '{pdef.name}'（type='{pdef.btype}'）不支持 target_featured=true："
             f"该字段仅对 hard 族生效（裁决 7B，2026-10-05）；soft 保底的目标集恒为 "
             f"scope 全集（可等价分解为「稀有度级 + 卡级」两步转移表达同形配置）。"
+        )
+
+    # ══ 2026-10-15（用户裁定）：`reset = "on_effective"` 的类型级硬拒 ══
+    # 该取值的判据是「本抽该保底真的改动了分布」（`compute_delta()` 返回非 `None`
+    # 且非全零），它只在**阈值触发型**上成立：`hard` 与两条 G3 在 `counter >= τ`
+    # 时一次性把目标组搬空（触发与否是二值的、可判的）。
+    # `soft_*` 是渐进爬升（每抽都有非零增量，「生效」退化为恒真，与 `'never'`
+    # 无异）；`rotating*` / `targeted*` 由标记翻转承载（触发不产生「分布被改动」
+    # 这一事件，其增量由 `guaranteed` 标记决定，与「本次是否触发」不同源）。
+    # 故与裁决 7B 对 `target_featured` 的处置同形：**类型级硬拒，不静默忽略**
+    # （静默忽略会让配置者写的字面语义与运行语义分叉且无信号）。
+    # 落点同样定在**本函数**（§3.2.1 落地面 ①）：等价性 harness 与直构 `PityDef`
+    # 的路径绕过 TOML 层，防线须盖住构造入口。
+    if getattr(pdef, 'reset', None) == 'on_effective' and pdef.btype not in _HARD_TYPES:
+        from .config_store import ConfigError
+        raise ConfigError(
+            f"保底 '{pdef.name}'（type='{pdef.btype}'）不支持 reset='on_effective'："
+            f"该取值仅对阈值触发型生效（{'/'.join(sorted(_HARD_TYPES))}），"
+            f"判据是「本抽真的改动了分布」（`compute_delta()` 非 None 且非全零）；"
+            f"soft 族的增量每抽非零（「生效」恒真，与 reset='never' 无异），"
+            f"事件驱动族的触发由标记翻转承载（不产生该判据）。"
+            f"需要「出该稀有度即重置」用 reset='' 或 reset='{scope}'。"
         )
 
     # ══ P64 preset 分支（§3.2 AUDIT-BREAK-3；preset 本体随 S4-2 / S4-3 逐条落地）══

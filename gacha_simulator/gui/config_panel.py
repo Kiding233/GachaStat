@@ -2221,12 +2221,16 @@ class ConfigPanel(QWidget):
     # 「抽到该保底作用稀有度（即 `scope`）的卡就重置」——实现口径为
     # `CounterTracker(reset_on=pdef.reset or _norm_scope(pdef))`（`core/pity.py`
     # 的 preset 工厂），即空串落回 `scope`，故显示名直接点名「作用稀有度」。
+    # `'on_effective'`（2026-10-15 用户裁定，同族文案）：判据不是出卡事件而是
+    # 「本抽真的改动了分布」，故显示名用「仅生效时重置」；它的**类型面**另有
+    # `create_behavior` 的硬拒（只有阈值触发型可用），本表只承载取值面。
     _PITY_RESET_CHOICES = [
         ('', '出作用稀有度'),
         ('featured', '仅出 Featured'),
         ('ssr', '出 SSR'),
         ('sr', '出 SR'),
         ('r', '出 R'),
+        ('on_effective', '仅生效时重置'),
         ('never', '永不重置'),
     ]
 

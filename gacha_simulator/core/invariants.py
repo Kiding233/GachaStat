@@ -372,8 +372,14 @@ class InvariantChecker:
            「下降且非 0 即破坏」今天是准的。但「重置」在语义上不必然归零，一旦出现
            「重置到非零」的语义，**合法重置会被本条误报为破坏**。最近的活边界是
            计划 §六 G16 第 1 条登记的候选（「保底触发时归零」：把 *永不重置* 的
-           计数器改成 *触发时重置*，即给本判据引入一种**新的重置来源**）。G16-2
-           落地时须同批复核本判据的「什么算合法下降」。
+           计数器改成 *触发时重置*，即给本判据引入一种**新的重置来源**）。
+           **该边界已于 2026-10-15 复核（`reset = "on_effective"` 落地）**：新的
+           重置来源仍走 `Counter.reset()`（`CounterTracker._reset_condition` 命中
+           `on_effective` 分支 → `commit` 调 `Counter.reset()`，写 0），故判据
+           「下降且非 0 即破坏」**无需改动**；复核证据是
+           `tests/core/test_pity_reset_on_effective.py::TestEngineEffectiveReset::test_invariant_checker_accepts_the_new_state_key`
+           （`enabled=True` 下跑完整调度、含一次归零，不抛 `InvariantError`）。
+           该条仍是**活耦合**：将来出现「重置到非零」的语义时须重判。
         4. **同一抽内先升后降不可见**：观测点是「每次抽后」，故抽内多次
            `advance` / `commit` 只有末值进入记忆（判据看不到抽内轨迹）。
         """

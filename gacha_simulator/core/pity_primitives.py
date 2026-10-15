@@ -233,6 +233,27 @@ _EVENT_DRIVEN_TYPES = frozenset({'rotating', 'targeted', 'targeted_soft',
 #: 本模块只依赖标准库（§3.1.6），不因此引入任何依赖方向问题。
 _EXTERNAL_STATE_KEYS = frozenset({'selected_card'})
 
+#: 「本抽是否真的改动了分布」的账本键（`reset = "on_effective"` 的唯一判据载体）。
+#:
+#: **写入方**：编排层骨架 `Pity.before_draw`（Modifier 链内，`compute_delta` 返回
+#: 非 `None` 且非全零时置位）。**读取方**：`CounterTracker._reset_condition`
+#: （`after_draw` 相位的 `commit` / `did_reset`）。**清除方**：同骨架，在每次
+#: `before_draw` 的 Modifier 链**之前**删键。
+#:
+#: **为什么经 state 传而不经形参**：Modifier 在 `before_draw` 被调度、`Tracker.commit`
+#: 在 `after_draw`，两个相位之间没有零件级通道（`Tracker` 的四个相位形参是
+#: `(ctx, state, name, ...)`，Modifier 的 `compute_delta` 收 `(view, dist, ctx)`），
+#: 故账本只能落在**本保底命名空间**（与 `_active` 同族、同命名空间）。
+#:
+#: **声明面**：`CounterTracker.state_keys()` 在 `reset_on='on_effective'` 时纳入本键，
+#: 故 S11 状态层（`InvariantChecker._check_declared_state`）不会把它判为未声明键。
+#: 不配该取值的保底**不写本键**（骨架按声明集判定是否需要记账），故其它保底的
+#: `PityState` 快照逐键不变。
+#:
+#: **放在叶子层的理由**与 `_EXTERNAL_STATE_KEYS` 同：`core/pity.py` 与
+#: `core/pity_tracker.py` 两个消费模块都已 import 本层，两处取到同一对象。
+_EFFECTIVE_KEY = '_effective'
+
 # ── 概率代数（P64 S8：卡级增量管道的两个本原函数，§3.9.2 / §3.9.4）──
 #
 # 两者都是**纯函数、只依赖标准库**，故住叶子层（§3.1.6）：
@@ -336,5 +357,6 @@ def transfer_linear(dist: Dict[str, float], A, Q, amount: float,
 __all__ = [
     'Counter', 'Flag', 'DrawInfo', 'PityContext', 'LifecycleConfig', 'PityState',
     '_SOFT_TYPES', '_HARD_TYPES', '_EVENT_DRIVEN_TYPES', '_EXTERNAL_STATE_KEYS',
+    '_EFFECTIVE_KEY',
     'transfer_linear', '_apply_delta',
 ]

@@ -660,11 +660,14 @@ def _build_day_overrides(data: dict, store: ConfigStore) -> None:
 def legal_reset_values(rarity_rank_map: dict) -> set:
     """`[[pity]].reset` 的合法取值集合（G16-1 / ISSUE-928）。
 
-    四类：空串（不透传给 `create_behavior` → `_should_reset` 落回
+    五类：空串（不透传给 `create_behavior` → `_should_reset` 落回
     `reward_rarity == scope` 的兜底分支，即「出 scope 稀有度即重置」）/
     `'featured'`（抽到 featured 卡即重置，**不限定稀有度**——`CounterTracker`
     的 `featured` 分支只看 `is_featured`、无 scope 门控，池内 featured 的 SR 卡
     同样触发）/ `'never'`（永不重置，G16）/
+    `'on_effective'`（**仅本抽该保底真的改动了分布时重置**，2026-10-15 用户裁定；
+    类型面另有一道硬拒，只有阈值触发型 `hard` / `hard_exclude_owned_*` 可用，
+    见 `core/pity.py` 的 `create_behavior`）/
     **稀有度名**（即 `[rarities].ranks` 的键）。
 
     参数 `rarity_rank_map` 须为**小写归一**后的 `{稀有度名: rank}`（与
@@ -675,19 +678,23 @@ def legal_reset_values(rarity_rank_map: dict) -> set:
     **形态不完全对称**（2026-10-10 实测界定）：
 
     - `scope` 校验带 `if rarity_rank_map and ...` 守卫——map 为空时整条跳过；
-    - `reset` 无此守卫——map 为空时集合收缩为前三类，`reset='ssr'` 亦被拒。
+    - `reset` 无此守卫——map 为空时集合收缩为前四类，`reset='ssr'` 亦被拒。
 
     不对称的**可达性有限**：TOML 路径下 `ConfigStore._parse_rarities()` 在
     缺 `[rarities]` 段时补默认三级（`[["SSR"], ["SR"], ["R"]]`），故 map
     不可能为空；空 map 只手构 `ConfigStore()`（字段默认 `{}`）或
     `ConfigStore.clear()` 之后可达，而这两条路径都不经过 `_build_pity`。
     保留不对称是有意的：scope 缺 map 时无从校验、只能跳过；reset 即使缺 map
-    也仍能校验前三类，收紧一侧不致放行拼写错误（`'nevr'` 在任何配置下都被拒）。
+    也仍能校验前四类，收紧一侧不致放行拼写错误（`'nevr'` 在任何配置下都被拒）。
+
+    **本函数是取值面、不是类型面**：`'on_effective'` 对全部 type 都是「合法取值」，
+    「哪些 type 真正可用」由 `create_behavior` 的类型级硬拒把关（与裁决 7B 的
+    `target_featured` 同形：取值白名单与类型白名单是两道互补的防线，不合并）。
 
     **调用点与测试共用本函数**，避免白名单在两处各写一份（曾在
     `tests/gui/test_config_panel_pity.py` 复制过一份常量）。
     """
-    return {'', 'featured', 'never'} | set(rarity_rank_map)
+    return {'', 'featured', 'never', 'on_effective'} | set(rarity_rank_map)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -914,9 +921,11 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             )
 
         # reset 取值白名单（G16-1 / ISSUE-928，与上方 scope 校验同层同形态的硬拒）。
-        # 合法取值四类：空串（create_behavior 不外传 → 回退 scope 兜底分支，
+        # 合法取值五类：空串（create_behavior 不外传 → 回退 scope 兜底分支，
         # 即「出 scope 稀有度即重置」）、'featured'（抽到 featured 卡即重置，
-        # 不限定稀有度）、稀有度名（[rarities].ranks 的键）、'never'（永不重置，G16）。
+        # 不限定稀有度）、稀有度名（[rarities].ranks 的键）、'never'（永不重置，G16）、
+        # 'on_effective'（仅本抽真的改动了分布时重置，2026-10-15；类型面另有
+        # create_behavior 的硬拒，只有阈值触发型可用）。
         # 未知值（含拼写错误如 'nevr'）经 _should_reset 的兜底分支
         # `reward_rarity == reset` 恒 False，即静默等价于 'never'，两种语义
         # 不可区分且不报错，故与 scope 同样升级为硬拒。

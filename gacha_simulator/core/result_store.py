@@ -5,7 +5,7 @@ import json
 import hashlib
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -455,6 +455,29 @@ def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dic
     return flat
 
 
+def _canon_field(value: Any) -> str:
+    """字段值 → 指纹用的**规范化字符串**（`compute_config_hash` 的保底分支用）。
+
+    dict / set 按键（元素）排序后序列化——两者的迭代序不保证稳定（dict 的插入序
+    取决于 TOML 解析与程序化构造两条路径），直接 `str()` 会把「同一份配置」判成
+    两份。list / tuple 统一按 list 序列化（`('*',)` 与 `['*']` 同串）：两者在配置
+    层语义相同（`pools` 只被遍历 / `fnmatch` 匹配），判成两份配置是误判。其余类型
+    走 `str()`，**不用 `repr`**：repr 随字段增删而变、跨版本不稳定（口径同
+    `compute_config_hash` 的 2026-10-01 段）。
+
+    `PityDef` 现全部字段都是标量 / tuple / None，故本函数当前只在标量分支上生效；
+    dict 分支是为「将来新增 dict 型字段」预置的确定性口径（字段驱动会自动纳入新
+    字段，值侧不能成为新的漂移点）。
+    """
+    if isinstance(value, dict):
+        return str(sorted((k, _canon_field(v)) for k, v in value.items()))
+    if isinstance(value, (set, frozenset)):
+        return str(sorted(_canon_field(v) for v in value))
+    if isinstance(value, (list, tuple)):
+        return str([_canon_field(v) for v in value])
+    return str(value)
+
+
 def compute_config_hash(pools_config: List[Any], pity_config: Any,
                         milestone_config: Any = None,
                         stop_condition_summary: Any = None, *,
@@ -483,6 +506,11 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
     hash。不纳入时「仅停止条件不同」的两组数据会被判为 same 维度，可比性结论与真实
     情况相反，且 hash 与指纹同时失明。沿用 milestone_config 式的关键字默认 None，
     既有三参 / 四参位置调用保持不变。
+
+    2026-10-15（ISSUE-922）：保底分支由「读已不存在的 `PityDef.params`」改为按
+    `dataclasses.fields(PityDef)` **逐字段派生**，并纳入 `PityConfig.enabled`。
+    修复前保底分支实际只哈希了 `name`（改 threshold / scope / priority 指纹不变），
+    保底配置不同的两组结果被判「可比」。
     """
     h = hashlib.sha256()
 
@@ -515,11 +543,34 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
             # 旧 PoolEntry 展平视图兼容分支（仅 pool_id/cost）
             _update(getattr(p, 'pool_id', ''))
             _update(str(getattr(p, 'cost', '')))
-    # 保底配置
+    # 保底配置（2026-10-15 修复 ISSUE-922：原实现读的 `PityDef.params` 自 P55 起
+    # 已不存在，见下方逐字段派生的说明）
     if pity_config and hasattr(pity_config, 'pities'):
+        _update('pity')
+        # `enabled` 一并纳入：关闭保底会改变模拟结果（`store.pity.enabled=False`
+        # 时引擎不构造），只差这一个键的两份配置此前 hash 相同 → 判「配置相同」。
+        # 口径与 milestone / resource_lifecycle 两条分支一致（它们都纳入 enabled）。
+        _update(f"enabled={getattr(pity_config, 'enabled', True)}\n")
         for pd in sorted(pity_config.pities, key=lambda x: x.name):
-            h.update(pd.name.encode())
-            h.update(str(getattr(pd, 'params', {})).encode())
+            # **字段驱动**：逐项取 `dataclasses.fields(PityDef)`。
+            #
+            # 原实现是 `h.update(str(getattr(pd, 'params', {})).encode())`——`params`
+            # 是 P55 之前的 dict 载体，扁平化后**该字段已不存在**，getattr 兜底恒取
+            # 空 dict，于是保底分支实际只哈希了 `name`：实测改 `threshold` /
+            # `scope` / `priority` 指纹**完全不变**，只有改 `name` 才变。后果是
+            # **保底配置不同的两组结果被判为「可比」**，比较结论可能是错的
+            # （与 2026-10-01 补入七项同一类事故）。
+            #
+            # 用 fields() 而非手写字段清单：手写清单会随 PityDef 增删字段再次漂移
+            # （P55 的扁平化正是这样把旧清单变成空转的），字段驱动使将来新增字段
+            # 自动纳入。
+            #
+            # 序列化口径：段尾 `\n` 作分隔符——不加分隔时「值里含下一字段名」会
+            # 拼出歧义串（`name='a'` + `btype='soft'` 与 `name='abtype'` 同串）；
+            # 值本身走 `_canon_field()`（dict 按键排序，其余 str()），不用 repr
+            # （repr 随字段增删而变、跨版本不稳定，同 2026-10-01 段的既定口径）。
+            for _f in fields(pd):
+                _update(f'{_f.name}={_canon_field(getattr(pd, _f.name, None))}\n')
     # 2026-10-01 删除 schedules_config 形参：它处理 pool_id / available_from /
     # available_until 三项，而这三项已被上方 BannerEntry 分支覆盖（Banner 是排期的
     # 权威载体），且生产调用从来只传空列表（ConfigStore 没有 schedules 属性，

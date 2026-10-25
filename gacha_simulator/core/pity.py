@@ -841,14 +841,14 @@ def _preset_soft_step(pdef):
         lifecycle=build_lifecycle(pdef),                               # ISSUE-301
         trackers=[CounterTracker(scope=_norm_scope(pdef),
                                  reset_on=pdef.reset or _norm_scope(pdef),
-                                 init=pdef.counter_init)],
+                                 init=pdef.counter_init)],   # §1.5#4：init 无读者（初值由 _build_pity_state_init 承担），与下方 counters 冗余
         modifiers=[
             # 裁决 7B：soft 不消费 target_featured（该形态经 create_behavior 抛
             # ConfigError），故本工厂**不写 `target=`**；Q 若写成 scope 内部，soft
             # 整体不生效（§3.1.5.2.4 错误 ②）。
             SoftModifier(_norm_scope(pdef), deltas=deltas),            # deltas 经 _soft_deltas_of(pdef)
         ],
-        counters={"counter": pdef.counter_init},
+        counters={"counter": pdef.counter_init},   # §1.5#4：与上方 init 冗余（真实初值由 _build_pity_state_init 承担）
     )
 
 
@@ -2293,6 +2293,25 @@ class PityEngine:
                 (_n for _n in _spec.pity_names if _n in self.behaviors),
                 key=lambda _n: _order_index.get(_n, len(ordered)),
             )
+
+        # ── 2026-10-25（批 A+B 审查 §一 1.7.3）：未绑定任何池的保底守卫 ──
+        # `_pool_scoped_groups` 对「不在任何 `pity_names` 里的 behavior」不产出组，
+        # 规则 2/3/4 对它整条不执行（修复前是全局判据、该形态会被拒收）。它们
+        # 同时也不会执行，故不是语义放松；但 `pools` 写错时配置会静默变成
+        # 「一堆不生效的保底」且不再有任何互斥报错兜底。故在此显式报出。
+        # `pool_specs` 为空（直构 `PityDef` 的测试路径）时跳过，保持既有语义。
+        if self.pool_specs:
+            _bound_names = set()
+            for _spec in self.pool_specs.values():
+                _bound_names.update(_spec.pity_names)
+            _unbound = sorted(set(self.behaviors) - _bound_names)
+            if _unbound:
+                from .config_store import ConfigError
+                raise ConfigError(
+                    f"以下保底未匹配任何池，将永不执行：{_unbound}。"
+                    f"现行 `pools` 口径是全限定键 `{{banner_id}}.{{pool_id}}`，"
+                    f"请检查配置里的 `pools` 是否用了裸池名或写错。"
+                )
 
         # ── P56：构建 depends_on 激活传播图 ──
         self._activation_graph: Dict[str, List[str]] = self._build_activation_graph(

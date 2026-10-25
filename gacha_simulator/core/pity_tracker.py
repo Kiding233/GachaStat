@@ -169,7 +169,7 @@ class CounterTracker(Tracker):
     """
 
     def __init__(self, scope: str, reset_on: Optional[str] = None, init: int = 0):
-        self._scope = scope
+        self._scope = scope   # §1.5#5：本属性全类无读取（形参 scope 仍是活的，见 _reset_on 回退）
         # 空串（None）回退 scope——对齐 create_behavior「仅在 pdef.reset 为 truthy
         # 时透传该参数」的既有语义（空串即「出触发稀有度即重置」）
         self._reset_on = reset_on if reset_on else scope

@@ -1,0 +1,1115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 E 全部成带（视觉 demo）</title>
+
+<!-- 独立 demo：一个「分析对象」= 方法 + 参数 + 结果，一个对象一份输出。
+     左栏按方法分组且方法行常驻，空方法行本身就是新建入口；对象挂在方法下，
+     右栏按方法分组展示只读结果。顶部「间隔分析 / 成功率分析」两个专题标签，
+     后者只有一个方法，用来验证单一方法时的退化形态。
+     数据全假，不接 Python；所有依赖都走同目录 libs/，不请求网络。 -->
+<link rel="stylesheet" href="libs/ep.min.css">
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --line-strong:#d0d5dd;
+  --ink:#1f2430; --ink-2:#5a6272; --ink-3:#8b93a3;
+  --accent:#1976d2; --accent-soft:#e8f1fb;
+  --ok:#2e7d32; --warn:#b26a00; --danger:#c62828;
+  --radius:6px;
+}
+*{box-sizing:border-box}
+[v-cloak]{display:none}
+html,body{height:100%;margin:0}
+body{
+  font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-size:13px;color:var(--ink);background:var(--bg);overflow:hidden;
+}
+#app{height:100vh;display:flex;flex-direction:column}
+
+.topbar{
+  height:38px;flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:0 14px;
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+.topbar b{font-size:14px;color:var(--accent)}
+.tag{font-size:11px;color:var(--ink-3);border:1px dashed var(--line-strong);
+  border-radius:10px;padding:1px 8px}
+.topbar .hint{margin-left:auto;font-size:12px;color:var(--ink-3)}
+
+.wrap{flex:1;display:flex;min-height:0}
+
+/* 左栏：固定顶栏 + 对象滚动区 + 固定底栏 */
+.left{
+  width:300px;flex:0 0 300px;display:flex;flex-direction:column;min-height:0;
+  background:var(--panel);border-right:1px solid var(--line);
+}
+.l-head{flex:0 0 auto;padding:9px 12px 10px;border-bottom:1px solid var(--line)}
+.l-head-row{display:flex;align-items:baseline;gap:8px}
+.l-title{font-size:14px;font-weight:700}
+.l-cnt{margin-left:auto;font-size:11px;color:var(--ink-3)}
+.tabs{flex:0 0 auto;display:flex;align-items:flex-end;gap:2px;padding:0 12px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.tab{height:34px;padding:0 12px;border:0;border-bottom:2px solid transparent;background:none;
+  font:inherit;font-size:12px;color:var(--ink-2);cursor:pointer}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
+.tabn{margin-left:5px;font-size:10px;color:var(--ink-3)}
+
+/* 左栏：方法行常驻，对象挂在方法下；空方法行就是创建入口。 */
+.mgroup{border-bottom:1px solid #f3f5f8}
+.mgroup.empty{background:#fcfcfd}
+.mh{display:flex;align-items:center;gap:6px;min-height:32px;padding:4px 8px 4px 6px;cursor:pointer}
+.mh:hover{background:var(--bg)}
+.mcaret{width:12px;flex:0 0 auto;text-align:center;font-size:10px;color:var(--ink-3)}
+.mname{flex:1;min-width:0;font-size:12px;font-weight:700;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mgroup.empty .mname{font-weight:400;color:var(--ink-3)}
+.mbadge{flex:0 0 auto;font-size:10px;color:var(--warn);background:#fff7e8;
+  border:1px solid #f0d9a8;border-radius:9px;padding:0 6px}
+.mcount{flex:0 0 auto;font-size:10px;color:var(--accent);background:var(--accent-soft);
+  border-radius:9px;padding:1px 6px}
+.madd{width:20px;height:20px;flex:0 0 auto;padding:0;border:1px dashed var(--line-strong);
+  border-radius:4px;background:none;color:var(--ink-3);font:inherit;font-size:12px;
+  line-height:1;cursor:pointer}
+.madd:hover{border-style:solid;border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.mitems{padding-bottom:3px}
+
+.l-list{flex:1 1 auto;overflow-y:auto;padding:4px 0}
+.l-empty{padding:18px 14px;color:var(--ink-3);font-size:12px;text-align:center;line-height:1.7}
+
+/* 一行一个对象。选中用左侧色条加淡底，展开用下方参数区表达。 */
+.obj{border-left:3px solid transparent}
+.obj.open{background:#fbfcfd}
+.obj.sel{background:var(--accent-soft);border-left-color:var(--accent)}
+.obj-row{
+  display:flex;align-items:center;gap:7px;min-height:36px;padding:7px 10px 7px 8px;
+  cursor:pointer;
+}
+.obj-row:hover{background:var(--bg)}
+.obj.sel .obj-row:hover{background:var(--accent-soft)}
+.obj-caret{
+  width:14px;flex:0 0 auto;text-align:center;color:var(--ink-3);
+  font-size:11px;line-height:1;cursor:pointer;border-radius:3px;padding:2px 0;
+}
+.obj-caret:hover{background:#e9edf2;color:var(--ink)}
+.obj-name{
+  flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.obj.sel .obj-name{color:var(--accent);font-weight:700}
+.obj-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:var(--ink-3)}
+.obj-dot.ok{background:var(--ok)}
+.obj-dot.dirty{background:var(--warn)}
+.obj-dot.running{background:var(--accent);animation:objpulse 1s ease-in-out infinite}
+@keyframes objpulse{0%,100%{opacity:.3}50%{opacity:1}}
+.obj-acts{display:flex;align-items:center;gap:2px;flex:0 0 auto}
+.ibtn{
+  width:20px;height:20px;padding:0;border:0;border-radius:3px;background:none;
+  color:var(--ink-3);font:inherit;font-size:12px;line-height:1;cursor:pointer;
+}
+.ibtn:hover{background:#e9edf2;color:var(--ink)}
+.ibtn.del:hover{background:#fdecec;color:var(--danger)}
+.ibtn:disabled{opacity:.28;cursor:default}
+.ibtn:disabled:hover{background:none;color:var(--ink-3)}
+
+/* 参数表单缩在对象行下方，由方法参数声明生成。 */
+.obj-params{
+  padding:3px 12px 10px 30px;background:#fbfcfd;
+  border-top:1px solid #f0f2f5;border-bottom:1px solid #f0f2f5;
+}
+.prow{display:flex;align-items:flex-start;gap:7px;margin-bottom:8px}
+.prow:last-child{margin-bottom:1px}
+.prow label{flex:0 0 58px;font-size:11px;color:var(--ink-2);padding-top:5px}
+.prow .pc{flex:1;min-width:0}
+.obj-params .el-radio{margin-right:10px}
+.obj-params .el-radio:last-child{margin-right:0}
+
+.l-foot{flex:0 0 auto;padding:10px 12px;border-top:1px solid var(--line);background:var(--panel)}
+.run-row{display:flex;align-items:center;gap:10px}
+.run-btn{flex:0 0 auto;min-width:76px;padding:0 12px}
+.run-note{flex:1;min-width:0;font-size:11px;color:var(--ink-2);line-height:1.4}
+
+/* 右栏：只读结果，按方法分组 */
+.right{flex:1;min-width:0;overflow-y:auto;padding:14px 18px 24px}
+.empty-state{
+  height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;color:var(--ink-3);
+}
+.empty-state .big{font-size:13px;color:var(--ink-2)}
+.empty-state .sub{font-size:11px}
+.group{margin-bottom:18px}
+.group:last-child{margin-bottom:4px}
+.group-h{
+  display:flex;align-items:center;gap:8px;margin:0 0 8px;
+  font-size:12px;font-weight:700;color:var(--ink-2);
+}
+.group-h .gname{flex:0 0 auto}
+.group-h .gcount{
+  flex:0 0 auto;font-size:10px;font-weight:400;color:var(--accent);
+  background:var(--accent-soft);border-radius:9px;padding:1px 7px;
+}
+.group-h .gline{flex:1;height:1px;background:var(--line)}
+
+.blk{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  margin-bottom:12px;overflow:hidden;
+  transition:opacity .15s,border-color .15s,box-shadow .15s;
+}
+.blk.dirty{opacity:.58}
+.blk.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.bh{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  border-bottom:1px solid var(--line);background:#fcfdfe;cursor:pointer;
+}
+.blk.sel .bh{background:#f3f8fe}
+.bname{
+  flex:0 0 auto;max-width:300px;font-size:13px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;
+}
+.bdiv{flex:0 0 auto;width:1px;height:12px;background:var(--line-strong)}
+.bsum{
+  flex:1 1 auto;min-width:0;font-size:11px;color:var(--ink-2);
+  background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  padding:2px 9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.bstate{
+  flex:0 0 auto;font-size:11px;border-radius:9px;padding:2px 8px;
+  border:1px solid transparent;white-space:nowrap;
+}
+.bstate.new{color:var(--ink-3);background:#f1f3f6;border-color:var(--line)}
+.bstate.dirty{color:var(--warn);background:#fff7e8;border-color:#f0d9a8}
+.bstate.running{color:var(--accent);background:var(--accent-soft);border-color:#cfe2f7}
+.bb{padding:6px 8px 8px}
+.ph{
+  height:196px;display:flex;align-items:center;justify-content:center;
+  border:1px dashed var(--line-strong);border-radius:4px;background:#fbfcfd;
+  color:var(--ink-3);font-size:12px;opacity:.78;
+}
+.chart-box{width:100%}
+.pbar{height:3px;background:var(--accent-soft);overflow:hidden}
+.pbar i{
+  display:block;height:100%;width:0;background:var(--accent);
+  animation:objprog .6s linear forwards;
+}
+@keyframes objprog{from{width:0}to{width:100%}}
+</style>
+<style>
+/* 方案 E：全部成带。空方法与有对象的方法同一条浅灰通栏带，层级靠缩进。 */
+.left{background:#fff}
+.l-list{padding:0 0 12px}
+.mgroup{border-bottom:0;margin:0}
+.mh{min-height:36px;padding:7px 10px;background:#f2f5f9;
+  border-top:1px solid #e6ecf4;border-bottom:1px solid #e6ecf4}
+.l-list > .mgroup:first-child .mh{border-top:0}
+.mgroup.empty .mh{background:#f2f5f9;border-top:1px solid #e6ecf4;border-bottom:1px solid #e6ecf4}
+.mname{font-size:12.5px;font-weight:700;color:#2b3342}
+.mgroup.empty .mname{font-size:12.5px;font-weight:700;color:#4a5364}
+.mcount{background:#dfe8f4;color:#33587f}
+.mitems{margin:5px 0 9px 19px;border-left:1px solid #dde4ee;padding-left:7px}
+.obj{border-left:0}
+.obj-row{min-height:32px;padding:5px 8px;border-radius:6px;margin-right:8px}
+.obj.sel{background:var(--accent-soft)}
+.obj-params{margin-right:8px;border-radius:6px}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+  <div class="topbar">
+    <b>方案 E 全部成带</b>
+    <span class="tag">独立 demo · 数据全假</span>
+    <span class="hint">左栏方法行常驻，行内 ＋ 新建；对象挂在方法下，右栏只读结果</span>
+  </div>
+
+  <div class="tabs">
+    <button v-for="t in TOPICS" :key="t.key" class="tab" :class="{on: t.key === topicKey}"
+            @click="switchTopic(t.key)">
+      {{ t.name }}<span class="tabn">{{ topicObjects(t.key).length }}</span>
+    </button>
+  </div>
+
+  <div class="wrap">
+    <aside class="left">
+      <div class="l-head">
+        <div class="l-head-row">
+          <span class="l-title">{{ curTopic.name }}</span>
+          <span class="l-cnt">{{ objects.length }} 个对象 · {{ curTopic.methods.length }} 个方法</span>
+        </div>
+      </div>
+
+      <div class="l-list">
+        <div v-for="g in methodGroups" :key="g.m.key" class="mgroup" :class="{empty: !g.items.length}">
+          <div class="mh" @click="g.items.length ? toggleGroup(g.m.key) : addObject(g.m.key)"
+               :title="g.items.length ? (isOpen(g.m.key) ? '收起该方法的对象' : '展开该方法的对象') : '点此新建一个对象'">
+            <span class="mcaret" v-if="g.items.length">{{ isOpen(g.m.key) ? '▾' : '▸' }}</span>
+            <span class="mcaret" v-else></span>
+            <span class="mname">{{ g.m.name }}</span>
+            <span class="mbadge" v-if="g.m.dispatch">派发</span>
+            <span class="mcount" v-if="g.items.length">{{ g.items.length }}</span>
+            <button class="madd" :title="'新建一个「' + g.m.name + '」对象'"
+                    @click.stop="addObject(g.m.key)">＋</button>
+          </div>
+
+          <div class="mitems" v-show="g.items.length && isOpen(g.m.key)">
+            <div v-for="o in g.items" :key="o.id" class="obj" :id="'obj-' + o.id"
+                 :class="{sel: selId === o.id, open: o.expanded}">
+              <div class="obj-row" @click="selectObject(o)">
+                <span class="obj-caret" :title="o.expanded ? '收起参数' : '展开参数'"
+                      @click.stop="toggleExpand(o)">{{ o.expanded ? '▾' : '▸' }}</span>
+                <span class="obj-name">{{ labelOf(o) }}</span>
+                <span class="obj-dot" :class="o.status" :title="statusText(o)"></span>
+                <span class="obj-acts">
+                  <button class="ibtn" title="只运行此项"
+                          :disabled="o.status === 'ok' || o.status === 'running'"
+                          @click.stop="runOne(o)">▷</button>
+                  <button class="ibtn" title="复制此对象" @click.stop="copyObject(o)">⧉</button>
+                  <button class="ibtn del" title="删除此对象" @click.stop="removeObject(o)">✕</button>
+                </span>
+              </div>
+
+              <div class="obj-params" v-show="o.expanded">
+                <div class="prow" v-for="p in methodOf(o).params" :key="p.k">
+                  <label>{{ p.k }}</label>
+                  <div class="pc">
+                    <el-select v-if="p.t === 'multi'" v-model="o.params[p.k]" multiple
+                               size="small" collapse-tags collapse-tags-tooltip style="width:100%">
+                      <el-option v-for="opt in p.opts" :key="opt" :label="opt" :value="opt"></el-option>
+                    </el-select>
+                    <el-input-number v-else-if="p.t === 'num'" v-model="o.params[p.k]"
+                                     size="small" :min="p.min" :max="p.max" :step="p.step"
+                                     controls-position="right" style="width:100%"></el-input-number>
+                    <el-radio-group v-else-if="p.t === 'radio'" v-model="o.params[p.k]" size="small">
+                      <el-radio v-for="opt in p.opts" :key="opt" :value="opt">{{ opt }}</el-radio>
+                    </el-radio-group>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="l-foot">
+        <div class="run-row">
+          <el-button type="primary" class="run-btn" :disabled="!canRun" @click="run">运行全部待更新</el-button>
+          <span class="run-note">{{ runNote }}</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="right">
+      <div v-if="!objects.length" class="empty-state">
+        <span class="big">{{ curTopic.name }}还没有分析对象</span>
+        <span class="sub">点左栏方法行上的 ＋ 新建一个。</span>
+      </div>
+
+      <div v-else>
+        <section v-for="g in resultGroups" :key="g.m.key" class="group">
+          <div class="group-h">
+            <span class="gname">{{ g.m.name }}</span>
+            <span class="gcount">{{ g.items.length }} 个</span>
+            <span class="gline"></span>
+          </div>
+
+          <article v-for="o in g.items" :key="o.id" class="blk"
+                   :class="{sel: selId === o.id, dirty: o.status === 'dirty'}">
+            <div class="bh" @click="selectObject(o)">
+              <b class="bname">{{ labelOf(o) }}</b>
+              <span class="bdiv"></span>
+              <span class="bsum" :title="summary(o)">{{ summary(o) }}</span>
+              <span class="bstate" :class="o.status" v-if="o.status !== 'ok'">{{ statusText(o) }}</span>
+            </div>
+            <div class="bb">
+              <div class="ph" v-if="!o.result && o.status !== 'running'">尚未运行</div>
+              <div class="ph" v-else-if="!o.result">正在计算…</div>
+              <result-chart v-else :option="o.result.option" :height="196"></result-chart>
+            </div>
+            <div class="pbar" v-if="o.status === 'running'"><i></i></div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="libs/vuemin.js"></script>
+<script src="libs/ep.min.js"></script>
+<script src="libs/echarts.min.js"></script>
+<script>
+/* ══ 方法声明与假数据 ═════════════════════════════════════════ */
+const HIT_NAMES = ['限定卡', '全部SSR', '目标卡'];
+
+/* 每个命中集一条基础分布。参数只改形状，不改「真有样本」这件事。 */
+const HIT_PROFILE = {
+  '限定卡': { center: 59, spread: 13, tail: 0.20, pity: 0.70 },
+  '全部SSR': { center: 47, spread: 18, tail: 0.06, pity: 0.12 },
+  '目标卡': { center: 67, spread: 12, tail: 0.34, pity: 0.78 },
+};
+
+/* 同一份命中集，换方法时让分布略偏一点，避免七张图共用同一个轮廓。 */
+const METHOD_BIAS = {
+  iv_hist: 0, iv_cdf: 0.8, iv_survival: 1.4, iv_hazard: -1.2,
+  iv_first: 3.2, iv_kth: 0, iv_mix: 0,
+};
+
+const TOPICS = [
+  {
+    key: 'interval', name: '间隔分析',
+    methods: [
+      { key: 'iv_hist', name: '池化间隔分布', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_cdf', name: '累积分布 F(n)', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_survival', name: '生存函数 S(n)', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_hazard', name: '风险函数 h(n)', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_first', name: '首次命中间隔', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_kth', name: '第 k 次间隔', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_mix', name: '间隔 × 终止卡类型', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '终止类型', t: 'radio', v: '限定卡', opts: ['限定卡', '普通SSR'] },
+      ] },
+    ],
+  },
+  {
+    key: 'success', name: '成功率分析',
+    methods: [
+      { key: 'succ', name: '成功率分析', params: [
+        { k: '目标', t: 'radio', v: '限定卡', opts: ['限定卡', '全部SSR'] },
+        { k: '目标抽数', t: 'num', v: 90, min: 10, max: 200, step: 5 },
+      ] },
+    ],
+  },
+];
+
+const METHOD_BY_KEY = {};
+TOPICS.forEach(function (t) {
+  t.methods.forEach(function (m) { METHOD_BY_KEY[m.key] = m; });
+});
+
+const PALETTE = ['#1976d2', '#26a69a', '#ef6c00', '#7e57c2'];
+
+function hashStr(s) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/* mulberry32：同一对象同一参数每次运行得到同一张图，改参数或换对象才变。 */
+function mulberry32(a) {
+  a = a >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function normalize(arr) {
+  let s = 0;
+  for (let i = 0; i < arr.length; i++) s += arr[i];
+  if (!s) return arr.slice();
+  return arr.map(function (v) { return v / s; });
+}
+
+/* 由「方法 + 命中集 + 对象种子」生成 1..90 抽的离散概率。 */
+function pmfFor(methodKey, hit, seed) {
+  const prof = HIT_PROFILE[hit] || HIT_PROFILE['限定卡'];
+  const rnd = mulberry32((seed ^ hashStr(methodKey + '|' + hit)) >>> 0);
+  const shift = (rnd() * 2 - 1) * 2.4;
+  const center = prof.center + shift + (METHOD_BIAS[methodKey] || 0);
+  const spread = prof.spread * (0.92 + rnd() * 0.16);
+  const p = new Array(91).fill(0);
+  let total = 0;
+  for (let n = 1; n <= 90; n++) {
+    const z = (n - center) / spread;
+    let w = Math.exp(-0.5 * z * z);
+    if (n > center) w += prof.tail * Math.exp(-(n - center) / 16) * 0.42;
+    w += prof.pity * 0.45 * Math.exp(-0.5 * Math.pow((n - 84) / 2.4, 2));
+    if (n < 12) w *= 0.25 + n / 16;
+    w *= 0.9 + rnd() * 0.2;
+    p[n] = w;
+    total += w;
+  }
+  for (let n = 1; n <= 90; n++) p[n] /= total;
+  return p;
+}
+
+function expected(pmf) {
+  let s = 0;
+  for (let n = 1; n < pmf.length; n++) s += pmf[n] * n;
+  return s;
+}
+
+/* 分箱宽度直接决定柱数：宽 5 出 18 格，宽 10 出 9 格，宽 1 出 90 格。 */
+function binPmf(pmf, width) {
+  const w = Math.max(1, Math.min(50, Number(width) || 5));
+  const n = Math.ceil(90 / w);
+  const mass = new Array(n).fill(0);
+  for (let v = 1; v <= 90; v++) {
+    let i = Math.floor((v - 1) / w);
+    if (i >= n) i = n - 1;
+    mass[i] += pmf[v];
+  }
+  return {
+    width: w,
+    mass: mass,
+    x: mass.map(function (_, i) { return i * w + w / 2; }),
+  };
+}
+
+function hitList(params) {
+  const v = params['命中集'];
+  const arr = Array.isArray(v) ? v.slice() : (v ? [v] : []);
+  return arr.length ? arr : ['限定卡'];
+}
+
+/* 根据一个对象的当前参数生成 ECharts option。结果快照存的是这份 option。 */
+function buildOption(o, params) {
+  const key = o.methodKey;
+  const seed = o.seed;
+  const hits = hitList(params);
+  const width = key === 'iv_mix' ? 5 : (Number(params['分箱宽度']) || 5);
+  let x = [];
+  let series = [];
+  let yMax = null;
+  let boundaryGap = false;
+  let showLegend = false;
+
+  if (key === 'iv_hist') {
+    const sets = hits.map(function (hit, i) {
+      return {
+        hit: hit,
+        b: binPmf(pmfFor(key, hit, seed), width),
+        color: PALETTE[i % PALETTE.length],
+      };
+    });
+    x = sets[0].b.x.map(function (v) { return String(v); });
+    series = sets.map(function (s) {
+      return {
+        name: s.hit,
+        type: 'bar',
+        data: s.b.mass.map(function (m) { return +(m / s.b.width).toFixed(5); }),
+        barMaxWidth: 24,
+        itemStyle: { color: s.color, borderRadius: [2, 2, 0, 0] },
+        emphasis: { focus: 'series' },
+      };
+    });
+    boundaryGap = true;
+  } else if (key === 'iv_cdf') {
+    series = hits.map(function (hit, i) {
+      const b = binPmf(pmfFor(key, hit, seed), width);
+      if (!x.length) x = b.x.map(function (v) { return String(v); });
+      let acc = 0;
+      const y = b.mass.map(function (m) {
+        acc += m;
+        return +acc.toFixed(5);
+      });
+      return {
+        name: hit,
+        type: 'line',
+        step: 'end',
+        symbol: 'none',
+        data: y,
+        lineStyle: { width: 2, color: PALETTE[i % PALETTE.length] },
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+      };
+    });
+    yMax = 1.02;
+  } else if (key === 'iv_survival') {
+    series = hits.map(function (hit, i) {
+      const b = binPmf(pmfFor(key, hit, seed), width);
+      if (!x.length) x = b.x.map(function (v) { return String(v); });
+      let acc = 0;
+      const y = b.mass.map(function (m) {
+        acc += m;
+        return +(1 - acc).toFixed(5);
+      });
+      return {
+        name: hit,
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        data: y,
+        lineStyle: { width: 2, color: PALETTE[i % PALETTE.length] },
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+        areaStyle: { opacity: 0.07 },
+      };
+    });
+    yMax = 1.02;
+  } else if (key === 'iv_hazard') {
+    series = hits.map(function (hit, i) {
+      const b = binPmf(pmfFor(key, hit, seed), width);
+      if (!x.length) x = b.x.map(function (v) { return String(v); });
+      let acc = 0;
+      const y = b.mass.map(function (m) {
+        const h = m / Math.max(1e-6, 1 - acc) / b.width;
+        acc += m;
+        return +Math.min(1, h).toFixed(5);
+      });
+      return {
+        name: hit,
+        type: 'line',
+        symbol: 'circle',
+        symbolSize: 3,
+        data: y,
+        lineStyle: { width: 1.8, color: PALETTE[i % PALETTE.length] },
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+      };
+    });
+  } else if (key === 'iv_first') {
+    series = hits.map(function (hit, i) {
+      const pmf = pmfFor(key, hit, seed);
+      const b = binPmf(pmf, width);
+      if (!x.length) x = b.x.map(function (v) { return String(v); });
+      const mean = expected(pmf);
+      const meanBin = Math.max(0, Math.min(b.mass.length - 1,
+        Math.round(mean / b.width - 0.5)));
+      return {
+        name: hit,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 3,
+        data: b.mass.map(function (m) { return +(m / b.width).toFixed(5); }),
+        lineStyle: { width: 2, color: PALETTE[i % PALETTE.length] },
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+        areaStyle: { opacity: 0.1 },
+        markLine: i === 0 ? {
+          silent: true,
+          symbol: 'none',
+          label: {
+            formatter: '均值 ' + mean.toFixed(1),
+            color: '#8b93a3',
+            fontSize: 10,
+            position: 'insideEndTop',
+          },
+          lineStyle: { type: 'dashed', color: '#8b93a3', width: 1 },
+          data: [{ xAxis: meanBin }],
+        } : undefined,
+      };
+    });
+  } else if (key === 'iv_kth') {
+    x = ['1', '2', '3', '4', '5', '6', '7', '8'];
+    series = hits.map(function (hit, i) {
+      const mean = expected(pmfFor(key, hit, seed));
+      const data = x.map(function (_, k) {
+        const wave = Math.sin((k + 1) * 0.85 + (seed % 9));
+        return +(mean * (0.94 + 0.012 * k + 0.018 * wave)).toFixed(2);
+      });
+      return {
+        name: hit,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        data: data,
+        lineStyle: { width: 2, color: PALETTE[i % PALETTE.length] },
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+      };
+    });
+  } else if (key === 'iv_mix') {
+    const base = new Array(91).fill(0);
+    hits.forEach(function (hit) {
+      const p = pmfFor(key, hit, seed);
+      for (let n = 1; n <= 90; n++) base[n] += p[n] / hits.length;
+    });
+    /* 终止于限定卡：尾部更重；终止于普通 SSR：前段更重。 */
+    const pL = normalize(base.map(function (v, n) {
+      return v * (1 + 0.9 * Math.exp(-0.5 * Math.pow((n - 84) / 2.8, 2)));
+    }));
+    const pN = normalize(base.map(function (v, n) {
+      return v * (1 + 0.55 * Math.exp(-0.5 * Math.pow((n - 50) / 10, 2)))
+        * (n < 72 ? 1.18 : 0.55);
+    }));
+    const bL = binPmf(pL, 5);
+    const bN = binPmf(pN, 5);
+    x = bL.x.map(function (v) { return String(v); });
+    const focus = params['终止类型'] || '限定卡';
+    series = [
+      {
+        name: '终止于限定卡',
+        type: 'bar',
+        data: bL.mass.map(function (m) { return +(m / 5).toFixed(5); }),
+        barMaxWidth: 18,
+        itemStyle: {
+          color: PALETTE[0],
+          opacity: focus === '限定卡' ? 1 : 0.32,
+          borderRadius: [2, 2, 0, 0],
+        },
+        emphasis: { focus: 'series' },
+      },
+      {
+        name: '终止于普通SSR',
+        type: 'bar',
+        data: bN.mass.map(function (m) { return +(m / 5).toFixed(5); }),
+        barMaxWidth: 18,
+        itemStyle: {
+          color: PALETTE[2],
+          opacity: focus === '普通SSR' ? 1 : 0.32,
+          borderRadius: [2, 2, 0, 0],
+        },
+        emphasis: { focus: 'series' },
+      },
+    ];
+    boundaryGap = true;
+    showLegend = true;
+  } else if (key === 'succ') {
+    /* 成功率分析：达成率随抽数上升，末端虚线标出目标抽数。 */
+    const target = Math.max(10, Math.min(200, Number(params['目标抽数']) || 90));
+    const step = Math.max(1, Math.round(target / 30));
+    const base = params['目标'] === '全部SSR' ? 0.028 : 0.021;
+    const rnd = mulberry32((seed ^ hashStr('succ|' + params['目标'])) >>> 0);
+    const jitter = 0.9 + rnd() * 0.2;
+    x = [];
+    const ys = [];
+    for (let n = 1; n <= target; n++) {
+      if (n % step === 0 || n === 1 || n === target) {
+        const label = String(n);
+        if (x[x.length - 1] === label) continue;
+        x.push(label);
+        ys.push(+(100 * (1 - Math.pow(1 - base * jitter, n))).toFixed(2));
+      }
+    }
+    series = [{
+      name: '达成率 %',
+      type: 'line',
+      smooth: true,
+      symbol: 'none',
+      data: ys,
+      lineStyle: { width: 2, color: PALETTE[0] },
+      itemStyle: { color: PALETTE[0] },
+      areaStyle: { opacity: 0.08 },
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        label: { formatter: '目标 ' + target, color: '#8b93a3', fontSize: 10, position: 'insideEndTop', rotate: 0 },
+        lineStyle: { type: 'dashed', color: '#8b93a3', width: 1 },
+        data: [{ xAxis: String(target) }],
+      },
+    }];
+  }
+
+  showLegend = showLegend || series.length > 1;
+
+  return {
+    animationDuration: 260,
+    animationEasing: 'cubicOut',
+    color: PALETTE,
+    legend: showLegend ? {
+      top: 0,
+      right: 2,
+      itemWidth: 10,
+      itemHeight: 7,
+      icon: 'roundRect',
+      textStyle: { fontSize: 10, color: '#5a6272' },
+      data: series.map(function (s) { return s.name; }),
+    } : { show: false },
+    grid: {
+      left: 6,
+      right: 14,
+      top: showLegend ? 30 : 14,
+      bottom: 4,
+      containLabel: true,
+    },
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      textStyle: { fontSize: 11 },
+      axisPointer: { type: boundaryGap ? 'shadow' : 'line' },
+      valueFormatter: function (v) {
+        const n = Number(v);
+        if (!isFinite(n)) return v;
+        return Math.abs(n) >= 10 ? n.toFixed(1) : n.toFixed(4);
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: x,
+      boundaryGap: boundaryGap,
+      axisLine: { lineStyle: { color: '#d0d5dd' } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: '#8b93a3',
+        fontSize: 10,
+        hideOverlap: true,
+        formatter: function (v) {
+          const n = Number(v);
+          if (!isFinite(n)) return v;
+          return Math.abs(n - Math.round(n)) < 1e-9 ? String(Math.round(n)) : String(n);
+        },
+      },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: yMax,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: '#8b93a3',
+        fontSize: 10,
+        formatter: function (v) {
+          const n = Number(v);
+          if (!isFinite(n)) return v;
+          if (n === 0) return '0';
+          return String(+n.toFixed(4));
+        },
+      },
+      splitLine: { lineStyle: { color: '#eef0f4' } },
+    },
+    series: series,
+  };
+}
+
+/* ══ 结果图组件 ═════════════════════════════════════════════════
+   本页 ECharts 5.5.1 在同一实例上调 resize() 会抛
+   「Cannot read properties of undefined (reading 'type')」（内部轴模型丢失）。
+   因此不做 resize，尺寸变化时先 dispose 再 init。演示页图少，重建成本可忽略。 */
+const ResultChart = {
+  name: 'ResultChart',
+  props: {
+    option: { type: Object, required: true },
+    height: { type: Number, default: 196 },
+  },
+  template: '<div ref="el" class="chart-box" :style="{height: height + \'px\'}"></div>',
+  data: function () {
+    return { inst: null, ro: null, raf: 0, lastW: 0, lastH: 0 };
+  },
+  mounted: function () {
+    const vm = this;
+    this._onWin = function () { vm.schedule(); };
+    window.addEventListener('resize', this._onWin);
+    if (window.ResizeObserver) {
+      this.ro = new ResizeObserver(function () { vm.schedule(); });
+      this.ro.observe(this.$refs.el);
+    }
+    this.$nextTick(this.schedule);
+  },
+  beforeUnmount: function () {
+    if (this.ro) this.ro.disconnect();
+    window.removeEventListener('resize', this._onWin);
+    if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.inst && !this.inst.isDisposed()) this.inst.dispose();
+    this.inst = null;
+  },
+  watch: {
+    option: {
+      deep: true,
+      handler: function () { this.$nextTick(this.schedule); },
+    },
+  },
+  methods: {
+    schedule: function () {
+      if (this.raf) return;
+      this.raf = requestAnimationFrame(this.paint);
+    },
+    paint: function () {
+      this.raf = 0;
+      const el = this.$refs.el;
+      if (!el) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (!w || !h) return;
+      if (this.inst && (w !== this.lastW || h !== this.lastH)) {
+        this.inst.dispose();
+        this.inst = null;
+      }
+      if (!this.inst) {
+        this.inst = echarts.init(el, null, { width: w, height: h });
+        this.lastW = w;
+        this.lastH = h;
+      }
+      this.inst.setOption(this.option, true);
+    },
+  },
+};
+
+/* ══ 应用状态 ═════════════════════════════════════════════════ */
+const { createApp, ref, computed, watch, nextTick } = Vue;
+
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+
+function defaultsOf(m) {
+  const o = {};
+  m.params.forEach(function (p) {
+    o[p.k] = Array.isArray(p.v) ? p.v.slice() : p.v;
+  });
+  return o;
+}
+
+function methodOf(o) { return METHOD_BY_KEY[o.methodKey] || null; }
+
+const app = createApp({
+  components: { ResultChart: ResultChart },
+  setup: function () {
+    let nextId = 1;
+    const topicKey = ref(TOPICS[0].key);
+
+    /* 每个专题各自一份对象清单，切专题只换清单，不动彼此状态。 */
+    const objectsByTopic = {};
+    TOPICS.forEach(function (t) { objectsByTopic[t.key] = []; });
+    const store = Vue.reactive(objectsByTopic);
+
+    const selId = ref(null);
+    /* 方法组的展开状态，键是「专题:方法」；没写过就算展开。 */
+    const openMap = Vue.reactive({});
+
+    const curTopic = computed(function () {
+      return TOPICS.filter(function (t) { return t.key === topicKey.value; })[0] || TOPICS[0];
+    });
+
+    const objects = computed(function () { return store[topicKey.value]; });
+
+    function makeObject(m) {
+      const id = nextId++;
+      const p = defaultsOf(m);
+      return {
+        id: id,
+        methodKey: m.key,
+        params: clone(p),
+        applied: clone(p),
+        result: null,
+        status: 'new',
+        expanded: false,
+        /* 对象级种子只影响图形细节，保证同参数的两份对象也能肉眼区分。 */
+        seed: ((id * 2654435761) >>> 0),
+      };
+    }
+
+    /* 初始：间隔分析给主方法建一个对象，成功率分析故意留空，用来看单方法的退化形态。 */
+    const first = makeObject(METHOD_BY_KEY['iv_hist']);
+    first.status = 'ok';
+    first.result = { option: Vue.markRaw(buildOption(first, first.params)) };
+    store['interval'].push(first);
+
+    /* 左栏画全部方法；空方法行本身就是新建入口。 */
+    const methodGroups = computed(function () {
+      return curTopic.value.methods.map(function (m) {
+        return {
+          m: m,
+          items: objects.value.filter(function (o) { return o.methodKey === m.key; }),
+        };
+      });
+    });
+
+    /* 右栏只画有对象的组。 */
+    const resultGroups = computed(function () {
+      return methodGroups.value.filter(function (g) { return g.items.length > 0; });
+    });
+
+    const running = computed(function () {
+      return objects.value.some(function (o) { return o.status === 'running'; });
+    });
+
+    function isPending(o) {
+      return o.status === 'new' || o.status === 'dirty';
+    }
+
+    const pendingList = computed(function () {
+      return objects.value.filter(isPending);
+    });
+
+    const pendingCount = computed(function () { return pendingList.value.length; });
+
+    /* 一个控件一个意思：底栏只负责「全部待更新」，单项运行在对象行的 ▷ 上。 */
+    const canRun = computed(function () {
+      return !running.value && pendingCount.value > 0;
+    });
+
+    const runNote = computed(function () {
+      if (running.value) return '运行中…';
+      return pendingCount.value ? pendingCount.value + ' 项待更新' : '全部已同步';
+    });
+
+    function openKey(mkey) { return topicKey.value + ':' + mkey; }
+    function isOpen(mkey) { return openMap[openKey(mkey)] !== false; }
+    function toggleGroup(mkey) {
+      const k = openKey(mkey);
+      openMap[k] = openMap[k] === false;
+    }
+
+    function labelOf(o) {
+      const m = methodOf(o);
+      if (!m) return '';
+      const same = objects.value.filter(function (x) { return x.methodKey === o.methodKey; });
+      const idx = same.findIndex(function (x) { return x.id === o.id; }) + 1;
+      return m.name + ' · ' + idx;
+    }
+
+    function summary(o) {
+      const m = methodOf(o);
+      if (!m) return '';
+      return m.params.map(function (p) {
+        const v = o.params[p.k];
+        let text;
+        if (Array.isArray(v)) text = v.length ? v.join('+') : '未选';
+        else text = String(v === undefined || v === '' ? '空' : v);
+        return p.k + ' ' + text;
+      }).join(' · ');
+    }
+
+    function statusText(o) {
+      const map = { new: '未运行', dirty: '参数已改', running: '运行中…', ok: '' };
+      return map[o.status] || '';
+    }
+
+    function selectObject(o) {
+      selId.value = o.id;
+      o.expanded = true;
+      nextTick(function () {
+        const el = document.getElementById('obj-' + o.id);
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
+    /* 箭头只负责展开收起，不改变选中项。这样「改参数」和「只跑这一项」是两件事。 */
+    function toggleExpand(o) {
+      o.expanded = !o.expanded;
+    }
+
+    /* 新建：默认参数、无结果，建完就选中并展开参数，省得用户再找。 */
+    function addObject(mkey) {
+      const m = METHOD_BY_KEY[mkey];
+      if (!m) return;
+      const o = makeObject(m);
+      store[topicKey.value].push(o);
+      openMap[openKey(mkey)] = true;
+      selectObject(o);
+    }
+
+    /* 复制当前参数，但不复制结果。 */
+    function copyObject(o) {
+      const m = methodOf(o);
+      if (!m) return;
+      const copy = makeObject(m);
+      copy.params = clone(o.params);
+      copy.applied = clone(o.params);
+      store[topicKey.value].push(copy);
+      openMap[openKey(o.methodKey)] = true;
+      nextTick(function () {
+        const el = document.getElementById('obj-' + copy.id);
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
+    function removeObject(o) {
+      const arr = store[topicKey.value];
+      const i = arr.findIndex(function (x) { return x.id === o.id; });
+      if (i >= 0) arr.splice(i, 1);
+      if (selId.value === o.id) selId.value = null;
+    }
+
+    function execute(list) {
+      if (!list.length || running.value) return;
+      const snaps = list.map(function (o) {
+        return { o: o, params: clone(o.params) };
+      });
+      snaps.forEach(function (s) { s.o.status = 'running'; });
+
+      setTimeout(function () {
+        snaps.forEach(function (s) {
+          const o = s.o;
+          const same = JSON.stringify(o.params) === JSON.stringify(s.params);
+          o.applied = clone(s.params);
+          o.result = { option: Vue.markRaw(buildOption(o, s.params)) };
+          /* 运行期间若参数又被改过，保留新图并回到「参数已改」。 */
+          o.status = same ? 'ok' : 'dirty';
+        });
+      }, 600);
+    }
+
+    function run() {
+      if (!canRun.value) return;
+      execute(pendingList.value.slice());
+    }
+
+    /* 只跑一个对象，给不想动其他对象时用。 */
+    function runOne(o) {
+      if (!isPending(o) || running.value) return;
+      execute([o]);
+    }
+
+    function switchTopic(k) {
+      if (k === topicKey.value) return;
+      topicKey.value = k;
+      selId.value = null;
+    }
+
+    function topicObjects(k) {
+      return store[k] ? store[k].length : 0;
+    }
+
+    /* 参数快照变化时同步状态。改回原值会自然回到已同步。 */
+    const paramSig = computed(function () {
+      return objects.value.map(function (o) {
+        return o.id + ':' + JSON.stringify(o.params);
+      }).join('|');
+    });
+
+    watch(paramSig, function () {
+      objects.value.forEach(function (o) {
+        if (o.status === 'running') return;
+        const same = JSON.stringify(o.params) === JSON.stringify(o.applied);
+        if (!same) {
+          o.status = o.result ? 'dirty' : 'new';
+        } else if (o.status === 'dirty') {
+          o.status = 'ok';
+        }
+      });
+    });
+
+    return {
+      TOPICS: TOPICS,
+      topicKey: topicKey,
+      curTopic: curTopic,
+      objects: objects,
+      methodGroups: methodGroups,
+      resultGroups: resultGroups,
+      selId: selId,
+      canRun: canRun,
+      runNote: runNote,
+      addObject: addObject,
+      selectObject: selectObject,
+      toggleExpand: toggleExpand,
+      toggleGroup: toggleGroup,
+      isOpen: isOpen,
+      copyObject: copyObject,
+      removeObject: removeObject,
+      run: run,
+      runOne: runOne,
+      switchTopic: switchTopic,
+      topicObjects: topicObjects,
+      labelOf: labelOf,
+      summary: summary,
+      statusText: statusText,
+      methodOf: methodOf,
+    };
+  },
+});
+
+app.use(ElementPlus);
+app.mount('#app');
+</script>
+</body>
+</html>

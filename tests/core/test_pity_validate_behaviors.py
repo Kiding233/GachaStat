@@ -564,6 +564,7 @@ def test_unbound_pity_is_rejected():
     整条不执行），配置随之变成「一堆不生效的保底」。
     """
     from gacha_simulator.core.config_store import ConfigError
+    from gacha_simulator.core.pity import PityState
     defs = [PityDef(name='x', btype='hard', scope='ssr', threshold=5)]
     with pytest.raises(ConfigError, match='未匹配任何池'):
-        PityEngine({'p1': PoolPitySpec(pity_names=[])}, defs)
+        PityEngine({'p1': PoolPitySpec(pity_names=[])}, defs, state=PityState())

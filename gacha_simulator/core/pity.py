@@ -841,14 +841,14 @@ def _preset_soft_step(pdef):
         lifecycle=build_lifecycle(pdef),                               # ISSUE-301
         trackers=[CounterTracker(scope=_norm_scope(pdef),
                                  reset_on=pdef.reset or _norm_scope(pdef),
-                                 init=pdef.counter_init)],
+                                 init=pdef.counter_init)],   # §1.5#4：init 无读者（初值由 _build_pity_state_init 承担），与下方 counters 冗余
         modifiers=[
             # 裁决 7B：soft 不消费 target_featured（该形态经 create_behavior 抛
             # ConfigError），故本工厂**不写 `target=`**；Q 若写成 scope 内部，soft
             # 整体不生效（§3.1.5.2.4 错误 ②）。
             SoftModifier(_norm_scope(pdef), deltas=deltas),            # deltas 经 _soft_deltas_of(pdef)
         ],
-        counters={"counter": pdef.counter_init},
+        counters={"counter": pdef.counter_init},   # §1.5#4：与上方 init 冗余（真实初值由 _build_pity_state_init 承担）
     )
 
 
@@ -1715,6 +1715,24 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
             f"需要「出该稀有度即重置」用 reset='' 或 reset='{scope}'。"
         )
 
+    # ══ 2026-10-25（批 A+B 审查 §二 2.15）：`on_effective` 与
+    # `deactivate_on_early_hit` 的组合硬拒 ══
+    # 两者共用 `did_reset`：`FiniteActive.should_deactivate` 取 fired = did_fire(ctx)，
+    # 而 `CounterTracker.did_reset` 对 `on_effective` 返回的正是 `_effective`。
+    # 于是「保底生效」被当成「提前出货」，首次生效即退役且 skip_reset=True 让
+    # 计数器不归零（实测序列 [(1,T),(2,F),(2,F),(2,F)]），与界面文案
+    # 「提前出货后停用」不同源。故类型级硬拒，不静默忽略。
+    if (getattr(pdef, 'reset', None) == 'on_effective'
+            and getattr(pdef, 'deactivate_on_early_hit', False)):
+        from .config_store import ConfigError
+        raise ConfigError(
+            f"保底 '{pdef.name}' 不支持 reset='on_effective' 与 "
+            f"deactivate_on_early_hit=true 同时启用："
+            f"该取值的 did_reset 判据是「保底自身生效」，与「提前出货」不同源；"
+            f"组合会让保底首次生效即退役且计数器不归零。"
+            f"若要「每 N 抽白送一个」，请关闭 deactivate_on_early_hit。"
+        )
+
     # ══ P64 preset 分支（§3.2 AUDIT-BREAK-3；preset 本体随 S4-2 / S4-3 逐条落地）══
     preset = entry.get("preset")
     if preset is not None:
@@ -2275,6 +2293,25 @@ class PityEngine:
                 (_n for _n in _spec.pity_names if _n in self.behaviors),
                 key=lambda _n: _order_index.get(_n, len(ordered)),
             )
+
+        # ── 2026-10-25（批 A+B 审查 §一 1.7.3）：未绑定任何池的保底守卫 ──
+        # `_pool_scoped_groups` 对「不在任何 `pity_names` 里的 behavior」不产出组，
+        # 规则 2/3/4 对它整条不执行（修复前是全局判据、该形态会被拒收）。它们
+        # 同时也不会执行，故不是语义放松；但 `pools` 写错时配置会静默变成
+        # 「一堆不生效的保底」且不再有任何互斥报错兜底。故在此显式报出。
+        # `pool_specs` 为空（直构 `PityDef` 的测试路径）时跳过，保持既有语义。
+        if self.pool_specs:
+            _bound_names = set()
+            for _spec in self.pool_specs.values():
+                _bound_names.update(_spec.pity_names)
+            _unbound = sorted(set(self.behaviors) - _bound_names)
+            if _unbound:
+                from .config_store import ConfigError
+                raise ConfigError(
+                    f"以下保底未匹配任何池，将永不执行：{_unbound}。"
+                    f"现行 `pools` 口径是全限定键 `{{banner_id}}.{{pool_id}}`，"
+                    f"请检查配置里的 `pools` 是否用了裸池名或写错。"
+                )
 
         # ── P56：构建 depends_on 激活传播图 ──
         self._activation_graph: Dict[str, List[str]] = self._build_activation_graph(

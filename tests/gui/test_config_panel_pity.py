@@ -49,6 +49,22 @@ def _make_panel():
 # ═══════════════════════════════════════════════════════════════════
 
 
+
+class TestPityCoverageGaugeTrace:
+    """覆盖倍数可追溯行（α / N）的 GUI 接线（批 A+B 审查 3.5，低）。
+
+    批 B 项三把 GUI 薄壳纳入测试，但 `PityCoverageGauge.set_value(...)` →
+    `trace_label.setText(...)` 仍零覆盖；该行是用户唯一能回溯 α 与 N 的入口。
+    """
+
+    def test_gauge_renders_alpha_and_n(self, qapp):
+        from gacha_simulator.gui.worst_impact_panel import PityCoverageGauge
+        gauge = PityCoverageGauge()
+        gauge.set_value(0.25, alpha=0.05, n=1000, worst_resource=3060, pity_cost=14400)
+        text = gauge.trace_label.text()
+        assert 'α=0.05' in text, f'可追溯行缺 α：{text!r}'
+        assert 'N=1000' in text, f'可追溯行缺 N：{text!r}'
+
 class TestPityPanelStartup:
     """模拟启动流程——完整路径无崩溃"""
 

@@ -555,3 +555,16 @@ class TestPoolScopedMutexRules:
                 PityDef(name='hard_a', btype='hard', scope='ssr', threshold=90),
                 PityDef(name='hard_b', btype='hard', scope='ssr', threshold=80),
             ], state=PityState(), rarity_rank=_RARITY)
+
+
+def test_unbound_pity_is_rejected():
+    """未绑定任何池的保底在构造期报错（批 A+B 审查 3.3 / §五 5.20）。
+
+    修复前该形态会静默通过（`_pool_scoped_groups` 对它不产出组、规则 2/3/4
+    整条不执行），配置随之变成「一堆不生效的保底」。
+    """
+    from gacha_simulator.core.config_store import ConfigError
+    from gacha_simulator.core.pity import PityState
+    defs = [PityDef(name='x', btype='hard', scope='ssr', threshold=5)]
+    with pytest.raises(ConfigError, match='未匹配任何池'):
+        PityEngine({'p1': PoolPitySpec(pity_names=[])}, defs, state=PityState())

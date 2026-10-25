@@ -1,310 +1,404 @@
 # GachaStat
 
-> 灵活的抽卡概率模拟与统计决策分析系统
+> 抽卡机制的概率模拟与统计分析系统
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41CD52?logo=qt)](https://www.riverbankcomputing.com/software/pyqt/)
-[![Tests](https://img.shields.io/badge/Tests-770_passed-success)](./tests/)
-[![Version](https://img.shields.io/badge/Version-2.3.0-blue)](./gacha_simulator/_version.py)
+[![Tests](https://img.shields.io/badge/Tests-3085_passed-success)](./tests/)
+[![Version](https://img.shields.io/badge/Version-2.5.0-blue)](./gacha_simulator/_version.py)
 [![License](https://img.shields.io/badge/License-GPLv3-blue)](./LICENSE)
 
-**GachaStat** 是一款面向游戏抽卡机制的概率模拟与统计分析工具。旨在通过蒙特卡洛模拟对抽取概率、卡池机制、广义出率指标（GDR）及策略选择进行精确建模，帮助玩家与策划人员在不确定条件下做出基于数据的决策。
+GachaStat 是一个抽卡机制的概率模拟与统计分析系统，用 Python 实现，由三部分组成。
+
+**模拟内核** 把配置描述的卡池机制、资源与策略转成抽卡时间线，执行并行批量模拟，产出统一的结果对象。机制建模覆盖基础概率、保底、资源与时间规则、溢出、里程碑与复刻；未等价支持的机制统一登记在配置手册的功能缺口表与模块状态矩阵中。
+
+**分析方法** 只依赖结果对象，计算分布、统计量、评价函数与检验，包括资源分布、出卡间隔、广义出率（GDR）、风险度量、过程分析、脆弱性、最差影响、方案搜索与策略比较。
+
+**界面** 以 PyQt6 桌面界面为主，使用 Plotly 交互式绘图与数据驱动控件；新 WebUI 与新交互逻辑正在设计中，CLI 面向自动化脚本。
+
+所有分析的输入都是模拟过程中产生的信息。系统不接入游戏客户端，不读取账号数据。
 
 ---
 
 ## 目录
 
-- [核心功能](#核心功能)
-- [安装](#安装)
-- [快速上手](#快速上手)
-- [架构概览](#架构概览)
-- [功能详解](#功能详解)
-  - [概率引擎](#概率引擎)
-  - [策略系统](#策略系统)
-  - [分析面板](#分析面板)
-  - [CLI 工具](#cli-工具)
-- [配置系统](#配置系统)
-- [开发](#开发)
-- [项目结构](#项目结构)
-- [版本历史](#版本历史)
-- [许可](#许可)
+- [适用场景](#适用场景)
+- [快速开始](#快速开始)
+- [一、模拟内核](#一模拟内核)
+- [二、分析项及其原理](#二分析项及其原理)
+- [三、配置模型](#三配置模型)
+- [四、架构与数据流](#四架构与数据流)
+- [五、扩展指南](#五扩展指南)
+- [六、开发与测试](#六开发与测试)
+- [七、版本与许可](#七版本与许可)
 
 ---
 
-## 核心功能
+## 适用场景
 
-| 功能 | 说明 |
-|------|------|
-| **概率模拟** | 多池子、多稀有度、保底（软/硬/轮换/捕获明光/定轨）全参数可配置 |
-| **批量仿真** | 多进程并行 Monte Carlo 仿真，支持自定义策略与停止条件 |
-| **广义出率 (GDR)** | 21 种 GDR 指标：目标达成率、资源效率、加权满意度、可达过滤等 |
-| **过程分析** | 逐抽事件推断（7 种事件类型）、交叉统计（AA/BB/AB/BA）、事件模式 |
-| **Bootstrap 分析** | BCa 置信区间、GPD 尾部估计、Hill 估计器、稳定性评估 |
-| **流式分析** | 边模拟边提取边丢弃，O(1) 内存，10 万次仿真热力图仅 ~128 KB |
-| **脆弱性分析** | PAVA 保序回归、Bootstrap 变更点 CI、决策风险量化 |
-| **方案搜索** | Pareto 前沿、退路搜索、资源-目标联立优化 |
-| **比较分析** | L1-L4 递进分析（统计摘要 → 分布比较 → 随机占优 → Bootstrap） |
-| **GUI 界面** | PyQt6 原生桌面应用，10 个分析面板，Plotly 交互图表 |
+| 问题 | 支撑能力 | 状态 |
+|------|----------|------|
+| 按当前配置，抽齐目标卡的概率是多少？ | 目标达成类 GDR + 成功概率（Wilson 区间） | 稳定 |
+| 同样资源，换一种抽法结果差多少？ | 策略系统 + 比较分析（L1 至 L4） | 稳定 |
+| 运气最差时，剩余资源还够抽几次大保底？ | 最差影响分析（虚拟池 + 覆盖倍数 + CVaR） | 已实现，剩余缺陷在办 |
+| 哪个参数最影响结论，会不会翻盘？ | 敏感性分析（参数扫描 + 翻转区间） | 设计中 |
 
 ---
 
-## 安装
+## 快速开始
+
+### 使用打包版（推荐）
+
+打包产物是 PyInstaller onedir 目录，目录内 `GachaStat.exe` 为桌面 GUI 入口。解压后直接运行，不需要安装 Python 或配置环境。
+
+- 首次启动使用内置 `config.toml`，按「配置 → 批量模拟 → 分析」的顺序使用。
+- 用户数据与输出写入 `%APPDATA%/GachaStat/`。
+- 自行构建：`pyinstaller GachaStat.spec`，产物在 `dist/GachaStat/`。
+
+WebUI 版随后续界面计划提供打包入口。当前开发版通过源码启动：
 
 ```bash
-# 克隆仓库
-git clone <repo-url>
-cd gacha_simulator
-
-# CLI / 无头模式安装
-pip install -e ".[dev]"
-
-# GUI 模式安装（含 PyQt6）
-pip install -e ".[gui,dev]"
+python -m gacha_simulator.main_webview
 ```
 
-**依赖项：** Python 3.10+ · PyQt6 · numpy · scipy · matplotlib · Plotly (WebEngine) · binsreg · PySDTest（L2 随机占优，可选）
-
----
-
-## 快速上手
-
-### GUI 启动
+### 从源码运行（开发用）
 
 ```bash
-python -m gacha_simulator.main
+pip install -e ".[gui,dev]"     # GUI + 开发依赖
+python -m gacha_simulator.main  # 桌面界面
 ```
 
-启动后通过「配置」面板设置卡池参数与保底规则，在「批量模拟」面板执行仿真，切换至各分析面板查看结果。
-
-### CLI 批量仿真
+### 命令行（面向自动化，非默认使用方式）
 
 ```bash
 python -m gacha_simulator.cli -n 1000 -w 4 -s 42
 ```
 
-| 参数 | 说明 |
-|------|------|
-| `-c, --config` | TOML 配置文件路径（默认使用内置 config.toml） |
-| `-n, --num-simulations` | 模拟次数（默认 1000） |
-| `-w, --workers` | 并行进程数（默认 4） |
-| `-s, --seed` | 随机种子（默认 42） |
-| `-o, --output` | 结果输出文件（JSON） |
-| `--strategy` | 策略选择：`smart` / `pool_quota` / `pity_reserve` / `target_hunting` / `stop_on_target` / `fixed_count` / `draw_target` |
-| `--strategy-params` | 策略参数（JSON 字符串） |
-| `--output-format` | 输出格式：`simple` / `full` |
-| `--migrate` | 迁移旧格式 TOML 至新格式 |
-| `--version` | 显示版本号 |
+常用参数：`-c` 配置文件、`-n` 模拟次数、`-w` 并行进程数、`-s` 随机种子、`-o` 输出文件、`--strategy` 策略键、`--output-format` 输出格式。完整说明见 `--help`。`--migrate` 仅兼容旧调用保留，旧格式迁移能力已移除。
 
 ---
 
-## 架构概览
+## 一、模拟内核
+
+### 1.1 理论模型与契约
+
+```
+假设层：有哪些池子、机制是否确定
+        ↓
+机制层：卡池机制、资源与时间规则
+        ↓
+行动层：行动空间 → 策略（当前可知信息 → 这一步行动）
+        ↓
+轨道层：一条时间线 = 离散时间随机过程的一条样本轨道
+        │  样本轨道是向量值函数：t 取非负整数，每个 t 对应一个结果向量
+        ↓
+摘要层：结果对象 CompactResult（逐抽事件、汇总统计、池快照）
+        ↓
+分析层：分布、统计量、评价函数（GDR 等）、检验、决策
+```
+
+- 假设层：池子集合与机制参数由配置给定。
+- 机制层：卡池机制（基础概率分布与保底修正算子）以及资源、时间、溢出、里程碑规则。
+- 行动层：行动空间决定可选动作；策略是输入当前可知信息、输出这一步行动的函数。
+- 轨道层：一条时间线是样本轨道；t 取非负整数，每个 t 对应一个结果向量，编码该时刻的全部状态信息。
+- 摘要层：样本轨道压缩为结果对象，分析只读摘要。
+- 分析层：GDR 是样本轨道上的泛函；分布、统计量与检验在摘要上计算。
+
+结果对象是模拟与分析的唯一契约：内核不暴露内部状态，分析层也不读内核对象。
+
+### 1.2 机制建模
+
+**Banner 与池子。** 一个 Banner 被视为一个卡池，包含一组池子（`[[banner]]` 下挂 `[[banner.pool]]`），用于建模卡池内强制送抽、step 池等特殊机制。每个池子有消耗与奖励列表（`[[banner.pool.reward]]`），奖励按卡牌、概率、稀有度、是否 UP 描述，基础概率分布由池内奖励概率给出。
+
+**保底。** 保底是概率修正算子，不是特判，由三族零件组合：
+
+| 零件 | 职责 |
+|------|------|
+| Tracker | 记录状态：计数器、保底标志、连续命中、定轨进度 |
+| Modifier | 修改分布：加增量、设阈值、换目标集 |
+| Lifecycle | 控制生效范围：常驻、有限、依赖其他保底 |
+
+三族零件组合出 13 种保底行为（`BEHAVIOR_REGISTRY`）。概率管道按卡级增量一次到底，归一化由框架统一完成，每个组合都按概率行为、状态转移、边界条件逐项验证。
+
+**其他机制。** 溢出转换用分段表（`OverflowBand`）统一在 `add_card()` 里匹配区间并返回溢出资源；里程碑奖励是独立计数器引擎（`MilestoneEngine`），支持阈值、重复、交替奖励；资源生命周期按到期时刻转换或清零；复刻通过 `rerun_of` 标签表达。
+
+### 1.3 行动空间与策略
+
+池子按产出分三类：随机出卡池、确定性出卡池（兑换池，100% 产出指定卡）、资源产出池。兑换与商店不引入独立动作类型，而是通过这三类特殊池加抽卡动作表达：兑换是确定性出卡池，商店是随时间开放的资源池或兑换池，消耗用 `cost` 的多资源与 OR/AND 语法描述（如 `draw_resource:160 > exchange_currency:5`）。策略的输出是一个动作；兑换与商店都通过 `DrawAction` 表达，不区分池类型。
+
+行动空间另有等待（`WaitAction`）与非抽卡动作（`NonDrawAction`：切换定轨目标、取消定轨路径）。策略是输入当前可知信息、输出这一步行动的函数，注册 8 种内置策略，支持插件目录扫描与启停；停止条件与策略分离，注册 7 种，支持 TOML 条件树与表达式编辑。
+
+### 1.4 结果数据结构与流式分析
+
+`CompactResult` 包含三类内容：逐抽事件（卡牌、时间、池子、保底标记、资源消耗与获取）、汇总统计（资源总量、持有、成功判定、池快照）、元数据（策略、版本、随机种子）。整个对象可序列化、可并行合并，内存为 O(1)。
+
+流式分析是这一层的架构优化：`SharedResultCollector` 与 worker 侧提取器在模拟过程中增量计算部分分布统计，合并后仍写入同一结果对象；逐抽明细路径已删除，内存与模拟次数无关。分析阶段看到的数据结构与是否启用流式提取无关。
+
+### 1.5 模拟执行与正确性
+
+所有批量与并行模拟都必须经过 `service/batch_simulator.py` 的 `run_batch_parallel()`，CLI、GUI、WebUI、测试共用这一入口。并行用 `multiprocessing.Pool` + worker initializer 模式，策略与配置在子进程中重建；模拟过程中的事件通过 notifier 分发给里程碑引擎等订阅者。
+
+内核的正确性靠三层机制保证：
+
+- **等价性对比**：新实现与旧实现跑固定种子，逐字段对比概率行为与状态转移，任何差异都要解释或登记到缺口表。
+- **不变式校验**：`InvariantChecker` 可选项运行时检查四层不变式（状态键、概率归一、生命周期、跨池一致性），生产默认关闭。
+- **配置闸门**：重名校验、scope 白名单、参数键契约、停止条件形态检查，把「配置写了但运行时静默失效」提前到加载期报错。
+
+---
+
+## 二、分析项及其原理
+
+### 2.1 结果对象与可分析量
+
+所有分析项的输入都是模拟过程中产生的信息。实现中，这些信息经 `CompactResult` 压缩为四类字段：
+
+| 来源字段 | 可计算的量 |
+|----------|-----------|
+| 逐抽事件 | 出卡间隔、事件序列、每池抽数与消耗、保底触发分布 |
+| 资源账本 | 资源剩余、资源消耗、每池资源轨迹、收入与支出 |
+| 持有与目标 | 目标达成率、收集率、重复次数、加权满意度 |
+| 池快照与元数据 | 每池成败、池间转移、策略标签、可比性指纹 |
+
+GDR 是其中一类评价函数，不是唯一产出；间隔分布、资源分布、事件分布同样由这些字段定义。
+
+### 2.2 分布分析
+
+**资源分布。** 对每次模拟结束时的资源剩余做经验分布，给出直方图、分位数与风险度量。这是最直接的结果视图。
+
+**出卡间隔分布。** 对同一张目标卡的两次获得之间、或每次稀有卡之间的抽取间隔做分布，回答「多久出一张」。它不是 GDR，但与目标达成同样重要；当前为设计阶段，可视化方案已成型，尚未接入。
+
+**GDR 分布。** 对某个 GDR 指标的 N 个取值做分布，是后续风险度量与比较分析的输入。
+
+**每池分布。** 逐池统计抽数、消耗、出卡与是否达成，用于定位是哪个池子拖累了整体。
+
+### 2.3 评价函数：GDR 指标族
+
+**回答的问题**：一次抽卡尝试好不好，好到什么程度。
+
+**原理**：GDR 是定义在样本轨道上的泛函，并约定函数值具有自然、有意义的大小关系。它把无法直接比较的轨道压成一个可比较的数，随机过程复合 GDR 后成为随机变量。
+
+按构造，GDR 可分为计数型、比率型、二值函数族、联合构造（多个 GDR 取 min）、保证型（在某个 GDR 达标的前提下再优化另一个）。计数型是最重要的一类：资源剩余、资源消耗、出卡数、抽数都是计数型，权重可以取 1，也可以按卡牌或资源价值加权；比率型由计数相除得到，如资源转化效率、每目标卡资源消耗。
+
+当前注册 21 种，按语义可分为目标达成（`target_achievement`、`target_collection`、`all_targets`、`ssr_collection`）、资源效率（`resource_remaining`、`resource_efficiency`、`resource_per_card`、`resource_consumed`、`extra_target`、`non_pity_draws`、`pity_draws`、`draw_conversion_efficiency`）、加权综合（`weighted_satisfaction`、`total_card_value`、`per_pool_draw_rate`、`weapon_character_ratio`、`target_card_draws`）三类，另有 4 个 `_obtainable` 变体：分母只统计模拟期间已开放池子里的可达目标卡，避免不可达卡造成虚降。
+
+**产出**：每条时间线一个实数；配合成功阈值得到成功概率 P（GDR ≥ c）。
+
+**状态**：稳定。21 种指标都满足「样本轨道 → 实数」，其中部分是否满足「自然大小关系」仍需逐项判断，属于广义用法。GDR 的选择有主观性，部分指标在策略比较中会退化（几乎不随策略变化），需要实际验证。
+
+### 2.4 统计推断与风险度量
+
+**描述统计与风险。** 对某个量的 N 个取值计算均值、中位数、标准差、偏度、峰度、下 α 分位数（VaR）、尾部条件期望（CVaR）、成功率与极值。VaR 回答「有 α 的概率比这个数更差」，CVaR 回答「最差 α 部分的平均有多差」。
+
+**Bootstrap 与 BCa。** 对已有结果做有放回重采样，重复估计统计量，得到经验抽样分布；BCa（偏差校正与加速）修正偏差和偏度，给出更可靠的置信区间。Bootstrap 同时用于稳定性评估。
+
+**极值理论。** 对超过阈值的超额值拟合广义帕累托分布（GPD，POT 法），外推更远的分位数与 CVaR；下尾用统一取负法转成上尾处理；阈值稳定性诊断检查形状参数是否随阈值剧烈变化。稀有事件采样不足时，这是尾部估计的主要手段。
+
+**状态**：稳定。EVT 在离散分布上会退化，退化条件已登记。
+
+### 2.5 过程分析
+
+**回答的问题**：不是只看最终成败，过程里发生了什么。
+
+**原理**：对每条时间线逐池推断事件：普通池有 pity_hit、early_hit、miss、skip、ignore，兑换池有 exchange、no_exchange，资源池有 resource_draw、resource_ignore。事件序列与池子成败做四类交叉统计（AA 事件×事件、BB 成败×成败、AB 事件×成败、BA 成败×事件），并支持事件组合模式与自定义约束。比例估计用 Wilson 区间。
+
+**产出**：事件分布、交叉统计表、事件模式。
+
+**状态**：核心稳定，事件细化在办。
+
+### 2.6 脆弱性分析
+
+**回答的问题**：在什么资源水平上，失败风险会突然升高。
+
+**原理**：按池子结束时的资源分箱，比较全部样本与失败样本的失败率；用 binsglm 分箱后做 PAVA 保序回归，强制失败率随资源单调，再用 m-out-of-n Bootstrap 估计变更点（失败率显著抬升的位置）的置信区间。校准曲线与变更点一起构成脆弱区间。
+
+**产出**：失败率曲线、脆弱区间、变更点置信区间。
+
+**状态**：稳定。binsglm 不可用时回退局部逻辑回归。
+
+### 2.7 最差影响
+
+**回答的问题**：这一轮抽完之后，最差还能撑多久。
+
+**原理**：从当前结果出发，构造后续虚拟池序列，估计剩余资源在连续池子推进下的最差水平；用覆盖倍数（剩余资源能覆盖几倍大保底所需资源）与 CVaR 量化风险。虚拟池的卡集合按池内真实 id 生成，保底才真正生效；匹配现有池子用 fnmatch。
+
+**产出**：覆盖倍数、最差资源分布、反事实路径。
+
+**状态**：已实现，剩余缺陷在办（逻辑跳跃、虚拟池同质、池数上限、无资源收入）。
+
+### 2.8 方案搜索
+
+**回答的问题**：目标定多了还是定少了，最少需要多少资源。
+
+**原理**：前进法按抽取意愿排序依次加入目标卡，后退法按错失代价排序依次删去目标卡，每次重算成功概率；最少资源搜索用二分找达到目标成功率所需的最少额外资源；Pareto 前沿给出「资源」与「目标数」两个维度上的非支配解集。
+
+**产出**：退路方案、最少资源、Pareto 前沿。
+
+**状态**：稳定，理论改进在办。
+
+### 2.9 比较分析（L1 至 L4）
+
+**回答的问题**：两个策略或两份配置，差别是否真实存在。
+
+**原理**：四层递进。
+
+| 层 | 方法 | 回答什么 |
+|----|------|----------|
+| L1 | 描述统计 | 各自的均值、中位数、分位数、偏度、CVaR、成功率 |
+| L2 | DD Bootstrap | 两条分布之差（差异分布的 bootstrap）是否有系统性偏移 |
+| L3 | 假设检验 | Mann-Whitney U、随机占优（Donald-Hsu 2016 选择性重中心化，依赖可选包 PySDTest） |
+| L4 | 帕累托前沿 | 多指标同时比较时的非支配解集 |
+
+**产出**：比较摘要、差异分布、检验结论、前沿。
+
+**状态**：L1 至 L3 稳定，L4 可用；B 减 A 的完整差分布设计中。
+
+### 2.10 敏感性分析
+
+**回答的问题**：参数动一下，结论会不会翻。
+
+**原理**：沿参数维度扫描，记录关心的量如何变化，给出翻转区间与裕度。参数按「模拟器读不读它」分四类：口径参数、策略参数、机制参数、精度参数。扫描规格三种：数值栅格、离散枚举、互斥分支。翻转点用「均匀采样 + 细化」定位，不纯用二分，避免遇跳变失效。
+
+**产出**：响应曲线、翻转区间、成立域。
+
+**状态**：设计中，界面为占位页。
+
+---
+
+## 三、配置模型
+
+配置文件是单个 TOML 文件，由 GUI 生成或手写。核心结构是 Banner：一个 Banner 被视为一个卡池，包含一组池子，用于建模卡池内强制送抽、step 池等特殊机制；池子与奖励挂在 Banner 下；保底、里程碑、资源生命周期是顶层规则，通过作用域或 banner 字段与 Banner 关联。
+
+```toml
+[[banner]]
+id = "b1"
+name = "示例卡池"
+start_day = 0
+end_day = 21
+
+[[banner.pool]]
+id = "main"
+cost = "draw_resource:160"
+
+[[banner.pool.reward]]
+card_id = "limited_ssr_1"
+probability = 0.006
+rarity = "ssr"
+featured = true
+
+[[pity]]
+name = "ssr_soft"
+type = "soft_interval"
+scope = "ssr"
+reset = "featured"
+start = 80
+end = 90
+```
+
+| 段 | 说明 |
+|----|------|
+| `[[banner]]` | Banner 定义：一个卡池，包含一组池子 |
+| `[[banner.pool]]` | 池子：id 与消耗方式 |
+| `[[banner.pool.reward]]` | 池内每个奖励：卡牌、概率、稀有度、是否 UP |
+| `[[pity]]` | 保底规则：类型、作用域、重置方式、阈值或区间 |
+| `[[milestone]]` | 累抽奖励：阈值、重复、最大触发次数 |
+| `[[targets]]` | 目标卡与数量 |
+| `[strategy]` | 策略键与参数 |
+| `[rarities]` | 稀有度排序 |
+| `[resources]` | 资源定义、收入日历、初始值、生命周期 |
+
+字段级说明见 GUI 的「帮助 → 关于 → 配置文件指南」。
+
+---
+
+## 四、架构与数据流
 
 ```
 gacha_simulator/
-├── core/           # 引擎层（无 GUI 依赖）
-│   ├── pool.py          — 卡池定义与抽卡逻辑
-│   ├── pity.py          — 保底系统（10 种行为类型）
-│   ├── state.py         — 模拟状态（资源/持有/时间）
-│   ├── strategy.py      — 策略注册表（7 种策略）
-│   ├── stop_condition.py— 停止条件（6 种）
-│   ├── gdr.py           — 广义出率注册表（21 种指标）
-│   ├── streaming.py     — 流式分析（O(1) 内存）
-│   ├── bootstrap.py     — Bootstrap 稳定性引擎
-│   ├── vulnerability.py — 脆弱性分析（PAVA 保序回归）
-│   ├── process_trace.py — 过程追踪与事件推断
-│   ├── comparison_analyzer.py — 比较分析（随机占优）
-│   ├── config_store.py  — 配置数据模型
-│   └── config_toml.py   — TOML 读写
-├── service/        # 服务层
-│   ├── gacha_service.py    — 单次模拟调度
-│   └── batch_simulator.py  — 并行批量模拟入口
-├── gui/            # GUI 层（PyQt6，10 个面板）
-│   ├── config_panel.py         — 配置编辑
-│   ├── gacha_panel.py          — 批量模拟
-│   ├── data_manager_panel.py   — 数据管理
-│   ├── analysis_panel.py       — 统计分析
-│   ├── process_analysis_panel.py — 过程分析
-│   ├── plan_search_panel.py    — 方案搜索
-│   ├── retreat_panel.py        — 脆弱性分析
-│   ├── worst_impact_panel.py   — 最差影响
-│   ├── comparison_analysis_panel.py — 比较分析
-│   └── wheel_blocker.py        — 全局滚轮拦截
-├── config/         # 默认配置（TOML）
-├── visualization/  # matplotlib 中文字体
-├── tests/          # 测试（pytest + cov）
-└── resources/      # 图标等静态资源
+├── core/            # 引擎层，无 GUI 依赖（42 个模块）
+│   ├── pool.py, banner.py          # 卡池与 Banner
+│   ├── pity*.py                    # 保底：Tracker / Modifier / Lifecycle
+│   ├── overflow.py, milestone.py   # 溢出、累抽奖励
+│   ├── action.py, state.py         # 行动与状态
+│   ├── strategy.py, stop_condition.py
+│   ├── result_types.py, collector.py # 结果数据结构
+│   ├── gdr.py, bootstrap.py, evt_tail.py, distribution.py
+│   ├── vulnerability.py, worst_impact.py, retreat_search.py
+│   ├── comparison_analyzer.py, process_trace.py, streaming.py
+│   └── config_store.py, config_toml.py
+├── service/         # 服务层：单次调度与并行批量入口
+├── gui/             # PyQt6 界面（17 个模块）
+├── webui/           # WebUI 后端（7 个模块）
+├── strategies/      # 8 个内置策略 + 插件示例
+├── config/          # 默认 config.toml
+├── visualization/   # ChartSpec 与 Plotly 渲染
+├── main.py / main_webview.py / cli.py / run.py
+└── paths.py
 ```
 
-**核心数据流：**
+仓库根目录另有 `tests/`（102 个测试文件）、`docs/`（文档体系）、`benchmarks/`（性能测量资产，不进发布产物）、`tools/refcheck/`（文档与代码互引工具）。
 
-```
+```text
 ConfigStore → SimulationEnvBuilder → SimulationEnv
-    → GachaService(pools, strategy, stop_cond)
+    → GachaService(banners, strategy, stop_condition)
     → run_simulation(CompactCollector) → CompactResult
-    → SharedResultCollector
+    → SharedResultCollector / ResultStore
+    → 分析面板（GUI / WebUI）或 CLI 输出
 ```
 
-`CompactResult` 为 O(1) 内存的结果格式，支持 JSON 序列化（`to_dict`/`from_dict`）。所有批量模拟必须通过 `service/batch_simulator.py` 的 `run_batch_parallel()` 执行。
+### 4.1 交互式绘图
+
+图表是可缩放的 Plotly 交互图，嵌在 `QWebEngineView` 里（`gui/chart_webview.py`）。实现上有四个设计点：
+
+- 一个面板共用一个 HTML 与一个 WebView，图表切换用 JS 的 display 控制，切换无延迟。
+- 增量更新单个图表：新数据通过 `runJavaScript` 原地重建，不重载页面。
+- 防闪烁：初始化时预加载骨架页（含 plotly.js 与重建函数），首次与后续更新都走原地重建；预加载未完成时把图表挂起。
+- ChartSpec 中间表示：图表先描述成与绘图库无关的规格，再由 Plotly 渲染器产出，GUI 与 WebUI 共用同一套图表语义。
+
+### 4.2 交互与控件
+
+策略参数、停止条件参数由 `ParamDescriptor` 声明，`gui/param_renderer.py` 按类型自动分派 Qt 控件；新增策略或停止条件时不需要改面板代码。
+
+两个 Qt 层面的细节：`gui/wheel_blocker.py` 用全局事件过滤器拦截下拉框与数值框的滚轮并转发给外层滚动区，避免页面滚不动；`gui/slot_guard.py` 用全局 excepthook 与 `@guarded_slot` 保护槽函数，避免 PyQt6 在槽内异常时直接终止进程且不留 traceback。
+
+分析结果以结果单元卡片组织，数据由 `ResultStore` 保存、加载、比较、导出；每次结果带可比性指纹，记录影响结果可比性的配置维度，指纹不一致的数据集在比较时会被明确拦下。
+
+### 4.3 WebUI
+
+`main_webview.py` 用 PyWebView 加载前端，与桌面 GUI 平行，共用 core 与 `config.toml`。前端技术栈为 Vue 3 + Vite + ECharts，组件库仍在选型。当前为开发版，打包入口随后续界面计划提供。
 
 ---
 
-## 功能详解
-
-### 概率引擎
-
-**保底系统 (`core/pity.py`)** 支持 10 种保底行为类型：
-
-| 类型 | 驱动方式 | 说明 |
-|------|---------|------|
-| `soft_step` | Counter | RLE deltas 驱动软保底 |
-| `soft_interval` | Counter | 区间语法糖（自动展开为 deltas） |
-| `soft_additive` | Counter | 叠加语法糖 |
-| `hard` | Counter | 阈值触发 100% 保底 |
-| `rotating` | Event | 纯净大小保底（guaranteed flag 二态翻转） |
-| `rotating_soft` | Event | 轮换保底 + 软保底混入 |
-| `rotating_cr` | Event | 捕获明光（cr_counter + cr_state_probs） |
-| `rotating_cr_soft` | Event | 捕获明光 + 软保底 |
-| `targeted` | Event | 定轨（selected_card + fate_points） |
-| `targeted_soft` | Event | 定轨 + 软保底 |
-
-### 策略系统
-
-`STRATEGY_REGISTRY` 注册 7 种抽卡策略，统一接口 `select_action(ctx) → Action`：
-
-| 策略 | 说明 |
-|------|------|
-| `smart` | 智能策略——综合目标卡价值、池子效率与资源约束 |
-| `pool_quota` | 池子配额——每个池子分配抽数上限 |
-| `pity_reserve` | 保底预留——为未开放保底池预留资源 |
-| `stop_on_target` | 达成即停——获取目标卡后停止 |
-| `target_hunting` | 目标狩猎——专注单一目标卡 |
-| `fixed_count` | 固定抽数——均匀分配预算 |
-| `draw_target` | 指定目标——按 desire 权重排序抽卡 |
-
-策略支持非抽卡动作（`NonDrawAction`）：切换定轨目标（`switch_epitomized_target`）与取消定轨路径（`cancel_epitomized_path`）。
-
-### 分析面板
-
-| 面板 | 分析方法 |
-|------|---------|
-| **统计分析** | GDR 汇总、经验分布、直方图、风险分析、成功率 Wilson CI |
-| **过程分析** | 每池 7 种事件推断、4 种交叉统计（AA/BB/AB/BA）、5 种事件组合模式 |
-| **方案搜索** | 退路搜索、资源目标搜索、Pareto 前沿（三合一面板） |
-| **脆弱性分析** | PAVA 保序回归 + Bootstrap 变更点 CI + 三行子图 |
-| **最差影响** | 虚拟池匹配（fnmatch）、反事实路径、CVaR 风险度量 |
-| **比较分析** | L1-L4 递进（统计摘要 → 分布比较 → SD 随机占优 → Bootstrap） |
-| **数据管理** | 数据集保存/加载/比较/导出（ComparabilityFingerprint 相容性校验） |
-| **敏感度分析** | 单参数变化 + GDR 折线图（开发中） |
-
-### CLI 工具
-
-除仿真外，CLI 还支持：
-
-```bash
-# 迁移旧格式配置
-python -m gacha_simulator.cli --migrate
-
-# 完整输出（含 extraction 数据）
-python -m gacha_simulator.cli -n 500 --output-format full -o full_results.json
-```
-
----
-
-## 配置系统
-
-配置文件为单一 TOML 文件（`config.toml`），包含以下段：
-
-| 段 | 说明 |
-|---|------|
-| `[simulation]` | 全局仿真参数（初始资源、起始时间、随机种子） |
-| `[[pool]]` | 卡池定义（名称、稀有度概率、开放时间、批次大小） |
-| `[[card]]` | 卡牌定义（名称、稀有度、权重、标签） |
-| `[[pity]]` | 保底规则（类型、作用域、阈值、delta 序列） |
-| `[strategy]` | 策略参数（目标卡、权重、desire weights） |
-| `[resources]` | 资源定义 |
-| `[gains]` | 资源日历（每日/每周固定收入） |
-| `[weights]` | 卡片价值权重（稀有度权重、卡片价值、资源价值） |
-
----
-
-## 开发
-
-```bash
-# 运行测试套件
-pytest --cov=gacha_simulator
-
-# 代码风格检查
-ruff check
-
-# 单模块测试
-pytest tests/test_pity.py -v
-```
-
-**测试规模：** 770 项测试通过，1 项跳过。
-
-### 扩展指南
+## 五、扩展指南
 
 | 扩展目标 | 入口 |
-|---------|------|
+|----------|------|
 | 新 GDR 指标 | `core/gdr.py` → `UNIFIED_GDR_REGISTRY` 注册 `GDRDefinition` |
-| 新策略 | `core/strategy.py` → `STRATEGY_REGISTRY` 注册 |
-| 新停止条件 | `core/stop_condition.py` → `STOP_CONDITION_REGISTRY` 注册 |
-| 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 + 实现 `CounterBasedBehavior` 或 `PityBehavior` 子类 |
-| 新 GUI 面板 | `gui/` 目录 → `MainWindow._setup_ui()` 注册 Tab |
-| 新卡片维度 | `CardDefEntry.tags`（单值）/ `CardDefEntry.list_tags`（多值）——TOML 中 `[card.tags]` 加一行即可 |
+| 新保底行为 | `core/pity.py` → `BEHAVIOR_REGISTRY` 注册 preset |
+| 新策略 | `strategies/builtin/*.py` 或插件目录 → `@register_strategy` 装饰器 |
+| 新停止条件 | `core/stop_condition.py` → `STOP_CONDITION_REGISTRY`，并声明 TOML 形态 |
+| 新 GUI 面板 | `gui/` 创建 → `MainWindow._setup_ui()` 注册 Tab |
+| 新 Banner 生命周期规则 | `[[banner.lifecycle]]` TOML 段 |
+| 新资源生命周期规则 | `core/resource_lifecycle.py` + `[resources.lifecycle]` |
+| 新里程碑 | `core/milestone.py` + `[[milestone]]` 段 |
+| 新卡片维度 | `CardDefEntry.tags` / `list_tags`，TOML 中加一行即可 |
 | 新配置项 | `ConfigStore` → `config_toml.py` → `config_panel.py` → `SimulationEnvBuilder` |
-| 新脆弱性方法 | `core/vulnerability.py` 新增私有函数，通过 `_fit_vulnerability_pava` 集成 |
-| 新随机占优检验 | `core/comparison_analyzer.py` → `compute_dominance_matrix()` 派发器 |
 
 ---
 
-## 项目结构
+## 六、开发与测试
 
-```
-抽卡模拟与分析程序/
-├── gacha_simulator/
-│   ├── _version.py          # 版本号（Pride Versioning: MAJOR=PROUD/MINOR=DEFAULT/PATCH=SHAME）
-│   ├── paths.py             # 路径工具（开发/打包环境自适应）
-│   ├── main.py              # GUI 入口
-│   ├── cli.py               # CLI 入口
-│   ├── core/                # 引擎层（34 个模块）
-│   ├── service/             # 服务层
-│   ├── gui/                 # GUI 层（18 个模块）
-│   ├── config/              # 默认配置文件
-│   ├── visualization/       # matplotlib 字体
-│   └── resources/           # 静态资源
-├── tests/                   # 测试套件
-├── docs/                    # 文档体系
-│   ├── 00-meta/             # 全局约定、术语表、验收清单
-│   ├── 01-活跃/             # 活跃计划文档（面板/子系统级别）
-│   ├── 02-待办/             # 待办事项
-│   └── 03-归档/             # 已完成的计划与面板文档
-├── pyproject.toml           # 项目元数据与依赖
-└── README.md
+```bash
+python -m pytest -q                      # 3085 passed, 35 skipped
+ruff check gacha_simulator/              # 代码风格
+python tools/refcheck/refcheck.py manual # 文档互引工具说明书
 ```
 
----
-
-## 版本历史
-
-采用 **Pride Versioning**（`PROUD.DEFAULT.SHAME`）：
-
-| 版本 | 日期 | 里程碑 |
-|------|------|--------|
-| **2.3.0** | 2026-07-20 | P65 卡片标签系统——CardDefEntry tags/list_tags + TOML 段名单数化 |
-| **2.2.0** | 2026-06-14 | P44 池子批次抽卡（十连强制）——Pool/PoolConfig/PoolEntry 三级 batch_size |
-| **2.1.0** | 2026-06-12 | P37 资源日历增强 + Harness 基础设施完善 + 全仓库 lint |
-| **2.0.0** | 2026-06-09 | 预发布版——面板合并、数据管理层、比较分析、应用打包、文档重构 |
-| **1.10.0** | 2026-05-26 | 文档体系重构、优先级路线图、Bootstrap 计划合并 |
-| 1.9.x 系列 | 2026-05-20~26 | Bootstrap 引擎、GDR 扩展、策略重构、过程分析、流式分析 |
-| 1.0.0 | 2026-05-07 | 初始版本——核心模拟引擎、GUI、配置系统 |
-
-完整版本历史见 `gacha_simulator/_version.py` 中的 `VERSION_HISTORY`。
+Windows 控制台默认 GBK，跑 CLI 子进程相关测试前建议设置 `PYTHONIOENCODING=utf-8`，否则中文输出会导致解码失败。
 
 ---
 
-## 许可
+## 七、版本与许可
 
-本项目以 [GNU General Public License v3.0](./LICENSE) 发布。
+当前版本 2.5.0。版本历史见 `gacha_simulator/_version.py` 的 `VERSION_HISTORY`。
 
-> **说明：** 项目依赖中包含 GPLv3 许可的组件（PyQt6、binsreg），在 PyInstaller 打包分发时构成组合分发，整体受 GPLv3 约束。详见 [LICENSE](./LICENSE) 文件。
+本项目以 GNU General Public License v3.0 发布。依赖中的 PyQt6 与 binsreg 同为 GPLv3 组件，打包分发时整体受 GPLv3 约束。详见 [LICENSE](./LICENSE)。

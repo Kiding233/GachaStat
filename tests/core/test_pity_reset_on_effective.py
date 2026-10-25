@@ -176,6 +176,22 @@ class TestTypeWhitelist:
         assert eng.get_pity_def('x').reset == 'on_effective'
 
 
+class TestDeactivateCombination:
+    """`on_effective` 与 `deactivate_on_early_hit` 的组合被硬拒（批 A+B 审查 3.1 / §二 2.15）。"""
+
+    def test_combination_is_rejected(self):
+        defs = [PityDef(name='x', btype='hard', scope='ssr', threshold=2,
+                        reset='on_effective', deactivate_on_early_hit=True)]
+        with pytest.raises(ConfigError, match='deactivate_on_early_hit'):
+            _engine(defs, FULL_SCOPE, FULL_BASE)
+
+    def test_combination_without_flag_is_accepted(self):
+        defs = [PityDef(name='x', btype='hard', scope='ssr', threshold=2,
+                        reset='on_effective', deactivate_on_early_hit=False)]
+        eng, st, pool_id, base = _engine(defs, FULL_SCOPE, FULL_BASE)
+        assert eng.get_pity_def('x').deactivate_on_early_hit is False
+
+
 # ══════════════════════════════════════════════════════════════════
 # 配置面：白名单 + round-trip
 # ══════════════════════════════════════════════════════════════════

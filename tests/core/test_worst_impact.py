@@ -876,12 +876,34 @@ def test_pity_cost_unit_uses_reference_pool_not_first_pool():
     assert analyzer._draw_unit_cost() == 320
 
 
+
+def test_draw_unit_cost_fallback_uses_parsed_cost_not_first_pool():
+    """回退分支（无 enabled 池、无自定义池配置）也须与 `_parsed_cost` 同源。
+
+    审查 3.4 的实测：默认配置 + 首池 cost 改 999 + 全部池禁用 → 旧实现
+    `_draw_unit_cost()=999`、`_get_pity_cost()=89910`，而分析实际用的单价是 160。
+    """
+    store = _default_store()
+    for banner in store.banner.banners:
+        for pool in banner.pools:
+            pool.enabled = False
+    store.banner.banners[0].pools[0].cost = 'draw_resource:999'
+
+    analyzer = WorstImpactAnalyzer([], {}, store)
+    analyzer._prepare_pool_info()
+
+    assert analyzer._draw_unit_cost() == 160, (
+        f'回退分支取错单价：期望解析成本 160（分析实际用的），'
+        f'实际 {analyzer._draw_unit_cost()}（第一个池为 999）')
+    max_end = max(analyzer._get_pity_end(p) for p in store.pity.pities)
+    assert analyzer._get_pity_cost() == max_end * 160
+
 def test_pity_coverage_golden_default_config():
     """默认配置 + GUI 默认口径的覆盖倍数 golden（α=0.05 / N=1000 / seed=42）。
 
     **口径**（与 GUI 面板默认完全同形，2026-10-15 实测复现）：
     - 主模拟：随包 `config.toml`、策略 `smart`（`[strategy].key`）、N=1000、seed=42
-    - 最差影响：条件=成功、广义出率=面板默认 `target_achievement`、阈值 1.00、
+    - 最差影响：条件=成功、广义出率=面板默认 `target_achievement_obtainable`（两 key 实测读数相同）、阈值 1.00、
       α=0.05、池形状取最后一个 enabled 池（面板 `_load_last_pool_config` 的口径）
     - 读数：`worst_resource`（成功组资源分布的 α 分位）/ `pity_cost`
       （`max_end × 单价` = 90 × 160）

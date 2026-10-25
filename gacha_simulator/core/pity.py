@@ -1715,6 +1715,24 @@ def create_behavior(pdef, state: 'PityState', **extra) -> 'PityBehavior':
             f"需要「出该稀有度即重置」用 reset='' 或 reset='{scope}'。"
         )
 
+    # ══ 2026-10-25（批 A+B 审查 §二 2.15）：`on_effective` 与
+    # `deactivate_on_early_hit` 的组合硬拒 ══
+    # 两者共用 `did_reset`：`FiniteActive.should_deactivate` 取 fired = did_fire(ctx)，
+    # 而 `CounterTracker.did_reset` 对 `on_effective` 返回的正是 `_effective`。
+    # 于是「保底生效」被当成「提前出货」，首次生效即退役且 skip_reset=True 让
+    # 计数器不归零（实测序列 [(1,T),(2,F),(2,F),(2,F)]），与界面文案
+    # 「提前出货后停用」不同源。故类型级硬拒，不静默忽略。
+    if (getattr(pdef, 'reset', None) == 'on_effective'
+            and getattr(pdef, 'deactivate_on_early_hit', False)):
+        from .config_store import ConfigError
+        raise ConfigError(
+            f"保底 '{pdef.name}' 不支持 reset='on_effective' 与 "
+            f"deactivate_on_early_hit=true 同时启用："
+            f"该取值的 did_reset 判据是「保底自身生效」，与「提前出货」不同源；"
+            f"组合会让保底首次生效即退役且计数器不归零。"
+            f"若要「每 N 抽白送一个」，请关闭 deactivate_on_early_hit。"
+        )
+
     # ══ P64 preset 分支（§3.2 AUDIT-BREAK-3；preset 本体随 S4-2 / S4-3 逐条落地）══
     preset = entry.get("preset")
     if preset is not None:

@@ -374,13 +374,15 @@ class WorstImpactAnalyzer:
         """
         if self._unit_cost is not None:
             return self._unit_cost
-        if self.store.pools:
-            c = self.store.pools[0].cost
-            if isinstance(c, str) and ':' in c:
-                try:
-                    return int(c.split(':')[1])
-                except ValueError:
-                    pass
+        # 回退分支也须与 `_parsed_cost` 同源（2026-10-25，审查 3.4）：原实现读
+        # `store.pools[0].cost`（第一个池），与本次分析实际使用的参照池解析结果
+        # 不同源；全池禁用时分析实际单价是构造期默认的 160，而旧代码会取到 999。
+        try:
+            parsed = self._parse_unit_cost()
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            return parsed
         return 160
 
     def _parse_unit_cost(self) -> Optional[int]:

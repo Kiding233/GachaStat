@@ -1,12 +1,13 @@
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 # 发布状态标志（保险措施）：正式上线 / 真实用户接入后改为 True，此后禁止
 # 一次性迁移与删除兼容机制（见 CLAUDE.md「无历史包袱原则」）。
 RELEASED = False
 
-VERSION_DISPLAY = "v2.4.0"
+VERSION_DISPLAY = "v2.5.0"
 
 VERSION_HISTORY = [
+    ("2.5.0", "2026-10-25", "DEFAULT：保底状态机重构（Tracker/Modifier/Lifecycle 三族零件 + 13 种 preset）、停止条件接通（条件树与表达式编辑）、里程碑序列与资源生命周期、保底管道顺序接线、代码清理（逐抽明细路径与旧保底路径删除）、文档互引工具、性能测量平台"),
     ("2.4.0", "2026-07-29", "DEFAULT — P69 策略系统重构——统一策略组件框架：@register_strategy 装饰器 + StrategyMeta 数据驱动注册表 + ParamDescriptor 6种参数描述符 + 策略插件系统（扫描/加载/热重载）+ 8个内置策略拆分至 strategies/builtin/ + 3种复合策略 Building Block（DrawSegment/PriorityChain/Conditional）+ StrategyContext 上下文契约完善 + 插件管理 GUI + config_panel Tab 拆分"),
     ("2.3.0", "2026-07-20", "DEFAULT — P65 卡片标签系统：CardDefEntry 新增 tags/list_tags + TOML [[card]] 破坏性变更（段名单数化 + id→card_id）+ QListWidget 详情面板 + 动态标签表 + is_limited() 删除"),
     ("2.2.0", "2026-06-14", "DEFAULT — P44 池子批次抽卡（十连强制）：Pool/PoolConfig/PoolEntry 三级 batch_size + can_afford_batch 资源预检查 + 服务层批次循环 + 策略层 11 处适配 + 保底逐发直调"),

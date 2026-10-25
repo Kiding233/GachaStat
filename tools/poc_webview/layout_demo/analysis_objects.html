@@ -6,7 +6,9 @@
 <title>分析对象交互模型（独立 demo）</title>
 
 <!-- 独立 demo：一个「分析对象」= 方法 + 参数 + 结果，一个对象一份输出。
-     左栏负责增删改对象，右栏按方法分组展示只读结果。
+     左栏按方法分组且方法行常驻，空方法行本身就是新建入口；对象挂在方法下，
+     右栏按方法分组展示只读结果。顶部「间隔分析 / 成功率分析」两个专题标签，
+     后者只有一个方法，用来验证单一方法时的退化形态。
      数据全假，不接 Python；所有依赖都走同目录 libs/，不请求网络。 -->
 <link rel="stylesheet" href="libs/ep.min.css">
 <style>
@@ -46,8 +48,32 @@ body{
 .l-head-row{display:flex;align-items:baseline;gap:8px}
 .l-title{font-size:14px;font-weight:700}
 .l-cnt{margin-left:auto;font-size:11px;color:var(--ink-3)}
-.new-drop{width:100%;margin-top:9px}
-.btn-new{width:100%}
+.tabs{flex:0 0 auto;display:flex;align-items:flex-end;gap:2px;padding:0 12px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.tab{height:34px;padding:0 12px;border:0;border-bottom:2px solid transparent;background:none;
+  font:inherit;font-size:12px;color:var(--ink-2);cursor:pointer}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
+.tabn{margin-left:5px;font-size:10px;color:var(--ink-3)}
+
+/* 左栏：方法行常驻，对象挂在方法下；空方法行就是创建入口。 */
+.mgroup{border-bottom:1px solid #f3f5f8}
+.mgroup.empty{background:#fcfcfd}
+.mh{display:flex;align-items:center;gap:6px;min-height:32px;padding:4px 8px 4px 6px;cursor:pointer}
+.mh:hover{background:var(--bg)}
+.mcaret{width:12px;flex:0 0 auto;text-align:center;font-size:10px;color:var(--ink-3)}
+.mname{flex:1;min-width:0;font-size:12px;font-weight:700;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mgroup.empty .mname{font-weight:400;color:var(--ink-3)}
+.mbadge{flex:0 0 auto;font-size:10px;color:var(--warn);background:#fff7e8;
+  border:1px solid #f0d9a8;border-radius:9px;padding:0 6px}
+.mcount{flex:0 0 auto;font-size:10px;color:var(--accent);background:var(--accent-soft);
+  border-radius:9px;padding:1px 6px}
+.madd{width:20px;height:20px;flex:0 0 auto;padding:0;border:1px dashed var(--line-strong);
+  border-radius:4px;background:none;color:var(--ink-3);font:inherit;font-size:12px;
+  line-height:1;cursor:pointer}
+.madd:hover{border-style:solid;border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.mitems{padding-bottom:3px}
 
 .l-list{flex:1 1 auto;overflow-y:auto;padding:4px 0}
 .l-empty{padding:18px 14px;color:var(--ink-3);font-size:12px;text-align:center;line-height:1.7}
@@ -106,12 +132,12 @@ body{
 
 /* 右栏：只读结果，按方法分组 */
 .right{flex:1;min-width:0;overflow-y:auto;padding:14px 18px 24px}
-.empty{
+.empty-state{
   height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:6px;color:var(--ink-3);
 }
-.empty .big{font-size:13px;color:var(--ink-2)}
-.empty .sub{font-size:11px}
+.empty-state .big{font-size:13px;color:var(--ink-2)}
+.empty-state .sub{font-size:11px}
 .group{margin-bottom:18px}
 .group:last-child{margin-bottom:4px}
 .group-h{
@@ -174,61 +200,71 @@ body{
   <div class="topbar">
     <b>分析对象交互模型</b>
     <span class="tag">独立 demo · 数据全假</span>
-    <span class="hint">左栏编辑对象，右栏只读结果；一个对象一份输出</span>
+    <span class="hint">左栏方法行常驻，行内 ＋ 新建；对象挂在方法下，右栏只读结果</span>
+  </div>
+
+  <div class="tabs">
+    <button v-for="t in TOPICS" :key="t.key" class="tab" :class="{on: t.key === topicKey}"
+            @click="switchTopic(t.key)">
+      {{ t.name }}<span class="tabn">{{ topicObjects(t.key).length }}</span>
+    </button>
   </div>
 
   <div class="wrap">
     <aside class="left">
       <div class="l-head">
         <div class="l-head-row">
-          <span class="l-title">间隔分析</span>
-          <span class="l-cnt">{{ objects.length }} 个分析</span>
+          <span class="l-title">{{ curTopic.name }}</span>
+          <span class="l-cnt">{{ objects.length }} 个对象 · {{ curTopic.methods.length }} 个方法</span>
         </div>
-        <el-dropdown trigger="click" class="new-drop" @command="addObject">
-          <el-button type="primary" size="small" class="btn-new">＋ 新建分析</el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item v-for="m in METHODS" :key="m.key" :command="m.key">{{ m.name }}</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
       </div>
 
       <div class="l-list">
-        <div class="l-empty" v-if="!objects.length">
-          还没有分析对象。点上方「＋ 新建分析」开始。
-        </div>
-
-        <div v-for="o in objects" :key="o.id" class="obj" :id="'obj-' + o.id"
-             :class="{sel: selId === o.id, open: o.expanded}">
-          <div class="obj-row" @click="selectObject(o)">
-            <span class="obj-caret" :title="o.expanded ? '收起参数' : '展开参数'"
-                  @click.stop="toggleExpand(o)">{{ o.expanded ? '▾' : '▸' }}</span>
-            <span class="obj-name">{{ labelOf(o) }}</span>
-            <span class="obj-dot" :class="o.status" :title="statusText(o)"></span>
-            <span class="obj-acts">
-              <button class="ibtn" title="只运行此项"
-                      :disabled="o.status === 'ok' || o.status === 'running'"
-                      @click.stop="runOne(o)">▷</button>
-              <button class="ibtn" title="复制此对象" @click.stop="copyObject(o)">⧉</button>
-              <button class="ibtn del" title="删除此对象" @click.stop="removeObject(o)">✕</button>
-            </span>
+        <div v-for="g in methodGroups" :key="g.m.key" class="mgroup" :class="{empty: !g.items.length}">
+          <div class="mh" @click="g.items.length ? toggleGroup(g.m.key) : addObject(g.m.key)"
+               :title="g.items.length ? (isOpen(g.m.key) ? '收起该方法的对象' : '展开该方法的对象') : '点此新建一个对象'">
+            <span class="mcaret" v-if="g.items.length">{{ isOpen(g.m.key) ? '▾' : '▸' }}</span>
+            <span class="mcaret" v-else></span>
+            <span class="mname">{{ g.m.name }}</span>
+            <span class="mbadge" v-if="g.m.dispatch">派发</span>
+            <span class="mcount" v-if="g.items.length">{{ g.items.length }}</span>
+            <button class="madd" :title="'新建一个「' + g.m.name + '」对象'"
+                    @click.stop="addObject(g.m.key)">＋</button>
           </div>
 
-          <div class="obj-params" v-show="o.expanded">
-            <div class="prow" v-for="p in methodOf(o).params" :key="p.k">
-              <label>{{ p.k }}</label>
-              <div class="pc">
-                <el-select v-if="p.t === 'multi'" v-model="o.params[p.k]" multiple
-                           size="small" collapse-tags collapse-tags-tooltip style="width:100%">
-                  <el-option v-for="opt in p.opts" :key="opt" :label="opt" :value="opt"></el-option>
-                </el-select>
-                <el-input-number v-else-if="p.t === 'num'" v-model="o.params[p.k]"
-                                 size="small" :min="p.min" :max="p.max" :step="p.step"
-                                 controls-position="right" style="width:100%"></el-input-number>
-                <el-radio-group v-else-if="p.t === 'radio'" v-model="o.params[p.k]" size="small">
-                  <el-radio v-for="opt in p.opts" :key="opt" :value="opt">{{ opt }}</el-radio>
-                </el-radio-group>
+          <div class="mitems" v-show="g.items.length && isOpen(g.m.key)">
+            <div v-for="o in g.items" :key="o.id" class="obj" :id="'obj-' + o.id"
+                 :class="{sel: selId === o.id, open: o.expanded}">
+              <div class="obj-row" @click="selectObject(o)">
+                <span class="obj-caret" :title="o.expanded ? '收起参数' : '展开参数'"
+                      @click.stop="toggleExpand(o)">{{ o.expanded ? '▾' : '▸' }}</span>
+                <span class="obj-name">{{ labelOf(o) }}</span>
+                <span class="obj-dot" :class="o.status" :title="statusText(o)"></span>
+                <span class="obj-acts">
+                  <button class="ibtn" title="只运行此项"
+                          :disabled="o.status === 'ok' || o.status === 'running'"
+                          @click.stop="runOne(o)">▷</button>
+                  <button class="ibtn" title="复制此对象" @click.stop="copyObject(o)">⧉</button>
+                  <button class="ibtn del" title="删除此对象" @click.stop="removeObject(o)">✕</button>
+                </span>
+              </div>
+
+              <div class="obj-params" v-show="o.expanded">
+                <div class="prow" v-for="p in methodOf(o).params" :key="p.k">
+                  <label>{{ p.k }}</label>
+                  <div class="pc">
+                    <el-select v-if="p.t === 'multi'" v-model="o.params[p.k]" multiple
+                               size="small" collapse-tags collapse-tags-tooltip style="width:100%">
+                      <el-option v-for="opt in p.opts" :key="opt" :label="opt" :value="opt"></el-option>
+                    </el-select>
+                    <el-input-number v-else-if="p.t === 'num'" v-model="o.params[p.k]"
+                                     size="small" :min="p.min" :max="p.max" :step="p.step"
+                                     controls-position="right" style="width:100%"></el-input-number>
+                    <el-radio-group v-else-if="p.t === 'radio'" v-model="o.params[p.k]" size="small">
+                      <el-radio v-for="opt in p.opts" :key="opt" :value="opt">{{ opt }}</el-radio>
+                    </el-radio-group>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -244,13 +280,13 @@ body{
     </aside>
 
     <main class="right">
-      <div v-if="!objects.length" class="empty">
-        <span class="big">还没有分析对象</span>
-        <span class="sub">点左栏上方的「＋ 新建分析」，先追加一个对象。</span>
+      <div v-if="!objects.length" class="empty-state">
+        <span class="big">{{ curTopic.name }}还没有分析对象</span>
+        <span class="sub">点左栏方法行上的 ＋ 新建一个。</span>
       </div>
 
       <div v-else>
-        <section v-for="g in groups" :key="g.m.key" class="group">
+        <section v-for="g in resultGroups" :key="g.m.key" class="group">
           <div class="group-h">
             <span class="gname">{{ g.m.name }}</span>
             <span class="gcount">{{ g.items.length }} 个</span>
@@ -298,39 +334,55 @@ const METHOD_BIAS = {
   iv_first: 3.2, iv_kth: 0, iv_mix: 0,
 };
 
-const METHODS = [
-  { key: 'iv_hist', name: '池化间隔分布', params: [
-    { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
-    { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
-  ] },
-  { key: 'iv_cdf', name: '累积分布 F(n)', params: [
-    { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
-    { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
-  ] },
-  { key: 'iv_survival', name: '生存函数 S(n)', params: [
-    { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
-    { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
-  ] },
-  { key: 'iv_hazard', name: '风险函数 h(n)', params: [
-    { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
-    { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
-  ] },
-  { key: 'iv_first', name: '首次命中间隔', params: [
-    { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
-    { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
-  ] },
-  { key: 'iv_kth', name: '第 k 次间隔', params: [
-    { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
-    { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
-  ] },
-  { key: 'iv_mix', name: '间隔 × 终止卡类型', params: [
-    { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
-    { k: '终止类型', t: 'radio', v: '限定卡', opts: ['限定卡', '普通SSR'] },
-  ] },
+const TOPICS = [
+  {
+    key: 'interval', name: '间隔分析',
+    methods: [
+      { key: 'iv_hist', name: '池化间隔分布', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_cdf', name: '累积分布 F(n)', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_survival', name: '生存函数 S(n)', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_hazard', name: '风险函数 h(n)', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_first', name: '首次命中间隔', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_kth', name: '第 k 次间隔', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 50, step: 1 },
+      ] },
+      { key: 'iv_mix', name: '间隔 × 终止卡类型', params: [
+        { k: '命中集', t: 'multi', v: ['限定卡'], opts: HIT_NAMES },
+        { k: '终止类型', t: 'radio', v: '限定卡', opts: ['限定卡', '普通SSR'] },
+      ] },
+    ],
+  },
+  {
+    key: 'success', name: '成功率分析',
+    methods: [
+      { key: 'succ', name: '成功率分析', params: [
+        { k: '目标', t: 'radio', v: '限定卡', opts: ['限定卡', '全部SSR'] },
+        { k: '目标抽数', t: 'num', v: 90, min: 10, max: 200, step: 5 },
+      ] },
+    ],
+  },
 ];
 
 const METHOD_BY_KEY = {};
-METHODS.forEach(function (m) { METHOD_BY_KEY[m.key] = m; });
+TOPICS.forEach(function (t) {
+  t.methods.forEach(function (m) { METHOD_BY_KEY[m.key] = m; });
+});
 
 const PALETTE = ['#1976d2', '#26a69a', '#ef6c00', '#7e57c2'];
 
@@ -604,6 +656,40 @@ function buildOption(o, params) {
     ];
     boundaryGap = true;
     showLegend = true;
+  } else if (key === 'succ') {
+    /* 成功率分析：达成率随抽数上升，末端虚线标出目标抽数。 */
+    const target = Math.max(10, Math.min(200, Number(params['目标抽数']) || 90));
+    const step = Math.max(1, Math.round(target / 30));
+    const base = params['目标'] === '全部SSR' ? 0.028 : 0.021;
+    const rnd = mulberry32((seed ^ hashStr('succ|' + params['目标'])) >>> 0);
+    const jitter = 0.9 + rnd() * 0.2;
+    x = [];
+    const ys = [];
+    for (let n = 1; n <= target; n++) {
+      if (n % step === 0 || n === 1 || n === target) {
+        const label = String(n);
+        if (x[x.length - 1] === label) continue;
+        x.push(label);
+        ys.push(+(100 * (1 - Math.pow(1 - base * jitter, n))).toFixed(2));
+      }
+    }
+    series = [{
+      name: '达成率 %',
+      type: 'line',
+      smooth: true,
+      symbol: 'none',
+      data: ys,
+      lineStyle: { width: 2, color: PALETTE[0] },
+      itemStyle: { color: PALETTE[0] },
+      areaStyle: { opacity: 0.08 },
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        label: { formatter: '目标 ' + target, color: '#8b93a3', fontSize: 10, position: 'insideEndTop', rotate: 0 },
+        lineStyle: { type: 'dashed', color: '#8b93a3', width: 1 },
+        data: [{ xAxis: String(target) }],
+      },
+    }];
   }
 
   showLegend = showLegend || series.length > 1;
@@ -666,7 +752,10 @@ function buildOption(o, params) {
         color: '#8b93a3',
         fontSize: 10,
         formatter: function (v) {
-          return Math.abs(v) >= 1 ? v.toFixed(1) : v.toFixed(3);
+          const n = Number(v);
+          if (!isFinite(n)) return v;
+          if (n === 0) return '0';
+          return String(+n.toFixed(4));
         },
       },
       splitLine: { lineStyle: { color: '#eef0f4' } },
@@ -757,8 +846,22 @@ const app = createApp({
   components: { ResultChart: ResultChart },
   setup: function () {
     let nextId = 1;
-    const objects = ref([]);
+    const topicKey = ref(TOPICS[0].key);
+
+    /* 每个专题各自一份对象清单，切专题只换清单，不动彼此状态。 */
+    const objectsByTopic = {};
+    TOPICS.forEach(function (t) { objectsByTopic[t.key] = []; });
+    const store = Vue.reactive(objectsByTopic);
+
     const selId = ref(null);
+    /* 方法组的展开状态，键是「专题:方法」；没写过就算展开。 */
+    const openMap = Vue.reactive({});
+
+    const curTopic = computed(function () {
+      return TOPICS.filter(function (t) { return t.key === topicKey.value; })[0] || TOPICS[0];
+    });
+
+    const objects = computed(function () { return store[topicKey.value]; });
 
     function makeObject(m) {
       const id = nextId++;
@@ -776,19 +879,25 @@ const app = createApp({
       };
     }
 
-    /* 初始对象：默认参数，且已经有一份结果。 */
-    const first = makeObject(METHODS[0]);
+    /* 初始：间隔分析给主方法建一个对象，成功率分析故意留空，用来看单方法的退化形态。 */
+    const first = makeObject(METHOD_BY_KEY['iv_hist']);
     first.status = 'ok';
     first.result = { option: Vue.markRaw(buildOption(first, first.params)) };
-    objects.value.push(first);
+    store['interval'].push(first);
 
-    const groups = computed(function () {
-      return METHODS.map(function (m) {
+    /* 左栏画全部方法；空方法行本身就是新建入口。 */
+    const methodGroups = computed(function () {
+      return curTopic.value.methods.map(function (m) {
         return {
           m: m,
           items: objects.value.filter(function (o) { return o.methodKey === m.key; }),
         };
-      }).filter(function (g) { return g.items.length > 0; });
+      });
+    });
+
+    /* 右栏只画有对象的组。 */
+    const resultGroups = computed(function () {
+      return methodGroups.value.filter(function (g) { return g.items.length > 0; });
     });
 
     const running = computed(function () {
@@ -814,6 +923,13 @@ const app = createApp({
       if (running.value) return '运行中…';
       return pendingCount.value ? pendingCount.value + ' 项待更新' : '全部已同步';
     });
+
+    function openKey(mkey) { return topicKey.value + ':' + mkey; }
+    function isOpen(mkey) { return openMap[openKey(mkey)] !== false; }
+    function toggleGroup(mkey) {
+      const k = openKey(mkey);
+      openMap[k] = openMap[k] === false;
+    }
 
     function labelOf(o) {
       const m = methodOf(o);
@@ -854,15 +970,14 @@ const app = createApp({
       o.expanded = !o.expanded;
     }
 
-    function addObject(key) {
-      const m = METHOD_BY_KEY[key];
+    /* 新建：默认参数、无结果，建完就选中并展开参数，省得用户再找。 */
+    function addObject(mkey) {
+      const m = METHOD_BY_KEY[mkey];
       if (!m) return;
       const o = makeObject(m);
-      objects.value.push(o);
-      nextTick(function () {
-        const el = document.getElementById('obj-' + o.id);
-        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
-      });
+      store[topicKey.value].push(o);
+      openMap[openKey(mkey)] = true;
+      selectObject(o);
     }
 
     /* 复制当前参数，但不复制结果。 */
@@ -872,7 +987,8 @@ const app = createApp({
       const copy = makeObject(m);
       copy.params = clone(o.params);
       copy.applied = clone(o.params);
-      objects.value.push(copy);
+      store[topicKey.value].push(copy);
+      openMap[openKey(o.methodKey)] = true;
       nextTick(function () {
         const el = document.getElementById('obj-' + copy.id);
         if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
@@ -880,8 +996,9 @@ const app = createApp({
     }
 
     function removeObject(o) {
-      const i = objects.value.findIndex(function (x) { return x.id === o.id; });
-      if (i >= 0) objects.value.splice(i, 1);
+      const arr = store[topicKey.value];
+      const i = arr.findIndex(function (x) { return x.id === o.id; });
+      if (i >= 0) arr.splice(i, 1);
       if (selId.value === o.id) selId.value = null;
     }
 
@@ -915,6 +1032,16 @@ const app = createApp({
       execute([o]);
     }
 
+    function switchTopic(k) {
+      if (k === topicKey.value) return;
+      topicKey.value = k;
+      selId.value = null;
+    }
+
+    function topicObjects(k) {
+      return store[k] ? store[k].length : 0;
+    }
+
     /* 参数快照变化时同步状态。改回原值会自然回到已同步。 */
     const paramSig = computed(function () {
       return objects.value.map(function (o) {
@@ -935,19 +1062,26 @@ const app = createApp({
     });
 
     return {
-      METHODS: METHODS,
+      TOPICS: TOPICS,
+      topicKey: topicKey,
+      curTopic: curTopic,
       objects: objects,
+      methodGroups: methodGroups,
+      resultGroups: resultGroups,
       selId: selId,
-      groups: groups,
       canRun: canRun,
       runNote: runNote,
       addObject: addObject,
       selectObject: selectObject,
       toggleExpand: toggleExpand,
+      toggleGroup: toggleGroup,
+      isOpen: isOpen,
       copyObject: copyObject,
       removeObject: removeObject,
       run: run,
       runOne: runOne,
+      switchTopic: switchTopic,
+      topicObjects: topicObjects,
       labelOf: labelOf,
       summary: summary,
       statusText: statusText,

@@ -7,14 +7,12 @@ from .param_descriptor import (
 
 if TYPE_CHECKING:
     from .state import GachaState
-    from .info_vector import InfoVector
     from ..service.gacha_service import SimulationStats
 
 
 class StopCondition(ABC):
     @abstractmethod
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
         pass
 
     @abstractmethod
@@ -26,11 +24,8 @@ class FixedActionCountCondition(StopCondition):
     def __init__(self, max_actions: int):
         self.max_actions = max_actions
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
-        if stats:
-            return stats.total_actions >= self.max_actions
-        return len(history) >= self.max_actions
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
+        return stats.total_actions >= self.max_actions
 
     def description(self) -> str:
         return f"抽满 {self.max_actions} 次后停止"
@@ -42,8 +37,7 @@ class ResourceThresholdCondition(StopCondition):
         self.threshold = threshold
         self.operator = operator
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
         current = state.resources.get(self.resource, 0)
         if self.operator == '<=':
             return current <= self.threshold
@@ -62,13 +56,9 @@ class TargetAcquiredCondition(StopCondition):
         self.target_id = target_id
         self.quantity = quantity
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
-        # P60：优先从 state.acquired 直读（单一真相源）
-        count = state.get_card_count(self.target_id)
-        if count <= 0:  # 回退——state.acquired 可能为 0（兼容旧调用路径）
-            count = sum(1 for iv in history if iv.card_id == self.target_id)
-        return count >= self.quantity
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
+        # P60：从 state.acquired 直读（单一真相源）
+        return state.get_card_count(self.target_id) >= self.quantity
 
     def description(self) -> str:
         return f"获得 {self.quantity} 张 {self.target_id}"
@@ -78,13 +68,8 @@ class LastDrawCardCondition(StopCondition):
     def __init__(self, card_id: str):
         self.card_id = card_id
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
-        if stats:
-            return stats.last_draw_card_id == self.card_id
-        if not history:
-            return False
-        return history[-1].card_id == self.card_id
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
+        return stats.last_draw_card_id == self.card_id
 
     def description(self) -> str:
         return f"抽到 {self.card_id} 后停止"
@@ -94,8 +79,7 @@ class TimeLimitCondition(StopCondition):
     def __init__(self, max_time: float):
         self.max_time = max_time
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
         return state.real_time >= self.max_time
 
     def description(self) -> str:
@@ -106,8 +90,7 @@ class AllPoolsEndCondition(StopCondition):
     def __init__(self, end_time: float):
         self.end_time = end_time
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
         return state.real_time >= self.end_time
 
     def description(self) -> str:
@@ -122,19 +105,17 @@ class ConsecutivePoolTargetCondition(StopCondition):
         self.resource_name = resource_name
         self.end_time = end_time
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
         if state.resources.get(self.resource_name, 0) <= 0:
             return True
         if self.end_time is not None and state.real_time >= self.end_time:
             return True
-        if stats:
-            for pool_id, _start, end in self.pool_schedules:
-                if state.real_time < end:
-                    break
-                target_card = self.pool_targets.get(pool_id)
-                if target_card and stats.card_counts.get(target_card, 0) < 1:
-                    return True
+        for pool_id, _start, end in self.pool_schedules:
+            if state.real_time < end:
+                break
+            target_card = self.pool_targets.get(pool_id)
+            if target_card and stats.card_counts.get(target_card, 0) < 1:
+                return True
         return False
 
     def description(self) -> str:
@@ -146,8 +127,7 @@ class CompositeStopCondition(StopCondition):
         self.conditions = conditions
         self.mode = mode
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
         # P79 5.6 第二道防线（第一道是解析期的空树规范化，见 config_toml 的
         # _normalize_stop_condition_node）：空条件数组不得恒真。
         # mode='all' 时 all([]) == True 会让内层恒真，外层
@@ -156,9 +136,9 @@ class CompositeStopCondition(StopCondition):
         if not self.conditions:
             return False
         if self.mode == 'any':
-            return any(c.check(state, history, stats) for c in self.conditions)
+            return any(c.check(state, stats) for c in self.conditions)
         else:
-            return all(c.check(state, history, stats) for c in self.conditions)
+            return all(c.check(state, stats) for c in self.conditions)
 
     def description(self) -> str:
         ops = ' 或 ' if self.mode == 'any' else ' 且 '
@@ -175,9 +155,8 @@ class NotCondition(StopCondition):
     def __init__(self, child: StopCondition):
         self.child = child
 
-    def check(self, state: 'GachaState', history: List['InfoVector'],
-              stats: Optional['SimulationStats'] = None) -> bool:
-        return not self.child.check(state, history, stats)
+    def check(self, state: 'GachaState', stats: 'SimulationStats') -> bool:
+        return not self.child.check(state, stats)
 
     def description(self) -> str:
         # StopCondition.description 是抽象方法，且 CompositeStopCondition.description

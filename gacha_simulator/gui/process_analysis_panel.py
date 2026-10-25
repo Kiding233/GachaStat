@@ -930,3 +930,12 @@ class ProcessAnalysisPanel(QWidget):
 
         self.trace_detail_table.resizeColumnsToContents()
         self.trace_detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    def charts_ready(self) -> bool:
+        """本面板持有的全部图表是否就绪（P83 §3.11 第 8 段「图表可用」）。
+
+        只读查询，供启动测量轮询；**不得以「某次取到 True」当完成判据**——
+        `ChartWebView.closeEvent` 会把就绪状态置回 False，判据须为连续多次
+        （见 §3.11 第 8 段第 3 条）。
+        """
+        from .chart_webview import views_ready
+        return views_ready(self.cond_chart_webview)

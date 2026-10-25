@@ -31,8 +31,7 @@ class CompactResult:
     pity_triggers: int = 0
     # P79（阶段 3）：循环实际迭代数。8.1 断言 1 与 8.4 性能闸门的观测载体——
     # total_draws / total_waits 在 affordability 空转轮完全不增长，不能替代。
-    # ⚠ 写入点须在 run_simulation 的 `if _is_compact:` 分支内（非紧凑路径返回
-    # List[InfoVector]，向 list 赋属性即 AttributeError）。
+    # （P81 2026-09-17：原「写入点须在紧凑分支内」的约束随逐抽明细路径删除而作废）
     iterations: int = 0
     # P79（阶段 3）：运行期告警（零进度兜底触发、迭代预算耗尽）。取「结果字段」
     # 而非日志：_run_single 是 Pool worker 入口，子进程 logging 无回传机制；

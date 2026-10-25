@@ -1,3 +1,4 @@
+import dataclasses
 import datetime as _dt
 from typing import Dict
 from .config_store import (
@@ -114,32 +115,18 @@ class RetreatConfigBuilder:
                 lifecycle=lifecycle,
             ))
 
-        # P55：PityDef 扁平化——shallow-copy 23 字段（dataclass 字段不可变）
+        # P55：PityDef 扁平化——浅拷贝（dataclass 字段不可变）
+        # P64 S4b（AUDIT-BREAK-1）：原为逐字段显式列举（曾漏拷 selected_card_init，
+        # 即 ISSUE-132），现由 `dataclasses.fields(PityDef)` 驱动，新增字段自动带上。
+        # 唯一的改写点是 counter_init——per-behavior 覆盖优先于字段原值。
         pities = []
         for pd in original_store.pity.pities:
             # 应用 per-behavior counter_init 覆盖
             custom_init = pity_counter_init.get(pd.name)
-            ci = custom_init if custom_init is not None else pd.counter_init
-            pities.append(PityDef(
-                name=pd.name, btype=pd.btype, scope=pd.scope,
-                target_featured=pd.target_featured,
-                deltas=pd.deltas, threshold=pd.threshold,
-                counter_init=ci,
-                guaranteed_init=pd.guaranteed_init,
-                fate_points_init=pd.fate_points_init,
-                selected_card_init=pd.selected_card_init,  # ISSUE-132：漏拷——阶段 3 后完整分支携带、截断分支丢失致不对称
-                soft_start=pd.soft_start, soft_end=pd.soft_end,
-                soft_increment=pd.soft_increment, soft_deltas=pd.soft_deltas,
-                cr_counter_threshold=pd.cr_counter_threshold,
-                cr_base_rate=pd.cr_base_rate, cr_state_probs=pd.cr_state_probs,
-                fate_threshold=pd.fate_threshold,
-                switch_allowed=pd.switch_allowed,
-                switch_resets_progress=pd.switch_resets_progress,
-                pools=pd.pools,
-                deactivate_on_early_hit=pd.deactivate_on_early_hit,
-                depends_on=pd.depends_on,
-                reset=pd.reset,
-            ))
+            fields_kwargs = {f.name: getattr(pd, f.name) for f in dataclasses.fields(pd)}
+            fields_kwargs['counter_init'] = (
+                custom_init if custom_init is not None else pd.counter_init)
+            pities.append(PityDef(**fields_kwargs))
         truncated.pity = PityConfig(
             enabled=original_store.pity.enabled,
             pities=pities,
@@ -219,5 +206,13 @@ class RetreatConfigBuilder:
         ]
         truncated.card_overflow_map = dict(original_store.card_overflow_map)
         truncated.rarity_defaults = dict(original_store.rarity_defaults)
+        # P64 S4-2 审查 important：`rarity_rank` 必须一并复制。截断路径不过 TOML
+        # 往返（`RetreatSearch._build_env` 直接把它喂 `SimulationEnvBuilder`），故
+        # 此前 `ConfigStore()` 的空表会一路带到引擎；旧 `SoftStepBehavior` 从 dist
+        # 键推导量来源、不依赖本表，新 `SoftModifier` 的 `_lower_rarities` 依赖它，
+        # 空表下 `pool == 0` 直接返回恒等，即**软保底静默失效**（退避点/最少资源
+        # 搜索会低估保底效果、高估资源需求，且不报错）。实测 `from_pool_id='pool_c1'`
+        # 端到端：修复前 `before_draw` 分布等于原始分布，修复后与旧类逐字段一致。
+        truncated.rarity_rank = dict(original_store.rarity_rank)
 
         return truncated

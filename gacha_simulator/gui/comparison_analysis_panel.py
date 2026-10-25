@@ -1035,3 +1035,14 @@ class ComparisonAnalysisPanel(QWidget):
             fig.update_yaxes(autorange="reversed")
 
         self._l4_chart_view.set_charts({"帕累托前沿": fig}, use_tabs=False)
+    def charts_ready(self) -> bool:
+        """本面板持有的全部图表是否就绪（P83 §3.11 第 8 段「图表可用」）。
+
+        只读查询，供启动测量轮询；**不得以「某次取到 True」当完成判据**——
+        `ChartWebView.closeEvent` 会把就绪状态置回 False，判据须为连续多次
+        （见 §3.11 第 8 段第 3 条）。
+        """
+        # 三个实例是私有命名（`_l1_` / `_l2_` / `_l4_chart_view`），故聚合入口
+        # 必须落在本文件内，不得让调用方去读它们（P83 §3.11 第 8 段第 2 条）。
+        from .chart_webview import views_ready
+        return views_ready(self._l1_chart_view, self._l2_chart_view, self._l4_chart_view)

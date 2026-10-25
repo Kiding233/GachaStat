@@ -12,7 +12,6 @@ GUI_MODULES = [
     'gacha_simulator.gui.gacha_panel',
     'gacha_simulator.gui.retreat_panel',
     'gacha_simulator.gui.worst_impact_panel',
-    'gacha_simulator.gui.strategy_panel',
     'gacha_simulator.gui.config_panel',
     'gacha_simulator.gui.chart_webview',
     'gacha_simulator.gui.data_manager_panel',

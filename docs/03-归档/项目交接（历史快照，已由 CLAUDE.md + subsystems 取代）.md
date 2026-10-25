@@ -1,5 +1,17 @@
 # Gacha Simulator 项目交接文档
 
+> **【已归档 · 2026-09-17】本文是截至 2026-06-08 的历史快照，不再维护。**
+>
+> - **为何归档**：本文属上一代文档架构（2026-06-02 那次「按面板/子系统聚合、六文件 + 主题计划模式」的重构）。现行体系为 `CLAUDE.md`（契约与架构约束）+ `docs/01-活跃/subsystems/*`（分模块档案，三文件制）+ `docs/00-meta/全局约定.md` + `docs/00-meta/模块状态矩阵.md`。职责已被完全覆盖，本文无独特职能；全库无任何入向引用，也无 hook/cron 维护它。
+> - **内容时效**：头部所记 v1.9.1 / 2026-05-22 即已滞后（归档时实际版本为 2.4.0），git 上最后一次内容改动为 **2026-06-08**。
+> - **归档时只做了一处更正**：InfoVector 明细路径已于 2026-09-17（P81 §十）整条删除，本文中与之相关的 10 处表述标注为失效（其中一处「`compute_from_history` 被 analysis_panel 使用」经实测为**假**）。其余陈旧内容**原样保留**：本文的历史价值正在于「交接当时是怎么描述的」。
+> - **已知失效处（勿据此作业）**：① §5「配置文件格式」整节描述 P53 之前的十份 txt 布局（`schedule.txt` / `pools/*.txt` / `pity.txt` / `targets.txt` / `gains.txt`），现已由单一 `config.toml` 取代，**本文全文零 `config.toml` 命中**；② §2 文件结构树列出 `service/analysis_service.py` 与 `service/config_service.py`，二者已于 2026-09-17 归档；③ §3.3「两种模拟模式」与 §9.3「为什么 GDR 有两套计算路径」描述的路径已删除（现为单一路径）；④ §7「未完成计划」的 P2~P6 编号已由 `模块状态矩阵` 取代。
+> - **仍有参考价值的部分**：§6 开发史（版本时间线、重大架构变更）与 §9 关键设计决策（四条「为什么」取舍），属纪要性质，与现行文档不重复。
+>
+> 检索边界：本目录（`docs/03-归档/`）不参与本项目的零命中验收检索。
+
+---
+
 > 当前版本：v1.9.1 | 最后更新：2026-05-22
 
 ---
@@ -43,9 +55,9 @@ gacha_simulator/
 │   ├── __init__.py            #   统一导出
 │   ├── state.py               #   GachaState：模拟状态（资源、时间、计数器）
 │   ├── action.py              #   Action/DrawAction/WaitAction：操作类型
-│   ├── info_vector.py         #   InfoVector：每步操作记录
+│   ├── (info_vector.py)       #   [已删除 P81 2026-09-17] InfoVector：每步操作记录
 │   ├── result_types.py        #   CompactResult：紧凑结果 dataclass（替代裸 dict）
-│   ├── collector.py           #   SimulationCollector/InfoVectorCollector/CompactCollector
+│   ├── collector.py           #   SimulationCollector/CompactCollector
 │   ├── pool.py                #   Pool/Reward：卡池定义与抽选
 │   ├── schedule.py            #   PoolSchedule/PoolScheduleManager：时间调度
 │   ├── strategy.py            #   Strategy 抽象基类 + 6种策略 + STRATEGY_REGISTRY + StrategyContext
@@ -191,7 +203,7 @@ GDR 是广义化的"出率"概念，将抽卡结果映射为标量值。系统�
 
 **两种计算路径**：
 - **compact 路径**：直接从 compact dict 的聚合字段计算（O(1) 每模拟）
-- **history 路径**：从 InfoVector 列表逐条遍历计算（O(T) 每模拟，T 为抽卡次数）
+- ~~**history 路径**：从 InfoVector 列表逐条遍历计算（O(T) 每模拟，T 为抽卡次数）~~ **已删除（P81 §十 2026-09-17）**
 
 #### 3.2.3 策略决策算法
 
@@ -346,7 +358,7 @@ GDR 是广义化的"出率"概念，将抽卡结果映射为标量值。系统�
 
 | 模式 | 方法 | 输出 | 用途 |
 |------|------|------|------|
-| **完整模式** | `run_simulation(collector=InfoVectorCollector())` | `List[InfoVector]` | 需要逐抽详细记录时使用（如过程分析） |
+| ~~**完整模式**~~ | ~~`run_simulation(collector=InfoVectorCollector())`~~ | ~~`List[InfoVector]`~~ | **已删除**（P81 §十 2026-09-17）：生产管线不可达 |
 | **紧凑模式** | `run_simulation(collector=CompactCollector())` 或 `run_simulation_compact()` | `CompactResult` | 绝大多数场景使用，内存高效 |
 
 `CompactResult` 是 dataclass，替代了原来的裸 `Dict[str, Any]`，提供 `.get()` / `__getitem__` / `__contains__` 向后兼容接口，以及 `.to_dict()` / `.from_dict()` 序列化方法。
@@ -377,7 +389,7 @@ GDR 是广义化的"出率"概念，将抽卡结果映射为标量值。系统�
 | `total_card_value` | 总出卡价值 | 0.0 | [0,+∞) | card_value |
 
 - `compute_from_compact(compact_dict, ...)` → 从 compact dict 计算（高效，主流路径）
-- `compute_from_history(history_list, ctx)` → 从 InfoVector 列表计算（兼容旧代码）
+- ~~`compute_from_history(history_list, ctx)` → 从 InfoVector 列表计算（兼容旧代码）~~ **已删除（P81 §十 2026-09-17）**
 - `SuccessChecker` 统一了"某次模拟是否成功"的判断逻辑（GDR值 ≥ 阈值）
 
 ### 3.5 策略系统
@@ -649,7 +661,7 @@ P2 (过程分析续) → P6 (重构遗留) → P3 (Bootstrap) → P4 (自适应+
 ## 8. 已知问题
 
 1. **weapon_character_ratio 始终为 0**：`GDRContext.weapon_character_map` 无配置入口，需要在配置系统中新增角色-武器对应表
-2. **per_pool_analysis.py 的 success_func**：仍使用内联逻辑（InfoVector 路径），未改用 SuccessChecker
+2. ~~**per_pool_analysis.py 的 success_func**：仍使用内联逻辑（InfoVector 路径），未改用 SuccessChecker~~ **已作废**：该内联路径的宿主函数已随 P81 §十（2026-09-17）删除
 3. **多面板 CPU 争抢**：各面板 Worker 线程无全局协调，同时运行会争抢 CPU
 4. **_extract_cost_per_draw 只取第一个池**：如果多池成本不同可能不准确（已添加手动设置入口）
 
@@ -675,7 +687,7 @@ v1.9.0 重构后，6 种策略统一定义在 `core/strategy.py` 中，使用 `S
 ### 9.3 为什么 GDR 有两套计算路径？
 
 - `compute_from_compact`：从 compact dict 计算，是主流路径（高效）
-- `compute_from_history`：从 InfoVector 列表计算，兼容旧代码（如 analysis_panel 的某些图表）
+- ~~`compute_from_history`：从 InfoVector 列表计算，兼容旧代码（如 analysis_panel 的某些图表）~~ **已删除（P81 §十 2026-09-17）**。**注**：原句括注「被 analysis_panel 使用」经实测为**假**（`analysis_panel.py` 全文零 `history` 命中），属陈旧错误，已随删除一并作废
 - `UNIFIED_GDR_REGISTRY` 统一管理两种路径，`GDRDefinition` 的 `compute_from_history` 可为 None
 
 ### 9.4 multiprocessing 的 initializer 模式

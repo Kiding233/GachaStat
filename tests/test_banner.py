@@ -361,8 +361,12 @@ class TestPityQualifiedKeyBinding:
             [b],
             target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)],
             pity_enabled=True,
+            # S4-5 修正：原写 `target_featured=True`，而它是裁决 7B 的类型级硬拒
+            # （`soft_*` + `target_featured`），S4-5 之前被 `PityEngine.__init__` 的
+            # 构造兜底静默跳过——本用例于是**在没有保底的情况下**测 pool_specs。
+            # 该组合本就非法，改用带 `deltas` 的合法 soft 保底。
             pity_defs=[PityDef(name='soft', btype='soft_interval', scope='ssr',
-                               target_featured=True, pools=('b1.main',))],
+                               deltas=((73, 0.0), (17, 5.88)), pools=('b1.main',))],
         )
         env = SimulationEnvBuilder.from_config_store(store)
         # pool_specs 键空间为全限定键 {banner_id}.{pool_id}（ISSUE-005/010）
@@ -755,11 +759,15 @@ class TestWorstImpactPityEngine:
         b = _ssr_only_banner('b1')  # ssr_a featured
         store = _make_store([b], target_cards=[TargetCardEntry(card_id='ssr_a', quantity=1)],
                             pity_enabled=True,
+                            # S4-5 修正：`target_featured=True` 属 7B 硬拒面（见上一用例），
+                            # 此前被构造兜底静默跳过；改用带 `deltas` 的合法 soft 保底。
                             pity_defs=[PityDef(name='soft', btype='soft_interval', scope='ssr',
-                                               target_featured=True, pools=('*',))])
+                                               deltas=((73, 0.0), (17, 5.88)), pools=('*',))])
         analyzer = WorstImpactAnalyzer([], {'ssr_a': 1}, store)
-        analyzer._prepare_pool_info()
-        engine = analyzer._build_pity_engine()
+        # 2026-10-09：`_build_pity_engine` 改为收「合成好的池列表」（卡集合按池内真实
+        # reward id 生成，原 ISSUE-006），故不再单独调它，改走完整装配
+        cfg = analyzer.prepare_simulation_config(50000)
+        engine = cfg['pity_engine']
         assert engine is not None
         spec_keys = set(engine.pool_specs.keys())
         assert any(k.endswith('.main') for k in spec_keys), \
@@ -804,23 +812,41 @@ class TestWorstImpactAnalyzeExpectedPools:
         assert result.worst_resource == 50000
 
 
-class TestCliFallbackTarget:
-    """CLI 无 [[targets]] 兜底目标取 banner 段（ISSUE-003）。"""
+class TestCliTargetSpecs:
+    """CLI 的目标卡规格取自配置，**不做兜底**。
 
-    def test_fallback_target_is_real_card(self):
+    2026-10-01 裁决撤销了原 ISSUE-003 的兜底：它合成 ``{banner_id}_ssr`` 当目标，
+    而仓库那份 config.toml 的 banner 叫 ``pool_cN``、卡叫 ``limited_ssr_N``，合成 id
+    不是任何真实卡，命中数恒为 0（兜底静默失效且无提示）。裁决为「没配目标卡时达成率
+    就是 0」，与 GUI / WebUI 同口径。
+
+    返回**含 quantity 的规格**而非 id 列表：同日达成的另一条裁决把达成率口径统一为
+    注册表的 ``target_achievement``，其定义按份数加权，需要 quantity。
+    """
+
+    def test_no_targets_yields_empty(self):
+        """无 [[targets]] 时返回空规格 —— 达成率随之恒为 0（不再是拼出来的假目标）。"""
         b = BannerEntry(id='b1', name='池', enabled=True,
                         available_from=0.0, available_until=21 * DAY,
                         pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
                                                       _reward('r1', 50.0, 'R')])])
         store = _make_store([b])  # 无 target_cards
-        # P61（ISSUE-003）：调用 cli 真实兜底函数（非重抄表达式）——取 banner 段拼 _ssr
-        from gacha_simulator.cli import _fallback_target_ids
-        fallback_ids = _fallback_target_ids(store)
-        assert fallback_ids == ['b1_ssr'], \
-            f'兜底目标应取 banner 段（非全限定 banner.main_ssr），实际 {fallback_ids}'
-        card_ids = {c.card_id for c in store.card_defs}
-        assert fallback_ids[0] in card_ids, \
-            f'兜底目标 {fallback_ids[0]} 应为真实卡，实际卡集 {card_ids}'
+        from gacha_simulator.cli import _cli_target_specs
+        assert _cli_target_specs(store) == {}, \
+            '未配置目标卡时不应合成任何目标（2026-10-01 裁决）'
+
+    def test_configured_targets_passed_through(self):
+        """配了 [[targets]] 时原样返回 card_id -> quantity。"""
+        b = BannerEntry(id='b1', name='池', enabled=True,
+                        available_from=0.0, available_until=21 * DAY,
+                        pools=[_pool('main', rewards=[_reward('b1_ssr', 50.0, 'SSR', featured=True),
+                                                      _reward('r1', 50.0, 'R')])])
+        store = _make_store([b], target_cards=[
+            TargetCardEntry(card_id='b1_ssr', quantity=1),
+            TargetCardEntry(card_id='r1', quantity=2),
+        ])
+        from gacha_simulator.cli import _cli_target_specs
+        assert _cli_target_specs(store) == {'b1_ssr': 1, 'r1': 2}
 
 
 class TestCliMigrateDisposition:
@@ -926,3 +952,104 @@ def test_p72_mixed_draws_cross_banner_key_integrity():
         {'t1': 1, 't2': 1}, gdr_key='all_targets', gdr_threshold=1.0, alpha=0.5)
     for pr in analysis.pool_results:
         assert '.' not in pr.pool_id, f'脆弱性 pool_id 应为 banner 级，got {pr.pool_id}'
+
+
+# ════════════════════════════════════════════════════════
+# 保底调整的卡级还原（缺陷 12）
+# ════════════════════════════════════════════════════════
+
+class TestPityAdjustmentReachesCardLevel:
+    """保底调整必须逐卡落实：Σ 恒为 1，且喂给抽卡的卡级字典就是保底管道的输出。
+
+    缺陷 12：`banner.draw` 的 scale_factors 还原段用 `infer_rarity_from_spec` 反查
+    每张卡的槽位，而该函数原先只认 SSR，SR / R 得到 None、缩放被跳过——保底从
+    SR / R 取走的质量从未在卡级字典里扣除，Σ 涨到 1.5+，`pool.draw` 按 `random()*Σ`
+    采样时把全部卡等比稀释，保底效果被打折（真实 config 的 ssr_soft 第 90 抽：
+    意图 100%、实际 50.1%）。
+
+    **S8-2 起本类换验收面（管道改卡级直传，§3.9.1）**：还原段与聚合段整体删除，
+    「槽位级调整值 → 卡级还原」这条三步往返不复存在，故原「每槽位的卡级合计 ==
+    槽位级调整值」的断言失去对象（槽位级分布不再产生）。现行的等价验收面是
+    **「喂给 `pool.draw` 的卡级字典 == `before_draw` 的返回值」**（逐卡精确相等），
+    它比原断言更强：原断言只钉住「槽位合计相符」（组内分配可以漂移），现行断言钉住
+    「保底算出的每一个卡级概率都原样到达采样点」。Σ = 1 一条不变。
+    """
+
+    SLOT_OF = {'ssr_up': 'ssr_featured', 'ssr_std': 'ssr', 'sr_a': 'sr', 'r_a': 'r'}
+
+    def _run_one_draw(self, monkeypatch):
+        from gacha_simulator.core import pool as pool_mod
+        from gacha_simulator.core.pity import PityState
+        from gacha_simulator.core.state import GachaState
+
+        rewards = [
+            _reward('ssr_up', 0.6, 'SSR', featured=True),
+            _reward('ssr_std', 0.3, 'SSR'),
+            _reward('sr_a', 5.1, 'SR'),
+            _reward('r_a', 94.0, 'R'),
+        ]
+        b = _ssr_only_banner('b1', pools=[_pool(rewards=rewards)])
+        # counter_init=0 时首个 before_draw 即 counter=1 → boost 50%，保底必触发。
+        # `target_featured` 已按裁决 7B（2026-10-05）从 soft 配置面移除，该形态现于
+        # `create_behavior` 抛 `ConfigError`（soft 的目标集恒为 scope 全集）；本用例
+        # 的三条断言（Σ = 1 / 槽位集合相符 / 逐槽位相等）与目标集取哪个槽无关。
+        store = _make_store([b], pity_enabled=True, pity_defs=[
+            PityDef(name='ssr_soft', btype='soft_step', scope='ssr',
+                    deltas=((0, 0.0), (1, 50.0)), pools=('*',)),
+        ])
+        # S4-2：软保底的取源面（Q = 更低稀有度）由 `rarity_rank` 定义
+        # （`SoftModifier.apply` 经 `_lower_rarities` 取），而手搓的
+        # `ConfigStore()` 不带该表（`SimulationEnvBuilder` 直取
+        # `store.rarity_rank`，TOML 路径才由 `_parse_rarities` 补默认三级）。
+        # 缺表时 Q 为空 → 无源可搬 → 增量恒等（**新形态下的静默退化**，见 §四
+        # `core/pity.py` 的 S4-2 备注）；此处按真实配置同值补齐。
+        store.rarity_rank = {'ssr': 0, 'sr': 1, 'r': 2}
+        env = SimulationEnvBuilder.from_config_store(store)
+        banner = env.pools[0]
+        pool = banner.active_pool
+
+        captured = {}
+        orig_apply = pool_mod.Pool._apply_probabilities
+
+        def spy_apply(self, probs):
+            captured['card'] = dict(probs)
+            return orig_apply(self, probs)
+
+        monkeypatch.setattr(pool_mod.Pool, '_apply_probabilities', spy_apply)
+
+        orig_bd = env.pity_engine.before_draw
+
+        def spy_bd(key, st, dist, sim):
+            # P64 S9-2：`before_draw` 的 `sim` 是必填参（§3.10.2），探针须同签名转发
+            captured['slot_before'] = dict(dist)      # S8 起即卡级分布（键为卡 id）
+            out = orig_bd(key, st, dist, sim)
+            captured['slot_after'] = dict(out)
+            return out
+
+        monkeypatch.setattr(env.pity_engine, 'before_draw', spy_bd)
+
+        banner.draw(GachaState(), env.pity_engine,
+                    PityState.from_dict(env.pity_state_init), pool)
+        return captured
+
+    def test_card_level_sum_is_one_and_pity_output_passes_through(self, monkeypatch):
+        cap = self._run_one_draw(monkeypatch)
+        card, before, after = cap['card'], cap['slot_before'], cap['slot_after']
+
+        # 验收面守门：保底必须真的改了分布，否则本测试恒真
+        assert after != before, '保底未生效——本测试无验收面'
+        # 方向断言（卡级）：软保底自更低稀有度取质量、搬进 SSR 卡集
+        assert after['sr_a'] < before['sr_a'], '软保底应从 SR 取质量'
+        assert after['r_a'] < before['r_a'], '软保底应从 R 取质量'
+        ssr = ('ssr_up', 'ssr_std')
+        assert sum(after[c] for c in ssr) > sum(before[c] for c in ssr), \
+            '软保底应把质量搬进 SSR 卡集'
+
+        # ① 卡级字典是归一化的（这正是缺陷 12 破坏的那条）
+        assert abs(sum(card.values()) - 1.0) < 1e-12, f'Σ = {sum(card.values())}'
+
+        # ② 逐卡精确相等：喂给 `pool.draw` 的卡级字典 == 保底管道的返回值
+        #    （S8 起卡级直传，中间不再有聚合 / 还原两步；缺陷 12 的成因即那条
+        #    还原段，本断言把「调整逐卡落实」钉在同一处）
+        assert card == after, f'卡级字典与保底输出不符：{card} vs {after}'
+        assert set(card) == set(self.SLOT_OF), '卡级字典须覆盖池内全部卡'

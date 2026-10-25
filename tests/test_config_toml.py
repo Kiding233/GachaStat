@@ -2,8 +2,7 @@
 import pytest
 from gacha_simulator.core.config_toml import (
     _expand_soft_to_deltas,
-    _is_legacy_format,
-    _migrate_legacy_pity,
+    _check_pity_format,
     _deltas_to_soft_interval,
     _parse_deltas_value,
     load_toml,
@@ -22,29 +21,32 @@ class TestExpandSoftToDeltas:
     """soft_interval / soft_additive 语法糖 → deltas"""
 
     def test_soft_interval_linear(self):
-        """start=73, end=90 → ((73, 0.0), (17, 5.882353...))"""
+        """start=73, end=90 → ((72, 0.0), (18, 5.555556))
+
+        两端都含：首段为 start-1（第 73 抽即加成），档数 end-start+1 = 18，
+        故 100% 恰好落在 end（第 90 抽）。"""
         result = _expand_soft_to_deltas('soft_interval', 73, 90, None)
         assert len(result) == 2
-        assert result[0] == (73, 0.0)
-        assert result[1][0] == 17  # 17 抽
-        assert pytest.approx(result[1][1], abs=1e-4) == 100.0 / 17
+        assert result[0] == (72, 0.0)
+        assert result[1][0] == 18
+        assert pytest.approx(result[1][1], abs=1e-4) == 100.0 / 18
 
     def test_soft_interval_start_zero(self):
-        """start=0, end=10 → ((0, 0.0), (10, 10.0))"""
+        """start=0, end=10 → ((0, 0.0), (11, 100/11))"""
         result = _expand_soft_to_deltas('soft_interval', 0, 10, None)
-        assert result[0] == (0, 0.0)
-        assert result[1][0] == 10
+        assert result[0] == (0, 0.0)   # start=0 → max(0, -1) = 0
+        assert result[1][0] == 11      # 两端都含：10-0+1
 
     def test_soft_interval_end_equals_start(self):
         """end <= start → 防御性修正为 start+1"""
         result = _expand_soft_to_deltas('soft_interval', 90, 90, None)
-        assert result[0] == (90, 0.0)
+        assert result[0] == (89, 0.0)
         assert result[1][0] == 1  # 修正为 1
 
     def test_soft_additive(self):
         """start=74, increment=6.0 → ((74, 0.0), (N, 6.0))"""
         result = _expand_soft_to_deltas('soft_additive', 74, None, 6.0)
-        assert result[0] == (74, 0.0)
+        assert result[0] == (73, 0.0)
         assert result[1][1] == 6.0
         # 达到 100% 需要的抽数 = ceil(100/6) + 1 = 17
         assert result[1][0] > 0
@@ -52,7 +54,7 @@ class TestExpandSoftToDeltas:
     def test_soft_additive_zero_increment(self):
         """increment=0.0 → 退化为 1 段（无增长）"""
         result = _expand_soft_to_deltas('soft_additive', 10, None, 0.0)
-        assert result[0] == (10, 0.0)
+        assert result[0] == (9, 0.0)
         # increment=0.0 → 不计增长段
         assert result[1][1] == 0.0
 
@@ -66,95 +68,87 @@ class TestExpandSoftToDeltas:
 # 阶段十B：旧格式迁移
 # ═══════════════════════════════════════════════════════════════════
 
-class TestIsLegacyFormat:
-    """_is_legacy_format 检测"""
+class TestRejectLegacyPityFormat:
+    """P81 B11：旧格式 [[pity]] 不再自动迁移，改为 ConfigError 拒绝。
 
-    def test_new_format_not_legacy(self):
-        assert _is_legacy_format([
+    替换原先的 TestIsLegacyFormat / TestMigrateLegacyPity 两个类。其中
+    test_reset_preserved 曾断言 ``reset`` 被原样保留为 'featured_ssr'，那正是
+    本次删除的 bug（新引擎 _should_reset 只认 'featured' 与稀有度标签，该值恒
+    False，保底计数器永不重置），故该断言随之删除而非改写。
+    """
+
+    def test_new_format_passes(self):
+        _check_pity_format([
             {'name': 'p1', 'type': 'soft_interval', 'scope': 'ssr', 'start': 74, 'end': 90}
-        ]) is False
+        ])
 
-    def test_old_format_with_start_detected(self):
-        assert _is_legacy_format([
-            {'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90}
-        ]) is True
+    def test_empty_list_passes(self):
+        _check_pity_format([])
 
-    def test_old_format_with_func_detected(self):
-        assert _is_legacy_format([
-            {'name': 'p1', 'type': 'soft', 'func': 'exp'}
-        ]) is True
+    def test_old_format_with_start_raises(self):
+        with pytest.raises(ConfigError, match='旧格式'):
+            _check_pity_format([{'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90}])
 
-    def test_empty_list_not_legacy(self):
-        assert _is_legacy_format([]) is False
+    def test_old_format_with_func_raises(self):
+        with pytest.raises(ConfigError, match='旧格式'):
+            _check_pity_format([{'name': 'p1', 'type': 'soft', 'func': 'exp'}])
 
+    def test_mixed_format_raises_ambiguity(self):
+        with pytest.raises(ConfigError, match='混用'):
+            _check_pity_format([
+                {'name': 'old', 'type': 'soft', 'start': 74},
+                {'name': 'new', 'type': 'soft_interval', 'scope': 'ssr'},
+            ])
 
-class TestMigrateLegacyPity:
-    """_migrate_legacy_pity 迁移规则"""
+    def test_error_message_names_the_offending_entry(self):
+        with pytest.raises(ConfigError, match='legacy_one'):
+            _check_pity_format([{'name': 'legacy_one', 'type': 'soft', 'start': 74}])
 
-    def test_soft_interval_migration(self):
-        """旧 soft → 新 soft_interval"""
-        old = [{'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90}]
-        new = _migrate_legacy_pity(old)
-        assert new[0]['type'] == 'soft_interval'
-        assert new[0]['scope'] == 'ssr'
-        assert new[0]['start'] == 74
-        assert new[0]['end'] == 90
+    def test_func_hint_is_reported(self):
+        """新格式 + func（手册 §2244 的字面形态）：提示语须点名 func 已不支持。
 
-    def test_hard_migration(self):
-        """旧 hard → 新 hard"""
-        old = [{'name': 'h1', 'type': 'hard', 'threshold': 180}]
-        new = _migrate_legacy_pity(old)
-        assert new[0]['type'] == 'hard'
-        assert new[0]['threshold'] == 180
+        该条目有 scope、type 也是新名，唯一的问题是 func。旧稿的提示语写
+        「含 start/end/func 等字段」，紧接着又建议「软保底爬升用 start + end」，
+        把 start/end 同时当旧格式标志与正确写法；现改为按判据陈述并附 func 专项提示。
+        """
+        with pytest.raises(ConfigError, match='func 自 P55 起不再支持'):
+            _check_pity_format([
+                {'name': 'p1', 'type': 'soft_interval', 'scope': 'ssr',
+                 'start': 70, 'end': 90, 'func': 'step'}
+            ])
 
-    def test_target_distribution_to_featured(self):
-        """旧 target → 新 target_featured=true"""
-        old = [{'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90,
-                'target': {'limited_ssr': 100}}]
-        new = _migrate_legacy_pity(old)
-        assert new[0]['target_featured'] is True
-
-    def test_reset_preserved(self):
-        """reset 条件保留"""
-        old = [{'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90,
-                'reset': 'featured_ssr'}]
-        new = _migrate_legacy_pity(old)
-        assert new[0]['reset'] == 'featured_ssr'
-
-    def test_counter_init_migrated(self):
-        """旧 counter_init → 新 counter_init"""
-        old = [{'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90,
-                'counter_init': 30}]
-        new = _migrate_legacy_pity(old)
-        assert new[0]['counter_init'] == 30
-
-    def test_func_exp_raises_config_error(self):
-        """func='exp' → ConfigError"""
-        old = [{'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90,
-                'func': 'exp'}]
-        with pytest.raises(ConfigError, match='exp'):
-            _migrate_legacy_pity(old)
-
-    def test_func_step_raises_config_error(self):
-        """func='step' → ConfigError"""
-        old = [{'name': 'p1', 'type': 'soft', 'start': 74, 'end': 90,
-                'func': 'step'}]
-        with pytest.raises(ConfigError, match='step'):
-            _migrate_legacy_pity(old)
+    def test_message_does_not_call_start_a_legacy_marker(self):
+        """提示语不得把 start/end 列为旧格式标志（它们正是新格式的软保底键）。"""
+        with pytest.raises(ConfigError) as ei:
+            _check_pity_format([{'name': 'p1', 'type': 'soft', 'start': 74}])
+        msg = str(ei.value)
+        assert '含 start/end/func 等字段' not in msg
+        assert 'start + end + increment' in msg
 
 
 class TestDeltasRoundTrip:
     """deltas ↔ soft_interval 往返可逆"""
 
     def test_round_trip(self):
-        """deltas → soft_interval → 展开 → 等价"""
-        deltas = ((73, 0.0), (17, 5.882353))
+        """deltas → soft_interval → 展开 → 逐段全等"""
+        deltas = _expand_soft_to_deltas('soft_interval', 73, 90, None)
+        assert deltas == ((72, 0.0), (18, 5.555556))  # 首段 = start-1，档数 = end-start+1
         result = _deltas_to_soft_interval(deltas)
-        assert result is not None
-        start, end = result
-        expanded = _expand_soft_to_deltas('soft_interval', start, end, None)
-        assert expanded[0] == deltas[0]
-        assert expanded[1][0] == deltas[1][0]
+        assert result == (73, 90)
+        assert _expand_soft_to_deltas('soft_interval', *result, None) == deltas
+
+    def test_start_zero_normalizes_to_equivalent_start_one(self):
+        """start=0 经反函数归一化到 (1, end+1)，deltas 逐段全等。
+
+        _expand_soft_to_deltas() 对 start=0 取 max(0, 0-1)=0，首段长 0；
+        反函数只能还原出「首段长 + 1」，故给 start=1 并同步把 end 加 1，
+        使档数 n_steps = end - start + 1 保持不变。二者 deltas 完全相同，
+        在 _cumulative_boost() 下行为一致，属表示不唯一而非语义丢失。
+        """
+        d0 = _expand_soft_to_deltas('soft_interval', 0, 10, None)
+        assert d0 == ((0, 0.0), (11, 9.090909))
+        assert _deltas_to_soft_interval(d0) == (1, 11)
+        assert _expand_soft_to_deltas('soft_interval', 1, 11, None) == d0
 
     def test_non_soft_interval_returns_none(self):
         """首段增量非零 → 无法还原"""
@@ -164,29 +158,6 @@ class TestDeltasRoundTrip:
     def test_single_segment_returns_none(self):
         """非标准双段 → 无法还原"""
         assert _deltas_to_soft_interval(((10, 1.0),)) is None
-
-
-class TestMigrationRoundTrip:
-    """旧格式 → 迁移 → 新格式 → 写回 → 再读 等价性"""
-
-    def test_migration_preserves_semantics(self):
-        """迁移后字段语义等价"""
-        old = [
-            {'name': 'ssr_soft', 'type': 'soft', 'start': 74, 'end': 90,
-             'reset': 'any_ssr', 'counter_init': 0},
-            {'name': 'ssr_hard', 'type': 'hard', 'threshold': 180},
-        ]
-        migrated = _migrate_legacy_pity(old)
-        # 迁移后条目数一致
-        assert len(migrated) == 2
-        # soft → soft_interval
-        assert migrated[0]['type'] == 'soft_interval'
-        assert migrated[0]['scope'] == 'ssr'
-        assert migrated[0]['start'] == 74
-        assert migrated[0]['end'] == 90
-        # hard → hard
-        assert migrated[1]['type'] == 'hard'
-        assert migrated[1]['threshold'] == 180
 
 
 class TestParseDeltasValue:
@@ -204,12 +175,10 @@ class TestParseDeltasValue:
         assert result == ((10, 5.0), (20, 10.0))
 
 
-class TestMigrationMarkRoundTrip:
-    """_migrated_from_legacy 标记往返测试"""
+class TestLegacyPityRejectedAtLoad:
+    """P81 B11：端到端——旧格式 TOML 加载即抛 ConfigError（不再自动迁移）。"""
 
-    def test_flag_set_on_migration(self):
-        """旧格式加载后 _migrated_from_legacy=True"""
-        content = """[rarities]
+    _LEGACY = """[rarities]
 ranks = [["SSR"], ["SR"], ["R"]]
 
 [[pity]]
@@ -218,23 +187,8 @@ type = "soft"
 start = 74
 end = 90
 """
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.toml',
-                                         delete=False, encoding='utf-8') as f:
-            f.write(content)
-            f.flush()
-            path = f.name
 
-        try:
-            store = load_toml(path)
-            assert store._migrated_from_legacy is True
-            assert len(store.pity.pities) == 1
-            assert store.pity.pities[0].btype == 'soft_interval'
-        finally:
-            os.unlink(path)
-
-    def test_flag_false_on_new_format(self):
-        """新格式加载后 _migrated_from_legacy=False"""
-        content = """[rarities]
+    _MODERN = """[rarities]
 ranks = [["SSR"], ["SR"], ["R"]]
 
 [[pity]]
@@ -244,17 +198,26 @@ scope = "ssr"
 start = 74
 end = 90
 """
+
+    def _load(self, content):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.toml',
                                          delete=False, encoding='utf-8') as f:
             f.write(content)
             f.flush()
             path = f.name
-
         try:
-            store = load_toml(path)
-            assert store._migrated_from_legacy is False
+            return load_toml(path)
         finally:
             os.unlink(path)
+
+    def test_legacy_toml_raises_config_error(self):
+        with pytest.raises(ConfigError, match='旧格式'):
+            self._load(self._LEGACY)
+
+    def test_new_format_toml_loads(self):
+        store = self._load(self._MODERN)
+        assert len(store.pity.pities) == 1
+        assert store.pity.pities[0].btype == 'soft_interval'
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -848,8 +811,8 @@ threshold = 5.0
     from gacha_simulator.core.stop_condition import ResourceThresholdCondition
 
     state = GachaState(resources={'draw_resource': 10})
-    assert ResourceThresholdCondition('draw_resource', 0, '<').check(state, []) is False
-    assert ResourceThresholdCondition('no_such_resource', 5, '>=').check(state, []) is False
+    assert ResourceThresholdCondition('draw_resource', 0, '<').check(state, _stats()) is False
+    assert ResourceThresholdCondition('no_such_resource', 5, '>=').check(state, _stats()) is False
 
 
 def test_p79_empty_condition_tree_omits_toml_section(tmp_path):
@@ -876,3 +839,256 @@ def test_p79_nonempty_condition_tree_writes_toml_section(tmp_path):
     text = out.read_text(encoding='utf-8')
     assert '[stop_condition]' in text
     assert load_toml(str(out)).stop_condition == store.stop_condition
+
+
+def _stats(**kw):
+    """P81 §4.1-4：停止条件 check() 的 stats 形参改为必填，测试统一由此构造。"""
+    from gacha_simulator.service.gacha_service import SimulationStats
+    s = SimulationStats()
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s
+
+
+def test_b8_legacy_colon_gain_rule_surfaces_as_load_warning():
+    """P81 B8：旧写法（参数嵌在类型串里）的增益规则在加载期报出、不阻断加载。
+
+    该写法已不再被识别——GUI 对未识别的类型统一显示为「每天」，用户无从察觉，
+    故必须靠告警说明「配置没按写的生效」。此处直接测 `_build_gain_rules`（告警
+    所在单元），不构造整份 TOML：主配置的 gain_rules 是内联数组，无法再追加同名表。
+    """
+    from gacha_simulator.core.config_store import ConfigStore
+    from gacha_simulator.core.config_toml import _build_gain_rules
+
+    store = ConfigStore()
+    _build_gain_rules({'resources': {'gain_rules': [
+        {'type': 'every_n_days:3', 'param': '', 'gains': {'draw_resource': 160}},
+    ]}}, store)
+
+    legacy = [w for w in store.load_warnings if '旧写法' in w]
+    assert len(legacy) == 1, store.load_warnings
+    assert 'every_n_days:3' in legacy[0]
+    # 不阻断：规则照常入 store（界面会显示为「每天」，用户靠上面这条告警察觉）
+    assert [r.rule_type for r in store.gain_rules] == ['every_n_days:3']
+
+    # 新格式（type + param 两字段）不产生该告警
+    store2 = ConfigStore()
+    _build_gain_rules({'resources': {'gain_rules': [
+        {'type': 'every_n_days', 'param': '3', 'gains': {'draw_resource': 160}},
+    ]}}, store2)
+    assert [w for w in store2.load_warnings if '旧写法' in w] == []
+    assert [r.rule_type for r in store2.gain_rules] == ['every_n_days']
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4c ②：`load_toml` 失败原子性
+# ══════════════════════════════════════════════════════════════════
+# 原实现先 `store.clear()` 再逐段构建，中途抛错即停在**半装**状态——实测（真实
+# 配置 + 一处非法输入）：`banner.banners` 8→0、`pity.pities` 1→0，已构建的段落
+# 留下、未构建的段落已清空；而 GUI 的 `_load_default_config` / `import_config`
+# 是 `except Exception` → stderr traceback + 状态栏一行字，窗口照常打开，即
+# **静默半开**。
+#
+# `load_toml` 调用链内现有近百处 `raise ConfigError`（cards / pity / milestone /
+# select_voucher / banners / resource_lifecycle / stop_condition 各段皆有），逐处
+# 包 try 治不了本，故改为「先快照、抛错即整体回滚」（`_restore_config_store`）。
+# 本组对**每个段落**各注入一处非法输入（外加一例 TOML 语法错误，证明非
+# `ConfigError` 的异常同样回滚），断言失败后传入的 store 与加载前逐字段相同。
+
+# 基准配置 = 真实 `config/config.toml` + 本增量段。增量段的用途是**反空转**：
+# 真实配置自身在 resource_lifecycle / select_voucher / stop_condition 三段上是空的。
+# **订正（S4c 审查 low，2026-10-10 实测）**：原文写「不补的话这三段的用例仍然绿」，
+# 与实测不符。删掉 `_GOOD_EXTRAS` 且把原子性变异回「先 clear 再构建」后，这三段的
+# 用例并非绿，而是先在下方反空转守卫（`assert all(c >= 1 ...)` 覆盖这三段的计数）
+# 处报错，10 条全红。让这三段有判别力的是「守卫 + 增量段」**两者**：守卫保证段落非
+# 空，增量段保证「确有内容可被清掉」，缺任一半该段用例都失去意义。
+_GOOD_EXTRAS = '''
+[resources.lifecycle]
+enabled = true
+
+[[resources.lifecycle.rules]]
+resource_id = "exchange_currency"
+expire_at = 100
+
+[resources.lifecycle.rules.on_expire]
+clear = true
+
+[[select_voucher]]
+voucher = "draw_resource"
+cards = ["limited_ssr_1"]
+
+[stop_condition]
+type = "fixed_action_count"
+max_actions = 500
+'''
+
+
+def _real_config_path():
+    """真实配置路径（开发环境即 `gacha_simulator/config/config.toml`）。"""
+    from gacha_simulator.paths import get_config_dir
+    return os.path.join(get_config_dir(), 'config.toml')
+
+
+def _good_config_text():
+    with open(_real_config_path(), encoding='utf-8') as f:
+        return f.read() + _GOOD_EXTRAS
+
+
+def _store_field_snapshot(store):
+    """store 全部 dataclass 字段的深拷贝快照（逐字段比对的基准）。
+
+    逐字段**现取**（`dataclasses.fields`）而非手写清单——手写清单漏一项即让
+    「逐字段相同」的断言失去覆盖面。
+    """
+    import copy as _c
+    import dataclasses as _d
+    from gacha_simulator.core.config_store import ConfigStore
+    return {f.name: _c.deepcopy(getattr(store, f.name))
+            for f in _d.fields(ConfigStore)}
+
+
+def _load_text_into(store, text):
+    """写临时文件后加载到 store（无论成败清临时文件）。"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.toml', delete=False,
+                                     encoding='utf-8') as f:
+        f.write(text)
+        path = f.name
+    try:
+        return load_toml(path, store=store)
+    finally:
+        os.unlink(path)
+
+
+def _inject(text, find, replace):
+    """在基准配置上注入一处非法输入：`find` 空串表示**追加**，否则为定点替换。"""
+    if not find:
+        return text + replace
+    assert text.count(find) == 1, f'注入锚点在基准配置中不唯一：{find!r}'
+    return text.replace(find, replace)
+
+
+# 段落名 → (锚点, 替换文本, 期望异常)
+# 追加形态用于数组表（`[[card]]` / `[[pity]]` / …），定点替换用于基准配置里
+# **已存在**的表（`[resources.lifecycle]` / `[stop_condition]`）——同名表不能
+# 二次定义，追加会退化成 TOMLDecodeError，测不到该段自己的校验分支。
+_ILLEGAL_BY_SEGMENT = [
+    ('cards',
+     '', '\n[[cards]]\nid = "x"\nname = "x"\nrarity = "SSR"\n',
+     ConfigError),
+    ('pity',
+     '', '\n[[pity]]\nname = "bad"\ntype = "hard"\nscope = "ssr"\n'
+         'threshold = 90\nmax_tirggers = 2\n',
+     ConfigError),
+    ('milestone',
+     '', '\n[[milestone]]\nname = "m_bad"\nthreshold = 0\n',
+     ConfigError),
+    ('select_voucher',
+     '', '\n[[select_voucher]]\nvoucher = "exchange_currency"\n'
+         'cards = ["no_such_card"]\n',
+     ConfigError),
+    ('banners',
+     '', '\n[[banner]]\nid = "b_bad"\nname = "bad"\nstart_day = 0\nend_day = 1\n'
+         '\n[[banner.pool]]\nid = "main"\ncost = "draw_resource:160"\n'
+         'epitomizable_cards = ["nonexistent"]\n'
+         '\n[[banner.pool.reward]]\ncard_id = "limited_ssr_1"\n'
+         'probability = 1.0\nrarity = "SSR"\nfeatured = true\n',
+     ConfigError),
+    ('resource_lifecycle',
+     'resource_id = "exchange_currency"\n', '',
+     ConfigError),
+    ('stop_condition',
+     '[stop_condition]\ntype = "fixed_action_count"\nmax_actions = 500\n',
+     '[stop_condition]\nconditions = "not_a_list"\n',
+     ConfigError),
+    ('toml_syntax',
+     '', '\n[[banner]\n',
+     Exception),
+]
+
+
+class TestLoadTomlFailureAtomicity:
+    """加载失败 → 传入的 store 逐字段回滚（P64 S4c ②）。"""
+
+    @staticmethod
+    def _loaded_store():
+        """基准配置装好的 store + 反空转守卫（任一段落为空则本组用例失去意义）。"""
+        store = _load_text_into(None, _good_config_text())
+        counts = (len(store.banner.banners), len(store.card_defs),
+                  len(store.pity.pities), len(store.resource_defs),
+                  len(store.milestone.milestones),
+                  len(store.resource_lifecycle.rules), len(store.select_vouchers))
+        assert all(c >= 1 for c in counts) and store.stop_condition is not None, (
+            f'基准配置的段落为空 {counts} / stop_condition={store.stop_condition}——'
+            f'本组用例的反空转前提失效（计划实测：banners 8 / cards 24 / pity 1）')
+        return store
+
+    @pytest.mark.parametrize('segment,find,replace,exc',
+                             _ILLEGAL_BY_SEGMENT,
+                             ids=[c[0] for c in _ILLEGAL_BY_SEGMENT])
+    def test_failed_load_leaves_store_unchanged(self, segment, find, replace, exc):
+        """各段落各自的非法输入 → 抛错，且 store 逐字段与加载前相同。"""
+        store = self._loaded_store()
+        before = _store_field_snapshot(store)
+        counts_before = (len(store.banner.banners), len(store.card_defs),
+                         len(store.pity.pities), len(store.resource_defs),
+                         len(store.milestone.milestones),
+                         len(store.resource_lifecycle.rules),
+                         len(store.select_vouchers))
+
+        with pytest.raises(exc):
+            _load_text_into(store, _inject(_good_config_text(), find, replace))
+
+        after = _store_field_snapshot(store)
+        counts_after = (len(store.banner.banners), len(store.card_defs),
+                        len(store.pity.pities), len(store.resource_defs),
+                        len(store.milestone.milestones),
+                        len(store.resource_lifecycle.rules),
+                        len(store.select_vouchers))
+        assert counts_after == counts_before, (
+            f'{segment}：失败后段落计数被改动（原实现此处为 banners 8→0 / pity 1→0）')
+        diff = sorted(k for k in before if before[k] != after[k])
+        assert diff == [], f'{segment}：失败后下列字段与加载前不同：{diff}'
+
+    def test_failed_load_keeps_store_usable(self):
+        """失败后 store 仍可用（回滚不留残留：配置项与派生值都对得上）。"""
+        store = self._loaded_store()
+        end_time_before = store.end_time
+        n_pools = len(store.pools)
+
+        with pytest.raises(ConfigError):
+            _load_text_into(
+                store,
+                _inject(_good_config_text(), '',
+                        '\n[[pity]]\nname = "bad"\ntype = "hard"\nscope = "ssr"\n'
+                        'max_tirggers = 2\n'))
+
+        assert store.end_time == end_time_before
+        assert len(store.pools) == n_pools
+        assert store.pity.pities and store.pity.pities[0].name == 'ssr_soft'
+
+    def test_successful_load_after_failure_still_replaces(self):
+        """失败 → 再成功加载：成功那次照常整体替换（回滚不粘连上次的失败）。"""
+        store = self._loaded_store()
+        with pytest.raises(ConfigError):
+            _load_text_into(
+                store,
+                _inject(_good_config_text(), '',
+                        '\n[[milestone]]\nname = "m_bad"\nthreshold = 0\n'))
+
+        minimal = ('[rarities]\nranks = [["SSR"], ["SR"], ["R"]]\n'
+                   '\n[[banner]]\nid = "b1"\nname = "b1"\nstart_day = 0\nend_day = 3\n'
+                   '\n[[banner.pool]]\nid = "main"\ncost = "draw_resource:160"\n'
+                   '\n[[banner.pool.reward]]\ncard_id = "c1"\nprobability = 1.0\n'
+                   'rarity = "SSR"\nfeatured = true\n')
+        _load_text_into(store, minimal)
+        assert len(store.banner.banners) == 1
+        assert store.card_defs == []
+        assert store.pity.pities == []
+
+    def test_failure_with_fresh_store_still_raises(self):
+        """`store=None`（新建实例）路径：照常抛错，异常不被吞掉。"""
+        with pytest.raises(ConfigError):
+            _load_text_into(
+                None,
+                _inject(_good_config_text(), '',
+                        '\n[[pity]]\nname = "bad"\ntype = "hard"\nscope = "ssr"\n'
+                        'max_tirggers = 2\n'))

@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>敏感性扫描 · 方案乙（WebUI）</title>
+
+<!-- 独立演示页：不接 Python、不并入 layout_demo/index.html。
+     沿用 layout_demo 的惯例：Vue 3 ＋ Element Plus ＋ 本地 libs/，同一套
+     :root 变量与同一套分析页类名（anchor-bar / an-tabrow / an-split /
+     an-side / an-main / an-res / pform / dform / tmeta / vsw）。
+     三行子图走共享的 chart3.js，与方案甲同源。
+
+     本轮改动（用户 2026-10-12 指出，依 工作区交互形态.md §5.5 既有裁决）：
+       · 左栏收窄到 238px，与 layout_demo 的 .an-side 同宽，只放维度清单
+       · 规格区与发起按钮从左栏移到右栏的发起块里（§5.5：派发型分析的发起入口
+         在结果块里，不在左栏、不在工具栏），沿用 .pform + .dform 的做法
+       · 右栏顺序：发起块 → 组条 → 结果块
+       · 大编辑器（表达式列表）仍在右栏就地切换，不用弹窗
+       · 形态由字段类型决定，只读显示
+       · 标签行只开放「敏感性分析」，其余置灰（本演示不做） -->
+
+<link rel="stylesheet" href="../layout_demo/libs/ep.min.css">
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --line-strong:#d0d5dd;
+  --result:#fafbfd; --line2:#eef1f5; --muted:#5a6272;
+  --ink:#1f2430; --ink-2:#5a6272; --ink-3:#8b93a3;
+  --accent:#1976d2; --accent-soft:#e8f1fb;
+  --ok:#2e7d32; --warn:#b26a00; --danger:#c62828; --purple:#6941c6;
+  --radius:6px;
+}
+*{box-sizing:border-box}
+[v-cloak]{display:none}
+html,body{height:100%;margin:0}
+body{font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-size:13px;color:var(--ink);background:var(--bg);overflow:hidden}
+#app{height:100vh;display:flex;flex-direction:column}
+
+/* ---------- 顶部 ---------- */
+.menu-bar{height:34px;display:flex;align-items:center;gap:2px;padding:0 10px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{font-weight:700;font-size:14px;color:var(--accent);margin-right:14px;
+  letter-spacing:.3px}
+.menu-btn{padding:4px 10px;border-radius:4px;color:var(--ink-2);cursor:pointer}
+.menu-btn:hover{background:var(--bg);color:var(--ink)}
+.spacer{flex:1}
+.demo-tag{font-size:11px;color:var(--ink-3);border:1px dashed var(--line-strong);
+  border-radius:10px;padding:1px 8px;margin-left:12px}
+
+.tool-bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 10px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.tb-sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+.tmeta{font-size:10px;color:var(--ink-3)}
+.split-btn{display:inline-flex;border-radius:4px;overflow:hidden;
+  border:1px solid #1565c0}
+.sb-main{border:0;background:var(--accent);color:#fff;font:inherit;font-size:12px;
+  padding:5px 12px;cursor:pointer}
+.sb-caret{border:0;border-left:1px solid #1565c0;background:var(--accent);color:#fff;
+  font-size:10px;padding:0 8px;cursor:pointer}
+.tb-badge{display:inline-block;margin-left:5px;background:var(--danger);color:#fff;
+  border-radius:9px;font-size:10px;padding:0 5px;line-height:14px}
+
+/* ---------- 主体 ---------- */
+.app-body{flex:1;min-height:0;display:flex}
+.side{flex:0 0 272px;min-width:272px;display:flex;flex-direction:column;
+  background:var(--panel);border-right:1px solid var(--line)}
+.side-top{flex:1;min-height:0;display:flex;flex-direction:column}
+.side-bottom{height:140px;flex:0 0 140px;display:flex;flex-direction:column;
+  border-top:2px solid var(--line)}
+.side-head{height:30px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 10px;font-size:12px;font-weight:600;color:var(--ink-2);
+  background:linear-gradient(#fbfcfd,#f4f6f9);border-bottom:1px solid var(--line)}
+.side-scroll{flex:1;min-height:0;overflow:auto;padding:5px 6px}
+.tnode{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;
+  white-space:nowrap}
+.tnode .g{font-size:10px;width:12px;text-align:center;flex:0 0 auto}
+.tnode.lv1 .g{color:var(--ok)}
+.tnode.lv2{padding-left:16px}
+.tnode.lv3{padding-left:32px;color:var(--ink-2)}
+.tnode .nb{font-size:10px;color:var(--ink-3)}
+
+.main-col{flex:1;min-width:0;overflow:auto;padding:12px 14px}
+
+/* ---------- 分析页 ---------- */
+.anchor-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 12px;background:var(--accent-soft);border-bottom:1px solid #d3e3f5;
+  border-radius:var(--radius) var(--radius) 0 0}
+.anchor-bar .lbl{font-size:12px;color:var(--ink-2)}
+.anchor-bar b{font-size:13px;color:var(--accent)}
+.anchor-hint{font-size:10px;color:var(--ink-3);margin-left:auto}
+
+.an-tabrow{display:flex;flex-wrap:wrap;padding-top:5px;border-bottom:1px solid var(--line);
+  margin-top:6px}
+.an-tab{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);
+  border-bottom:0;background:var(--result);border-radius:2px 2px 0 0;padding:5px 9px;
+  margin:0 -1px -1px 0;font:inherit;font-size:12px;color:var(--muted);
+  white-space:nowrap}
+.an-tab.on{background:var(--panel);color:var(--ink);font-weight:600;
+  border-bottom:1px solid var(--panel);position:relative;z-index:1}
+.an-tab.off{color:#c3c9d4;cursor:not-allowed;background:#fafbfd}
+.tabnote{font-size:10px;color:var(--ink-3);padding:5px 2px 0}
+
+/* 分析页主体：左（维度清单） / 右（发起块 ＋ 组条 ＋ 结果）。
+   左栏与 layout_demo 的 .an-side 同构：只放清单，纯选择。
+   依据 工作区交互形态.md §5.5：派发型分析的发起入口在结果块里，
+   不在工具栏；layout_demo 亦把参数与发起放在 .an-res-b 内。
+   敏感性分析只有一个方法，但左栏装的是「可扫维度」而不是方法，
+   规格随选中的维度长出，故与 layout_demo 一样留在右侧。 */
+.an-split{display:flex;gap:12px;align-items:flex-start;margin-top:12px}
+.an-side{flex:0 0 238px;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);overflow:hidden;position:sticky;top:0}
+.an-side-h{display:flex;align-items:center;justify-content:space-between;
+  padding:6px 10px;background:#fafbfd;border-bottom:1px solid var(--line);
+  font-size:12px;font-weight:600;color:var(--ink-2)}
+.an-side-h .n{font-size:10px;color:var(--ink-3);font-weight:400}
+.an-list{padding:4px}
+.dom{padding:8px 8px 2px;font-size:10px;color:var(--ink-3);font-weight:600;
+  letter-spacing:.5px}
+.dim{display:flex;align-items:center;gap:6px;width:100%;border:0;background:transparent;
+  font:inherit;font-size:12px;color:var(--ink-2);cursor:pointer;text-align:left;
+  padding:5px 8px 5px 10px;border-radius:3px;border-left:2px solid transparent}
+.dim:hover{background:#f4f7fb}
+.dim.on{background:var(--accent-soft);color:var(--ink);font-weight:600;
+  border-left-color:var(--accent)}
+.dim .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dim .kind{flex:0 0 auto;white-space:nowrap;font-size:9px;
+  line-height:13px;padding:0 5px;border-radius:7px}
+.dim .kind.s{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.dim .kind.d{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.an-tip{margin:0;padding:6px 10px 8px;font-size:10px;color:var(--ink-3);
+  border-top:1px solid var(--line2);line-height:1.7}
+
+/* 参数表单与发起区。类名取自 layout_demo，保持两页视觉一致 */
+.pform{display:flex;flex-direction:column;gap:7px;margin-bottom:12px;
+  padding:9px 10px;background:#fafbfd;border:1px solid var(--line2);border-radius:4px;
+  max-width:560px}
+.pform .pf{display:flex;align-items:center;gap:8px}
+.pform .pf>label{flex:0 0 78px;font-size:11px;color:var(--ink-3);text-align:right}
+.pform .pf>.el-select,.pform .pf>.el-input,.pform .pf>.el-input-number,
+.pform .pf>.range,.pform .pf>.pfmulti{flex:1;min-width:0}
+.pform .pfmulti{display:flex;flex-wrap:wrap;gap:2px 10px;min-width:0}
+.pform .pfmulti .el-checkbox{margin-right:0;height:22px}
+.shape{font-size:10px;line-height:16px;padding:0 6px;border-radius:8px}
+.shape.sync{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.shape.dispatch{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.dform{display:flex;flex-direction:column;gap:8px}
+.drow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.range{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.range .el-input-number{width:86px}
+.preview{font-size:10px;color:var(--ink-3);line-height:1.8}
+
+/* ---------- 右栏 ---------- */
+.an-main{flex:1;min-width:0}
+.groupbar{display:flex;align-items:center;gap:7px;padding:7px 9px;margin:10px 0;
+  border:1px solid var(--line);border-radius:var(--radius);background:#fafbfd}
+.groupbar .gscroll{flex:1;min-width:0;display:flex;gap:6px;overflow-x:auto;
+  padding-bottom:2px}
+.gchip{flex:0 0 auto;display:flex;align-items:center;gap:7px;font-size:11px;
+  border:1px solid var(--line);border-radius:14px;background:var(--panel);
+  padding:3px 11px;cursor:pointer;white-space:nowrap;color:var(--ink-2)}
+.gchip:hover{border-color:#a9c9e8;background:#f6fbff}
+.gchip.on{background:var(--accent-soft);border-color:#c7ddf5;color:var(--accent);
+  font-weight:600}
+.gchip .st.run{color:var(--accent)}
+.navbtn{border:1px solid var(--line);background:var(--panel);border-radius:4px;
+  width:24px;height:22px;font-size:10px;cursor:pointer;color:var(--ink-2)}
+.navbtn:hover{background:#f2f6fb}
+.navbtn.wide{width:auto;padding:0 9px}
+
+.an-res{border:1px solid var(--line);border-radius:var(--radius);background:#fff;
+  overflow:hidden}
+.an-res-h{display:flex;align-items:center;gap:9px;padding:8px 11px;
+  border-bottom:1px solid var(--line);background:#fafbfd}
+.an-res-h b{font-size:13px}
+.an-bd{font-size:9px;line-height:13px;padding:0 5px;border-radius:7px}
+.an-bd.s{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.an-bd.d{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.an-res-b{padding:12px}
+.vsw{font:inherit;font-size:10px;cursor:pointer;border:1px solid var(--line);
+  border-radius:9px;padding:1px 8px;background:var(--panel);color:var(--ink-2)}
+.vsw:hover{background:#f2f6fb;color:var(--ink)}
+.hint{border:1px dashed var(--line-strong);border-radius:var(--radius);
+  background:#fcfdfe;padding:44px 24px;text-align:center;color:var(--ink-3);
+  font-size:12px;line-height:2.1}
+.stats{display:flex;flex-wrap:wrap;gap:18px;padding:9px 2px 2px;font-size:12px}
+.stats .k{color:var(--ink-3);font-size:11px}
+.legend-line{display:flex;gap:16px;font-size:10px;color:var(--ink-3);padding:6px 2px 0;
+  flex-wrap:wrap}
+.legend-line i{display:inline-block;width:16px;height:8px;margin-right:4px;
+  vertical-align:-1px;border:1px solid #bbb;border-radius:2px}
+.mrow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:14px;
+  padding-top:10px;border-top:1px dashed var(--line)}
+.mnote{font-size:10px;color:var(--ink-3);margin-top:5px}
+.srcnote{font-size:10px;color:var(--ink-3);padding:8px 2px 0;border-top:1px dashed var(--line2);
+  margin-top:10px;line-height:1.8}
+.dbar{height:15px;border:1px solid var(--line);border-radius:8px;background:#fff;
+  overflow:hidden;position:relative;margin:9px 0 5px}
+.dbar i{display:block;height:100%;background:linear-gradient(90deg,#7fb0d8,#1976d2)}
+.dbar span{position:absolute;inset:0;text-align:center;font-size:10px;line-height:13px;
+  color:var(--ink-2)}
+
+/* 编辑态（表达式列表就地编辑，无弹窗） */
+.edithead{display:flex;align-items:center;gap:9px;padding:8px 11px;
+  border-bottom:1px solid var(--line);background:#fafbfd}
+.edithead b{font-size:13px}
+table.expr{width:100%;border-collapse:collapse;font-size:11px;background:#fff;
+  border:1px solid var(--line);border-radius:4px;overflow:hidden}
+table.expr th{background:#f7f9fc;border-bottom:1px solid var(--line);padding:5px 9px;
+  text-align:left;font-weight:600;color:var(--ink-2)}
+table.expr td{border-bottom:1px solid var(--line2);padding:3px 7px}
+table.expr tr:last-child td{border-bottom:0}
+table.expr td input{border:0;outline:0;background:transparent;font:inherit;width:100%;
+  color:var(--ink)}
+table.expr td.rm{width:26px;text-align:center;color:var(--ink-3);cursor:pointer}
+table.expr td.rm:hover{color:var(--danger)}
+.ok-line{font-size:11px;color:var(--ok);margin-top:8px}
+
+/* ---------- 任务抽屉 ---------- */
+.drawer{position:fixed;left:0;right:0;top:0;z-index:40;background:var(--panel);
+  border-bottom:1px solid var(--line-strong);box-shadow:0 8px 24px rgba(20,30,50,.12);
+  transform:translateY(-100%);transition:transform .28s cubic-bezier(.25,.8,.35,1)}
+.drawer.open{transform:translateY(0)}
+.drawer-h{height:42px;display:flex;align-items:center;gap:12px;padding:0 14px;
+  border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
+.drawer-b{padding:12px 14px;display:flex;gap:16px}
+.drawer-b table{width:100%;border-collapse:collapse;font-size:12px}
+.drawer-b th{text-align:left;font-size:11px;color:var(--ink-3);font-weight:400;
+  border-bottom:1px solid var(--line);padding:5px 8px}
+.drawer-b td{padding:6px 8px;border-bottom:1px solid var(--line2)}
+.st-done{color:var(--ok)} .st-run{color:var(--accent)}
+.mini{height:9px;border-radius:5px;background:#eef1f5;overflow:hidden;width:110px;
+  display:inline-block;vertical-align:-1px}
+.mini i{display:block;height:100%;background:var(--accent)}
+.drawer-b .res{flex:0 0 240px;border-left:1px solid var(--line);padding-left:16px;
+  font-size:11px;color:var(--ink-2);line-height:2.1}
+
+/* ---------- demo 状态条 ---------- */
+.demobar{position:fixed;right:12px;bottom:12px;z-index:60;background:#fffbe8;
+  border:1px dashed #d9b441;border-radius:5px;padding:6px 8px;display:flex;
+  gap:5px;align-items:center;box-shadow:0 3px 12px rgba(0,0,0,.12)}
+.demobar .dl{font-size:10px;color:#8a6d1f}
+.demobar button{font:11px inherit;cursor:pointer;border:1px solid #d9b441;
+  background:#fff;color:#6b5410;border-radius:3px;padding:2px 7px}
+.demobar button.on{background:#d9b441;color:#fff;font-weight:600}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <div class="menu-bar">
+    <span class="brand">GachaStat</span>
+    <span class="menu-btn">文件</span><span class="menu-btn">工具</span>
+    <span class="menu-btn">帮助</span>
+    <span class="spacer"></span>
+    <span class="demo-tag">演示页 · 数据全假 · 不接后端</span>
+  </div>
+
+  <div class="tool-bar">
+    <el-button size="small">新建配置</el-button>
+    <span class="tmeta">敏感性在分析页面内发起，不在工具栏</span>
+    <div class="tb-sep"></div>
+    <span class="spacer"></span>
+    <div class="split-btn">
+      <button class="sb-main">运行模拟：{{ anchorLabel }}</button>
+      <button class="sb-caret">▾</button>
+    </div>
+    <el-button size="small" @click="drawer = !drawer">
+      任务管理<span v-if="runningCount" class="tb-badge">{{ runningCount }}</span>
+    </el-button>
+  </div>
+
+  <div class="app-body">
+
+    <!-- ===== 工作区树 ===== -->
+    <aside class="side">
+      <div class="side-top">
+        <div class="side-head"><span>工作区</span><span class="tmeta">WORKSPACE</span></div>
+        <div class="side-scroll">
+          <div class="tnode lv1"><span class="g">●</span>主配置</div>
+          <div class="tnode lv2"><span class="g">◆</span>main-run-1<span class="nb">1000 样本</span></div>
+          <template v-if="state === 's6'">
+            <div class="tnode lv2"><span class="g" style="color:var(--warn)">▲</span>
+              派发批次：保底阈值扫描 A<span class="nb">5</span></div>
+            <div class="tnode lv3" v-for="v in ['070','075','080','085','090']" :key="v">
+              <span class="g">■</span>sub-{{ v }}<span class="nb">非锚点</span></div>
+            <div class="tnode lv2"><span class="g">◆</span>scan-A-run-3<span class="nb">1000 样本</span></div>
+          </template>
+        </div>
+      </div>
+      <div class="side-bottom">
+        <div class="side-head"><span>对比任务</span></div>
+        <div class="side-scroll"><div class="tmeta">（本演示不涉及）</div></div>
+      </div>
+    </aside>
+
+    <!-- ===== 分析页 ===== -->
+    <div class="main-col">
+
+      <div class="anchor-bar">
+        <span class="lbl">分析锚点</span><b>{{ anchorLabel }}</b>
+        <span class="lbl">数据集</span>
+        <el-select v-model="datasetId" size="small" style="width:230px">
+          <el-option v-for="d in datasetOptions" :key="d.id" :value="d.id" :label="d.label">
+            <span>{{ d.label }}</span>
+            <span class="tmeta" style="float:right">{{ d.samples }} 样本</span>
+          </el-option>
+        </el-select>
+        <span class="anchor-hint">锚点固定在一级配置节点；同子树内点选不改变面板</span>
+      </div>
+
+      <div class="an-tabrow">
+        <button class="an-tab" v-for="t in TABS" :key="t.k"
+                :class="{ on: t.k === 'sensitivity', off: t.k !== 'sensitivity' }">
+          {{ t.n }}</button>
+      </div>
+      <div class="tabnote">本演示只做「敏感性分析」这一个专题，其余 10 个置灰</div>
+
+      <div class="an-split">
+
+        <!-- 左：维度清单。与 layout_demo 的 .an-side 同构：纯选择，238px，
+             参数与发起都在右侧（依 工作区交互形态.md §5.5） -->
+        <aside class="an-side">
+          <div class="an-side-h">
+            <span>敏感性分析 · 维度</span>
+            <span class="n">{{ DIM_COUNT }} 项</span>
+          </div>
+          <div class="an-list">
+            <template v-for="d in DOMAINS" :key="d.name">
+              <div class="dom">{{ d.name }}</div>
+              <button v-for="x in d.dims" :key="x.k" class="dim"
+                      :class="{ on: dim && dim.k === x.k && dim._dom === d.name }"
+                      @click="pick(d, x)">
+                <span class="nm">{{ x.k }}</span>
+                <span class="kind" :class="d.side === '复算' ? 's' : 'd'">{{ d.side }}</span>
+              </button>
+            </template>
+          </div>
+          <p class="an-tip">点一项选中它：规格与发起按钮在右侧。复算侧不重跑，派发侧重跑。</p>
+        </aside>
+
+        <!-- 右：发起块 ＋ 组条 ＋ 结果 -->
+        <main class="an-main">
+
+          <!-- 发起块：参数表单 ＋ 发起按钮，常驻。
+               §5.5：派发型分析的发起入口在结果块里，不在左栏、不在工具栏；
+               layout_demo 亦把参数与发起同放在 .an-res-b 内。 -->
+          <div class="an-res">
+            <div class="an-res-h">
+              <b>敏感性扫描</b>
+              <span class="shape" :class="isSync ? 'sync' : 'dispatch'">
+                {{ isSync ? '即时分析' : '需派发模拟' }}</span>
+              <span class="tmeta" v-if="dim">{{ dim._dom }} · {{ dim.k }}</span>
+              <span class="tmeta" v-else>尚未选维度</span>
+              <span class="spacer"></span>
+              <span class="tmeta" v-if="dim">{{ dim.form }}</span>
+            </div>
+            <div class="an-res-b">
+
+              <p v-if="!dim" class="preview" style="margin:0">
+                在左栏点一个维度，这里会长出它对应的扫描规格与发起按钮。</p>
+
+              <template v-else>
+                <div class="pform">
+                  <!-- 对象/字段选择器：先选「要搜什么」，所以选项是对象与字段，
+                       不是具体取值。取值由下面的区间/步长或枚举勾选决定。 -->
+                  <div class="pf" v-for="s in dim.sel" :key="s.label">
+                    <label>{{ s.label }}</label>
+                    <el-select v-model="sel[s.label]" size="small">
+                      <el-option v-for="o in s.opts" :key="o" :label="o" :value="o"></el-option>
+                    </el-select>
+                  </div>
+
+                  <!-- 数值栅格 -->
+                  <template v-if="dim.form === '数值栅格'">
+                    <div class="pf"><label>区间</label>
+                      <span class="range">
+                        <el-input-number v-model="def.from" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta">→</span>
+                        <el-input-number v-model="def.to" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta" v-if="dim.unit">单位 {{ dim.unit }}</span>
+                      </span></div>
+                    <div class="pf"><label>步长</label>
+                      <span class="range">
+                        <el-input-number v-model="def.step" size="small" :controls="false"></el-input-number>
+                      </span></div>
+                  </template>
+
+                  <!-- 枚举 -->
+                  <template v-else-if="dim.form === '枚举'">
+                    <div class="pf" style="align-items:flex-start"><label>取值</label>
+                      <span class="pfmulti">
+                        <el-checkbox v-for="o in dim.def.opts" :key="o" size="small"
+                                     v-model="enumPick" :label="o">{{ o }}</el-checkbox>
+                      </span></div>
+                  </template>
+
+                  <!-- 变换库 -->
+                  <template v-else-if="dim.form === '变换库'">
+                    <div class="pf"><label>区间</label>
+                      <span class="range">
+                        <el-input-number v-model="def.from" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta">→</span>
+                        <el-input-number v-model="def.to" size="small" :controls="false"></el-input-number>
+                        <span class="tmeta" v-if="dim.unit">单位 {{ dim.unit }}</span>
+                      </span></div>
+                    <div class="pf"><label>扫哪个</label>
+                      <span class="preview">概率按「{{ sel['变换'] }}」改写后再跑，
+                        扫的是「{{ sel['扫哪个参数'] }}」</span></div>
+                  </template>
+
+                  <!-- 表达式列表 -->
+                  <template v-else>
+                    <div class="pf"><label>列表</label>
+                      <span class="preview">{{ rows.length }} 行完整子配置</span>
+                      <el-button size="small" @click="edit = true">编辑列表</el-button></div>
+                  </template>
+                </div>
+
+                <div class="dform">
+                  <div class="drow">
+                    <el-button type="primary" size="small" @click="run">
+                      开始敏感性扫描</el-button>
+                    <span class="tmeta">{{ runPreview }}</span>
+                  </div>
+                  <p class="preview" style="margin:0">
+                    汇合产出：N 条子配置 ＋ N 个数据集，写回本锚点的子节点，
+                    可在上方数据集选择器切换查看</p>
+                  <p class="preview" style="margin:0">
+                    每次运行都新建一组，不覆盖已有的；复算侧毫秒级，派发侧进任务队列</p>
+                </div>
+              </template>
+
+            </div>
+          </div>
+
+          <!-- 组条：只切历史结果，新建只由上面的「开始敏感性扫描」产生，故无「＋」 -->
+          <div class="groupbar" v-if="visibleGroups.length">
+            <span class="tmeta">结果组</span>
+            <div class="gscroll">
+              <span class="gchip" v-for="g in visibleGroups" :key="g.id"
+                    :class="{ on: g.id === group }">
+                #{{ g.id }} {{ g.dim }}
+                <span class="st" :class="{ run: g.st === 'run' }">
+                  {{ g.st === 'run' ? '⟳ 60%' : '✓' }}</span>
+              </span>
+            </div>
+            <button class="navbtn">◀</button>
+            <button class="navbtn">▶</button>
+            <button class="navbtn wide">清除结果</button>
+          </div>
+
+          <!-- 编辑态 -->
+          <div class="an-res" v-if="edit">
+            <div class="edithead">
+              <el-button size="small" @click="edit = false">← 返回结果</el-button>
+              <b>编辑扫描列表</b>
+              <span class="tmeta" style="margin-left:auto">每行是一条完整子配置</span>
+            </div>
+            <div class="an-res-b">
+              <table class="expr">
+                <thead><tr>
+                  <th style="width:150px">type</th><th style="width:120px">threshold</th>
+                  <th style="width:100px">scope</th><th style="width:110px">pools</th>
+                  <th style="width:130px">max_triggers</th><th style="width:26px"></th>
+                </tr></thead>
+                <tbody>
+                  <tr v-for="(r, i) in rows" :key="i">
+                    <td><input v-model="r.type"></td><td><input v-model="r.threshold"></td>
+                    <td><input v-model="r.scope"></td><td><input v-model="r.pools"></td>
+                    <td><input v-model="r.max_triggers"></td>
+                    <td class="rm" @click="rows.splice(i, 1)">✕</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="margin-top:9px">
+                <el-button size="small" @click="rows.push(blankRow())">＋ 添加一行</el-button>
+              </div>
+              <div class="ok-line">✓ 校验通过：{{ rows.length }} 行，与
+                <code>_pity_declared_keys(btype)</code> 逐行比对无未知键</div>
+            </div>
+          </div>
+
+          <!-- 空态：维度已选但还没跑过 -->
+          <div class="hint" v-else-if="dim && !visibleGroups.length" style="padding:22px 20px">
+            还没有结果组。规格填好后点上面的「开始敏感性扫描」。
+          </div>
+
+          <!-- 结果 -->
+          <div class="an-res" v-else-if="visibleGroups.length">
+            <div class="an-res-h">
+              <b>#{{ group }}　{{ isDisp ? '保底 · 阈值' : '分析口径 · GDR 阈值' }}</b>
+              <span class="an-bd" :class="isDisp ? 'd' : 's'">
+                {{ isDisp ? '派发侧 · 切回读缓存' : '复算侧 · 切回即时重算' }}</span>
+              <span class="spacer"></span>
+              <button class="vsw">看表格</button>
+            </div>
+            <div class="an-res-b">
+
+              <!-- 运行中 -->
+              <template v-if="state === 's4'">
+                <div class="dbar"><i style="width:60%"></i><span>3 / 5</span></div>
+                <div style="display:flex;gap:14px;align-items:center">
+                  <span class="tmeta">批次「保底阈值扫描 A」</span>
+                  <span class="tmeta">已用 42s</span>
+                  <span class="spacer"></span>
+                  <button class="vsw">取消</button>
+                </div>
+                <div class="tmeta" style="font-family:Consolas,monospace;margin-top:7px">
+                  sub-070 ✓　sub-075 ✓　sub-080 ✓　sub-085 …　sub-090 …</div>
+                <div class="srcnote">本组为派发侧：产物已落工作区
+                  （5 条子配置 ＋ 5 个数据集），切回直接读，不重跑</div>
+              </template>
+
+              <!-- 完成 -->
+              <template v-else>
+                <div ref="chartHost"></div>
+                <div class="stats">
+                  <span><span class="k">翻转点</span>
+                    <b>{{ isDisp ? '82.0　[80.5, 83.5]' : '0.885　[0.878, 0.893]' }}</b></span>
+                  <span><span class="k">μ*</span>
+                    <b>{{ isDisp ? '0.018 / 抽' : '0.421' }}</b></span>
+                  <span><span class="k">σ</span>
+                    <b>{{ isDisp ? '0.006' : '0.108' }}</b></span>
+                  <span><span class="k">μ</span>
+                    <b>{{ isDisp ? '0.017' : '−0.397' }}</b></span>
+                </div>
+                <div class="legend-line">
+                  <span><i style="background:rgba(31,119,180,.25)"></i>同时置信带（双侧 95%）</span>
+                  <span><i style="background:rgba(200,50,50,.25)"></i>说不准地带</span>
+                  <span><i style="background:#e8f5e9"></i>结论成立域</span>
+                  <span><i style="background:#666"></i>τ 判据线</span>
+                </div>
+                <div class="mrow">
+                  <span class="tmeta">同时带档位</span>
+                  <el-select v-model="ciLevel" size="small" style="width:130px">
+                    <el-option label="双侧 95%" value="双侧 95%"></el-option>
+                    <el-option label="双侧 90%" value="双侧 90%"></el-option>
+                  </el-select>
+                  <el-checkbox v-model="pava" size="small">强制单调（PAVA）</el-checkbox>
+                  <el-checkbox v-model="jump" size="small">跳变点检测</el-checkbox>
+                </div>
+                <div class="mnote">勾选「强制单调」时，本次结果不可用作单调性判据</div>
+                <div class="srcnote" v-if="state === 's6'">
+                  产物：5 条子配置 ＋ 5 个数据集（批次「保底阈值扫描 A」），
+                  已落工作区，见左树 ▲ 批次节点</div>
+                <div class="srcnote" v-else>
+                  本组为复算侧：工作区只存配方
+                  （<code>analyses/*.json</code>），切回时即时重算（毫秒级），
+                  不缓存图形数据</div>
+              </template>
+
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <!-- 任务抽屉 -->
+  <div class="drawer" :class="{ open: drawer }">
+    <div class="drawer-h">
+      <span>任务管理</span><span class="tmeta">运行中 {{ runningCount }}</span>
+      <span class="spacer"></span>
+      <el-button size="small" @click="drawer = false">收起</el-button>
+    </div>
+    <div class="drawer-b">
+      <div style="flex:1;min-width:0">
+        <table>
+          <thead><tr><th>任务</th><th>所属配置</th><th>类型</th><th>状态</th>
+            <th>进度</th><th>耗时</th><th>操作</th></tr></thead>
+          <tbody><tr>
+            <td>保底阈值扫描 A</td><td>{{ anchorLabel }}</td><td>模拟</td>
+            <td :class="state === 's4' ? 'st-run' : 'st-done'">
+              {{ state === 's4' ? '运行中' : '完成' }}</td>
+            <td><span class="mini"><i :style="{ width: state === 's4' ? '60%' : '100%' }"></i></span>
+              <span class="tmeta" style="margin-left:6px">
+                {{ state === 's4' ? '3/5' : '5/5' }}</span></td>
+            <td>{{ state === 's4' ? '42s' : '68s' }}</td>
+            <td><span class="tmeta">查看</span>
+              <span v-if="state === 's4'" class="tmeta">· 取消</span></td>
+          </tr></tbody>
+        </table>
+      </div>
+      <div class="res">
+        <div>CPU　<span class="mini" style="width:80px"><i style="width:46%"></i></span> 46%</div>
+        <div>内存 <span class="mini" style="width:80px"><i style="width:31%"></i></span> 31%</div>
+        <div>并行 worker　{{ state === 's4' ? 4 : 0 }}</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="../layout_demo/libs/vuemin.js"></script>
+<script src="../layout_demo/libs/ep.min.js"></script>
+<script src="chart3.js"></script>
+<script>
+const { createApp, ref, reactive, computed, watch, nextTick } = Vue;
+
+/* 维度清单：六域 × 若干维度。静态，不随配置内容变。
+   具体对象与字段在选择维度后才出现（发起块里，按对象类型动态过滤）。 */
+const DOMAINS = [
+  { name: '分析口径', side: '复算', dims: [
+    { k: 'GDR 阈值', form: '数值栅格', sel: [], def: { from: 0.75, to: 0.95, step: 0.02 }, unit: '' },
+    { k: 'VaR α', form: '数值栅格', sel: [], def: { from: 0.01, to: 0.11, step: 0.01 }, unit: '' },
+    { k: '权重', form: '数值栅格',
+      sel: [{ label: '权重', opts: ['desire_weights', 'miss_cost_weights', 'card_value_weights'] },
+            { label: '卡范围', opts: ['逐卡', '全部卡'] }],
+      def: { from: 0.5, to: 1.5, step: 0.1 }, unit: '' },
+    { k: '成功判据', form: '数值栅格', sel: [], def: { from: 0.30, to: 0.70, step: 0.05 }, unit: '' },
+  ]},
+  { name: '策略', side: '派发', dims: [
+    { k: '策略类型', form: '枚举', sel: [],
+      def: { opts: ['smart（智能抽卡）', 'pity_reserve（保底预留）', 'fixed_count（固定抽数）', 'pool_quota（池配额）'] } },
+    { k: '策略参数', form: '数值栅格',
+      sel: [{ label: '策略', opts: ['smart（智能抽卡）', 'pity_reserve（保底预留）', 'fixed_count（固定抽数）'] },
+            { label: '参数', opts: ['count', 'pity_threshold_pct'] }],
+      def: { from: 100, to: 300, step: 50 }, unit: '' },
+  ]},
+  { name: '池子', side: '派发', dims: [
+    { k: '成本', form: '数值栅格',
+      sel: [{ label: '池子', opts: ['限定池 A', '常驻池'] }, { label: '叶子', opts: ['draw_resource'] }],
+      def: { from: 140, to: 200, step: 10 }, unit: '' },
+    { k: '概率', form: '变换库',
+      sel: [{ label: '池子', opts: ['限定池 A', '常驻池'] },
+            { label: '变换', opts: ['组缩放', '组间转移', '单卡定向', '组内形状'] },
+            { label: '扫哪个参数', opts: ['转移量', 'A 取法', 'A 侧形状'] }],
+      def: { from: 0.8, to: 1.2, step: 0.1 }, unit: '×' },
+    { k: '批量', form: '数值栅格', sel: [{ label: '池子', opts: ['限定池 A'] }],
+      def: { from: 1, to: 10, step: 1 }, unit: '抽' },
+  ]},
+  { name: '保底', side: '派发', dims: [
+    { k: '保底类型', form: '枚举', sel: [],
+      def: { opts: ['hard', 'soft_interval', 'soft_additive', 'rotating', 'rotating_cr', 'targeted'] } },
+    { k: '阈值', form: '数值栅格', sel: [{ label: '对象', opts: ['SSR 硬保底', 'SR 硬保底'] }],
+      def: { from: 70, to: 90, step: 5 }, unit: '抽' },
+    { k: '软保底参数', form: '数值栅格',
+      sel: [{ label: '对象', opts: ['SSR 软保底'] },
+            { label: '参数', opts: ['soft_start', 'soft_end', 'soft_increment'] }],
+      def: { from: 60, to: 80, step: 5 }, unit: '抽' },
+    { k: '初始状态', form: '数值栅格',
+      sel: [{ label: '对象', opts: ['SSR 硬保底', 'SSR 软保底', '定轨命定'] },
+            { label: '参数', opts: ['counter_init', 'fate_points_init'] }],
+      def: { from: 0, to: 40, step: 10 }, unit: '抽' },
+    { k: '触发上限', form: '数值栅格', sel: [{ label: '对象', opts: ['SSR 硬保底'] }],
+      def: { from: 0, to: 5, step: 1 }, unit: '' },
+    { k: '表达式列表', form: '表达式列表', sel: [], def: {} },
+  ]},
+  { name: '里程碑', side: '派发', dims: [
+    { k: '阈值', form: '数值栅格', sel: [{ label: '对象', opts: ['每 40 抽奖励'] }],
+      def: { from: 30, to: 60, step: 5 }, unit: '抽' },
+    { k: '偏移', form: '数值栅格', sel: [{ label: '对象', opts: ['每 40 抽奖励'] }],
+      def: { from: 0, to: 10, step: 2 }, unit: '抽' },
+  ]},
+  { name: '资源', side: '派发', dims: [
+    { k: '初始资源', form: '数值栅格', sel: [{ label: '资源', opts: ['draw_resource', 'ticket'] }],
+      def: { from: 10000, to: 50000, step: 5000 }, unit: '' },
+  ]},
+];
+const DIM_COUNT = DOMAINS.reduce((n, d) => n + d.dims.length, 0);
+
+const TABS = [
+  { k: 'gdr', n: '全局GDR分析' }, { k: 'success', n: '成功率分析' },
+  { k: 'risk', n: '风险分析' }, { k: 'time', n: '时间演化' },
+  { k: 'per_pool', n: '每池分析' }, { k: 'vuln', n: '脆弱性分析' },
+  { k: 'process', n: '过程分析' }, { k: 'worst', n: '最差影响' },
+  { k: 'interval', n: '间隔分析' }, { k: 'search', n: '方案搜索' },
+  { k: 'sensitivity', n: '敏感性分析' },
+];
+
+const GROUPS = [
+  { id: 1, dim: '分析口径 · GDR 阈值', st: 'done' },
+  { id: 2, dim: '分析口径 · VaR α', st: 'done' },
+  { id: 3, dim: '保底 · 阈值', st: 'run' },
+];
+
+createApp({
+  setup() {
+    const state = ref('s1');
+    const anchorLabel = ref('主配置');
+    const drawer = ref(false);
+    const datasetId = ref('main-run-1');
+    const dim = ref(null);
+    const sel = reactive({});
+    const def = reactive({ from: 0, to: 1, step: 1 });
+    const enumPick = ref([]);
+    const edit = ref(false);
+    const group = ref(1);
+    const ciLevel = ref('双侧 95%');
+    const pava = ref(false);
+    const jump = ref(true);
+    const chartHost = ref(null);
+    const rows = reactive([
+      { type: 'hard', threshold: '70', scope: 'ssr', pools: '*', max_triggers: '0' },
+      { type: 'hard', threshold: '80', scope: 'ssr', pools: '*', max_triggers: '0' },
+      { type: 'hard', threshold: '90', scope: 'ssr', pools: '*', max_triggers: '0' },
+      { type: 'soft_interval', threshold: '', scope: 'ssr', pools: '*', max_triggers: '0' },
+    ]);
+    const blankRow = () => ({ type: 'hard', threshold: '', scope: 'ssr', pools: '*',
+                              max_triggers: '0' });
+
+    function pick(d, x) {
+      dim.value = Object.assign({ _dom: d.name, _side: d.side }, x);
+      Object.keys(sel).forEach(k => delete sel[k]);
+      (x.sel || []).forEach(s => { sel[s.label] = s.opts[0]; });
+      if (x.def) Object.assign(def, { from: x.def.from, to: x.def.to, step: x.def.step });
+      enumPick.value = x.form === '枚举' ? x.def.opts.slice(0, 4) : [];
+      edit.value = false;
+    }
+    const pointCount = () => {
+      const n = Math.round((def.to - def.from) / (def.step || 1)) + 1;
+      return n > 0 && n < 1000 ? n : 0;
+    };
+
+    const isSync = computed(() => !!dim.value && dim.value._side === '复算');
+    /* 发起按钮右边那行预览：随表单类型给出「会跑出什么」 */
+    const runPreview = computed(() => {
+      const d = dim.value;
+      if (!d) return '';
+      if (d.form === '枚举') return '→ 已勾选 ' + enumPick.value.length + ' 项，逐项对比';
+      if (d.form === '表达式列表') return '→ 照列表逐行跑，系统不解释语义';
+      return '→ ' + pointCount() + ' 个扫描点';
+    });
+
+    const visibleGroups = computed(() =>
+      (state.value === 's1' || state.value === 's2') ? [] : GROUPS);
+    const isDisp = computed(() => state.value === 's4' || state.value === 's6');
+    const runningCount = computed(() => (state.value === 's4' ? 1 : 0));
+    const datasetOptions = computed(() => {
+      const base = [{ id: 'main-run-1', label: 'main-run-1', samples: 1000 }];
+      if (state.value === 's6') {
+        base.push({ id: 'scan-A-run-3',
+                    label: 'scan-A-run-3（批次：保底阈值扫描 A）', samples: 1000 });
+      }
+      return base;
+    });
+
+    /* 运行分析：永远新建一组，不覆盖 */
+    const run = () => {
+      group.value = 3;
+      state.value = isSync.value ? 's3' : 's4';
+    };
+
+    const render = () => {
+      nextTick(() => {
+        if (chartHost.value && !edit.value && visibleGroups.value.length) {
+          drawChart3(chartHost.value,
+            isDisp.value ? demoDataDispatch() : demoDataRecompute());
+        }
+      });
+    };
+    watch([state, edit, visibleGroups], render, { immediate: true });
+
+    /* 演示页状态入口（产品里没有这一段） */
+    window.__demoSetState = s => {
+      state.value = s; edit.value = false; group.value = 1;
+      if (s === 's1') { dim.value = null; }
+      else if (s === 's2' || s === 's3') {
+        pick(DOMAINS[0], DOMAINS[0].dims[0]);
+      } else if (s === 's5') {
+        pick(DOMAINS[3], DOMAINS[3].dims[5]); edit.value = true; group.value = 3;
+      } else {
+        pick(DOMAINS[3], DOMAINS[3].dims[1]); group.value = 3;
+      }
+      if (s === 's4' || s === 's6') drawer.value = true;
+    };
+
+    return { state, anchorLabel, drawer, datasetId, dim, sel, def, enumPick, edit,
+             group, ciLevel, pava, jump, chartHost, rows, blankRow, pick, pointCount,
+             isSync, runPreview,
+             visibleGroups, isDisp, runningCount, datasetOptions, run,
+             DOMAINS, DIM_COUNT, TABS };
+  }
+}).use(ElementPlus).mount('#app');
+
+/* demo 状态切换条 */
+const BAR = [
+  ['s1', '① 未选维度'], ['s2', '② 规格已填'], ['s3', '③ 复算出图'],
+  ['s4', '④ 多组＋派发中'], ['s5', '⑤ 列表编辑态'], ['s6', '⑥ 派发完成'],
+];
+const bar = document.createElement('div');
+bar.className = 'demobar';
+bar.innerHTML = '<span class="dl">demo</span>' + BAR.map(
+  ([k, t], i) => `<button data-s="${k}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('');
+document.body.appendChild(bar);
+bar.addEventListener('click', e => {
+  const b = e.target.closest('button[data-s]');
+  if (!b) return;
+  window.__demoSetState(b.dataset.s);
+  [...bar.querySelectorAll('button')].forEach(x => x.classList.toggle('on', x === b));
+});
+window.__demoSetState('s1');
+</script>
+</body>
+</html>

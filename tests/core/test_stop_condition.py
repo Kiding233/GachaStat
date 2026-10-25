@@ -8,34 +8,34 @@ from gacha_simulator.core.stop_condition import (
     STOP_CONDITION_REGISTRY, MAX_SIM_TIME,
 )
 from gacha_simulator.core.state import GachaState
+from gacha_simulator.service.gacha_service import SimulationStats
 
 
 def test_fixed_action_count():
     cond = FixedActionCountCondition(max_actions=10)
-    state = GachaState()
-    assert cond.check(state, []) is False
-    assert cond.check(state, [None] * 10) is True
+    state, stats = GachaState(), SimulationStats()
+    assert cond.check(state, stats) is False
+    stats.total_actions = 10
+    assert cond.check(state, stats) is True
 
 
 def test_resource_threshold():
     cond = ResourceThresholdCondition('draw_resource', 100, '<=')
     state = GachaState(resources={'draw_resource': 50})
-    assert cond.check(state, []) is True
+    assert cond.check(state, SimulationStats()) is True
     state.resources['draw_resource'] = 200
-    assert cond.check(state, []) is False
+    assert cond.check(state, SimulationStats()) is False
 
 
 def test_target_acquired():
+    """P81 §4.1-4：判据只读 state.acquired（history 兜底已删）。"""
     cond = TargetAcquiredCondition('character_a', quantity=2)
-    state = GachaState()
-    from gacha_simulator.core.info_vector import InfoVector
-    history = [
-        InfoVector('draw', 'character_a', 'p1', action_index=0, session_id='s1'),
-        InfoVector('draw', 'character_b', 'p1', action_index=1, session_id='s1'),
-    ]
-    assert cond.check(state, history) is False
-    history.append(InfoVector('draw', 'character_a', 'p1', action_index=2, session_id='s1'))
-    assert cond.check(state, history) is True
+    state, stats = GachaState(), SimulationStats()
+    assert cond.check(state, stats) is False
+    state.add_card('character_a')
+    assert cond.check(state, stats) is False
+    state.add_card('character_a')
+    assert cond.check(state, stats) is True
 
 
 def test_composite_any():
@@ -43,7 +43,7 @@ def test_composite_any():
     cond2 = ResourceThresholdCondition('draw_resource', 0, '<=')
     composite = CompositeStopCondition([cond1, cond2], mode='any')
     state = GachaState(resources={'draw_resource': 0})
-    assert composite.check(state, []) is True
+    assert composite.check(state, SimulationStats()) is True
 
 
 # ── P79 4b2b2：递归条件树求值（8.2「递归条件树求值」整行）────────────
@@ -51,8 +51,8 @@ def test_composite_any():
 def test_not_condition_negates_child():
     state = GachaState(resources={'draw_resource': 0})
     inner = ResourceThresholdCondition('draw_resource', 0, '<=')
-    assert inner.check(state, []) is True
-    assert NotCondition(inner).check(state, []) is False
+    assert inner.check(state, SimulationStats()) is True
+    assert NotCondition(inner).check(state, SimulationStats()) is False
     # description 必须实现——CompositeStopCondition.description 会逐个调用子节点
     assert '非(' in NotCondition(inner).description()
 
@@ -105,7 +105,7 @@ def test_create_stop_condition_recursive_tree_and_evaluation():
     assert isinstance(inner, CompositeStopCondition) and inner.mode == 'all'
     assert isinstance(inner.conditions[1], NotCondition)
     # A 未达成；Y 成立（10 <= 100）；not B 成立（y 未持有）→ any 为真
-    assert cond.check(state, []) is True
+    assert cond.check(state, SimulationStats()) is True
 
 
 def test_create_stop_condition_conditions_present_skips_registry():
@@ -149,8 +149,8 @@ def test_composite_empty_conditions_not_vacuously_true():
     """空条件数组不得恒真——mode='all' 下 all([]) == True 会让内层恒真，
     外层 any(用户条件, 硬边界) 短路，模拟在 iteration 0 结束。"""
     state = GachaState(resources={'draw_resource': 100})
-    assert CompositeStopCondition([], mode='all').check(state, []) is False
-    assert CompositeStopCondition([], mode='any').check(state, []) is False
+    assert CompositeStopCondition([], mode='all').check(state, SimulationStats()) is False
+    assert CompositeStopCondition([], mode='any').check(state, SimulationStats()) is False
 
 
 def test_composite_all_mode_evaluation():
@@ -158,10 +158,12 @@ def test_composite_all_mode_evaluation():
     a = FixedActionCountCondition(2)
     b = ResourceThresholdCondition('draw_resource', 0, '<=')
     composite = CompositeStopCondition([a, b], mode='all')
-    # a 未满足（history 长度 0）
-    assert composite.check(state, []) is False
+    stats = SimulationStats()
+    # a 未满足（total_actions 不足）
+    assert composite.check(state, stats) is False
     # 两者均满足
-    assert composite.check(state, [None, None]) is True
+    stats.total_actions = 2
+    assert composite.check(state, stats) is True
 
 
 def test_registry_param_metadata_is_descriptor_list():

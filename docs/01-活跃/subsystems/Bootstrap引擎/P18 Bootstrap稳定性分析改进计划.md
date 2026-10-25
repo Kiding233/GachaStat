@@ -6,7 +6,7 @@
 > - `docs/superpowers/plans/2026-05-18-bootstrap-stability-analysis.md`（原始 Bootstrap 引擎 + UI 计划，v3）
 > - `docs/拉普拉斯平滑与Bootstrap改进计划.md` §二（引擎已知问题修复）+ §三（UI MVP 方案）
 > 关联：P3（Bootstrap 引擎）、P4（自适应模拟 + EVT）
-> 状态：**阶段一 ✅ · 阶段二 70%（3/6完成+2项架构绕过）· 阶段三 3A✅/3B 待做（UI方案原文保留，实施子任务同步至 [P48](P48 Bootstrap UI集成计划.md)）**
+> 状态：**阶段一 ✅ · 阶段二：原 6 项已全处置（3 完成 + 2 架构绕过 + 1 于 2026-10-08 补修）· 追加项 B2.8/B2.9 待做 · 阶段三 3A✅/3B 待做（UI方案原文保留，实施子任务同步至 [P48](P48 Bootstrap UI集成计划.md)）**
 
 ---
 
@@ -50,12 +50,14 @@ Bootstrap 不是重新跑模拟，而是对已有的 N 条模拟结果做有放�
 
 ### 3.2 需小改即可 Bootstrap 的面板
 
+> **2026-09-17（P81 C1）**：下表中 **strategy_panel** 与 **resource_search_panel** 两行已**作废**——两个面板均于 2026-09-17 归档至 `.recycle_bin/2026-09-17-p81-archived-panels/`（P8 面板合并后其三种搜索模式已由 `plan_search_panel` 取代，且二者从未在 `main_window` 注册）。若需为「搜索」类分析加 Bootstrap CI，对象是活面板 `plan_search_panel`。
+
 这些面板每步跑 N 次模拟，但只保存聚合结果。只需额外保存个体结果（N 个 bool），**零额外模拟**。
 
 | 面板 | 当前保存 | 需额外保存 | 改动量 |
 |------|---------|-----------|--------|
-| **strategy_panel** | 每步 `success_probability: float` | 每步 `success_flags: List[bool]`（N×1 字节） | 小 |
-| **resource_search_panel** | 每步 `success_probability: float` | 每步 `success_flags: List[bool]` | 小 |
+| ~~**strategy_panel**~~ | ~~每步 `success_probability: float`~~ | ~~每步 `success_flags: List[bool]`（N×1 字节）~~ | **已作废**（面板已归档） |
+| ~~**resource_search_panel**~~ | ~~每步 `success_probability: float`~~ | ~~每步 `success_flags: List[bool]`~~ | **已作废**（面板已归档） |
 | **worst_impact_panel（新池子分布）** | 聚合 `pool_distribution` | `pool_success_counts: List[int]` | 小 |
 
 ### 3.3 不做 Bootstrap 的面板
@@ -145,13 +147,65 @@ Bootstrap B 次后得到 B 个分布估计，TVD 均值衡量"分布估计的平
 
 > **结论**：✅ 已实现。
 
-#### 问题 6：BCa 在离散 Bootstrap 分布下可能失效 → ❌ 未实现
+#### 问题 6：BCa 在离散 Bootstrap 分布下可能失效 → ⚠️ 回退缺失已由问题 8 补齐，离散性关切状态未定
 
-罕见事件（p~0.1%）的 Bootstrap 分布高度离散，BCa 的连续分布假设可能不成立。**优先级低**——离散 BCa 守卫生效的场景（极端罕见事件）本项目极少遇到；即使发生，scipy BCa 失败时会自动回退百分位法（`except Exception: pass`）。
+罕见事件（p~0.1%）的 Bootstrap 分布高度离散，BCa 的连续分布假设可能不成立。
 
-> **结论**：低优先级，后续深化或永久搁置。
+**原结论已订正**（2026-10-08）：原文写「即使发生，scipy BCa 失败时会自动回退百分位法（`except Exception: pass`）」，**该保证不成立**——退化路径不抛异常（只发 `DegenerateDataWarning`），nan 会原样返回。回退已由问题 8 的 `_ci_is_valid()` 守卫补上。
+
+**但两者不是同一件事**：问题 8 修的是「退化导致 nan」，问题 6 关切的是「分布离散导致 BCa 的连续假设失效」。独立复核（2026-10-08）在罕见事件（k=1/n=1000、k=1/n=100、k=3/n=200）上对比 BCa 与精确 Clopper-Pearson 区间，**未找到「BCa 给出有限却严重错误的区间」的实例**（如 k=1/n=1000 得 `[0, 0.005]` 对精确 `[0.00003, 0.00556]`），故「已被守卫关闭」既无证据支持也未被证伪。
+
+> **结论**：回退缺失已由问题 8 补齐；离散性关切本身**状态未定**，留待有实例时再评估。
 
 > 问题 4-6 来源：`docs/reports/全模块理论严谨性系统性审查.md`（2026-05-26）。问题 4-5 已在引擎修复中完成（架构委托scipy后一并实施）；问题 6 低优先级。
+
+#### 问题 7：m-out-of-n 缺收敛率缩放 → ✅ 已修复（2026-10-08）
+
+**发现**：P88 差分布计划的独立审查（2026-10-08）实测发现，`_bootstrap_mean_m_out_of_n()` 直接对 `boot_means` 取百分位，**缺收敛率缩放**。重抽 m 个（m<n）的抽样分布比原样本更宽，须乘回收敛率之比。
+
+**实测证据**（正态数据，n=200，m=n^(2/3)=34）：
+
+| 量 | 宽度 |
+|---|---|
+| 理论 95% 宽度（2×1.96×σ/√n） | 0.2772 |
+| 修复前实测 | 0.6658（**2.40 倍**，恰为 √(n/m)=2.425） |
+| 修复后实测 | 0.2745（0.99× 理论） |
+
+**修复**（`core/bootstrap.py`）：按尾指数选择缩放因子。α ≥ 2 乘 √(m/n)；α ∈ (1,2) 的波动尺度为 k^(−(1−1/α))，乘 (m/n)^(1−1/α)；α = 2 处两式连续；其余（α ≤ 1、inf、nan）落 √(m/n) 兜底。method 字段补报 `scale=` 便于诊断。
+
+**有限样本下的残余偏宽**（独立复核实测）：n=200 的 Pareto(1.5) 上真实波动尺度比 0.4879 落在 √(m/n)=0.4123 与公式值 0.5540 之间，即尚未进入稳定律区间，本分支**偏保守**。这是 Hill α 估计与有限样本的共同限制，非公式错误。**覆盖率上残余欠覆盖不是尺度问题而是形状问题**：n=200 的 Pareto(1.5) 修复后覆盖率 0.462（名义 0.95），因缩放后的 bootstrap 偏差分位 [−1.82, +2.08] 与真实抽样偏差分位 [−1.79, +1.00] 形状不符，且百分位法把区间钉在 θ̂_n 上、无法复现真实抽样分布的位移。**该路径在厚尾下宽度正确但覆盖率仍不达标**，使用时须知情。
+
+**α ≤ 1 的边界**：总体均值不存在，θ̂_n 不收敛于任何常数，公式仅形式外推。当前代码会静默给出一个极宽区间，**未标记为「无有效估计对象」**（见「遗留」）。
+
+**影响面**：`auto_heavy_tail=True` 在生产代码中**零调用**（仅 3 个测试使用），故修复不改变任何面板行为。
+
+**守测试**：`test_m_out_of_n_scaled_to_n_scale` / `test_m_out_of_n_method_reports_scale`。
+
+#### 问题 8：BCa 退化静默返回 nan → ✅ 已修复（2026-10-08）
+
+**发现**：同次审查实测 `bootstrap_mean([0.0]*30, use_bca=True)` 返回 `nan [nan, nan]`。BCa 在退化输入下**不抛异常**（scipy 只发 `DegenerateDataWarning`），故 `except Exception: pass` 抓不到，nan 经 `_from_scipy_result` 原样返回并被 `format_ci` 显示成 `nan [nan, nan]`。
+
+**这订正了本文件「问题 6」的结论**：问题 6 称「即使发生，scipy BCa 失败时会自动回退百分位法（`except Exception: pass`）」，该保证**不成立**，因为退化路径不抛异常。问题 6 的「低优先级」定性随之失效，已按本条修复。
+
+**修复**：新增 `_ci_is_valid()` 静态守卫（`isfinite` 且 `lower ≤ upper`），`bootstrap_probability` 与 `bootstrap_mean` 两处 BCa 分支在返回前校验，失败即落到百分位路径。
+
+**影响面**：`bootstrap_mean(use_bca=True)` 有 2 个生产调用点（`gui/analysis_panel.py:2361`、`webui/analysis_service.py:286`），两处都在 GDR 循环外建一个引擎并复用。三条须写准（2026-10-08 独立复核实测）：
+
+- **触发面不止常数数据**：n=30 正态在 B=2 时 scipy BCa 即返回 nan（θ̂ 落在 B 个重抽值域之外使 z0=±inf）。定向搜索 3000 组小 n / 小 B 混合标志，守卫触发 120 次（4%），非死代码。
+- **「逐位不变」须限定为「同一次调用、相同 RNG 状态下」**：回退会多消耗一次 scipy 调用的 RNG，**平移共享引擎后续调用的随机流**。故一次运行里只要出现过至少一个退化指标，其后所有指标的 CI 都会与修复前不同（实测：同引擎先调退化再调正常，区间由 `[-0.2057, 0.0543]` 变为 `[-0.1960, 0.0524]`）。这不是缺陷（旧结果本身是 nan），但不得声称「非退化情形一律逐位不变」。
+- **守卫只覆盖 BCa 分支**：百分位回退路径未校验，输入含 nan / inf 时仍会输出 `nan [nan, nan]` / `inf [1.000, nan]`。若要「不显示 nan」全局成立，须在三个方法的最终返回点统一校验（未做，见「遗留」）。
+
+**守测试**：`test_bca_degenerate_returns_finite` / `test_bca_constant_nonzero_returns_finite` / `test_bca_normal_unchanged` / `test_ci_is_valid_helper`。
+
+#### 遗留（2026-10-08 独立复核提出，本次未处理）
+
+按重要性排序：
+
+1. **百分位路径未校验**（🟡）：`_ci_is_valid()` 只作用于 BCa 分支，`bootstrap_mean` / `bootstrap_probability` / `bootstrap_quantile` 的百分位返回点均未校验。输入含 nan 时仍输出 `nan [nan, nan]`，含 inf 时输出 `inf [1.000, nan]`。若要「不显示 nan」全局成立，须在三处最终返回点统一校验，或在输入非有限时直接报错。**生产可达性未追查**（取决于 GDR 抽取器能否产出 nan）。
+2. **α ≤ 1 未标记为「无有效估计对象」**（🟡）：此时总体均值不存在，m-out-of-n 公式仅形式外推，代码会静默给出极宽区间。建议在 `_bootstrap_mean_m_out_of_n` 内对 α ≤ 1 显式标记。
+3. **`bootstrap_std` 未校验**（🟢）：B=1 时 `_percentile_ci` 用 `ddof=1` 算单元素标准差得 nan，而 CI 有限且有序，守卫放行。当前无消费者（全库仅 `bootstrap.py:22` 声明该字段），属潜在隐患。
+4. **`_select_m` 的 `max(20, n^(2/3))` 使小 n 退化**（🟢）：n ≤ 89 时 m 恒为 20，n=20 时 m=n，缩放因子恰为 1.0，所谓「m-out-of-n」退化为标准 n-out-of-n，与 docstring 的「m = n^(2/3)」不符。既有设计问题，修复后 method 字段把它显性化了。
+5. **`_bootstrap_tail_gpd` 的退化**（已登记）：常数数据走 GPD 路径返回 `ci=[-1.15e-30, -9.6e-33]`（有限且有序，`_ci_is_valid` 抓不到，需要「去重计数 / 相对宽度」类判据）。已在 §六 2.8 登记，此处不重复。
 
 ---
 
@@ -199,7 +253,7 @@ class BootstrapResult:
 
 ---
 
-## 六、阶段2：引擎已知问题修复（70% 完成）
+## 六、阶段2：引擎已知问题修复（原 6 项已全处置；追加项 B2.8/B2.9 待做）
 
 > 来源：§四 4.4 的六个问题。本节是 `docs/拉普拉斯平滑与Bootstrap改进计划.md` §二 的完整迁移。
 > 
@@ -219,10 +273,10 @@ class BootstrapResult:
 - [x] **2.3: BCa n<50 守卫**——~~小样本自动回退百分位法~~ **主动拒绝**：测试验证 scipy BCa 在 n=25-30 下可用，n<50 守卫不必要
 - [x] **2.4: m-out-of-n m 选择策略**——✅ `_select_m()` 使用 Bickel & Sakov (2008): m = n^(2/3)
 - [x] **2.5: Hill k 选择策略**——✅ `_select_hill_k()` 基于 Hill 图一阶差分最小区域（拐点检测）
-- [ ] **2.6: 离散 BCa 守卫**——检测 Bootstrap 分布离散度，过离散时回退百分位法（低优先级——scipy BCa失败时已有 `except Exception: pass` 回退）
+- [x] **2.6: 离散 BCa 守卫**——✅ **已实现**（2026-10-08，见 §4.4 问题 8）：新增 `_ci_is_valid()` 守卫（`isfinite` 且 `lower ≤ upper`），BCa 返回前校验，失败回退百分位法。**原「低优先级」定性基于错误前提**：「scipy BCa 失败时已有 `except Exception: pass` 回退」不成立——退化路径只发 `DegenerateDataWarning` 而不抛异常，nan 会原样返回并被 `format_ci` 显示为 `nan [nan, nan]`
 - [x] **2.7: 更新测试 + 提交**——✅ 测试覆盖完整
 
-> 问题 2.6 优先级低，scipy BCa 失败时的 Exception 回退已提供兜底。
+> 问题 2.6 原定低优先级，其理由（Exception 回退兜底）经 2026-10-08 实测证伪，已随 §4.4 问题 8 修复；阶段二原 6 项至此全部处置。
 
 - [ ] **2.8: EVT 拟合路径统一（NEW — 2026-05-28，来源：P25 §八）**——`_bootstrap_tail_gpd()` 当前直接调用 `genpareto.fit()` 自行拟合 GPD，与 `evt_tail.py` 中的 GPD 拟合逻辑重复且不一致。改为委托 `evt_tail.fit_gpd_lower()` + `evt_tail.evt_var_right()`，消除重复实现并统一：
   1. 替换直接 `genpareto.fit()` 为委托 `evt_tail.fit_gpd_lower()`
@@ -297,8 +351,8 @@ class BootstrapResult:
     └── process_analysis_panel 已有 Wilson CI，不需要 Bootstrap CI（见 §7.1）
 
 阶段 3B（扩展，3-6h）
-├── strategy_panel：成功率趋势图 CI 阴影带（需小改数据保存：+success_flags）
-├── resource_search_panel：成功率-资源曲线 CI 阴影带（需小改数据保存）
+├── ~~strategy_panel~~：成功率趋势图 CI 阴影带   ← 已作废（面板已归档，P81 C1）
+├── ~~resource_search_panel~~：成功率-资源曲线 CI 阴影带   ← 已作废（同上）
 ├── retreat_panel：条件分布分位数 CI + 核密度回归 CI 阴影带
 └── worst_impact_panel：保守资源 CI + 安全边际 CI
 
@@ -365,13 +419,17 @@ CI 嵌入单元格内，格式为：
 
 > **📋 详细的分面板实施子任务、代码改动量预估、图表 CI 通用模式见 [P48 §五](P48 Bootstrap UI集成计划.md#五阶段-3b--扩展面板待实施)。**
 
-#### strategy_panel（需小改数据保存）
+#### ~~strategy_panel~~（需小改数据保存）
+
+> **已作废（2026-09-17，P81 C1）**：该面板已归档，下列三项不再执行。若 3B 重启，落点应改为活面板 `plan_search_panel`。
 
 - [ ] **ForwardStep/BackwardStep 添加 `success_flags: List[bool]` 字段**
 - [ ] **修改前进法/后退法——每步保存个体成功/失败结果**
 - [ ] **趋势图添加阴影带（Bootstrap CI）**——自动计算，无需按钮
 
-#### resource_search_panel（需小改）
+#### ~~resource_search_panel~~（需小改）
+
+> **已作废（2026-09-17，P81 C1）**：该面板已归档，下列三项不再执行。同上，落点应改为 `plan_search_panel`。
 
 - [ ] **步骤数据类添加 `success_flags: List[bool]`**
 - [ ] **修改 `_simulate_with_resource`——返回个体结果**
@@ -403,8 +461,8 @@ CI 嵌入单元格内，格式为：
 - [x] 引擎已知问题修复（5/6 项已处置：3实现 + 2架构绕过/主动拒绝 + 1低优先级搁置）
 - [x] process_analysis_panel AA/BB/AB/BA 概率列保持 Wilson CI（现有实现，无需改动；Bootstrap CI 冗余，见 §7.1）
 - [x] analysis_panel GDR 统计表格显示 Bootstrap CI（均值/中位数/VaR，独立CI列，置信水平可配置）
-- [ ] strategy_panel 成功率趋势图显示阴影带（阶段 3B——见 [P48 §5.1](P48 Bootstrap UI集成计划.md#51-strategy_panel--成功率趋势图-ci-阴影带)）
-- [ ] resource_search_panel 成功率-资源曲线显示阴影带（阶段 3B——见 [P48 §5.2](P48 Bootstrap UI集成计划.md#52-resource_search_panel--成功率-资源曲线-ci-阴影带)）
+- [ ] ~~strategy_panel 成功率趋势图显示阴影带~~ → **已作废（2026-09-17，P81 C1）**：目标面板 `gui/strategy_panel.py` 已归档（死代码，未被 `main_window` 注册）。3B 若重启，应改为给活面板 `plan_search_panel` 加 CI 阴影带
+- [ ] ~~resource_search_panel 成功率-资源曲线显示阴影带~~ → **已作废（2026-09-17，P81 C1）**：同上，面板已归档
 - [ ] retreat_panel 条件分布、核密度回归、资源不足概率显示 CI（阶段 3B——见 [P48 §5.3](P48 Bootstrap UI集成计划.md#53-retreat_panel--条件分布-ci)）
 - [ ] worst_impact_panel 保守资源显示 CI（阶段 3B——见 [P48 §5.4](P48 Bootstrap UI集成计划.md#54-worst_impact_panel--保守资源-ci)）
 - [x] 性能：N=10000、B=1000 时，单次 Bootstrap 计算 < 5 秒（scipy 实现，已验证高效）
@@ -442,7 +500,7 @@ B2.8完成后，B2.9（TIB 替代百分位法）在此基础上替换 CI 构造�
 
 ```
 P18（本文件：引擎层）
-    ├── 2.6 离散BCa守卫（低优先级）
+    ├── 2.6 离散BCa守卫 ✅（2026-10-08 补修）
     ├── B2.8 EVT路径统一 ← P24/P25接口就绪
     └── B2.9 TIB ← B2.8前置
          ↓

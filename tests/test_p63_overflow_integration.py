@@ -11,7 +11,6 @@
 import os
 import tempfile
 
-import pytest
 from gacha_simulator.core.state import GachaState
 from gacha_simulator.core.overflow import (
     OverflowBand,
@@ -32,8 +31,7 @@ def test_pipe_first_time_bonus():
     """PIPE-1: 首次获得触发 first_time_bonus"""
     state = GachaState()
     bands = [OverflowBand(1, 1, {"gem": 10})]
-    result = state.add_card("X", path="draw",
-                            overflow_bands=bands, initial_counts={})
+    result = state.add_card("X", path="draw", overflow_bands=bands)
     assert result == {"gem": 10}
     assert state.get_card_count("X") == 1
 
@@ -42,8 +40,8 @@ def test_pipe_second_time_no_bonus():
     """PIPE-2: 第 2 次获得无产出（间隙）"""
     state = GachaState()
     bands = [OverflowBand(1, 1, {"gem": 10})]
-    state.add_card("X", path="draw", overflow_bands=bands, initial_counts={})
-    result = state.add_card("X", path="draw", overflow_bands=bands, initial_counts={})
+    state.add_card("X", path="draw", overflow_bands=bands)
+    result = state.add_card("X", path="draw", overflow_bands=bands)
     assert result == {}
 
 
@@ -56,31 +54,44 @@ def test_pipe_excess_at_threshold():
     ]
     # 模拟前 6 次
     for _ in range(6):
-        state.add_card("X", path="draw", overflow_bands=bands, initial_counts={"X": 0})
+        state.add_card("X", path="draw", overflow_bands=bands)
     # 第 7 次
-    result = state.add_card("X", path="draw", overflow_bands=bands, initial_counts={"X": 0})
+    result = state.add_card("X", path="draw", overflow_bands=bands)
     assert result == {"star": 25}
 
 
 def test_pipe_with_initial_counts():
     """PIPE-4: initial_counts 正确参与定位——不误判为首次"""
-    state = GachaState()
+    state = GachaState(initial_counts={"X": 3})
     bands = [
         OverflowBand(1, 1, {"gem": 10}),
         OverflowBand(2, None, {"star": 5}),
     ]
     # 初始持有 3 张 → 首次模拟获得是 total_holding=4
-    result = state.add_card("X", path="draw",
-                            overflow_bands=bands, initial_counts={"X": 3})
+    result = state.add_card("X", path="draw", overflow_bands=bands)
     assert result == {"star": 5}
 
 
-def test_pipe_missing_initial_counts_raises():
-    """PIPE-5: 传 bands 不传 initial_counts → ValueError"""
+def test_pipe_bands_reads_state_initial_counts():
+    """PIPE-5（P64 S9-2 改写）：原「传 bands 不传 initial_counts → ValueError」的守卫
+    **已删除**（`initial_counts` 升为 `GachaState` 字段，单一真相源）。
+
+    现行形态：`add_card` 从 `self.initial_counts` 取初始持有，缺省空表即「本场无初始
+    持有」，分段表按 `total_holding`（初始持有 + 本场获得）定位。分段表刻意取两段互斥
+    的形态（`[1, 1]` / `[4, ∞)`）：单一 `[1, ∞)` 段对 `total_holding=1` 与 `=4` 返回
+    同一个值，断言无判别力；两段互斥时「按 `total_holding` 定位」与「按 `acquired`
+    定位」结果不同，断言才有牙齿。
+    """
     state = GachaState()
-    bands = [OverflowBand(1, None, {"gem": 40})]
-    with pytest.raises(ValueError, match="initial_counts"):
-        state.add_card("X", overflow_bands=bands)
+    bands = [
+        OverflowBand(1, 1, {"gem": 40}),
+        OverflowBand(4, None, {"star": 7}),
+    ]
+    assert state.add_card("X", overflow_bands=bands) == {"gem": 40}
+    # 字段是唯一来源：预置初始持有后，同一调用改按 total_holding = 3 + 1 = 4 定位
+    # （命中 `[4, ∞)`；若误按 acquired = 1 定位则仍命中 `[1, 1]`，本断言即红）
+    state2 = GachaState(initial_counts={"X": 3})
+    assert state2.add_card("X", overflow_bands=bands) == {"star": 7}
 
 
 def test_pipe_acquired_by_path_recording():

@@ -21,10 +21,11 @@ from .worst_impact_panel import WorstImpactPanel
 from .process_analysis_panel import ProcessAnalysisPanel
 from .comparison_analysis_panel import ComparisonAnalysisPanel
 from ..core.result_store import (
-    ResultStore, StoredDataset, ComparabilityFingerprint, compute_config_hash,
+    ResultStore, StoredDataset, ComparabilityFingerprint, compute_config_hash_for_store,
     canonical_stop_condition_summary,
 )
 from .data_manager_panel import DataManagerPanel
+from .slot_guard import guarded_slot
 from ..core.config_store import ConfigStore, derive_pool_type_from_distribution
 from ..core.config_toml import load_toml, save_toml
 from ..paths import get_config_dir, get_resource
@@ -339,6 +340,7 @@ class MainWindow(QMainWindow):
                         str(card_counts),
                     ])
 
+    @guarded_slot
     def on_simulation_finished(self, result_bundle):
         if isinstance(result_bundle, dict):
             aggregate_data = result_bundle.get('aggregate_data', [])
@@ -448,10 +450,11 @@ class MainWindow(QMainWindow):
         # 原实现把指纹的 stop_condition 硬编码为 'all_pools_end'，与用户实际配置无关。
         _stop_summary = canonical_stop_condition_summary(
             getattr(self._store, 'stop_condition', None))
-        config_hash = compute_config_hash(
-            self._store.banner.banners, getattr(self._store, 'pity', None),
-            getattr(self._store, 'schedules', []),
-            milestone_config=getattr(self._store, 'milestone', None),   # P58（ISSUE-008）：里程碑配置纳入可比性指纹
+        # 2026-10-01：改走 compute_config_hash_for_store——原实现在此自行拼装参数，
+        # 漏传了七项影响模拟结果的配置（收入规则 / 起始日期 / 稀有度层级 / 卡定义 /
+        # 资源生命周期 / 溢出表），导致这些差异被静默判为「可比」。
+        config_hash = compute_config_hash_for_store(
+            self._store,
             stop_condition_summary=_stop_summary,   # P79：停止条件纳入可比性指纹
         )
 
@@ -460,6 +463,9 @@ class MainWindow(QMainWindow):
             config_hash=config_hash,
             strategy_name=strategy_name,
             strategy_key=strategy_name,
+            # 2026-10-01：策略参数参与「策略」维度判定（原实现不记录它，
+            # 同一策略只改参数的两次运行会被判「所有维度相同」）
+            strategy_params=dict(getattr(self._store, 'strategy_params', {}) or {}),
             target_cards=target_specs_for_fp,
             initial_resources=initial_resources,
             stop_condition=_stop_summary,   # P79：条件树渲染的规范化摘要（原为硬编码）
@@ -506,6 +512,23 @@ class MainWindow(QMainWindow):
 
         self.tabs.setCurrentIndex(2)
         self.status_bar.showMessage(f"模拟完成，共 {len(aggregate_data)} 次模拟，已存入: {actual_name}")
+
+    def charts_ready(self) -> bool:
+        """全部 `ChartWebView` 是否就绪（P83 §3.11 第 8 段「图表可用」）。
+
+        **本窗口自身不持有任何 `ChartWebView`**——它持有的是面板（`self.result_store`
+        与十次 `addTab`），10 个图表实例分落在 6 个面板文件里。故聚合只能对面板求
+        与，且必须逐面板问，不能在本类里枚举图表控件（P83 §3.11 第 8 段的采集纪律
+        第 1 条：一个按「MainWindow 持有 10 个 ChartWebView」实现的聚合入口，交出
+        的是恒 False 或 AttributeError）。
+
+        只读查询，不改任何既有行为。调用方**不得以某次取到 True 当完成判据**——
+        面板内的 `ChartWebView.closeEvent` 会把就绪状态置回 False。
+        """
+        panels = (self.analysis_panel, self.comparison_analysis_panel,
+                  self.plan_search_panel, self.process_analysis_panel,
+                  self.retreat_panel, self.worst_impact_panel)
+        return all(panel.charts_ready() for panel in panels)
 
     def _load_dataset_for_analysis(self, name: str):
         """从 ResultStore 加载数据集到所有分析面板"""

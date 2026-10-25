@@ -871,8 +871,43 @@ class TestConfigHashIncludesMilestone:
         m2 = MilestoneConfig(enabled=True, milestones=[
             MilestoneDef(name='m2', threshold=99, bonus_reward={'resources': {'coin': 99}}),
         ])
-        h_none = compute_config_hash(store.banner.banners, None, [])
-        h_m1 = compute_config_hash(store.banner.banners, None, [], milestone_config=m1)
-        h_m2 = compute_config_hash(store.banner.banners, None, [], milestone_config=m2)
+        h_none = compute_config_hash(store.banner.banners, None)
+        h_m1 = compute_config_hash(store.banner.banners, None, milestone_config=m1)
+        h_m2 = compute_config_hash(store.banner.banners, None, milestone_config=m2)
         assert h_none != h_m1, '无 milestone 与含 milestone 应不同 hash'
         assert h_m1 != h_m2, 'milestone 内容不同应不同 hash'
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S9-2：里程碑发卡的溢出分档读 `GachaState.initial_counts`
+# ══════════════════════════════════════════════════════════════════
+
+class TestMilestoneBonusInitialHolding:
+    """`_consume_bonus` 的初始持有改从**当场的 `state`** 取（§四 `core/milestone.py` 行）。
+
+    S9-2 删除了 `register_milestone_engine(..., initial_counts=...)` 的闭包捕获与
+    `_consume_bonus` 的同名形参（初始持有升为 `GachaState` 字段，服务层不再经形参
+    透传），故里程碑发卡的溢出分档口径现由 `state.initial_counts` 决定。
+
+    **为什么单列**：漏改（仍用空表）不报错、只把 `total_holding` 少算初始持有、
+    溢出分档静默落错区间；且本路径只在**配了里程碑的配置**上执行
+    （`batch_simulator` 的装配块包在 `if env.milestone_defs:` 内），默认配置跑不到。
+    """
+
+    def test_consume_bonus_overflow_reads_state_initial_counts(self):
+        from gacha_simulator.core.milestone import _consume_bonus
+        from gacha_simulator.core.state import GachaState
+
+        # 初始持有 3 张；里程碑再发 1 张 → total_holding = 4，命中 [4, ∞) 段
+        state = GachaState(initial_counts={'X': 3})
+        bands = [OverflowBand(1, 1, {'gem': 10}),
+                 OverflowBand(4, None, {'star': 5})]
+        entry = {'name': 'm1', 'bonus': {'card_ids': ['X']}}
+
+        _consume_bonus(entry, state, CompactCollector(), pool_id='p1',
+                       real_time=0.0, draw_index=0,
+                       card_overflow_map={'X': bands})
+
+        assert state.total_holding('X') == 4
+        assert state.resources.get('star') == 5,             '里程碑溢出分档须读 state.initial_counts（含初始持有），不是空表'
+        assert 'gem' not in state.resources, '未读初始持有时会误命中 [1, 1] 段'

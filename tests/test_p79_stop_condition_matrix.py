@@ -155,7 +155,7 @@ def test_matrix_covers_all_dimensions(env_and_targets):
     assert len(build_stop_conditions(env.end_time)) == 10
     state = GachaState(resources={'draw_resource': 0})
     # 纯否定条件在「不可得卡 + 空历史」下恒真，是 8.1 表里的边界形态
-    assert build_stop_conditions(env.end_time)['pure_not'].check(state, []) is True
+    assert build_stop_conditions(env.end_time)['pure_not'].check(state, _stats()) is True
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -339,3 +339,12 @@ def test_perf_criterion_distinguishes_legit_multiround_from_spin(env_and_targets
     spin = _run_single(env, target_set, SEED, env.initial_resources)
     assert spin.iterations < 100000                         # 不再烧满预算
     assert spin.warnings and '零进度兜底' in spin.warnings[0]  # 由兜底收口
+
+
+def _stats(**kw):
+    """P81 §4.1-4：停止条件 check() 的 stats 形参改为必填，测试统一由此构造。"""
+    from gacha_simulator.service.gacha_service import SimulationStats
+    s = SimulationStats()
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s

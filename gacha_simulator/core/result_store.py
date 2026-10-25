@@ -5,7 +5,7 @@ import json
 import hashlib
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -38,12 +38,16 @@ class ComparabilityFingerprint:
     pool_ids: Tuple[str, ...]            # 池子 ID 列表（有序）
     created_at: str                      # ISO 时间戳
     strategy_key: str = ''               # P69 ISSUE-002：策略注册 key
+    # 2026-10-01（用户裁决）：策略参数参与「策略」维度的可比性判定。
+    # 原实现完全不记录它，于是「同一个策略、只改参数」的两次运行被判「所有维度相同」。
+    strategy_params: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             'config_hash': self.config_hash,
             'strategy_name': self.strategy_name,
             'strategy_key': self.strategy_key,
+            'strategy_params': dict(self.strategy_params),
             'target_cards': dict(self.target_cards),
             'initial_resources': dict(self.initial_resources),
             'stop_condition': self.stop_condition,
@@ -60,6 +64,8 @@ class ComparabilityFingerprint:
             config_hash=d.get('config_hash', ''),
             strategy_name=d.get('strategy_name', ''),
             strategy_key=d.get('strategy_key', ''),
+            # 旧数据集没有这个键 -> 取空 dict（降级为「参数未记录」，不误判为不同）
+            strategy_params=dict(d.get('strategy_params', {}) or {}),
             target_cards={str(k): int(v) for k, v in d.get('target_cards', {}).items()},
             initial_resources={str(k): float(v) for k, v in d.get('initial_resources', {}).items()},
             stop_condition=d.get('stop_condition', ''),
@@ -168,8 +174,9 @@ class ComparabilityDiff:
     def only_strategy_differs(self) -> bool:
         """仅策略不同的纯策略比较"""
         diff_dims = {k for k, v in self.dimensions.items() if v != 'same'}
-        # P69 ISSUE-812：差异维度限定在 strategy_name 或 strategy_key 中
-        return bool(diff_dims) and diff_dims <= {'strategy_name', 'strategy_key'}
+        # 2026-10-01：策略相关的三个字段已合成单一维度 'strategy'（原为
+        # strategy_name / strategy_key 两项，P69 ISSUE-812 的限定随之收敛）
+        return bool(diff_dims) and diff_dims <= {'strategy'}
 
     def all_same(self) -> bool:
         """所有维度相同"""
@@ -181,10 +188,7 @@ class ComparabilityDiff:
         if self.only_strategy_differs():
             return '策略比较——同一环境下策略的选择差异。同种子可配对比较。'
         # P69 ISSUE-813：同时检查 strategy_name 和 strategy_key 维度
-        strategy_diff = (
-            self.dimensions.get('strategy_name', 'same') != 'same'
-            or self.dimensions.get('strategy_key', 'same') != 'same'
-        )
+        strategy_diff = self.dimensions.get('strategy', 'same') != 'same'
         config_diff = any(
             self.dimensions.get(d, 'same') != 'same'
             for d in ['config_hash', 'target_cards', 'initial_resources', 'stop_condition', 'pool_ids']
@@ -359,7 +363,19 @@ class ResultStore:
                 name_b, fp_b = fps[j]
                 pair_key = f"{name_a} vs {name_b}"
                 dims[pair_key] = {}
-                for attr in ['strategy_name', 'strategy_key', 'config_hash', 'stop_condition',
+                # 2026-10-01（用户裁决）：策略相关字段**合成一个维度** —— 「换策略」与
+                # 「改参数」都算这一个维度的改动。原实现分列 strategy_name 与
+                # strategy_key 两项，且 strategy_params 完全不参与，于是同一策略只改
+                # 参数的两次运行会被判「所有维度相同」。
+                _na, _nb = _strategy_label(fp_a), _strategy_label(fp_b)
+                if _strategy_signature(fp_a) == _strategy_signature(fp_b):
+                    dims[pair_key]['strategy'] = 'same'
+                elif _na != _nb:
+                    dims[pair_key]['strategy'] = f'different: {_na} ≠ {_nb}'
+                else:
+                    dims[pair_key]['strategy'] = 'different: 同一策略、参数不同'
+
+                for attr in ['config_hash', 'stop_condition',
                              'seed_start', 'seed_end', 'num_simulations']:
                     a = getattr(fp_a, attr)
                     b = getattr(fp_b, attr)
@@ -403,6 +419,23 @@ class ResultStore:
         return name in self._datasets
 
 
+def _strategy_label(fp) -> str:
+    """策略维度的可读名（用于差异单元格的展示）。"""
+    return getattr(fp, 'strategy_key', '') or getattr(fp, 'strategy_name', '') or '?'
+
+
+def _strategy_signature(fp) -> str:
+    """策略维度的**判定签名**：名称 + 参数。
+
+    参数经 ``json.dumps(sort_keys=True)`` 规范化 —— 它是从 TOML 读来的 dict，
+    键序不保证，直接 ``str()`` 比较会把「同一份参数」判成不同。
+    """
+    params = getattr(fp, 'strategy_params', None) or {}
+    if not params:
+        return _strategy_label(fp)
+    return f"{_strategy_label(fp)}|{json.dumps(params, sort_keys=True, ensure_ascii=False)}"
+
+
 def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dict[str, str]:
     """将 pairwise 差异字典展平为单层 {维度: 状态}。>=3 个数据集时合并为汇总。"""
     if len(names) == 2:
@@ -422,10 +455,40 @@ def dimensions_to_flat(dims: Dict[str, Dict[str, str]], names: List[str]) -> Dic
     return flat
 
 
+def _canon_field(value: Any) -> str:
+    """字段值 → 指纹用的**规范化字符串**（`compute_config_hash` 的保底分支用）。
+
+    dict / set 按键（元素）排序后序列化——两者的迭代序不保证稳定（dict 的插入序
+    取决于 TOML 解析与程序化构造两条路径），直接 `str()` 会把「同一份配置」判成
+    两份。list / tuple 统一按 list 序列化（`('*',)` 与 `['*']` 同串）：两者在配置
+    层语义相同（`pools` 只被遍历 / `fnmatch` 匹配），判成两份配置是误判。其余类型
+    走 `str()`，**不用 `repr`**：repr 随字段增删而变、跨版本不稳定（口径同
+    `compute_config_hash` 的 2026-10-01 段）。
+
+    `PityDef` 现全部字段都是标量 / tuple / None，故本函数当前只在标量分支上生效；
+    dict 分支是为「将来新增 dict 型字段」预置的确定性口径（字段驱动会自动纳入新
+    字段，值侧不能成为新的漂移点）。
+    """
+    if isinstance(value, dict):
+        return str(sorted((k, _canon_field(v)) for k, v in value.items()))
+    if isinstance(value, (set, frozenset)):
+        return str(sorted(_canon_field(v) for v in value))
+    if isinstance(value, (list, tuple)):
+        return str([_canon_field(v) for v in value])
+    return str(value)
+
+
 def compute_config_hash(pools_config: List[Any], pity_config: Any,
-                        schedules_config: List[Any],
                         milestone_config: Any = None,
-                        stop_condition_summary: Any = None) -> str:
+                        stop_condition_summary: Any = None, *,
+                        rarity_rank: Any = None,
+                        card_defs: Any = None,
+                        gain_rules: Any = None,
+                        day_overrides: Any = None,
+                        sim_start_date: Any = None,
+                        resource_lifecycle: Any = None,
+                        card_overflow_map: Any = None,
+                        card_weights: Any = None) -> str:
     """计算配置的确定性 hash（用于可比性判断）。
 
     P61（Ph7 / ISSUE-013）：纳入 Banner 级配置。pools_config 现为
@@ -443,6 +506,11 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
     hash。不纳入时「仅停止条件不同」的两组数据会被判为 same 维度，可比性结论与真实
     情况相反，且 hash 与指纹同时失明。沿用 milestone_config 式的关键字默认 None，
     既有三参 / 四参位置调用保持不变。
+
+    2026-10-15（ISSUE-922）：保底分支由「读已不存在的 `PityDef.params`」改为按
+    `dataclasses.fields(PityDef)` **逐字段派生**，并纳入 `PityConfig.enabled`。
+    修复前保底分支实际只哈希了 `name`（改 threshold / scope / priority 指纹不变），
+    保底配置不同的两组结果被判「可比」。
     """
     h = hashlib.sha256()
 
@@ -475,16 +543,114 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
             # 旧 PoolEntry 展平视图兼容分支（仅 pool_id/cost）
             _update(getattr(p, 'pool_id', ''))
             _update(str(getattr(p, 'cost', '')))
-    # 保底配置
+    # 保底配置（2026-10-15 修复 ISSUE-922：原实现读的 `PityDef.params` 自 P55 起
+    # 已不存在，见下方逐字段派生的说明）
     if pity_config and hasattr(pity_config, 'pities'):
+        _update('pity')
+        # `enabled` 一并纳入：关闭保底会改变模拟结果（`store.pity.enabled=False`
+        # 时引擎不构造），只差这一个键的两份配置此前 hash 相同 → 判「配置相同」。
+        # 口径与 milestone / resource_lifecycle 两条分支一致（它们都纳入 enabled）。
+        _update(f"enabled={getattr(pity_config, 'enabled', True)}\n")
         for pd in sorted(pity_config.pities, key=lambda x: x.name):
-            h.update(pd.name.encode())
-            h.update(str(getattr(pd, 'params', {})).encode())
-    # 排期（P61 Ph6 后 pool_id 为 banner 级）
-    for s in sorted(schedules_config, key=lambda x: getattr(x, 'pool_id', '')):
-        h.update(getattr(s, 'pool_id', '').encode())
-        h.update(str(getattr(s, 'available_from', 0)).encode())
-        h.update(str(getattr(s, 'available_until', 0)).encode())
+            # **字段驱动**：逐项取 `dataclasses.fields(PityDef)`。
+            #
+            # 原实现是 `h.update(str(getattr(pd, 'params', {})).encode())`——`params`
+            # 是 P55 之前的 dict 载体，扁平化后**该字段已不存在**，getattr 兜底恒取
+            # 空 dict，于是保底分支实际只哈希了 `name`：实测改 `threshold` /
+            # `scope` / `priority` 指纹**完全不变**，只有改 `name` 才变。后果是
+            # **保底配置不同的两组结果被判为「可比」**，比较结论可能是错的
+            # （与 2026-10-01 补入七项同一类事故）。
+            #
+            # 用 fields() 而非手写字段清单：手写清单会随 PityDef 增删字段再次漂移
+            # （P55 的扁平化正是这样把旧清单变成空转的），字段驱动使将来新增字段
+            # 自动纳入。
+            #
+            # 序列化口径：段尾 `\n` 作分隔符——不加分隔时「值里含下一字段名」会
+            # 拼出歧义串（`name='a'` + `btype='soft'` 与 `name='abtype'` 同串）；
+            # 值本身走 `_canon_field()`（dict 按键排序，其余 str()），不用 repr
+            # （repr 随字段增删而变、跨版本不稳定，同 2026-10-01 段的既定口径）。
+            for _f in fields(pd):
+                _update(f'{_f.name}={_canon_field(getattr(pd, _f.name, None))}\n')
+    # 2026-10-01 删除 schedules_config 形参：它处理 pool_id / available_from /
+    # available_until 三项，而这三项已被上方 BannerEntry 分支覆盖（Banner 是排期的
+    # 权威载体），且生产调用从来只传空列表（ConfigStore 没有 schedules 属性，
+    # 三处调用都写 getattr(store, 'schedules', [])，其中一处还是 worktree 旧副本）。
+    # 一个「恒空的形参」比不写更危险：读代码的人会以为排期已被覆盖。
+    # ── 2026-10-01：补入「影响模拟结果、此前一个身份字段都没覆盖」的七项 ──
+    #
+    # 依据是逐项实测：改动下列任一字段时旧实现的 hash **不变**，于是两份配置哪怕一个
+    # 每天进 60 资源、一个每天进 600，compare_fingerprints 也判「所有维度相同」。
+    # 覆盖面以「SimulationEnvBuilder.from_config_store 会读的字段」为准（该函数是
+    # 配置进入 worker 的唯一通道，它不读的字段不影响模拟结果，故不在此列）。
+    #
+    # 序列化一律**自己拼规范化字符串**，不用 dataclass 的 repr —— repr 随字段增删
+    # 而变，跨版本不稳定，会做出「同一份配置两个 hash」这种事。
+    if rarity_rank:
+        _update('rarity_rank')
+        for _k, _v in sorted(rarity_rank.items()):
+            _update(f'{_k}={_v}')
+    if card_defs:
+        _update('card_defs')
+        for _cd in sorted(card_defs, key=lambda x: getattr(x, 'card_id', '')):
+            _update(str(getattr(_cd, 'card_id', '')))
+            _update(str(getattr(_cd, 'name', '')))
+            _update(str(getattr(_cd, 'rarity', '')))
+            _update(str(getattr(_cd, 'initial_count', 0)))
+            _update(str(sorted(getattr(_cd, 'pools', []) or [])))
+            # tags / list_tags（P65）决定卡牌维度，影响分析分组
+            _update(str(sorted((getattr(_cd, 'tags', {}) or {}).items())))
+            _update(str(sorted((getattr(_cd, 'list_tags', {}) or {}).items())))
+    if gain_rules:
+        _update('gain_rules')
+        for _gr in gain_rules:
+            _update(str(getattr(_gr, 'rule_type', '')))
+            _update(str(getattr(_gr, 'param', '')))
+            _update(str(sorted((getattr(_gr, 'gains', {}) or {}).items())))
+    if day_overrides:
+        _update('day_overrides')
+        for _ov in sorted(day_overrides, key=lambda x: getattr(x, 'day', 0)):
+            _update(str(getattr(_ov, 'day', 0)))
+            _update(str(sorted((getattr(_ov, 'gains', {}) or {}).items())))
+    if sim_start_date:
+        # 只影响按日历展开的收入规则（monthly_day / weekly / monthly_week），
+        # 但会改变模拟结果，故属配置身份（P85 的 I1/I2）
+        _update('sim_start_date')
+        _update(str(sim_start_date))
+    if resource_lifecycle is not None:
+        _update('resource_lifecycle')
+        _update(str(getattr(resource_lifecycle, 'enabled', True)))
+        for _rl in getattr(resource_lifecycle, 'rules', []) or []:
+            _update(str(getattr(_rl, 'resource_id', '')))
+            _update(str(getattr(_rl, 'expire_at', None)))
+            _update(str(getattr(_rl, 'expire_with_banner', None)))
+            _update(str(sorted((getattr(_rl, 'on_expire', {}) or {}).items())))
+    if card_overflow_map:
+        # 满突溢出的资源返还。它是解析期由 card_defs + rarity_defaults 展开的结果，
+        # 故纳入展开结果即可同时覆盖 rarity_defaults
+        _update('card_overflow_map')
+        for _cid in sorted(card_overflow_map):
+            _update(str(_cid))
+            for _band in card_overflow_map[_cid] or []:
+                _update(str(getattr(_band, 'min', None)))
+                _update(str(getattr(_band, 'max', None)))
+                _update(str(sorted((getattr(_band, 'resources', {}) or {}).items())))
+    if card_weights:
+        # 2026-10-07（用户裁决「无条件纳入」）：抽取意愿 / 错失代价 / 单卡价值三维权重。
+        #
+        # 它们不参与模拟，但**是 GDR 的输入**，因而改变基于 GDR 的一切分析结论
+        # （加权满意度、总出卡价值），以及将来消费加权 GDR 的策略。纳入与否**不由
+        # 「当前有没有策略消费它」决定**：若按当前事实决定，将来加了消费它的策略时，
+        # 历史数据集的配置身份会静默失效（与 2026-10-01 补七项同一类事故）。
+        #
+        # 不纳入时的失效形态：两份只有权重不同的配置被判「配置完全相同」，而它们的
+        # GDR 分析结论不同，且无任何提示。
+        _update('card_weights')
+        for _cwid in sorted(card_weights):
+            _cw = card_weights[_cwid]
+            _update(str(_cwid))
+            _update(str(getattr(_cw, 'desire_weight', None)))
+            _update(str(getattr(_cw, 'miss_cost_weight', None)))
+            _update(str(getattr(_cw, 'card_value', None)))
     # 里程碑配置（P58 ISSUE-008——仅 milestone 不同的数据集判「配置: 不同」）
     if milestone_config is not None and hasattr(milestone_config, 'milestones'):
         _update(str(getattr(milestone_config, 'enabled', True)))
@@ -504,6 +670,35 @@ def compute_config_hash(pools_config: List[Any], pity_config: Any,
     if stop_condition_summary is not None:
         _update(str(stop_condition_summary))
     return h.hexdigest()[:16]
+
+
+def compute_config_hash_for_store(store, *, stop_condition_summary: Any = None) -> str:
+    """从 ConfigStore 计算配置身份哈希 —— **生产代码的唯一入口**。
+
+    为什么要这个包装：底层 `compute_config_hash` 有十来个成分参数，散在各调用点自行
+    拼装，**漏传一个就是「静默判为可比」**。本函数被引入的直接原因就是这件事：
+    2026-10-01 实测发现有七项影响模拟结果的配置完全没进哈希，而当时两个调用点都
+    只传了三个参数。把「该取哪些字段」收在一处，完整性就从「每个调用点都要记得」
+    变成一件结构上的事。
+
+    `stop_condition_summary` 仍由调用方传入：它是**导出量**（条件树经
+    `canonical_stop_condition_summary` 规范化），不是 store 上的字段。
+    """
+    _banner_cfg = getattr(store, 'banner', None)
+    return compute_config_hash(
+        getattr(_banner_cfg, 'banners', None) if _banner_cfg is not None else [],
+        getattr(store, 'pity', None),
+        getattr(store, 'milestone', None),
+        stop_condition_summary,
+        rarity_rank=getattr(store, 'rarity_rank', None),
+        card_defs=getattr(store, 'card_defs', None),
+        gain_rules=getattr(store, 'gain_rules', None),
+        day_overrides=getattr(store, 'day_overrides', None),
+        sim_start_date=getattr(store, 'sim_start_date', None),
+        resource_lifecycle=getattr(store, 'resource_lifecycle', None),
+        card_overflow_map=getattr(store, 'card_overflow_map', None),
+        card_weights=getattr(store, 'card_weights', None),
+    )
 
 
 def canonical_stop_condition_summary(tree: Optional[Dict[str, Any]]) -> str:

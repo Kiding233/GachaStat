@@ -175,7 +175,12 @@ class StrategyContext:
         if pool is None or pool.is_exchange:
             return {}
         probs = {r.id: p for r, p in pool.rewards}
-        result = self._pity_engine.get_probabilities(pool_id, self._pity_state, probs)
+        # P64 S9-2（§3.10.2，通道 B）：本通道**完全绕过 `Banner.draw`**，故必须
+        # 自行填 `sim`：`StrategyContext` 持有 `GachaState`（`self.state`），
+        # 视图由它就地自产，与通道 A 共用同一 `GachaState` 源（§六 的「两通道必须
+        # 共用同一 GachaState / `_initial_counts` 源」）。漏填即构造期 `TypeError`。
+        result = self._pity_engine.get_probabilities(
+            pool_id, self._pity_state, probs, self.state.sim_view())
         self._pity_cache[pool_id] = result
         return result
 
@@ -247,34 +252,6 @@ from gacha_simulator.strategies.builtin.fixed_count import FixedCountStrategy  #
 from gacha_simulator.strategies.builtin.target_hunting import TargetHuntingStrategy  # noqa: E402, F401
 from gacha_simulator.strategies.builtin.no_draw import NoDrawStrategy  # noqa: E402, F401
 from gacha_simulator.strategies.builtin.draw_target import DrawTargetStrategy  # noqa: E402, F401
-
-
-class CompositeStrategy(Strategy):
-    """[DEPRECATED] 请使用 PriorityChainStrategy 替代。
-
-    P69 阶段 3：内部委托给 PriorityChainStrategy，实例化时发出 DeprecationWarning。
-    """
-
-    def __init__(self, strategies: List[Strategy], mode: str = 'first_valid'):
-        import warnings
-        warnings.warn(
-            "CompositeStrategy 已废弃，请使用 PriorityChainStrategy 替代",
-            DeprecationWarning, stacklevel=2,
-        )
-        if mode not in ('first_valid',):
-            raise ValueError(
-                f"CompositeStrategy mode must be 'first_valid', got '{mode}'"
-            )
-        self.strategies = strategies
-        self.mode = mode
-        self._delegate = PriorityChainStrategy(strategies)
-
-    @classmethod
-    def description(cls) -> str:
-        return "组合多个策略"
-
-    def select_action(self, ctx: StrategyContext) -> Action:
-        return self._delegate.select_action(ctx)
 
 
 # ── 复合策略 Building Block（P69 阶段 3） ─────────────────────────

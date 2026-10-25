@@ -328,7 +328,7 @@ class GachaApi:
             task['status'] = 'done'
             task['dataset'] = dataset
             self._push_js(f"typeof window.__gscTaskDone === 'function' && "
-                          f"window.__gscTaskDone({json.dumps({'taskId': task_id, 'ok': True})})")
+                          f"window.__gscTaskDone({json.dumps({'taskId': task_id, 'ok': True, 'warnings': bundle.get('warnings') or []}, ensure_ascii=False)})")
         except Exception as e:
             traceback.print_exc()
             task['status'] = 'failed'
@@ -368,6 +368,9 @@ class GachaApi:
                 'no_draw_resources': no_draw_resources,
                 'no_draw_pool_resources': no_draw_pool_resources,
                 'seed': seed,
+                # 核心层告警（失败原因与条数 / 零进度兜底 / 迭代预算耗尽 / 路径降级）。
+                # 前端经 __gscTaskDone 的 warnings 字段消费。
+                'warnings': list(getattr(batch_result, 'warnings', []) or []),
             }
             return bundle
         return {
@@ -379,12 +382,13 @@ class GachaApi:
             'n_results': 0, 'n_requested': n,
             'no_draw_resource': no_draw_resource, 'no_draw_resources': no_draw_resources,
             'no_draw_pool_resources': no_draw_pool_resources, 'seed': seed,
+            'warnings': list(getattr(batch_result, 'warnings', []) or []),
         }
 
     def _dataset_from_bundle(self, bundle, store, seed):
         """result_bundle → StoredDataset dict（可持久化 + 前端 meta）。"""
         from gacha_simulator.core.result_store import (
-            canonical_stop_condition_summary, compute_config_hash,
+            canonical_stop_condition_summary, compute_config_hash_for_store,
         )
         agg = bundle['aggregate_data']
         initial_resources = dict(store.initial_resources) if isinstance(store.initial_resources, dict) else {}
@@ -392,16 +396,17 @@ class GachaApi:
         # P79：停止条件的规范化摘要（含参数值；空树产出哨兵 ''）
         _stop_summary = canonical_stop_condition_summary(
             getattr(store, 'stop_condition', None))
-        config_hash = compute_config_hash(
-            store.banner.banners, getattr(store, 'pity', None),
-            getattr(store, 'schedules', []),
-            milestone_config=getattr(store, 'milestone', None),
+        # 2026-10-01：同 gui/main_window.py，改走 for_store 包装（原实现在此自行
+        # 拼装参数，漏传七项影响模拟结果的配置）
+        config_hash = compute_config_hash_for_store(
+            store,
             stop_condition_summary=_stop_summary,   # P79：停止条件纳入可比性指纹
         )
         strategy_name = getattr(store, 'strategy_key', '') or 'unknown'
         now = datetime.now().isoformat()
         fingerprint = ComparabilityFingerprint(
             config_hash=config_hash, strategy_name=strategy_name, strategy_key=strategy_name,
+            strategy_params=dict(getattr(store, 'strategy_params', {}) or {}),
             target_cards=dict(bundle['target_specs']), initial_resources=initial_resources,
             stop_condition=_stop_summary,   # P79：条件树渲染的规范化摘要（原为硬编码）
             seed_start=seed,

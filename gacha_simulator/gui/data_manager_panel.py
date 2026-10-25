@@ -234,7 +234,9 @@ class DataManagerPanel(QWidget):
             return
 
         dims = [
-            ('strategy_name', '策略'),
+            # 2026-10-01：策略相关三字段（name / key / params）已合成单一维度；
+            # 原清单在此列了 strategy_name 一项，比对侧却还有 strategy_key 未列
+            ('strategy', '策略'),
             ('config_hash', '配置'),
             ('target_cards', '目标卡'),
             ('initial_resources', '初始资源'),

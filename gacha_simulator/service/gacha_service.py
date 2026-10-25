@@ -1,13 +1,12 @@
 from typing import Dict, List, Optional, Union
 import math
 import time
-import uuid
 import warnings
 from ..core import (
     Banner, GachaState, Pool, DrawAction, WaitAction, NonDrawAction,
-    InfoVector, Strategy, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
+    Strategy, StopCondition, TargetCardSet, ResourceGainFunction, CompactResult,
     build_strategy_context,
-    SimulationCollector, InfoVectorCollector, CompactCollector,
+    SimulationCollector, CompactCollector,
     MilestoneEngine,   # P58（M4a）：里程碑引擎类型注解
     ResourceLifecycle, resolve_expire_time,   # P77：资源生命周期
 )
@@ -52,9 +51,6 @@ class SimulationStats:
         self.total_actions += 1
         self.total_waits += 1
         self.last_action_time += duration
-
-
-_EMPTY_DICT = {}
 
 
 def _derive_pool_type(pool) -> str:
@@ -146,7 +142,6 @@ class GachaService:
         self.card_overflow_map = card_overflow_map or {}
         self.milestone_engine = milestone_engine or None   # P58：None 时无里程碑行为
         self._notifier = notifier or Notifier()
-        self.session_id = str(uuid.uuid4())
 
         # ── P77：资源生命周期索引：到期规则表 + 到期时刻排序表 ──
         # 两结构同源派生（先 _expire_rules_by_res 再排序表），避免双结构漂移。
@@ -229,8 +224,8 @@ class GachaService:
         清零 = 源全额扣减，无目标入账。
 
         记账（记账语义见 P77 §3.5）：转换记源 total_consumed + 目标 total_gained；
-        清零记源 total_consumed。仅紧凑路径有汇总账（total_* 非 None），明细路径
-        （InfoVector）无汇总账可写，只做余额变更，两条路径资源余额变化完全一致。
+        清零记源 total_consumed。P81（2026-09-17）删除逐抽明细路径后，本函数
+        只服务紧凑路径，total_* 恒为字典，原「非 None」保护已移除。
         """
         if balance <= 0:
             return
@@ -243,21 +238,18 @@ class GachaService:
             state.spend({rule.resource_id: balance})
             if amount > 0:
                 state.gain({on_expire['convert_to']: amount})
-            if total_consumed is not None:
-                total_consumed[rule.resource_id] = total_consumed.get(rule.resource_id, 0) + balance
-                if amount > 0:
-                    total_gained[on_expire['convert_to']] = (
-                        total_gained.get(on_expire['convert_to'], 0) + amount)
+            total_consumed[rule.resource_id] = total_consumed.get(rule.resource_id, 0) + balance
+            if amount > 0:
+                total_gained[on_expire['convert_to']] = (
+                    total_gained.get(on_expire['convert_to'], 0) + amount)
         elif on_expire.get('clear'):
             state.spend({rule.resource_id: balance})
-            if total_consumed is not None:
-                total_consumed[rule.resource_id] = total_consumed.get(rule.resource_id, 0) + balance
+            total_consumed[rule.resource_id] = total_consumed.get(rule.resource_id, 0) + balance
 
     # ── P56：非抽卡动作（定轨切换/取消） ──
 
     def _apply_non_draw(self, action, banners, pity_engine, pity_state):
         """P56：执行 NonDrawAction——定轨切换/取消。"""
-        from ..core.pity import TargetedBehavior
         if action.action_id not in NON_DRAW_ACTION_REGISTRY:
             raise InvalidActionError(f"未注册的 NonDrawAction action_id: '{action.action_id}'")
         pool_id = action.params.get('pool_id')
@@ -278,8 +270,18 @@ class GachaService:
         pool = banner.active_pool
         qualified_key = f"{banner.id}.{banner.active_pool_id}"
         targeted_name = None
-        for pname, bh in pity_engine.get_behaviors_for_pool(qualified_key):
-            if isinstance(bh, TargetedBehavior):
+        for pname, _bh in pity_engine.get_behaviors_for_pool(qualified_key):
+            # P64 S4-3：判据由旧类 `isinstance(bh, TargetedBehavior)` 改为按 `btype`
+            # 判定。`targeted` / `targeted_soft` 已 preset 化为统一骨架 `Pity`，不再是
+            # 旧类实例，按旧类判型会**恒不命中**并抛 `InvalidActionError`（池子明明配了
+            # 定轨保底却报「未配置 targeted 保底」）。
+            # 取 `PityDef.btype` 而非零件自身的 `_btype`：后者对**旧类**可能被硬编码成
+            # 与 btype 不同的值（如 `RotatingSoftBehavior._btype` 是 `'rotating'`），
+            # 而 `PityDef.btype` 与本函数下游 `switch_allowed` 的取法同源
+            # (`get_pity_def`)，不受零件侧实现细节影响（S4-3 审查 low）。
+            # 注：`Pity` 骨架实际持 `self._btype`；此处不用它只是为免踩旧类口径。
+            _pdef = pity_engine.get_pity_def(pname)
+            if getattr(_pdef, 'btype', None) in ('targeted', 'targeted_soft'):
                 targeted_name = pname
                 break
         if targeted_name is None:
@@ -306,23 +308,29 @@ class GachaService:
         self,
         initial_state: GachaState,
         max_iterations: int = 100000,
-        lightweight: bool = False,
         collector: Optional[SimulationCollector] = None,
-    ) -> Union[List[InfoVector], CompactResult]:
+    ) -> CompactResult:
         if collector is None:
-            collector = InfoVectorCollector(
-                session_id=self.session_id, lightweight=lightweight
-            )
+            collector = CompactCollector()
 
         state = initial_state.clone()
         pity_state = self.pity_state.clone()
         stats = SimulationStats()
+        # P64 S9-2（§四 本文件行，ISSUE-916）：初始持有的**唯一推导源**（数据源
+        # `self.card_defs`）与**唯一赋值点**（本函数 `clone()` 之后）都在这里。
+        # 赋值落在 clone 之后（而非构造点补传）才覆盖**全部**入口：构造点赋值只覆盖
+        # `batch_simulator` 那一处 `GachaState(...)`，覆盖不到任何「直接构造
+        # GachaState 后进入 run_simulation」的调用方（测试 / 脚本 / `worst_impact` /
+        # `retreat_search`），而那些路径的首行都是 `initial_state.clone()`。
+        # 赋值是**无条件覆盖**：state 字段是单一真相源，`self.card_defs` 是唯一推导源，
+        # 不保留「调用方预置的 initial_counts」（两个来源即两套口径，§四 明令禁止）。
         _initial_counts = {}
         for cd in self.card_defs:
             ic = cd.get('initial_count', 0) if isinstance(cd, dict) else getattr(cd, 'initial_count', 0)
             if ic > 0:
                 cid = cd['card_id'] if isinstance(cd, dict) else cd.card_id
                 _initial_counts[cid] = ic
+        state.initial_counts = _initial_counts
         banners = self._banners
         notifier = self._notifier
         real_time = state.real_time
@@ -338,7 +346,6 @@ class GachaService:
         _isinstance = isinstance
         _DrawAction = DrawAction
         _WaitAction = WaitAction
-        _is_compact = isinstance(collector, CompactCollector)
 
         # ── P79（阶段 3）：零进度兜底的状态量，一律在 `for` 之前初始化 ──
         # 检测点位于循环体顶部，第 1 轮进入时 `ctx` 尚未构建、`action` 尚未产出，
@@ -363,14 +370,15 @@ class GachaService:
         banner_end_times_sorted = sorted(
             [(b.id, b.available_until) for b in banners.values() if b.available_until],
             key=lambda x: x[1]
-        ) if _is_compact else []
-        recorded_banner_ends = set() if _is_compact else None
-        _pending_wait_gains = {} if _is_compact else None
-        total_consumed = {} if _is_compact else None
-        total_gained = {} if _is_compact else None
+        )
+        recorded_banner_ends = set()
+        _pending_wait_gains = {}
+        total_consumed = {}
+        total_gained = {}
 
-        # ── P77：资源到期结算状态（移出 _is_compact 守卫，明细/InfoVector 路径亦须
-        # 触发到期，ISSUE-203；记账侧 total_* 在明细路径为 None，_settle 内已做保护）──
+        # ── P77：资源到期结算状态。P81（2026-09-17）删除逐抽明细路径后，记账侧
+        # total_* 恒为字典（原「明细路径为 None」的分支与 _settle 内的
+        # `is not None` 保护均已不存在）──
         recorded_resource_expiries: set = set()
 
         # P77（ISSUE-035）：首迭代前置结算，保证策略首次 build_strategy_context 前已完成
@@ -380,7 +388,7 @@ class GachaService:
             real_time, state, total_consumed, total_gained, recorded_resource_expiries)
 
         for iteration in range(max_iterations):
-            if _check(state, [], stats):
+            if _check(state, stats):
                 _stop_reason = 'condition'
                 break
 
@@ -491,7 +499,6 @@ class GachaService:
                         overflow = state.add_card(
                             reward.id, path="draw",
                             overflow_bands=self.card_overflow_map.get(reward.id),
-                            initial_counts=_initial_counts,
                         )
                         for k, v in overflow.items():
                             rg[k] = rg.get(k, 0) + v
@@ -504,19 +511,15 @@ class GachaService:
                     # （触发抽的 counter 在 after_draw 内已被 reset，原读恒低估 hard-90 峰值）
                     pool_counter_max = out.pity_counter_max
 
-                    if _is_compact:
-                        for k, v in spent.items():
-                            total_consumed[k] = total_consumed.get(k, 0) + v
-                        if rg:
-                            for k, v in rg.items():
-                                total_gained[k] = total_gained.get(k, 0) + v
-                        combined_gained = dict(rg)
-                        for k, v in _pending_wait_gains.items():
-                            combined_gained[k] = combined_gained.get(k, 0) + v
-                        _pending_wait_gains.clear()
-                    else:
-                        combined_gained = rg.copy() if rg else _EMPTY_DICT
-
+                    for k, v in spent.items():
+                        total_consumed[k] = total_consumed.get(k, 0) + v
+                    if rg:
+                        for k, v in rg.items():
+                            total_gained[k] = total_gained.get(k, 0) + v
+                    combined_gained = dict(rg)
+                    for k, v in _pending_wait_gains.items():
+                        combined_gained[k] = combined_gained.get(k, 0) + v
+                    _pending_wait_gains.clear()
                     collector.on_draw(
                         card_id=reward.id, pool=pool, spent=spent,
                         resources_gained=rg, pity_triggered=pity_triggered,
@@ -552,10 +555,9 @@ class GachaService:
                     rg = _resource_gain.compute(action.duration, state)
                     for k, v in rg.items():
                         resources[k] = resources.get(k, 0) + v
-                    if _is_compact:
-                        for k, v in rg.items():
-                            total_gained[k] = total_gained.get(k, 0) + v
-                            _pending_wait_gains[k] = _pending_wait_gains.get(k, 0) + v
+                    for k, v in rg.items():
+                        total_gained[k] = total_gained.get(k, 0) + v
+                        _pending_wait_gains[k] = _pending_wait_gains.get(k, 0) + v
 
                 # ── 等待期纯时间条件评估（ISSUE-003）：仅 time_window 可能在此满足 ──
                 for b in active_banners:
@@ -565,14 +567,13 @@ class GachaService:
                 self._check_resource_expiries(
                     real_time, state, total_consumed, total_gained, recorded_resource_expiries)
 
-                if _is_compact:
-                    for bid, bet in banner_end_times_sorted:
-                        if bid not in recorded_banner_ends and real_time >= bet:
-                            banner_obj = banners.get(bid)
-                            if banner_obj is not None:
-                                banner_obj._exhaust()      # 时间窗口过期即永久关闭（ISSUE-001）
-                            collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
-                            recorded_banner_ends.add(bid)
+                for bid, bet in banner_end_times_sorted:
+                    if bid not in recorded_banner_ends and real_time >= bet:
+                        banner_obj = banners.get(bid)
+                        if banner_obj is not None:
+                            banner_obj._exhaust()      # 时间窗口过期即永久关闭（ISSUE-001）
+                        collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
+                        recorded_banner_ends.add(bid)
 
                 stats.on_wait(action.duration)
 
@@ -588,23 +589,6 @@ class GachaService:
             self._check_resource_expiries(
                 real_time, state, total_consumed, total_gained, recorded_resource_expiries)
 
-            if _is_compact:
-                for bid, bet in banner_end_times_sorted:
-                    if bid not in recorded_banner_ends and real_time >= bet:
-                        banner_obj = banners.get(bid)
-                        if banner_obj is not None:
-                            banner_obj._exhaust()
-                        collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
-                        recorded_banner_ends.add(bid)
-
-        state.real_time = real_time
-        state.resources = resources
-
-        # P77：循环收尾的资源到期结算（ISSUE-306 同序：先资源后 banner 快照）
-        self._check_resource_expiries(
-            real_time, state, total_consumed, total_gained, recorded_resource_expiries)
-
-        if _is_compact:
             for bid, bet in banner_end_times_sorted:
                 if bid not in recorded_banner_ends and real_time >= bet:
                     banner_obj = banners.get(bid)
@@ -613,53 +597,67 @@ class GachaService:
                     collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
                     recorded_banner_ends.add(bid)
 
-            result = collector.get_result()
-            result.total_consumed = total_consumed
-            # P58（M5-serial，方案 C）：on_bonus 已把 milestone 资源并入 result.total_gained
-            # （对象字段），此处须【合并】而非覆盖——局部 total_gained（仅正常产出 + 等待收益）
-            # 直接赋值会整体覆盖、丢失 milestone 资源。
-            merged = dict(total_gained)
-            for k, v in result.total_gained.items():
-                merged[k] = merged.get(k, 0) + v
-            result.total_gained = merged
-            result.total_draws = stats.total_draws
-            result.total_waits = stats.total_waits
-            result.pity_triggers = stats.pity_triggers
-            result.final_resources = dict(resources)
-            result.final_time = real_time
-            # ── P79（阶段 3）：迭代数与告警（AUDIT-BREAK-2——写入点必须在紧凑分支内）。
-            # 非紧凑路径由下方 `return collector.get_result()` 返回 List[InfoVector]，
-            # 向 list 赋 .iterations / .warnings 即 AttributeError；「迭代预算耗尽」的
-            # 判定可在分支外算好，但落字段这一动作只能在此。
-            result.iterations = _iterations
-            if _zero_progress_msg is not None:
-                result.warnings.append(_zero_progress_msg)
-            if _stop_reason == 'exhausted':
-                # 第三类失效信号：迭代预算耗尽（含 max_iterations <= 0 的零迭代情形）。
-                # 此时循环既不触发零进度判据（签名每轮都在变）、也不报错，final_time
-                # 会静默停在被截断处、_obtainable 系列 GDR 的分母随之失真。
-                # 文案引用 _iterations 而非 iteration——后者在零迭代时未绑定。
-                _gap_days = max(0.0, _hard_end_time - real_time) / 86400.0
-                result.warnings.append(
-                    f"迭代预算耗尽：{max_iterations} 轮内停止条件未满足，final_time 停在"
-                    f"被截断处（迭代 {_iterations}，策略 {_strategy_key}，"
-                    f"距硬边界尚有 {_gap_days:.1f} 天）"
-                )
-            # P61（§3.13.1 / ISSUE-002）：pool_types 由推导属性填充，键为全限定 {banner_id}.{pool_id}
-            result.pool_types = {
-                f"{b.id}.{pk}": _derive_pool_type(p)
-                for b in banners.values()
-                for pk, p in b.pools.items()
-            }
-            result.strategy_name = type(self.strategy).__name__
-            result.strategy_key = getattr(
-                type(self.strategy), '_strategy_key',
-                type(self.strategy).__name__
-            )  # P69 ISSUE-007：策略注册 key，复合策略类回退为类名
-            result.generated_at = time.time()
-            return result
+        state.real_time = real_time
+        state.resources = resources
 
-        return collector.get_result()
+        # P77：循环收尾的资源到期结算（ISSUE-306 同序：先资源后 banner 快照）
+        self._check_resource_expiries(
+            real_time, state, total_consumed, total_gained, recorded_resource_expiries)
+
+        for bid, bet in banner_end_times_sorted:
+            if bid not in recorded_banner_ends and real_time >= bet:
+                banner_obj = banners.get(bid)
+                if banner_obj is not None:
+                    banner_obj._exhaust()
+                collector.on_banner_end(bid, dict(resources), pity_state.to_dict())
+                recorded_banner_ends.add(bid)
+
+        result = collector.get_result()
+        result.total_consumed = total_consumed
+        # P58（M5-serial，方案 C）：on_bonus 已把 milestone 资源并入 result.total_gained
+        # （对象字段），此处须【合并】而非覆盖——局部 total_gained（仅正常产出 + 等待收益）
+        # 直接赋值会整体覆盖、丢失 milestone 资源。
+        merged = dict(total_gained)
+        for k, v in result.total_gained.items():
+            merged[k] = merged.get(k, 0) + v
+        result.total_gained = merged
+        result.total_draws = stats.total_draws
+        result.total_waits = stats.total_waits
+        result.pity_triggers = stats.pity_triggers
+        result.final_resources = dict(resources)
+        result.final_time = real_time
+        # ── P79（阶段 3）：迭代数与告警。原 AUDIT-BREAK-2 约束「写入点必须在
+        # 紧凑分支内」，因当时另一条路径返回逐抽记录列表，向 list 赋属性即
+        # AttributeError。P81（2026-09-17）删除该路径后此处已无条件，
+        # 注释保留作沿革记录。──
+        result.iterations = _iterations
+        if _zero_progress_msg is not None:
+            result.warnings.append(_zero_progress_msg)
+        if _stop_reason == 'exhausted':
+            # 第三类失效信号：迭代预算耗尽（含 max_iterations <= 0 的零迭代情形）。
+            # 此时循环既不触发零进度判据（签名每轮都在变）、也不报错，final_time
+            # 会静默停在被截断处、_obtainable 系列 GDR 的分母随之失真。
+            # 文案引用 _iterations 而非 iteration——后者在零迭代时未绑定。
+            _gap_days = max(0.0, _hard_end_time - real_time) / 86400.0
+            result.warnings.append(
+                f"迭代预算耗尽：{max_iterations} 轮内停止条件未满足，final_time 停在"
+                f"被截断处（迭代 {_iterations}，策略 {_strategy_key}，"
+                f"距硬边界尚有 {_gap_days:.1f} 天）"
+            )
+        # P61（§3.13.1 / ISSUE-002）：pool_types 由推导属性填充，键为全限定 {banner_id}.{pool_id}
+        result.pool_types = {
+            f"{b.id}.{pk}": _derive_pool_type(p)
+            for b in banners.values()
+            for pk, p in b.pools.items()
+        }
+        result.strategy_name = type(self.strategy).__name__
+        result.strategy_key = getattr(
+            type(self.strategy), '_strategy_key',
+            type(self.strategy).__name__
+        )  # P69 ISSUE-007：策略注册 key，复合策略类回退为类名
+        result.generated_at = time.time()
+        return result
+
 
     def run_simulation_compact(
         self, initial_state: GachaState, max_iterations: int = 100000,

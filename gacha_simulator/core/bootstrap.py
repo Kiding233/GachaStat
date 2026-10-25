@@ -65,6 +65,17 @@ class BootstrapEngine:
         return point_est, low, high, std
 
     @staticmethod
+    def _ci_is_valid(res: BootstrapResult) -> bool:
+        """CI 有效性守卫。
+
+        BCa 在退化输入（如全部样本同值）下会**静默返回 nan 而不抛异常**，
+        故 `except Exception` 抓不到，须显式校验后回退百分位法。
+        2026-10-08 实测：bootstrap_mean([0.0]*30, use_bca=True) -> nan [nan, nan]。
+        """
+        return (math.isfinite(res.ci_lower) and math.isfinite(res.ci_upper)
+                and res.ci_lower <= res.ci_upper)
+
+    @staticmethod
     def _from_scipy_result(scipy_res, point_est: float, method: str,
                            n: int, B: int) -> BootstrapResult:
         """将 scipy BootstrapResult 转换为项目 BootstrapResult。"""
@@ -104,7 +115,9 @@ class BootstrapEngine:
                     (data.astype(np.float64),), np.mean,
                     n_resamples=self.B, confidence_level=self.ci_level,
                     method='BCa', random_state=self._rng)
-                return self._from_scipy_result(scipy_res, point_est, 'BCa', n, self.B)
+                res = self._from_scipy_result(scipy_res, point_est, 'BCa', n, self.B)
+                if self._ci_is_valid(res):
+                    return res
             except Exception:
                 pass
 
@@ -149,7 +162,9 @@ class BootstrapEngine:
                     (data,), np.mean,
                     n_resamples=self.B, confidence_level=self.ci_level,
                     method='BCa', random_state=self._rng)
-                return self._from_scipy_result(scipy_res, point_est, 'BCa', n, self.B)
+                res = self._from_scipy_result(scipy_res, point_est, 'BCa', n, self.B)
+                if self._ci_is_valid(res):
+                    return res
             except Exception:
                 pass
 
@@ -247,17 +262,34 @@ class BootstrapEngine:
                                    ) -> BootstrapResult:
         """m-out-of-n Bootstrap 均值——厚尾分布下的一致性估计。
 
-        m-out-of-n 对无限方差分布（α<2）给出渐近正确的抽样分布，
-        无需方差缩放（因为 CLT 的 √n 收敛率在厚尾下不成立）。
+        **必须按波动尺度之比缩放回 n 口径**：重抽 m 个（m < n）的抽样分布比
+        原样本更宽，直接取百分位会得到过宽区间。α ≥ 2（有限方差）的波动尺度
+        为 k^(-1/2)，故乘 √(m/n)；α ∈ (1, 2)（α-stable 吸引域）的波动尺度为
+        k^(-(1-1/α))，故乘 (m/n)^(1-1/α)。α = 2 处两式连续。其余取值（α ≤ 1
+        时总体均值不存在、α = inf / nan）一律落 √(m/n) 兜底。
+
+        **两处措辞须注意**（2026-10-08 独立复核指出）：(a) α ≤ 1 时 θ̂_n 不收敛
+        于任何常数，公式只是形式外推，不应称为「收敛率」；(b) 「缺缩放时放大
+        √(n/m) 倍」只在 α ≥ 2 精确，α < 2 时放大倍数是 (n/m)^(1-1/α)。
+
+        实测（正态 n=200 / m=34）：缺缩放时宽度 0.6658 对理论 0.2772（2.40 倍），
+        补缩放后 0.2745（与理论吻合到 1%）。**α < 2 的有限样本下本公式偏保守
+        （区间偏宽）**：实测 n=200 的 Pareto(1.5) 上真实波动尺度比 0.4879 落在
+        √(m/n)=0.4123 与 (m/n)^(1-1/α)=0.5540 之间，尚未进入稳定律区间。
         """
         n = len(data)
         point_est = float(np.mean(data))
         indices = self._rng.integers(0, n, size=(self.B, m))
         boot_means = np.mean(data[indices], axis=1)
-        _, ci_low, ci_high, std = self._percentile_ci(boot_means, point_est)
         alpha = self.hill_estimator(data)
+        if math.isfinite(alpha) and 0.0 < alpha < 2.0:
+            scale = (m / n) ** (1.0 - 1.0 / alpha)
+        else:
+            scale = math.sqrt(m / n)
+        boot_scaled = point_est + (boot_means - point_est) * scale
+        _, ci_low, ci_high, std = self._percentile_ci(boot_scaled, point_est)
         return BootstrapResult(point_est, ci_low, ci_high, std,
-                               f'm-out-of-n (m={m}, auto: heavy tail α={alpha:.2f})',
+                               f'm-out-of-n (m={m}, scale={scale:.4f}, α={alpha:.2f})',
                                n, self.B)
 
     def hill_estimator(self, values: Union[List[float], np.ndarray],

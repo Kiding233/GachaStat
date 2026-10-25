@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
 from gacha_simulator.core.gdr import populate_gdr_combo, get_default_threshold
+from gacha_simulator.core.worst_impact import coverage_trace_text
 from .config_panel import PoolDistributionDialog
 from .chart_webview import ChartWebView
 
@@ -80,9 +81,22 @@ class PityCoverageGauge(QWidget):
         self.detail_label.setStyleSheet("font-size: 11px; color: #555;")
         layout.addWidget(self.detail_label)
 
+        # 读数可追溯行（2026-10-15）：覆盖倍数对 α **极敏感**——同一版本 α=0.05
+        # 读 0.2125、α=0.15 读 0.2792（P64 报告 §八 实测），而 α / N 此前只存在于
+        # 左侧输入控件里，读数一旦离开面板就无法回溯自己对应哪套参数。故把
+        # α / N 与两个原始量（分子 `worst_resource`、分母 `pity_cost`）一并印在
+        # 读数旁。**纯展示**：数值全部来自计算结果与输入控件，不参与任何计算。
+        self.trace_label = QLabel("")
+        self.trace_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.trace_label.setStyleSheet("font-size: 11px; color: #888;")
+        self.trace_label.setWordWrap(True)
+        layout.addWidget(self.trace_label)
+
         layout.addStretch()
 
-    def set_value(self, coverage: float):
+    def set_value(self, coverage: float, alpha=None, n=None,
+                  worst_resource=None, pity_cost=None):
+        """渲染覆盖倍数读数 + 可追溯行（α / N / 分子 / 分母）。"""
         self.value_label.setText(f"{coverage:.2f}x")
 
         max_display = max(coverage * 1.3, 2.0)
@@ -104,6 +118,24 @@ class PityCoverageGauge(QWidget):
         self.detail_label.setText(
             f"覆盖 {coverage:.2f} 倍大保底  |  {hint}"
         )
+        self.trace_label.setText(_coverage_trace_text(
+            alpha=alpha, n=n, worst_resource=worst_resource, pity_cost=pity_cost))
+
+
+def _coverage_trace_text(alpha=None, n=None, worst_resource=None,
+                         pity_cost=None) -> str:
+    """覆盖倍数读数的可追溯后缀（**薄壳**：实现在 `core/worst_impact.py`）。
+
+    `α=0.05 · N=1000 · 保守资源 3060 · 大保底成本 14400`。
+
+    **2026-10-15 下沉**：原先本函数自持一份实现，而 WebUI 侧的同一展示
+    （`webui/worst_impact_service.analyze_worst_dist` 的 gauge 段）没有该行，两处
+    口径不一致。实现下沉到 `core/worst_impact.coverage_trace_text` 后，GUI 与 WebUI
+    取**同一函数**，不再有「改一处另一处静默分叉」的失效模式。本壳保留函数名，
+    既有调用点（`set_value` / `_on_finished`）不变。
+    """
+    return coverage_trace_text(alpha=alpha, n=n, worst_resource=worst_resource,
+                               pity_cost=pity_cost)
 
 
 class WorstImpactWorker(QThread):
@@ -147,6 +179,9 @@ class WorstImpactPanel(QWidget):
         self._simulation_results = None
         self._target_specs = None
         self._worker = None
+        self._last_run_alpha = None
+        self._last_run_n = None
+        self._last_run_analyzer = None
         self._custom_distribution = None
         self._config_panel = None
         self._setup_ui()
@@ -439,6 +474,12 @@ class WorstImpactPanel(QWidget):
                 self.sim_spin.value(),
                 custom_resource=custom_resource,
             )
+            # 本次运行的 α / N / 分析器：供 `_on_finished` 打印**读数可追溯行**用
+            # （α 是覆盖倍数最敏感的输入，N 决定分位估计的噪声）。取值在启动时
+            # 捕获——结果展示时再读控件会拿到用户中途改过的值。
+            self._last_run_alpha = self._worker.alpha
+            self._last_run_n = self._worker.num_simulations
+            self._last_run_analyzer = analyzer
             self._worker.progress.connect(self._on_progress)
             self._worker.finished.connect(self._on_finished)
             self._worker.error.connect(self._on_error)
@@ -461,12 +502,31 @@ class WorstImpactPanel(QWidget):
         if not result:
             return
         try:
-            self.coverage_gauge.set_value(result.pity_coverage)
+            # 读数可追溯（2026-10-15）：覆盖倍数对 α 极敏感，读数旁必须带 α / N，
+            # 否则同一面板两个 α 下的读数无法区分（0.2125 vs 0.2792）。分母
+            # `pity_cost` 取自本次运行的分析器（`analyze()` 内已 `_prepare_pool_info`，
+            # 故与读数同源）；取不到就略去该项，不臆造。
+            pity_cost = None
+            _an = getattr(self, '_last_run_analyzer', None)
+            if _an is not None:
+                try:
+                    pity_cost = _an._get_pity_cost()
+                except Exception:
+                    pity_cost = None
+            _alpha = getattr(self, '_last_run_alpha', None)
+            _n = getattr(self, '_last_run_n', None)
+            self.coverage_gauge.set_value(
+                result.pity_coverage,
+                alpha=_alpha, n=_n,
+                worst_resource=result.worst_resource, pity_cost=pity_cost,
+            )
 
+            _trace = _coverage_trace_text(alpha=_alpha, n=_n)
             lines = [
                 f"<b>保守资源:</b> {result.worst_resource:.0f}"
                 f" &nbsp;|&nbsp; <b>大保底覆盖:</b> {result.pity_coverage:.2f} 倍"
-                f" &nbsp;|&nbsp; <b>期望新池子数:</b> {result.expected_pools:.2f}",
+                f" &nbsp;|&nbsp; <b>期望新池子数:</b> {result.expected_pools:.2f}"
+                + (f" &nbsp;|&nbsp; <span style='color:#888'>{_trace}</span>" if _trace else ""),
             ]
             self.summary_label.setText('<br>'.join(lines))
 
@@ -523,3 +583,12 @@ class WorstImpactPanel(QWidget):
         self.status_label.setText(f"错误: {err}")
         import traceback
         traceback.print_exc()
+    def charts_ready(self) -> bool:
+        """本面板持有的全部图表是否就绪（P83 §3.11 第 8 段「图表可用」）。
+
+        只读查询，供启动测量轮询；**不得以「某次取到 True」当完成判据**——
+        `ChartWebView.closeEvent` 会把就绪状态置回 False，判据须为连续多次
+        （见 §3.11 第 8 段第 3 条）。
+        """
+        from .chart_webview import views_ready
+        return views_ready(self.chart_webview)

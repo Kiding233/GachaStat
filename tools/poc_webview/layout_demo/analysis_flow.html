@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>分析页交互模型（独立 demo）</title>
+
+<!-- 独立 demo：演示另一套分析页交互模型，不改 index.html（那页代表旧方案，留着对照）。
+     数据全假，不接 Python。要演示的是四件事：
+       ① 左栏分三层（方法清单 / 参数区 / 运行），点方法行＝选中，点勾选框＝添加一份结果
+       ② 右栏每个结果块的块头是**只读参数快照**（这份结果实际用了什么参数），展开可就地改
+       ③ 「复制一份」出第二份实例，「运行分析」把改过的参数一次提交
+       ④ 分面：某参数取多个值时，一块里出 N 个共享分箱与纵轴的面板（可比性由构造保证）
+     与真界面的关系、以及这套模型的设计理由，见 docs/00-meta/UI设计体系/工作区交互形态.md。 -->
+<link rel="stylesheet" href="libs/ep.min.css">
+<link rel="stylesheet" href="libs/gs-charts.css">
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --line-strong:#d0d5dd;
+  --ink:#1f2430; --ink-2:#5a6272; --ink-3:#8b93a3;
+  --accent:#1976d2; --accent-soft:#e8f1fb;
+  --ok:#2e7d32; --warn:#b26a00; --danger:#c62828;
+  --radius:6px;
+}
+*{box-sizing:border-box}
+[v-cloak]{display:none}
+html,body{height:100%;margin:0}
+body{
+  font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-size:13px;color:var(--ink);background:var(--bg);overflow:hidden;
+}
+#app{height:100vh;display:flex;flex-direction:column}
+
+.topbar{
+  height:38px;flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:0 14px;
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+.topbar b{font-size:14px;color:var(--accent)}
+.tag{font-size:11px;color:var(--ink-3);border:1px dashed var(--line-strong);
+  border-radius:10px;padding:1px 8px}
+.topbar .hint{margin-left:auto;font-size:12px;color:var(--ink-3)}
+
+.wrap{flex:1;display:flex;min-height:0}
+
+/* ── 左栏：三层 ───────────────────────────────────────────── */
+.left{
+  width:300px;flex:0 0 300px;display:flex;flex-direction:column;min-height:0;
+  background:var(--panel);border-right:1px solid var(--line);
+}
+.l-head{
+  flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:9px 12px 7px;
+  border-bottom:1px solid var(--line);font-weight:700;
+}
+.l-head .cnt{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink-3)}
+.l-list{flex:1 1 auto;overflow-y:auto;padding:4px 0}
+.mrow{
+  width:100%;display:flex;align-items:center;gap:8px;padding:7px 12px;
+  border:0;background:none;font:inherit;color:var(--ink);text-align:left;cursor:pointer;
+  border-left:3px solid transparent;
+}
+.mrow:hover{background:var(--bg)}
+/* 选中：左侧色条 + 淡底。与「勾选」分开表达：勾选＝有结果，选中＝参数区在配它 */
+.mrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}
+.mcb{
+  width:14px;height:14px;flex:0 0 auto;border:1px solid var(--line-strong);
+  border-radius:3px;background:#fff;position:relative;
+}
+.mcb.on{background:var(--accent);border-color:var(--accent)}
+.mcb.on::after{
+  content:"";position:absolute;left:3.5px;top:1px;width:4px;height:8px;
+  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);
+}
+.mdot{color:var(--accent);font-size:11px;flex:0 0 auto}
+.mdot:not(.main){color:var(--ink-3)}
+.mname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mcnt{font-size:11px;color:var(--accent);background:var(--accent-soft);
+  border-radius:9px;padding:1px 7px}
+
+/* 参数区：随选中项切换，可折叠。标题必须写清「正在配谁」，
+   否则多份实例并存时读者对不上「这组参数属于哪一块结果」。 */
+.l-param{flex:0 0 auto;border-top:1px solid var(--line);background:#fbfcfd}
+.ph{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer}
+.ptitle{font-weight:700;font-size:12px}
+.pfor{font-size:11px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;flex:1}
+.pcaret{color:var(--ink-3);font-size:11px}
+.pb{padding:0 12px 10px;max-height:236px;overflow-y:auto}
+.prow{display:flex;align-items:flex-start;gap:8px;margin-bottom:7px}
+.prow label{flex:0 0 68px;font-size:12px;color:var(--ink-2);padding-top:4px}
+.prow .pc{flex:1;min-width:0}
+.prow .pnote{font-size:11px;color:var(--ink-3);margin-top:2px}
+
+.l-foot{flex:0 0 auto;padding:10px 12px;border-top:1px solid var(--line)}
+
+/* ── 右栏：结果块 ─────────────────────────────────────────── */
+.right{flex:1;min-width:0;overflow-y:auto;padding:14px 16px}
+.empty{
+  height:100%;display:flex;align-items:center;justify-content:center;
+  color:var(--ink-3);font-size:13px;
+}
+.blk{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  margin-bottom:14px;overflow:hidden;
+}
+.blk.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.bh{
+  display:flex;align-items:center;gap:10px;padding:8px 12px;
+  border-bottom:1px solid var(--line);background:#fcfdfe;
+}
+.bh b{font-size:13px;flex:0 0 auto}
+/* 只读参数快照：这一行的内容是「这张图实际用什么算的」，不是编辑器的第二份副本。
+   收起态是只读，展开态才变控件。 */
+.bsum{
+  font-size:11px;color:var(--ink-2);background:var(--bg);border:1px solid var(--line);
+  border-radius:10px;padding:2px 9px;flex:0 1 auto;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;
+}
+.bdirty{font-size:11px;color:var(--warn);flex:0 0 auto}
+.bacts{margin-left:auto;display:flex;align-items:center;gap:4px;flex:0 0 auto}
+.bicon{
+  border:1px solid var(--line);background:#fff;border-radius:4px;font:inherit;
+  font-size:11px;color:var(--ink-2);padding:3px 8px;cursor:pointer;
+}
+.bicon:hover{border-color:var(--line-strong);color:var(--ink)}
+.bp{padding:9px 12px;border-bottom:1px solid var(--line);background:#fbfcfd}
+.bb{padding:6px 8px 8px}
+.fn{font-size:11px;color:var(--ink-3);padding:0 6px 6px}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+  <div class="topbar">
+    <b>分析页交互模型</b>
+    <span class="tag">独立 demo · 数据全假</span>
+    <span class="hint">
+      点方法行＝选中（参数区切过去，不出结果）；点勾选框＝添加一份结果
+    </span>
+  </div>
+
+  <div class="wrap">
+    <!-- ── 左栏 ─────────────────────────────────────────── -->
+    <aside class="left">
+      <div class="l-head">
+        <span>间隔分析</span>
+        <span class="cnt">{{ blocks.length }} 份结果 / {{ METHODS.length }} 个方法</span>
+      </div>
+
+      <!-- 第一层：方法清单 -->
+      <div class="l-list">
+        <button v-for="m in METHODS" :key="m.key" class="mrow"
+                :class="{sel: selMethodKey===m.key}"
+                @click="selectMethod(m)">
+          <span class="mcb" :class="{on: countOf(m)>0}"
+                @click.stop="toggleMethod(m)"></span>
+          <span class="mdot" :class="{main: m.main}">{{ m.main ? '●' : '○' }}</span>
+          <span class="mname">{{ m.name }}</span>
+          <span class="mcnt" v-if="countOf(m)">{{ countOf(m) }} 份</span>
+        </button>
+      </div>
+
+      <!-- 第二层：参数区（随选中项切换，可折叠） -->
+      <div class="l-param">
+        <div class="ph" @click="pFolded = !pFolded">
+          <span class="ptitle">参数</span>
+          <span class="pfor">{{ ownerLabel }}</span>
+          <span class="pcaret">{{ pFolded ? '▸' : '▾' }}</span>
+        </div>
+        <div class="pb" v-show="!pFolded">
+          <div class="prow" v-for="f in ownerFields" :key="f.k">
+            <label>{{ f.k }}</label>
+            <div class="pc">
+              <el-select v-if="f.t==='multi'" v-model="ownerParams[f.k]" multiple
+                         size="small" collapse-tags collapse-tags-tooltip
+                         style="width:100%">
+                <el-option v-for="o in f.opts" :key="o" :label="o" :value="o"></el-option>
+              </el-select>
+              <el-select v-else-if="f.t==='sel'" v-model="ownerParams[f.k]" size="small"
+                         style="width:100%">
+                <el-option v-for="o in f.opts" :key="o" :label="o" :value="o"></el-option>
+              </el-select>
+              <el-input-number v-else-if="f.t==='num'" v-model="ownerParams[f.k]"
+                               size="small" :min="f.min" :max="f.max" :step="f.step"
+                               controls-position="right" style="width:100%"></el-input-number>
+              <div class="pnote" v-if="f.facet">
+                可多选：勾几个，一块里出几个面（共享分箱与纵轴）
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 第三层：运行 -->
+      <div class="l-foot">
+        <el-button type="primary" style="width:100%" @click="run">
+          运行分析
+        </el-button>
+        <el-button text style="width:100%;margin:6px 0 0" @click="clearAll">
+          清除结果
+        </el-button>
+      </div>
+    </aside>
+
+    <!-- ── 右栏：结果 ───────────────────────────────────── -->
+    <main class="right">
+      <div v-if="!blocks.length" class="empty">
+        左栏点一下勾选框，这里出现一份结果。
+      </div>
+
+      <section v-for="b in blocks" :key="b.id" class="blk"
+               :class="{sel: isSelBlock(b)}" @click="selectBlock(b)">
+        <div class="bh">
+          <b>{{ methodOf(b).name }}</b>
+          <!-- 只读快照：写的是 applied（这张图实际用的），不是 draft（正在改的） -->
+          <span class="bsum" :title="summary(b)">{{ summary(b) }}</span>
+          <span class="bdirty" v-if="dirty(b)">参数已改 · 未运行</span>
+          <span class="bacts">
+            <button class="bicon" @click.stop="b.expanded = !b.expanded">
+              {{ b.expanded ? '▾ 收起参数' : '▸ 展开参数' }}
+            </button>
+            <button class="bicon" title="以这一份的参数再加一份" @click.stop="dup(b)">
+              复制一份
+            </button>
+            <button class="bicon" @click.stop="del(b)">✕</button>
+          </span>
+        </div>
+
+        <div class="bp" v-show="b.expanded" @click.stop>
+          <div class="prow" v-for="f in fieldsOf(b)" :key="f.k">
+            <label>{{ f.k }}</label>
+            <div class="pc">
+              <el-select v-if="f.t==='multi'" v-model="b.draft[f.k]" multiple
+                         size="small" collapse-tags collapse-tags-tooltip style="width:100%">
+                <el-option v-for="o in f.opts" :key="o" :label="o" :value="o"></el-option>
+              </el-select>
+              <el-select v-else-if="f.t==='sel'" v-model="b.draft[f.k]" size="small"
+                         style="width:100%">
+                <el-option v-for="o in f.opts" :key="o" :label="o" :value="o"></el-option>
+              </el-select>
+              <el-input-number v-else-if="f.t==='num'" v-model="b.draft[f.k]" size="small"
+                               :min="f.min" :max="f.max" :step="f.step"
+                               controls-position="right" style="width:100%"></el-input-number>
+            </div>
+          </div>
+          <p class="fn">
+            改完按左栏底部的「运行分析」提交；块头摘要跟着换成新参数。
+          </p>
+        </div>
+
+        <div class="bb">
+          <p class="fn" v-if="faces(b).length > 1">
+            {{ faces(b).length }} 个面共享分箱宽度 {{ b.applied['分箱宽度'] }} 抽与同一纵轴上限，
+            所以面与面之间可以直接比高低。
+          </p>
+          <facet-chart v-if="faces(b).length > 1" :faces="faces(b)" :bin-w="b.applied['分箱宽度']"></facet-chart>
+          <gs-figure v-else :spec="specOf(b)" :height="168"></gs-figure>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="libs/vuemin.js"></script>
+<script src="libs/ep.min.js"></script>
+<script src="libs/echarts.min.js"></script>
+<script src="libs/gs-charts.js"></script>
+<script>
+/* ══ 假数据 ══════════════════════════════════════════════════════
+   与 index.html 探针同源：pmf → 逆变换抽样 → 样本数组。
+   图与表都只认样本数组，这样走的是与后端一致的分箱路径。 */
+const IV_PMF = (function () {
+  const p = new Array(92).fill(0);
+  let a = 0.0055;
+  for (let n = 1; n <= 22; n++) { p[n] = a; a *= 0.90; }
+  for (let n = 23; n <= 59; n++) p[n] = 0.04 / 37;
+  for (let n = 60; n <= 79; n++) p[n] = 0.26 / 20;
+  [[80, .05], [81, .105], [82, .13], [83, .12], [84, .10], [85, .07],
+   [86, .04], [87, .015], [88, .008], [89, .004], [90, .003]]
+    .forEach(function (r) { p[r[0]] = r[1]; });
+  const t = p.reduce(function (x, y) { return x + y; }, 0);
+  return p.map(function (v) { return v / t; });
+})();
+
+/* 终止于普通 SSR 的那一类（P80 §3.4 ⑦）：比终止于限定卡的那一类短得多。 */
+const IV_PMF_SSR = (function () {
+  const p = new Array(92).fill(0);
+  let a = 0.019;
+  for (let n = 1; n <= 79; n++) { p[n] = a; a *= 0.981; }
+  for (let n = 80; n <= 90; n++) p[n] = 0.0015;
+  const t = p.reduce(function (x, y) { return x + y; }, 0);
+  return p.map(function (v) { return v / t; });
+})();
+
+/* 目标卡：命中面比限定卡更窄，所以早段更稀、整体更长。示意量级，
+   只为让三个面看起来「确实不是同一份分布」。 */
+const IV_PMF_TARGET = (function () {
+  const p = new Array(92).fill(0);
+  let a = 0.0040;
+  for (let n = 1; n <= 22; n++) { p[n] = a; a *= 0.90; }
+  for (let n = 23; n <= 59; n++) p[n] = 0.03 / 37;
+  for (let n = 60; n <= 79; n++) p[n] = 0.22 / 20;
+  [[80, .06], [81, .12], [82, .14], [83, .125], [84, .105], [85, .075],
+   [86, .045], [87, .018], [88, .009], [89, .005], [90, .004]]
+    .forEach(function (r) { p[r[0]] = r[1]; });
+  const t = p.reduce(function (x, y) { return x + y; }, 0);
+  return p.map(function (v) { return v / t; });
+})();
+
+/* mulberry32：全程 Math.imul 与 >>>0，double 下不丢精度 */
+function ivRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function ivCum(pmf) {
+  const c = []; let s = 0;
+  for (let i = 0; i < pmf.length; i++) { s += pmf[i]; c.push(s); }
+  return c;
+}
+
+/* 逆变换抽样：先把 pmf 变成累计分布，再二分定位 */
+function ivSample(pmf, n, seed) {
+  const cum = ivCum(pmf), rnd = ivRng(seed), out = [];
+  for (let i = 0; i < n; i++) {
+    const u = rnd();
+    let lo = 0, hi = cum.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid] < u) lo = mid + 1; else hi = mid; }
+    out.push(lo);
+  }
+  return out;
+}
+
+/* 命中集 → 样本。三个命中集各用不同 pmf，种子固定，所以每次运行同一份参数
+   得到同一批样本（演示里「运行分析」不该让图随机跳）。 */
+const HIT_SETS = {
+  '限定卡（6 张）': { pmf: IV_PMF, seed: 355 },
+  '全部 SSR（12 张）': { pmf: IV_PMF_SSR, seed: 77 },
+  '目标卡': { pmf: IV_PMF_TARGET, seed: 941 },
+};
+const HIT_NAMES = Object.keys(HIT_SETS);
+const _sampleCache = {};
+function samplesFor(hit) {
+  if (!_sampleCache[hit]) {
+    const h = HIT_SETS[hit] || HIT_SETS[HIT_NAMES[0]];
+    _sampleCache[hit] = ivSample(h.pmf, 1200, h.seed);
+  }
+  return _sampleCache[hit];
+}
+
+/* 分箱：0 到 90 抽，等宽。共享分箱就是靠「所有面用同一组 edges」实现的。 */
+function binsOf(samples, w) {
+  const n = Math.floor(90 / w) + 1;
+  const counts = new Array(n).fill(0);
+  samples.forEach(function (s) {
+    if (s <= 0 || s > 90) return;
+    let i = Math.floor(s / w); if (i >= n) i = n - 1;
+    counts[i]++;
+  });
+  return counts.map(function (c, i) { return [i * w + w / 2, c / (samples.length * w)]; });
+}
+
+/* ══ 方法表 ══════════════════════════════════════════════════════
+   每个方法 = 一张声明的参数表（正式版由 AnalysisSpec.params 生成，§5.6）。
+   facet:true 的参数允许取多值，取几个就出几个面。 */
+const METHODS = [
+  { key: 'iv_hist', name: '池化间隔分布', main: true,
+    params: [
+      { k: '命中集', t: 'multi', v: ['限定卡（6 张）'], opts: HIT_NAMES, facet: true },
+      { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 20, step: 1 },
+      { k: '参考线', t: 'multi', v: ['分位线'], opts: ['分位线', '均值线'] },
+    ] },
+  { key: 'iv_cdf', name: '累积分布 F(n)',
+    params: [
+      { k: '命中集', t: 'multi', v: ['限定卡（6 张）'], opts: HIT_NAMES, facet: true },
+      { k: '分箱宽度', t: 'num', v: 5, min: 1, max: 20, step: 1 },
+    ] },
+  { key: 'iv_survival', name: '生存函数 S(n)',
+    params: [
+      { k: '命中集', t: 'multi', v: ['限定卡（6 张）'], opts: HIT_NAMES, facet: true },
+      { k: '标注软保底区', t: 'sel', v: '是', opts: ['是', '否'] },
+    ] },
+  { key: 'iv_hazard', name: '风险函数 h(n)',
+    params: [
+      { k: '命中集', t: 'multi', v: ['限定卡（6 张）'], opts: HIT_NAMES, facet: true },
+      { k: '风险集下限', t: 'num', v: 30, min: 1, max: 500, step: 1 },
+    ] },
+  { key: 'iv_first', name: '首次命中间隔',
+    params: [
+      { k: '命中集', t: 'multi', v: ['限定卡（6 张）'], opts: HIT_NAMES, facet: true },
+    ] },
+  { key: 'iv_kth', name: '第 k 次间隔',
+    params: [
+      { k: '命中集', t: 'multi', v: ['限定卡（6 张）'], opts: HIT_NAMES, facet: true },
+      { k: 'k 范围', t: 'sel', v: '1–5', opts: ['1–3', '1–5'] },
+    ] },
+  { key: 'iv_mix', name: '间隔 × 终止卡类型',
+    params: [
+      { k: '命中集', t: 'multi', v: ['全部 SSR（12 张）'], opts: HIT_NAMES, facet: true },
+    ] },
+];
+
+/* ── 由参数算出图规格。分面时每个面各算一份，但**共享分箱与纵轴** ── */
+function histSpec(params) {
+  const s = samplesFor(params['命中集'][0]);
+  const lines = [];
+  if ((params['参考线'] || []).indexOf('分位线') >= 0) lines.push(0.05, 0.5, 0.95);
+  return {
+    chart_type: 'histogram', title: '', xlabel: '间隔（抽）', ylabel: '密度',
+    data: { samples: s, quantile_lines: lines, density: true },
+    annotations: (params['参考线'] || []).indexOf('均值线') >= 0
+      ? [{ type: 'vline', value: avg(s), color: '#8b93a3', dash: 'dot', text: '均值' }]
+      : [],
+    layout_hints: { nbins: Math.max(4, Math.round(90 / params['分箱宽度'])) },
+  };
+}
+function cdfSpec(params) {
+  const s = samplesFor(params['命中集'][0]).slice().sort(function (a, b) { return a - b; });
+  const x = [], y = [];
+  for (let i = 0; i < s.length; i++) { x.push(s[i]); y.push((i + 1) / s.length); }
+  return {
+    chart_type: 'cdf', title: '', xlabel: '间隔（抽）', ylabel: '累积概率',
+    data: { samples: s },
+  };
+}
+function survivalSpec(params) {
+  const pmf = (HIT_SETS[params['命中集'][0]] || HIT_SETS[HIT_NAMES[0]]).pmf;
+  const x = [], y = [];
+  for (let n = 0; n <= 90; n++) {
+    let rest = 0;
+    for (let k = n + 1; k <= 90; k++) rest += pmf[k];
+    x.push(n); y.push(+rest.toFixed(5));
+  }
+  const spec = {
+    chart_type: 'scatter', title: '', xlabel: '间隔（抽）', ylabel: 'P(间隔 > n)',
+    data: { traces: [{ name: 'S(n)', mode: 'lines', marker_symbol: 'none',
+      marker_color: GS.CAT[0], x: x, y: y }] },
+    layout_hints: { y_range: [0, 1.02] },
+  };
+  if (params['标注软保底区'] === '是') {
+    spec.shaded_regions = [{ lower: 80, upper: 90, color: 'rgba(25,118,210,.08)',
+      label: '软保底区间' }];
+  }
+  return spec;
+}
+function hazardSpec(params) {
+  const pmf = (HIT_SETS[params['命中集'][0]] || HIT_SETS[HIT_NAMES[0]]).pmf;
+  const lo = params['风险集下限'] || 30;
+  const x = [], y = [];
+  for (let n = Math.max(1, lo); n <= 90; n++) {
+    let risk = 0;
+    for (let k = n; k <= 90; k++) risk += pmf[k];
+    x.push(n); y.push(+(pmf[n] / (risk || 1)).toFixed(4));
+  }
+  return {
+    chart_type: 'scatter', title: '', xlabel: '已抽抽数 n', ylabel: 'h(n)',
+    data: { traces: [{ name: 'h(n)', mode: 'lines', marker_symbol: 'none',
+      marker_color: GS.CAT[0], x: x, y: y }] },
+    layout_hints: { y_range: [0, 1.08] },
+  };
+}
+function firstSpec(params) {
+  const a = binsOf(samplesFor(params['命中集'][0]), 5);
+  return {
+    chart_type: 'scatter', title: '', xlabel: '间隔（抽）', ylabel: '密度',
+    data: { traces: [{ name: '命中集内全部间隔', mode: 'lines', marker_symbol: 'none',
+      marker_color: GS.CAT[1], x: a.map(function (r) { return r[0]; }),
+      y: a.map(function (r) { return r[1]; }) }] },
+  };
+}
+function kthSpec(params) {
+  const n = params['k 范围'] === '1–3' ? 3 : 5;
+  const mean = [76.4, 76.3, 77.7, 70.2, 60.7].slice(0, n);
+  return {
+    chart_type: 'scatter', title: '', xlabel: '第 k 次间隔', ylabel: '间隔（抽）',
+    data: { x: mean.map(function (_, i) { return i + 1; }), y: mean },
+  };
+}
+function mixSpec(params) {
+  const a = binsOf(samplesFor('限定卡（6 张）'), 5);
+  const b = binsOf(samplesFor('全部 SSR（12 张）'), 5);
+  return {
+    chart_type: 'scatter', title: '', xlabel: '间隔（抽）', ylabel: '密度',
+    data: { traces: [
+      { name: '终止于限定卡', mode: 'lines', marker_symbol: 'none', marker_color: GS.CAT[0],
+        x: a.map(function (r) { return r[0]; }), y: a.map(function (r) { return r[1]; }) },
+      { name: '终止于普通 SSR', mode: 'lines', marker_symbol: 'none', marker_color: GS.CAT[1],
+        x: b.map(function (r) { return r[0]; }), y: b.map(function (r) { return r[1]; }) }] },
+  };
+}
+const SPEC_OF = {
+  iv_hist: histSpec, iv_cdf: cdfSpec, iv_survival: survivalSpec,
+  iv_hazard: hazardSpec, iv_first: firstSpec, iv_kth: kthSpec, iv_mix: mixSpec,
+};
+function avg(a) { return a.reduce(function (x, y) { return x + y; }, 0) / a.length; }
+
+/* ── 分面渲染：N 个面板共享分箱与纵轴上限。
+      不写进 libs/gs-charts.js，因为正式版要怎么落还没定；这里是 demo 内的一次性实现。 */
+const FacetChart = {
+  props: { faces: { type: Array, default: function () { return []; } },
+           binW: { type: Number, default: 5 } },
+  template: '<div ref="el" class="fc" style="width:100%;height:196px"></div>',
+  mounted: function () { this.draw(); },
+  beforeUnmount: function () {
+    if (this._ro) this._ro.disconnect();
+    if (this.inst && !this.inst.isDisposed()) this.inst.dispose();
+  },
+  watch: {
+    faces: { handler: function () { this.draw(); }, deep: true },
+    binW: function () { this.draw(); },
+  },
+  methods: {
+    draw: function () {
+      const el = this.$refs.el;
+      if (!el) return;
+      const w = Math.round(el.getBoundingClientRect().width);
+      if (!w) return;                     // 零尺寸不建实例，等拿到尺寸再来
+      if (!this.inst) this.inst = echarts.init(el);
+      this.inst.setOption(this.option(w), true);
+    },
+    option: function (w) {
+      const faces = this.faces, bw = this.binW;
+      const n = faces.length;
+      /* 关键：所有面用同一组 edges（共享分箱），纵轴上限取全体最大值（共享刻度）。
+         这两条是「面与面可以直接比」的全部来源。 */
+      const counts = faces.map(function (f) { return binsOf(f.samples, bw); });
+      let ymax = 0;
+      counts.forEach(function (c) { c.forEach(function (r) { ymax = Math.max(ymax, r[1]); }); });
+      ymax = (ymax || 1) * 1.14;
+
+      const perRow = n <= 3 ? n : 2;
+      const rows = Math.ceil(n / perRow);
+      /* GAPX 要留够：每个面都画自己的纵轴刻度（共享刻度这件事要看得见），
+         留 14px 时左面横轴末端的刻度会和右面纵轴顶端的刻度叠在一起。 */
+      const L = 46, R = 14, T = 26, B = 30, GAPX = 38, GAPY = 26;
+      const cellW = (w - L - R - GAPX * (perRow - 1)) / perRow;
+      const cellH = (196 - T - B - GAPY * (rows - 1)) / rows;
+
+      const grid = [], xAxis = [], yAxis = [], series = [], titles = [];
+      for (let i = 0; i < n; i++) {
+        const gx = i % perRow, gy = Math.floor(i / perRow);
+        const left = L + gx * (cellW + GAPX);
+        const top = T + gy * (cellH + GAPY);
+        grid.push({ left: left, top: top, width: cellW, height: cellH, containLabel: false });
+        xAxis.push({
+          type: 'category', gridIndex: i,
+          data: counts[i].map(function (r) { return String(Math.round(r[0])); }),
+          axisLine: { lineStyle: { color: '#d0d5dd' } },
+          axisTick: { show: false },
+          axisLabel: { color: '#8b93a3', fontSize: 10,
+            interval: bw < 5 ? 4 : 2 },
+          splitLine: { show: false },
+        });
+        yAxis.push({
+          type: 'value', gridIndex: i, min: 0, max: +ymax.toFixed(4),
+          /* 每个面都显示纵轴刻度：共享刻度这件事要看得见，只留第一列会看不出「同刻度」 */
+          axisLabel: { color: '#8b93a3', fontSize: 10,
+            formatter: function (v) { return v.toFixed(2); } },
+          axisLine: { show: false }, axisTick: { show: false },
+          splitLine: { lineStyle: { color: '#eef0f4' } },
+        });
+        series.push({
+          type: 'bar', xAxisIndex: i, yAxisIndex: i,
+          data: counts[i].map(function (r) { return +r[1].toFixed(5); }),
+          barWidth: '88%',
+          itemStyle: { color: GS.CAT[i % GS.CAT.length], opacity: .9 },
+        });
+        titles.push({
+          show: true, text: faces[i].label,
+          left: left + cellW / 2, top: top - 18,
+          textAlign: 'center',
+          textStyle: { color: '#5a6272', fontSize: 11, fontWeight: 600 },
+        });
+      }
+      return {
+        animation: false, title: titles, grid: grid, xAxis: xAxis, yAxis: yAxis,
+        series: series, tooltip: { trigger: 'axis' },
+      };
+    },
+  },
+};
+
+/* ══ 应用 ═══════════════════════════════════════════════════════ */
+const { createApp, reactive, ref, computed } = Vue;
+const app = createApp({
+  components: { FacetChart: FacetChart },
+  setup: function () {
+    const blocks = ref([]);
+    const drafts = reactive({});        // 方法 key → 下一份实例的参数（用于新增）
+    /* 选中的单位是「方法」或「块」。参数区显示谁的参数，由它决定。 */
+    const sel = reactive({ kind: 'method', key: METHODS[0].key, blockId: null });
+    const pFolded = ref(false);
+
+    let nextId = 1;
+    function defaultsOf(m) {
+      const o = {};
+      m.params.forEach(function (p) { o[p.k] = Array.isArray(p.v) ? p.v.slice() : p.v; });
+      return o;
+    }
+    METHODS.forEach(function (m) { drafts[m.key] = defaultsOf(m); });
+
+    function methodOf(b) { return METHODS.find(function (m) { return m.key === b.key; }); }
+    function countOf(m) {
+      return blocks.value.filter(function (b) { return b.key === m.key; }).length;
+    }
+    function curBlock() {
+      return blocks.value.find(function (b) { return b.id === sel.blockId; }) || null;
+    }
+    function isSelBlock(b) { return sel.kind === 'block' && sel.blockId === b.id; }
+
+    /* 参数区的所有者：选中块 → 该块的 draft；选中方法 → 该方法的下次参数 */
+    const ownerParams = computed(function () {
+      if (sel.kind === 'block') { const b = curBlock(); if (b) return b.draft; }
+      return drafts[sel.key];
+    });
+    const ownerFields = computed(function () {
+      if (sel.kind === 'block') {
+        const b = curBlock();
+        if (b) return methodOf(b).params;
+      }
+      const m = METHODS.find(function (x) { return x.key === sel.key; });
+      return m ? m.params : [];
+    });
+    const ownerLabel = computed(function () {
+      if (sel.kind === 'block') {
+        const b = curBlock();
+        if (b) return methodOf(b).name + ' · ' + summary(b);
+      }
+      const m = METHODS.find(function (x) { return x.key === sel.key; });
+      return m ? m.name + ' · 下一份' : '';
+    });
+
+    /* 左栏高亮的是「当前在配谁」：选中块时高亮它所属的方法，选中方法时高亮方法本身。
+       用计算属性而不是在模板里现算，是因为模板里现算要写两层三元，容易写错状态名。 */
+    const selMethodKey = computed(function () {
+      if (sel.kind === 'block') { const b = curBlock(); if (b) return b.key; }
+      return sel.key;
+    });
+
+    function selectMethod(m) { sel.kind = 'method'; sel.key = m.key; sel.blockId = null; }
+    function selectBlock(b) { sel.kind = 'block'; sel.key = b.key; sel.blockId = b.id; }
+
+    /* 勾选框：这个方法有没有结果。勾上 = 加一份；取消 = 删掉它所有块。
+       「再来一份」不在这里，在块头的「复制一份」上（jamovi/JASP/Grafana 都是 Duplicate）。 */
+    function toggleMethod(m) {
+      if (countOf(m) > 0) {
+        blocks.value = blocks.value.filter(function (b) { return b.key !== m.key; });
+        if (sel.kind === 'block' && !curBlock()) selectMethod(m);
+        return;
+      }
+      addBlock(m, drafts[m.key]);
+    }
+    function addBlock(m, params) {
+      const applied = JSON.parse(JSON.stringify(params));
+      const b = { id: nextId++, key: m.key, applied: applied,
+                  draft: JSON.parse(JSON.stringify(applied)), expanded: false };
+      blocks.value.push(b);
+      selectBlock(b);
+      return b;
+    }
+    /* 复制一份：以「这一份现在看到的结果」（applied）为参数再加一份。
+       复制 applied 而不是 draft：所见即所得，复制的是你正在比的那张图。 */
+    function dup(b) { const nb = addBlock(methodOf(b), b.applied); nb.expanded = true; }
+    function del(b) {
+      const i = blocks.value.indexOf(b);
+      if (i >= 0) blocks.value.splice(i, 1);
+      if (isSelBlock(b)) selectMethod(methodOf(b));
+    }
+    function clearAll() {
+      blocks.value = [];
+      sel.kind = 'method'; sel.blockId = null;
+    }
+
+    /* 运行分析：把当前这组参数提交成「这一份结果实际用的参数」。
+       选中块 → 就地更新它；选中方法（还没出结果）→ 新增一份。
+       这是全套里唯一的运行入口，块内不再各放一个重跑按钮。 */
+    function run() {
+      if (sel.kind === 'block') {
+        const b = curBlock();
+        if (!b) return;
+        b.applied = JSON.parse(JSON.stringify(b.draft));
+        return;
+      }
+      addBlock(METHODS.find(function (m) { return m.key === sel.key; }), drafts[sel.key]);
+    }
+
+    function dirty(b) {
+      return JSON.stringify(b.applied) !== JSON.stringify(b.draft);
+    }
+    /* 块头摘要：只列与默认值不同的项，全默认时写「默认参数」。
+       全写会把块头塞满，读者反而读不出差异。 */
+    function summary(b) {
+      const m = methodOf(b);
+      if (!m) return '';
+      const d = defaultsOf(m), parts = [];
+      m.params.forEach(function (p) {
+        const v = b.applied[p.k];
+        if (JSON.stringify(v) === JSON.stringify(d[p.k])) return;
+        parts.push(p.k + ' ' + (Array.isArray(v) ? v.map(shortName).join('+') : v));
+      });
+      if (!parts.length) return '默认参数';
+      /* 分面时把面数写在最前：那是这一份结果与单面结果最大的差别 */
+      const n = facetValues(b).length;
+      return (n > 1 ? n + ' 面 · ' : '') + parts.join(' · ');
+    }
+    function shortName(s) { return String(s).replace(/（[^）]*）/g, ''); }
+
+    /* 分面取值：取该块某参数的多个值。只有一个值时不分面。 */
+    function facetValues(b) {
+      const m = methodOf(b);
+      if (!m) return [];
+      const fp = m.params.find(function (p) { return p.facet; });
+      if (!fp) return [];
+      const v = b.applied[fp.k];
+      return Array.isArray(v) ? v : (v ? [v] : []);
+    }
+    function faces(b) {
+      const hit = facetValues(b);
+      if (hit.length < 2) return [];
+      return hit.map(function (h) { return { label: shortName(h), samples: samplesFor(h) }; });
+    }
+    function specOf(b) {
+      const fn = SPEC_OF[b.key];
+      return fn ? fn(b.applied) : { chart_type: 'histogram', data: {}, title: '' };
+    }
+    function fieldsOf(b) { return methodOf(b).params; }
+
+    return { METHODS: METHODS, blocks: blocks, sel: sel, pFolded: pFolded,
+             ownerParams: ownerParams, ownerFields: ownerFields, ownerLabel: ownerLabel,
+             selectMethod: selectMethod, selectBlock: selectBlock, toggleMethod: toggleMethod,
+             dup: dup, del: del, clearAll: clearAll, run: run,
+             dirty: dirty, summary: summary, faces: faces, specOf: specOf,
+             fieldsOf: fieldsOf, methodOf: methodOf, countOf: countOf,
+             isSelBlock: isSelBlock, selMethodKey: selMethodKey };
+  },
+});
+app.use(ElementPlus).use(GS).mount('#app');
+</script>
+</body>
+</html>

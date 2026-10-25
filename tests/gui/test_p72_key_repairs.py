@@ -248,52 +248,6 @@ class TestAnalysisPoolNamesBannerLayer:
         assert names['c2'] == '武器特选'
 
 
-def _make_gdr_ctx():
-    from gacha_simulator.core.gdr import GDRContext
-    return GDRContext(
-        target_specs={'card_A': 1},
-        ssr_ids={'card_A'},
-        all_drawable_ids=['card_A'],
-        initial_resources={'draw_resource': 1000},
-        resource_gain_per_day={},
-    )
-
-
-class TestPerPoolAnalysisBannerKeys:
-    """ISSUE-106 第二部分：per_pool_analysis 两产键方返回键均为 banner 级。"""
-
-    def test_compute_cumulative_snapshots_banner_keys(self):
-        from gacha_simulator.core.info_vector import InfoVector
-        from gacha_simulator.core.per_pool_analysis import compute_cumulative_snapshots
-
-        history = [
-            InfoVector('draw', 'card_A', 'b1.main', real_time_after=5.0,
-                       resources_consumed={'draw_resource': 160}),
-            InfoVector('draw', 'card_A', 'b2.main', real_time_after=15.0,
-                       resources_consumed={'draw_resource': 160}),
-        ]
-        pool_end_times = {'b1': 10.0, 'b2': 20.0}
-        snaps = compute_cumulative_snapshots(history, _make_gdr_ctx(), pool_end_times)
-        assert [s.pool_id for s in snaps] == ['b1', 'b2']  # 键为 banner 级
-        for s in snaps:
-            assert '.' not in s.pool_id
-
-    def test_cumulative_gdr_at_pool_ends_banner_keys(self):
-        from gacha_simulator.core.per_pool_analysis import (
-            CumulativeSnapshot, cumulative_gdr_at_pool_ends,
-        )
-
-        snap = CumulativeSnapshot(
-            pool_id='b1', pool_end_time=10.0, cumulative_draws=10,
-            cumulative_target_cards=1, cumulative_pity_draws=0,
-            cumulative_resources_consumed={'draw_resource': 1600},
-            target_achievement_rate=1.0, ssr_collection_rate=1.0,
-            resource_remaining=100.0,
-        )
-        result = cumulative_gdr_at_pool_ends({'b1': [snap], 'b2': []})
-        assert set(result.keys()) == {'b1'}  # 空 snaps 跳过，键为 banner 级
-
-
 def test_parallel_vs_single_thread_snapshot_equiv():
     """ISSUE-104：并行（WorkerLocalExtractor + merge_extraction_packets）与单线程
     （DrawSequenceExtractor）两条路径累积快照键均为 banner 级，累积消费端

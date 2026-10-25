@@ -10,6 +10,8 @@
    / ``banner_end_*`` 均按 8.3「有意变更」表变化），但须显式核对新值——
    ``final_time`` 必须收敛到 ``env.end_time``
 4. 其余 7 组（含插件策略）**逐字段严格一致**
+   （``smart`` / ``pool_quota`` / ``draw_target`` 三组曾因 2026-10-06 软保底
+   语义修正而整组豁免，同日已改为**重固化**这三组 golden 并重新纳入本档）
 5. 两侧固定 ``sim_start_date`` 为 golden 的生成日：``config.toml`` 含 ``monthly_day``
    收入规则，其日程锚定该字段，不固定则 ``draw_resources_gained`` 的归属抽次随墙上
    时钟差 1，对照在非生成日恒红（P79 R19 审计定位）
@@ -63,6 +65,12 @@ GLOBAL_ALLOWED = {'iterations', 'warnings', 'result_version'}
 SKIP_FIELDS = {'generated_at'}
 # 整组豁免的策略（1c 修复了其时间冻结失效形态，全字段按白名单变化）
 EXEMPT_STRATEGIES = {'fixed_count', 'stop_on_target'}
+# 2026-10-06：软保底语义修正（§3.4.1 修正 ① ② + §3.4.1.2 端点裁决）曾使
+#   `smart` / `pool_quota` / `draw_target` 三组的逐抽序列与汇总字段变化。
+#   当时以 `SOFT_SEMANTICS_EXEMPT` 整组豁免处置，但该分支只断言 `final_time`
+#   收敛、不做任何字段比较，等于把这三组永久移出回归网（独立审查提出）。
+#   现改为**重固化这三组 golden**（新基线已记入其 meta.note），三组重新纳入
+#   逐字段对照，故不再需要任何 soft 专属豁免集。
 
 
 def snapshot_name(strategy_key: str) -> str:

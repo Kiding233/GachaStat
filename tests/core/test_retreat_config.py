@@ -5,6 +5,14 @@ from gacha_simulator.core.config_store import (
     LifecycleRuleEntry, DAY,
 )
 from gacha_simulator.core.retreat_config import RetreatConfigBuilder
+# P64 S9-2：`PityContext.sim` 非 Optional（3.10.2）------------------------------
+# 直构 ctx 与 `PityEngine` 三个调度入口（before_draw / after_draw /
+# get_probabilities）的 `sim` 都是**必填**（缺参在构造 ctx 时即 TypeError）。本文件
+# 只验与「玩家持有」无关的机制，故用**空 state 的视图**作最小替身。
+from gacha_simulator.core.state import GachaState as _GachaState, SimView as _SimView
+
+_SIM = _SimView(_GachaState())
+
 
 
 def _make_store_with_3_pools():
@@ -347,3 +355,145 @@ def test_min_resource_build_env_banner_fallback_equiv():
     assert ids1 == ids2, f'env1={ids1} env2={ids2}'
     assert ids1 == ['b2']  # offset_day=b1.end_day(42) → 截断保留 b2
     assert env1.pool_end_times == env2.pool_end_times
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4b / §3.6 AUDIT-BREAK-1：retreat_config 浅拷贝的字段全量保真
+# ══════════════════════════════════════════════════════════════════
+# 第三处透传点。原为 24 个字段的显式列举（曾漏拷 selected_card_init，即 ISSUE-132），
+# 现由 `dataclasses.fields(PityDef)` 驱动——漏字段的失败形态是**静默落回默认值**。
+
+def _all_fields_non_default() -> dict:
+    """一条全部字段均为非默认值的 `PityDef` kwargs（取值同 S4b 的字段往返守卫）。"""
+    return {
+        'name': 'pity_full',
+        'btype': 'soft_interval',
+        'scope': 'sr',
+        'target_featured': True,
+        'deltas': ((74, 0.0), (16, 6.25)),
+        'threshold': 90,
+        'counter_init': 3,
+        'guaranteed_init': True,
+        'fate_points_init': 2,
+        'selected_card_init': 'up_a',
+        'soft_start': 74,
+        'soft_end': 90,
+        'soft_increment': 6.25,
+        'soft_deltas': ((74, 0.0), (16, 6.25)),
+        'cr_counter_threshold': 3,
+        'cr_base_rate': 0.018,
+        'cr_state_probs': (0.0, 0.0, 0.0, 1.0),
+        'fate_threshold': 1,
+        'switch_allowed': False,
+        'switch_resets_progress': False,
+        'pools': ('pool_3.main',),
+        'deactivate_on_early_hit': True,
+        'depends_on': 'other',
+        'max_triggers': 2,
+        'reset': 'featured',
+        'priority': 5,
+    }
+
+
+def _truncated_pity(pity_counter_init=None):
+    store = _make_store_with_3_pools()
+    store.pity.pities = [PityDef(**_all_fields_non_default())]
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='pool_2',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init=pity_counter_init or {},
+    )
+    assert len(truncated.pity.pities) == 1
+    return truncated.pity.pities[0]
+
+
+def test_truncate_preserves_every_pitydef_field():
+    """截断浅拷贝逐字段等值——漏字段即静默落回默认值（AUDIT-BREAK-1）。"""
+    import dataclasses
+
+    store = _make_store_with_3_pools()
+    store.pity.pities = [PityDef(**_all_fields_non_default())]
+    src = store.pity.pities[0]
+    truncated = RetreatConfigBuilder.build(
+        original_store=store,
+        from_pool_id='pool_2',
+        initial_resources={'draw_resource': 5000},
+        pity_counter_init={},
+    )
+    got = truncated.pity.pities[0]
+    for f in dataclasses.fields(PityDef):
+        assert getattr(got, f.name) == getattr(src, f.name), (
+            f"字段 '{f.name}' 在截断浅拷贝中失真："
+            f"{getattr(src, f.name)!r} → {getattr(got, f.name)!r}")
+    assert got == src
+
+
+def test_truncate_shallow_copy_carries_priority():
+    """`priority` 是 S4b 新增字段——浅拷贝必须带上（第三处透传点，ISSUE-007）。"""
+    assert _truncated_pity().priority == 5
+
+
+def test_truncate_counter_init_override_still_wins():
+    """counter_init 覆盖语义不受字段驱动改造影响（唯一改写点）。"""
+    got = _truncated_pity({'pity_full': 30})
+    assert got.counter_init == 30
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4-2 审查 important：截断 store 必须带上 `rarity_rank`
+# ══════════════════════════════════════════════════════════════════
+# 截断路径**不过 TOML 往返**（`PlanSearchEngine._build_env` 把 `RetreatConfigBuilder`
+# 的产物直接喂 `SimulationEnvBuilder`），故 `ConfigStore()` 的空表会一路带到引擎。
+# 旧 `SoftStepBehavior` 从 dist 键推导量来源 Q、不依赖本表；新 `SoftModifier` 的
+# `_lower_rarities` 依赖它，空表下 `pool == 0` 即 `apply` 返回恒等，软保底**静默
+# 失效**（退避点 / 最少资源搜索会低估保底效果、高估资源需求，且不报错）。
+
+def test_truncate_copies_rarity_rank():
+    """`rarity_rank` 与其余十余个字段同等对待，必须浅拷贝（S4-2 审查 important）。"""
+    store = _make_store_with_3_pools()
+    store.rarity_rank = {'SSR': 0, 'SR': 1, 'R': 2}
+    truncated = RetreatConfigBuilder.build(
+        original_store=store, from_pool_id='pool_2',
+        initial_resources={'draw_resource': 5000}, pity_counter_init={})
+    assert truncated.rarity_rank == {'SSR': 0, 'SR': 1, 'R': 2}
+
+
+def test_truncated_env_soft_pity_is_not_identity():
+    """截断 env 的软保底必须真的改动分布（漏拷 `rarity_rank` 时恒等）。
+
+    **S8-2 起管道是卡级**（§3.9.1）：基础分布改由池内**卡 id** 构造，原写
+    `base={'ssr': 0.02, 'r': 0.98}` 是槽位级键，卡级管道下 `transfer_linear`
+    取 `dist[c]`（c 为卡 id）会直接 `KeyError`（**不是静默恒等**，这是 S8 键空间
+    纪律的显形面）。实测（真实 config.toml、`from_pool_id='pool_c1'`、counter=90、
+    按池内声明概率建基础分布）：空表下分布原样返回；补齐后 SSR 卡集的小计由
+    池内声明值抬到 1.0（ssr 是最高稀有度，软保底的 Q = 更低稀有度卡，
+    `amount` 封顶 `p(Q)`）。
+    """
+    from gacha_simulator.core.config_toml import load_toml
+    from gacha_simulator.service.batch_simulator import SimulationEnvBuilder
+
+    # 用真实配置（合成 store 的池 id 与保底 pool_specs 的键空间对不上，`spec=None`
+    # 会在 `before_draw` 首行早退，测不到本缺陷）。
+    store = load_toml('gacha_simulator/config/config.toml')
+    truncated = RetreatConfigBuilder.build(
+        original_store=store, from_pool_id='pool_c1',
+        initial_resources={'draw_resource': 0.0},
+        pity_counter_init={'ssr_soft': 90})
+    assert truncated.rarity_rank, '截断 copy 丢了 rarity_rank'
+    env = SimulationEnvBuilder.from_config_store(truncated)
+    eng = env.pity_engine
+    pool_id = truncated.pools[0].pool_id
+    spec = eng.get_spec(pool_id)
+    assert spec is not None, '截断后的池必须在 pool_specs 内（否则测不到本缺陷）'
+    ssr_cards = tuple(spec.scope_cards['ssr'])
+    base = {r.id: p for r, p in env.pools[0].active_pool.rewards}
+    assert ssr_cards and len(base) > len(ssr_cards), \
+        '本用例需要 SSR 与更低稀有度两类卡（Q 非空才谈得上搬质量）'
+
+    out = eng.before_draw(pool_id, eng._state, dict(base), sim=_SIM)
+    ssr_before = sum(base[c] for c in ssr_cards)
+    ssr_after = sum(out[c] for c in ssr_cards)
+    assert ssr_after > ssr_before, (
+        f"截断路径的软保底恒等（SSR 卡集小计仍为 {ssr_after}）："
+        f"`rarity_rank` 未随截断复制")

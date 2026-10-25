@@ -1,7 +1,8 @@
 """P56 阶段十三-c：ConfigPanel 保底 UI P56 扩展集成测试。
 
 覆盖目标：
-  1. _PITY_TYPES 包含 10 条目（4 + 6 P56 新增）
+  1. _PITY_TYPES 与 `BEHAVIOR_REGISTRY` 同步（P64 S6a 起为生成式，条目数由
+     registry 决定，本文件不再写死数量）
   2. type 切换时专属控件显隐正确
   3. 池子级 epitomizable_cards round-trip
   4. 联动校验（depends_on 引用不存在→警告）
@@ -48,9 +49,18 @@ def _make_panel():
 class TestPityTypesP56:
     """P56 类型在 _PITY_TYPES 和下拉框中就绪。"""
 
-    def test_pity_types_has_10_entries(self, qapp):
+    def test_pity_types_tracks_registry(self, qapp):
+        """`_PITY_TYPES` 与 `BEHAVIOR_REGISTRY` 逐条同序同名（P64 S6a，ISSUE-929）。
+
+        改造前本断言写死 `== 10`，S6a 起 `_PITY_TYPES` 由 registry 生成，
+        写死数量会在每次新增 type 时误红（红的不是它要守的东西）。改为
+        **逐条对齐**后，它守的是「生成式改造未被回退成硬编码列表」。
+        """
+        from gacha_simulator.core.pity import BEHAVIOR_REGISTRY
+
         panel = _make_panel()
-        assert len(panel._PITY_TYPES) == 10
+        assert panel._PITY_TYPES == [(k, v['display_name'])
+                                     for k, v in BEHAVIOR_REGISTRY.items()]
 
     def test_all_p56_types_present(self, qapp):
         panel = _make_panel()
@@ -59,9 +69,23 @@ class TestPityTypesP56:
                     'rotating_cr_soft', 'targeted', 'targeted_soft'):
             assert bt in btypes, f"缺少类型: {bt}"
 
-    def test_combo_has_10_entries(self, qapp):
+    def test_combo_tracks_registry(self, qapp):
+        from gacha_simulator.core.pity import BEHAVIOR_REGISTRY
+
         panel = _make_panel()
-        assert panel.pity_type_combo.count() == 10
+        assert panel.pity_type_combo.count() == len(BEHAVIOR_REGISTRY)
+
+    def test_s6a_rotating_inverse_auto_appears(self, qapp):
+        """S6a 新增的 `rotating_inverse` **自动**进入下拉（无手工追加）。
+
+        这是生成式改造的**唯一显形面**：改造前新增 type 必须手工追加 `_PITY_TYPES`，
+        漏加则该类型在 GUI 不可选、而引擎侧已支持（静默缺口）。断言取的是下拉的
+        实际条目文本，而非 `_PITY_TYPES` 自身，故「列表改了但 addItems 没重跑」也红。
+        """
+        panel = _make_panel()
+        items = [panel.pity_type_combo.itemText(i)
+                 for i in range(panel.pity_type_combo.count())]
+        assert '反向轮换保底（连中必歪）' in items
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -113,20 +137,22 @@ class TestP56WidgetVisibility:
         panel.pity_type_combo.setCurrentIndex(idx)
         assert panel._pity_cr_probs_group.isHidden()
 
-    def test_deactivate_on_early_hit_only_enabled_for_hard(self, qapp):
-        """deactivate_on_early_hit 仅 type=hard 启用。"""
+    def test_deactivate_on_early_hit_enabled_for_all_types(self, qapp):
+        """`deactivate_on_early_hit` **对全部类型可勾选**（P64 S6a / H3）。
+
+        改造前本用例名为 `..._only_enabled_for_hard`，断言 `rotating` 下禁用，
+        与 P56 的 `_build_pity` 拒绝分支同源。H3 删除该分支后，退役判定由
+        Lifecycle 对全部类型统一承担（`should_deactivate` 的第四实参 `fired`
+        取 `any(tr.did_reset(...))`），故 enable 门控整体移除。
+
+        **逐条遍历全部 type**，不抽查两例：门控若被误改回某个子集，
+        只抽查 hard/rotating 两例可能漏网（如「仅 soft 族启用」）。
+        """
         panel = _make_panel()
         panel.pity_list.setCurrentRow(0)
-
-        # hard → 启用
-        hard_idx = next(i for i, (t, _) in enumerate(panel._PITY_TYPES) if t == 'hard')
-        panel.pity_type_combo.setCurrentIndex(hard_idx)
-        assert panel.pity_deactivate_cb.isEnabled()
-
-        # rotating → 禁用
-        rot_idx = next(i for i, (t, _) in enumerate(panel._PITY_TYPES) if t == 'rotating')
-        panel.pity_type_combo.setCurrentIndex(rot_idx)
-        assert not panel.pity_deactivate_cb.isEnabled()
+        for idx, (btype, _label) in enumerate(panel._PITY_TYPES):
+            panel.pity_type_combo.setCurrentIndex(idx)
+            assert panel.pity_deactivate_cb.isEnabled(), f'{btype} 下不应禁用' 
 
 
 # ═══════════════════════════════════════════════════════════════════

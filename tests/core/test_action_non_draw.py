@@ -4,7 +4,15 @@
   1. NonDrawAction 构造 + repr
   2. NON_DRAW_ACTION_REGISTRY 包含正确条目
   3. InvalidActionError 构造与继承链
-  4. gacha_service._apply_non_draw() 的 switch/cancel/非法 action_id/未注册池子 四种路径
+  4. 注册表守卫与 `InvalidActionError` 的构造面。
+
+**订正（S6c 审查 F3）**：本行原写「`gacha_service._apply_non_draw()` 的
+switch/cancel/非法 action_id/未注册池子 四种路径」，但**本文件从不调用**
+`_apply_non_draw`（全文与它相关处都只在注释里，实测零调用）。`_apply_non_draw` 的
+端到端与直调覆盖在 `tests/service/test_gacha_service.py`：
+`test_switch_epitomized_target_writes_selected_card` /
+`test_cancel_epitomized_path_clears_selected_card` /
+`test_apply_non_draw_direct_recognizes_both_targeted_types`（S6c）。
 """
 
 import pytest
@@ -90,11 +98,13 @@ class TestInvalidActionError:
 
 
 class TestGachaServiceApplyNonDraw:
-    """GachaService._apply_non_draw() —— 核心路径覆盖。
+    """`GachaService._apply_non_draw()` 的前置守卫（注册表 + 动作构造）。
 
-    注：完整集成测试需要复杂的 PityEngine + GachaService 构造链，
-    此处测试 NonDrawAction 类 + 注册表的正确性——它们是 _apply_non_draw 的前置守卫。
-    _apply_non_draw 的运行时验证已通过手动冒烟确认。
+    本类**不调用** `_apply_non_draw` 本身，只覆盖它的两个前置守卫（NonDrawAction
+    的构造与 NON_DRAW_ACTION_REGISTRY）。该方法的运行时覆盖在
+    `tests/service/test_gacha_service.py`（P64 S6c）：两条端到端用例（策略经主循环
+    返回 switch / cancel）与一条直调用例
+    `test_apply_non_draw_direct_recognizes_both_targeted_types`（两型定轨保底的识别）。
     """
 
     def test_switch_action_id_is_registered(self):

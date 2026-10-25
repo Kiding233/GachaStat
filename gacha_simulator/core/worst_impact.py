@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 from collections import defaultdict
 
 from .distribution import EmpiricalDistribution
@@ -83,11 +83,14 @@ class WorstImpactAnalyzer:
         self._ref_pool_entry = None
         self._featured_ids: Set[str] = set()
         self._ssr_ids: Set[str] = set()
-        self._standard_ssr_ids: Set[str] = set()
         self._featured_prob: float = 0.0
         self._pool_duration = 21 * DAY
         self._parsed_cost = [{'draw_resource': 160}]
         self._resource_name = 'draw_resource'
+        # 单抽消耗单价（覆盖倍数分母的单价因子）。由 `_prepare_pool_info` /
+        # `_apply_custom_pool_config` 按**参照池**写入；None = 参照池不可得
+        # （两条选择路径都早退），此时 `_draw_unit_cost()` 走原回退。
+        self._unit_cost: Optional[int] = None
         self._rewards = []
         self._main_ssr_ids: Set[str] = set()
         for cd in store.card_defs:
@@ -250,7 +253,7 @@ class WorstImpactAnalyzer:
             end_time=total_end_time,
         )
 
-        pity_engine = self._build_pity_engine(all_featured_ids, all_ssr_ids, pool_targets)
+        pity_engine = self._build_pity_engine(pools)
 
         # P75（阶段 3）：无条件产出完整初始状态快照——engine 构造后立即取，与 A 同源
         # （含 counter / guaranteed / fate_points / selected_card + _active=True，ISSUE-106）
@@ -348,18 +351,55 @@ class WorstImpactAnalyzer:
 
     def _get_pity_cost(self):
         if not self.store.pity.enabled or not self.store.pity.pities:
+            # 保底关闭时的退化分母，保持既有口径不变（与参照池无关）
             return 90 * 160
         # 取所有 PityDef 中最大的 end 值（替代仅读 pities[0]）
         max_end = max((self._get_pity_end(p) for p in self.store.pity.pities), default=90)
-        cost = 160
+        return max_end * self._draw_unit_cost()
+
+    def _draw_unit_cost(self) -> int:
+        """单抽消耗（覆盖倍数分母的单价因子）——取**参照池**的成本。
+
+        「参照池」= `_prepare_pool_info` 选定的那个池（非自定义池路径下是
+        `pool_entries[-1]`，自定义池路径下是 `custom_pool_config['cost']`）——
+        两条路径都把它的消耗解析进 `self._parsed_cost` 并据它定
+        `self._resource_name`，本函数从同一份解析结果取单价，故与参照池同源。
+
+        **原实现固定读 `store.pools[0].cost`（第一个池）**：池成本异构时分母取到
+        一个与分析无关的单价，覆盖倍数随之失真（默认配置 8 池同价，故在随包配置上
+        不可见；2026-10-15 修复）。
+
+        参照池不可得时（无 enabled 池且无自定义池配置 → 两条选择路径都早退）
+        保留原回退：读 `store.pools[0].cost`，仍不可解析则用 160。
+        """
+        if self._unit_cost is not None:
+            return self._unit_cost
         if self.store.pools:
             c = self.store.pools[0].cost
             if isinstance(c, str) and ':' in c:
                 try:
-                    cost = int(c.split(':')[1])
+                    return int(c.split(':')[1])
                 except ValueError:
                     pass
-        return max_end * cost
+        return 160
+
+    def _parse_unit_cost(self) -> Optional[int]:
+        """从 `self._parsed_cost` 取 `self._resource_name` 的单价（参照池口径）。
+
+        `_parsed_cost` 是 `parse_cost_string()` 的产物（OR 分支列表，每支一个
+        `{资源: 数量}`），`_resource_name` 已定为**首支**里的分析资源名，故首支
+        里它的数量就是单抽消耗。解析不出（空成本串 / 非数值）返回 None——调用方
+        据此保留 `_unit_cost = None`，走 `_draw_unit_cost()` 的原回退。
+        """
+        if not self._parsed_cost:
+            return None
+        option = self._parsed_cost[0]
+        if not isinstance(option, dict):
+            return None
+        try:
+            return int(option.get(self._resource_name))
+        except (TypeError, ValueError):
+            return None
 
     def _prepare_pool_info(self):
         if self.custom_pool_config and self.custom_pool_config.get('distribution'):
@@ -382,6 +422,7 @@ class WorstImpactAnalyzer:
             self._resource_name = parsed_rid
         else:
             self._resource_name = list(self._parsed_cost[0].keys())[0] if self._parsed_cost else 'draw_resource'
+        self._unit_cost = self._parse_unit_cost()   # 参照池单价（覆盖倍数分母）
 
         rewards = []
         if pe.distribution:
@@ -417,7 +458,6 @@ class WorstImpactAnalyzer:
                 if r.id in self._ssr_ids
             )
 
-        self._standard_ssr_ids = self._ssr_ids - self._featured_ids
 
         # P61（ISSUE-333）：end_day=None（永久 Banner）时展平视图回填 None——
         # 减法 TypeError；按永久池语义兜底 21 天
@@ -444,6 +484,7 @@ class WorstImpactAnalyzer:
             self._resource_name = parsed_rid
         else:
             self._resource_name = list(self._parsed_cost[0].keys())[0] if self._parsed_cost else 'draw_resource'
+        self._unit_cost = self._parse_unit_cost()   # 参照池（自定义池配置）单价
 
         rewards = []
         for d in cfg.get('distribution', []):
@@ -475,78 +516,115 @@ class WorstImpactAnalyzer:
                 if r.id in self._ssr_ids
             )
 
-        self._standard_ssr_ids = self._ssr_ids - self._featured_ids
         self._rewards = rewards
 
-    def _build_pity_engine(self, all_featured_ids=None, all_ssr_ids=None, pool_targets=None):
+    def _build_pity_engine(self, pools):
+        """按合成池逐个构造 `PoolPitySpec`。
+
+        **卡集合必须按池内真实 reward id 生成**（2026-10-09 修复，原 ISSUE-006）。
+        原实现把 `scope_cards` / `featured_cards` / `scope_slots` / `featured_slots` /
+        `card_to_slot` 从 `self._ssr_ids` / `self._featured_ids`（**原始**卡 id）一次性
+        建好、99 个池共用，而池内限定卡已在 `prepare_simulation_config` 里改名为
+        `_wi_featured_{i}`，于是：
+          · `featured_cards` 认不出池内那张 UP 卡 → 它被聚合进槽位 `'ssr'` 而非
+            `'ssr_featured'` → 软保底的目标槽概率为 0 → 每次早退，**保底完全空转**
+          · `featured_ids` / `ssr_ids`（新名）与 `scope_cards`（旧名）描述的是同一张卡
+            的两个名字，同一份 spec 内部自相矛盾
+        现改为按池调 `compute_scope_mappings()`：四个卡集合与 `card_to_slot` 同源生成，
+        `ssr_ids == scope_cards['ssr']` 与 `featured_ids ⊆ scope_cards` 两条不变量
+        由构造保证（守卫测试见 `test_pity_integration.TestRarityInferenceConsistency`）。
+        """
         if not self.store.pity.enabled:
             return None
 
         # P55：从扁平化 PityDef 构造引擎
-        is_new_format = any(hasattr(pd, 'scope') and not hasattr(pd, 'params')
-                           for pd in self.store.pity.pities)
+        # P81 §4.1-6：原「假兼容」检测已删除；空列表显式 early-return，保持
+        # 「无引擎」语义（原由该检测的隐式 return None 顺带产生）。
+        if not self.store.pity.pities:
+            return None
 
-        if is_new_format:
-            from gacha_simulator.core.config_store import PityDef as _PityDef
-            pity_defs_list = []
-            for pd in self.store.pity.pities:
-                if not isinstance(pd, _PityDef):
-                    continue
-                # shallow copy via dataclass fields
-                pity_defs_list.append(pd)
+        from gacha_simulator.core.config_store import PityDef as _PityDef
+        pity_defs_list = []
+        for pd in self.store.pity.pities:
+            if not isinstance(pd, _PityDef):
+                continue
+            # shallow copy via dataclass fields
+            pity_defs_list.append(pd)
 
-            state = PityState()
-            from gacha_simulator.core.pity import _build_pity_state_init
-            state = _build_pity_state_init(pity_defs_list)
+        state = PityState()
+        from gacha_simulator.core.pity import _build_pity_state_init
+        state = _build_pity_state_init(pity_defs_list)
 
-            # P55 ISSUE-032：从参考池或已知 ID 构建 scope 映射
-            ref_pool = getattr(self, '_ref_pool', None)
-            if ref_pool and hasattr(ref_pool, 'rewards'):
-                scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = compute_scope_mappings(ref_pool)
-            else:
-                scope_cards = {'ssr': tuple(self._ssr_ids)} if self._ssr_ids else {}
-                featured_cards = {'ssr': tuple(self._featured_ids)} if self._featured_ids else {}
-                card_to_slot = {}
-                if self._ssr_ids and self._featured_ids:
-                    scope_slots = {'ssr': ('ssr', 'ssr_featured')}
-                    featured_slots = {'ssr': ('ssr_featured',)}
-                    for cid in self._featured_ids:
-                        card_to_slot[cid] = 'ssr_featured'
-                    for cid in (self._ssr_ids - self._featured_ids):
-                        card_to_slot[cid] = 'ssr'
-                else:
-                    scope_slots = {'ssr': ('ssr',)} if self._ssr_ids else {}
-                    featured_slots = {'ssr': ('ssr',)} if self._featured_ids else {}
-                    for cid in self._ssr_ids:
-                        card_to_slot[cid] = 'ssr'
+        pool_specs = {}
+        for pool_idx in range(MAX_POOLS):
+            pid = f'_worst_impact_pool_{pool_idx}'
+            # P61（Ph1a / ISSUE-301）：pool_specs 键全限定 {pid}.main（单池包装口径），
+            # pdef.pools 的 fnmatch 按全限定键匹配——否则 gacha_service 查询键
+            # '_worst_impact_pool_0.main' 查裸键引擎为 None、before_draw 保底调整静默跳过
+            qualified_key = f"{pid}.main"
+            matching = []
+            for pdef in pity_defs_list:
+                pools_ptn = getattr(pdef, 'pools', ('*',))
+                if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
+                    matching.append(pdef.name)
 
-            pool_specs = {}
-            for pool_idx in range(MAX_POOLS):
-                pid = f'_worst_impact_pool_{pool_idx}'
-                # P61（Ph1a / ISSUE-301）：pool_specs 键全限定 {pid}.main（单池包装口径），
-                # pdef.pools 的 fnmatch 按全限定键匹配——否则 gacha_service 查询键
-                # '_worst_impact_pool_0.main' 查裸键引擎为 None、before_draw 保底调整静默跳过
-                qualified_key = f"{pid}.main"
-                matching = []
-                for pdef in pity_defs_list:
-                    pools_ptn = getattr(pdef, 'pools', ('*',))
-                    if pools_ptn == ('*',) or any(fnmatch.fnmatch(qualified_key, ptn) for ptn in pools_ptn):
-                        matching.append(pdef.name)
+            # 卡集合按池生成——四个映射与 card_to_slot 同源，id 与池内 reward 一致
+            wi_pool = pools[pool_idx].pools['main']
+            scope_cards, featured_cards, scope_slots, featured_slots, card_to_slot = (
+                compute_scope_mappings(wi_pool))
 
-                pool_featured = {f'_wi_featured_{pool_idx}'} if all_featured_ids else self._featured_ids
-                pool_ssr = (pool_featured | self._standard_ssr_ids) if all_ssr_ids else self._ssr_ids
+            # 构造期不变量（强制）：卡集合必须覆盖池内每一张卡。两者一旦错开，保底不会
+            # 报错，只会静默不生效（聚合把卡算进别的槽位 / 卡级稀有度推断落空），故在此
+            # 拦下。见 §3.9.3 ISSUE-006 与 tests/core/test_worst_impact.py 的对齐测试。
+            _covered = set(card_to_slot)
+            _missing = {r.id for r, _ in wi_pool.rewards} - _covered
+            if _missing:
+                raise ValueError(
+                    f'{qualified_key}: 卡集合未覆盖池内 reward {sorted(_missing)}——'
+                    'scope_cards 必须与池内 id 一致，否则保底静默失效（ISSUE-006）')
 
-                pool_specs[qualified_key] = PoolPitySpec(
-                    pity_names=matching,
-                    featured_ids=pool_featured,
-                    ssr_ids=pool_ssr,
-                    scope_cards=scope_cards,
-                    featured_cards=featured_cards,
-                    scope_slots=scope_slots,
-                    featured_slots=featured_slots,
-                    card_to_slot=card_to_slot,
-                )
+            pool_specs[qualified_key] = PoolPitySpec(
+                pity_names=matching,
+                featured_ids={c for cs in featured_cards.values() for c in cs},
+                ssr_ids={c for c in scope_cards.get('ssr', ())},
+                scope_cards=scope_cards,
+                featured_cards=featured_cards,
+                scope_slots=scope_slots,
+                featured_slots=featured_slots,
+                card_to_slot=card_to_slot,
+            )
 
-            rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
-            return PityEngine(pool_specs, pity_defs_list,
-                            state=state, rarity_rank=rr)
+        rr = {k.lower(): v for k, v in self.store.rarity_rank.items()} if hasattr(self, 'store') and self.store else {'ssr': 0, 'sr': 1, 'r': 2}
+        return PityEngine(pool_specs, pity_defs_list,
+                        state=state, rarity_rank=rr)
+
+
+def coverage_trace_text(alpha=None, n=None, worst_resource=None,
+                        pity_cost=None) -> str:
+    """覆盖倍数读数的**可追溯后缀**（GUI 与 WebUI 共用的一处实现，2026-10-15）。
+
+    覆盖倍数对 α **极敏感**（同一版本 α=0.05 读 0.2125、α=0.15 读 0.2792，P64 报告
+    §八 实测），而 α / N 原先只存在于面板的输入控件里，读数一旦离开界面就无法回溯
+    自己对应哪套参数。故把 α / N 与两个原始量（分子 `worst_resource`、分母
+    `pity_cost`）拼成一串，印在读数旁。
+
+    **两处展示共用本函数**：GUI 的 `PityCoverageGauge` 经
+    `gui/worst_impact_panel._coverage_trace_text` 调用它，WebUI 的 `analyze_worst_dist`
+    经 `webui/worst_impact_service` 调用它。此前 GUI 侧有一份实现、WebUI 侧**没有**
+    该展示（口径不一致）；下沉到本层后是**一处实现**，WebUI 侧的读数与 GUI 侧逐字
+    同构，也不再有「同一展示两处实现、改一处另一处静默分叉」的失效模式（同型先例：
+    缺陷 12 的 `infer_rarity_from_spec` 与 `_infer_rarity` 两份实现）。
+
+    **纯展示**：不参与任何计算。缺项即略（`analyze()` 未产出 / 分母不可得时不写
+    占位符，不臆造未观测到的值）。
+    """
+    parts = []
+    if alpha is not None:
+        parts.append(f"α={alpha:g}")
+    if n is not None:
+        parts.append(f"N={n}")
+    if worst_resource is not None:
+        parts.append(f"保守资源 {worst_resource:.0f}")
+    if pity_cost is not None:
+        parts.append(f"大保底成本 {pity_cost:.0f}")
+    return " · ".join(parts)

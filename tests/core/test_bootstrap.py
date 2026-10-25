@@ -297,3 +297,105 @@ class TestBootstrapResultFormat:
     def test_method_field(self):
         result = BootstrapResult(1.0, 1.0, 1.0, 0.0, 'GPD-param', 30, 1000)
         assert result.method == 'GPD-param'
+
+class TestBootstrapFixes:
+    """2026-10-08 修复的两处缺陷的守测试。
+
+    缺陷一：m-out-of-n 缺收敛率缩放，区间放大 sqrt(n/m) 倍。
+    缺陷二：BCa 在退化输入下静默返回 nan（不抛异常），`except Exception` 抓不到。
+    """
+
+    @pytest.fixture
+    def engine(self):
+        return BootstrapEngine(B=1000, ci_level=0.95, random_seed=7)
+
+    def test_m_out_of_n_scaled_to_n_scale(self, engine):
+        """m-out-of-n 区间宽度须缩放回 n 口径，而非停在 1/sqrt(m) 口径。
+
+        正态数据下理论宽度 = 2*1.96*sigma/sqrt(n)；缺缩放时会是它的
+        sqrt(n/m) 倍（n=200, m=34 时约 2.4 倍）。
+        """
+        rng = np.random.default_rng(7)
+        n = 200
+        m = BootstrapEngine._select_m(n)
+        theo = 2 * 1.96 / math.sqrt(n)
+        widths = []
+        for rep in range(20):
+            data = rng.normal(0.0, 1.0, n)
+            eng = BootstrapEngine(B=1000, ci_level=0.95, random_seed=rep)
+            r = eng._bootstrap_mean_m_out_of_n(data, m)
+            widths.append(r.ci_upper - r.ci_lower)
+        avg = float(np.mean(widths))
+        assert 0.8 * theo < avg < 1.25 * theo, (
+            '宽度 %.4f 偏离理论 %.4f 过多（缺缩放时会是 %.4f）'
+            % (avg, theo, theo * math.sqrt(n / m)))
+
+    def test_m_out_of_n_method_reports_scale(self, engine):
+        """method 字段须报出缩放因子，便于诊断。"""
+        rng = np.random.default_rng(7)
+        data = rng.normal(0, 1, 200)
+        r = engine._bootstrap_mean_m_out_of_n(data, BootstrapEngine._select_m(200))
+        assert 'scale=' in r.method
+
+    def test_bca_degenerate_returns_finite(self, engine):
+        """退化输入下 BCa 不得静默返回 nan，须回退百分位法。"""
+        r = engine.bootstrap_mean([0.0] * 30, use_bca=True)
+        assert math.isfinite(r.ci_lower) and math.isfinite(r.ci_upper)
+        assert r.ci_lower <= r.ci_upper
+        assert r.method != 'BCa'
+
+    def test_bca_constant_nonzero_returns_finite(self, engine):
+        """常数非零数据同样不得返回 nan。"""
+        r = engine.bootstrap_mean([3.5] * 30, use_bca=True)
+        assert math.isfinite(r.ci_lower) and math.isfinite(r.ci_upper)
+
+    def test_bca_normal_unchanged(self, engine):
+        """非退化数据仍走 BCa（修复不得改变既有行为）。"""
+        rng = np.random.default_rng(3)
+        r = engine.bootstrap_mean(rng.normal(5, 1, 100), use_bca=True)
+        assert r.method == 'BCa'
+        assert r.ci_lower < r.point_estimate < r.ci_upper
+
+    def test_ci_is_valid_helper(self):
+        """守卫函数的判据：有限、且下界不大于上界。"""
+        ok = BootstrapResult(0.5, 0.4, 0.6, 0.05, 'BCa')
+        assert BootstrapEngine._ci_is_valid(ok)
+        bad_nan = BootstrapResult(0.5, float('nan'), float('nan'), 0.0, 'BCa')
+        assert not BootstrapEngine._ci_is_valid(bad_nan)
+        inverted = BootstrapResult(0.5, 0.6, 0.4, 0.05, 'BCa')
+        assert not BootstrapEngine._ci_is_valid(inverted)
+    @pytest.mark.parametrize('alpha_val,use_sqrt', [
+        (3.0, True), (2.5, True), (2.0, True), (float('inf'), True),
+        (1.5, False), (1.2, False), (0.5, False),
+    ])
+    def test_m_out_of_n_scale_branch(self, monkeypatch, alpha_val, use_sqrt):
+        """缩放因子按尾指数分支：α≥2 与 α=inf 走 sqrt；0<α<2 走指数公式。
+
+        **这是 α<2 分支的唯一覆盖点**——用正态数据的测试只走 sqrt 分支，
+        把指数分支改回 sqrt 它们仍会全绿（2026-10-08 独立复核指出）。
+        monkeypatch hill_estimator 以避开 Hill 估计噪声。
+        """
+        n = 200
+        m = BootstrapEngine._select_m(n)
+        eng = BootstrapEngine(B=200, ci_level=0.95, random_seed=7)
+        monkeypatch.setattr(eng, 'hill_estimator', lambda *a, **k: alpha_val)
+        data = np.linspace(0.1, 10.0, n)
+        r = eng._bootstrap_mean_m_out_of_n(data, m)
+        want = math.sqrt(m / n) if use_sqrt else (m / n) ** (1.0 - 1.0 / alpha_val)
+        got = float(r.method.split('scale=')[1].split(',')[0])
+        assert abs(got - want) < 1e-4, 'α=%s: scale=%s 期望 %s' % (alpha_val, got, want)
+
+    def test_bca_fallback_shifts_rng_stream(self):
+        """退化回退会多消耗一次 scipy 调用的 RNG，平移同引擎后续结果。
+
+        这是修复的已知副作用（非缺陷）：同一次调用、相同 RNG 状态下逐位不变，
+        但跨调用会平移。此测试锁定该行为，防止被误认为回归。
+        """
+        data = np.random.default_rng(5).normal(0, 1, 60)
+        eng = BootstrapEngine(B=300, ci_level=0.95, random_seed=11)
+        eng.bootstrap_mean([0.0] * 30, use_bca=True)   # 触发回退，消耗 RNG
+        after = eng.bootstrap_mean(data, use_bca=True)
+        eng2 = BootstrapEngine(B=300, ci_level=0.95, random_seed=11)
+        clean = eng2.bootstrap_mean(data, use_bca=True)
+        assert math.isfinite(after.ci_lower) and math.isfinite(after.ci_upper)
+        assert (after.ci_lower, after.ci_upper) != (clean.ci_lower, clean.ci_upper)

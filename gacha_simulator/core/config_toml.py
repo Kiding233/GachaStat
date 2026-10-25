@@ -5,6 +5,9 @@ P61（Ph4）：池子配置段已从旧 [[pools]]（含 distribution_template/bi
 （§3.10.6）——模板在迁移时展开为内联 [[banner.pool.reward]]。
 """
 
+import copy as _copy
+import dataclasses as _dataclasses
+import datetime as _dt
 import warnings
 from typing import Dict, List, Optional
 
@@ -54,12 +57,45 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
 
     Returns:
         填充后的 ConfigStore。
+
+    Raises:
+        ConfigError: 配置非法（各 `_build_*` 校验）。**P64 S4c：失败时传入的
+            store 逐字段回滚到调用前状态**（原实现是半装：已构建的段落留下、
+            未构建的段落已清空，banner 8→0 / pity 1→0 实测可复现）。
+
+    **两条边界（S4c 审查 low）**：① 快照走 `copy.deepcopy(store)`，要求 store 的字段
+    取值全部可深拷贝（现状成立：取值均来自 TOML / GUI 基本类型）。将来若有字段持不可
+    深拷贝的对象（如 module），本函数会在 `clear()` **之前**以 `TypeError` 失败，此时
+    store 未被改动、异常直接冒泡。② 回滚只保证**字段内容**与加载前一致，**不保证**
+    调用前取到的可变容器别名的身份与内容（回滚赋的是快照的深拷贝）。
     """
     if store is None:
         store = ConfigStore()
+        _snapshot = None
     else:
+        # P64 S4c：失败原子性——先留快照，任一步抛错即整体回滚
+        # （`_restore_config_store()`）。原实现是先 `store.clear()`
+        # 再逐段构建，中途抛错即停在半装状态。
+        _snapshot = _copy.deepcopy(store)
         store.clear()
 
+    try:
+        _fill_store_from_toml(path, store)
+    except BaseException:
+        if _snapshot is not None:
+            _restore_config_store(store, _snapshot)
+        raise
+    return store
+
+
+def _fill_store_from_toml(path: str, store: ConfigStore) -> None:
+    """`load_toml` 的填充主体（P64 S4c 自 `load_toml` 原样抽出，无独立调用者）。
+
+    抽出只为让 `load_toml` 能把「打开文件 → 各段构建 → 校验」整体包进
+    try/except：填充全程在**传入的 store 上原地进行**（各 `_build_*` 直接
+    追加/覆盖字段，且依赖 `load_toml` 已 `clear()`），中途抛错即半装，
+    故必须整体回滚而不是局部补偿。
+    """
     with open(path, 'rb') as f:
         data = tomllib.load(f)
 
@@ -109,7 +145,20 @@ def load_toml(path: str, store: Optional[ConfigStore] = None) -> ConfigStore:
     _build_stop_condition(data, store)
     _validate_stop_condition_config(data, store)
 
-    return store
+
+def _restore_config_store(store: ConfigStore, snapshot: ConfigStore) -> None:
+    """把 `snapshot` 的全部字段写回 `store`（P64 S4c：`load_toml` 失败回滚）。
+
+    逐字段**现取**（`dataclasses.fields`）而非手写清单：手写清单漏一项即静默
+    留下半装状态，而 `ConfigStore` 自 P58 起已多次加字段（P60/P63/P77/P78/P79）
+    且以后还会加。写回的是 `load_toml` 开头那份深拷贝的字段值，故回滚后
+    「与加载前逐字段相同」是构造上的直接结果，不依赖逐字段比对。
+
+    原地赋值而非返回新对象：调用方（GUI 的 `self._store`、webui 的
+    `self._store`）持有的是同一个 ConfigStore 引用，换对象等于没修。
+    """
+    for _f in _dataclasses.fields(ConfigStore):
+        setattr(store, _f.name, getattr(snapshot, _f.name))
 
 
 def save_toml(store: ConfigStore, path: str) -> None:
@@ -126,6 +175,12 @@ def save_toml(store: ConfigStore, path: str) -> None:
     data['resources'] = {
         'defs': dict(store.resource_defs),
         'initial': dict(store.initial_resources),
+        # P85 I2（2026-10-01）：模拟起始日期（day=0 对应的日历日）。它只影响
+        # monthly_day / weekly / monthly_week 这类按**日历**展开的收入规则，但会改变
+        # 模拟结果，故属配置身份的一部分，必须落盘（此前完全不读写，GUI 那个控件改了存不住）。
+        # **总是写**：写盘这一刻把当天固化成显式值——存过一次的配置，之后哪天跑都是同一天，
+        # 「同配置同种子跨天结果不同」这件事由此收口（缺省语义仍是 ConfigStore 的当天）。
+        'sim_start_date': str(getattr(store, 'sim_start_date', '') or _dt.date.today().isoformat()),
     }
 
     # gain_rules
@@ -382,6 +437,54 @@ def _save_banners(store: ConfigStore, data: dict) -> None:
 # ══════════════════════════════════════════════════════════════════
 
 
+def _check_pity_format(pity_list: list) -> None:
+    """P81 B11：阻断 P55 之前的旧 [[pity]] 写法。
+
+    旧格式自动迁移已于 P81 删除，原因是**该迁移本身产出错误配置**：它把
+    ``reset='featured_ssr'`` 原样保留，而新引擎 ``_should_reset`` 只对
+    ``'featured'`` 特判、其余值与稀有度字符串比较，该值恒 False，导致迁移
+    过来的保底计数器**永不重置**（无报错、无日志）。
+
+    与 P65 的 ``_check_card_format`` 同口径：仅旧格式 → ConfigError 提示手工
+    升级；新旧混用 → ConfigError 报告歧义。
+    """
+    if not pity_list:
+        return
+
+    legacy, modern = [], []
+    for e in pity_list:
+        keys = set(e.keys())
+        if ('start' in keys and 'scope' not in keys) or 'func' in keys:
+            legacy.append(e)
+        else:
+            modern.append(e)
+
+    if not legacy:
+        return
+
+    names = '、'.join(str(e.get('name', '?')) for e in legacy)
+    if modern:
+        raise ConfigError(
+            f"[[pity]] 段内混用新旧格式：条目「{names}」仍是 P55 之前的写法，"
+            f"其余条目已是新格式。请统一改写为新格式（旧格式自动迁移已于 P81 删除）。"
+        )
+    # 判据两条（二者之一即旧）：① 带 start 但缺 scope；② 含 func。
+    # 提示语须与本判据一致——旧稿写「含 start/end/func 等字段」，紧接着又建议
+    # 「软保底爬升用 start + end」，把 start/end 同时当旧格式标志与正确写法。
+    has_func = any('func' in e for e in legacy)
+    func_hint = (
+        " 其中含 func 字段的条目：func 自 P55 起不再支持（软保底只有 linear 一种"
+        "爬升形态），请删除该字段；需要非线性爬升就直接写 deltas。"
+    ) if has_func else ""
+    raise ConfigError(
+        f"[[pity]] 条目「{names}」使用 P55 之前的旧格式（判据：带 start 却缺 scope，"
+        f"或含 func 字段）。已不再支持自动迁移——原迁移会把 reset='featured_ssr' "
+        f"原样保留，使保底计数器永不重置。请手工改写为新格式：每条须带 scope；"
+        f"type 用 soft_interval / soft_additive / hard 等；软保底爬升用 "
+        f"start + end + increment（或直接写 deltas）。{func_hint}"
+    )
+
+
 def _check_card_format(data: dict) -> None:
     """P65：防御性检测——阻断旧格式卡片段，避免静默数据丢失。
 
@@ -501,18 +604,44 @@ def _build_cards(data: dict, store: ConfigStore) -> None:
 
 
 def _build_resources(data: dict, store: ConfigStore) -> None:
-    """[resources.defs] + [resources.initial]"""
+    """[resources.defs] + [resources.initial] + [resources.sim_start_date]"""
     res = data.get('resources', {})
     store.resource_defs.update(res.get('defs', {}))
     store.initial_resources.update(res.get('initial', {}))
+
+    # P85 I2（2026-10-01）：模拟起始日期。**缺键即保持 ConfigStore 的默认（当天）**——
+    # 「模拟从今天开始」是既有裁决，落盘不改变该默认，只是让用户的显式设定能存下来。
+    # 非法值**显式告警**而不是静默回退：`_build_resource_gain` 对解析失败的兜底是
+    # 「取当天」（batch_simulator.py 的 except 分支），不报的话用户会以为自己的设定生效了。
+    raw = res.get('sim_start_date')
+    if raw:
+        try:
+            _dt.date.fromisoformat(str(raw))
+        except (ValueError, TypeError):
+            msg = (f"[resources].sim_start_date 取值 {raw!r} 不是合法日期（需 YYYY-MM-DD），"
+                   f"已回退为当天。")
+            store.load_warnings.append(msg)
+            warnings.warn(msg)
+        else:
+            store.sim_start_date = str(raw)
 
 
 def _build_gain_rules(data: dict, store: ConfigStore) -> None:
     """[[resources.gain_rules]] → store.gain_rules"""
     res = data.get('resources', {})
     for r in res.get('gain_rules', []):
+        rule_type = r['type']
+        # P81 B8：旧写法把参数嵌在类型串里（如 "every_n_days:3"），该兼容分支已删除。
+        # 命中时只告警、不改写——GUI 对未识别的类型统一显示为「每天」，用户无从察觉，
+        # 故必须在此报出（口径同 A5/B7：清理 + 让失效可见）。
+        if ':' in rule_type:
+            msg = (f"[[resources.gain_rules]] 的 type='{rule_type}' 使用 P55 之前的旧写法"
+                   f"（参数嵌在类型串中，已不再支持）。请改为 type + param 两个字段；"
+                   f"当前该规则在界面上会显示为「每天」，与配置不符。")
+            store.load_warnings.append(msg)
+            warnings.warn(msg)
         store.gain_rules.append(GainRule(
-            rule_type=r['type'],
+            rule_type=rule_type,
             param=str(r.get('param', '1')),
             gains=dict(r.get('gains', {})),
         ))
@@ -528,17 +657,238 @@ def _build_day_overrides(data: dict, store: ConfigStore) -> None:
         ))
 
 
+def legal_reset_values(rarity_rank_map: dict) -> set:
+    """`[[pity]].reset` 的合法取值集合（G16-1 / ISSUE-928）。
+
+    五类：空串（不透传给 `create_behavior` → `_should_reset` 落回
+    `reward_rarity == scope` 的兜底分支，即「出 scope 稀有度即重置」）/
+    `'featured'`（抽到 featured 卡即重置，**不限定稀有度**——`CounterTracker`
+    的 `featured` 分支只看 `is_featured`、无 scope 门控，池内 featured 的 SR 卡
+    同样触发）/ `'never'`（永不重置，G16）/
+    `'on_effective'`（**仅本抽该保底真的改动了分布时重置**，2026-10-15 用户裁定；
+    类型面另有一道硬拒，只有阈值触发型 `hard` / `hard_exclude_owned_*` 可用，
+    见 `core/pity.py` 的 `create_behavior`）/
+    **稀有度名**（即 `[rarities].ranks` 的键）。
+
+    参数 `rarity_rank_map` 须为**小写归一**后的 `{稀有度名: rank}`（与
+    `_build_pity` 内的同名局部变量一致；`store.rarity_rank` 的键是大写，
+    调用点统一 `.lower()` 后传入）。
+
+    **取值集合随 map 浮动**，且该 map 在上方 `scope` 校验与 `reset` 校验中
+    **形态不完全对称**（2026-10-10 实测界定）：
+
+    - `scope` 校验带 `if rarity_rank_map and ...` 守卫——map 为空时整条跳过；
+    - `reset` 无此守卫——map 为空时集合收缩为前四类，`reset='ssr'` 亦被拒。
+
+    不对称的**可达性有限**：TOML 路径下 `ConfigStore._parse_rarities()` 在
+    缺 `[rarities]` 段时补默认三级（`[["SSR"], ["SR"], ["R"]]`），故 map
+    不可能为空；空 map 只手构 `ConfigStore()`（字段默认 `{}`）或
+    `ConfigStore.clear()` 之后可达，而这两条路径都不经过 `_build_pity`。
+    保留不对称是有意的：scope 缺 map 时无从校验、只能跳过；reset 即使缺 map
+    也仍能校验前四类，收紧一侧不致放行拼写错误（`'nevr'` 在任何配置下都被拒）。
+
+    **本函数是取值面、不是类型面**：`'on_effective'` 对全部 type 都是「合法取值」，
+    「哪些 type 真正可用」由 `create_behavior` 的类型级硬拒把关（与裁决 7B 的
+    `target_featured` 同形：取值白名单与类型白名单是两道互补的防线，不合并）。
+
+    **调用点与测试共用本函数**，避免白名单在两处各写一份（曾在
+    `tests/gui/test_config_panel_pity.py` 复制过一份常量）。
+    """
+    return {'', 'featured', 'never', 'on_effective'} | set(rarity_rank_map)
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S4c：`[[pity]]` 的 TOML 键契约（**全篇唯一契约源**）
+# ══════════════════════════════════════════════════════════════════
+# 读侧 `_build_pity` 对未声明键是**静默忽略**（`p.get(...)` 取不到即落默认值），
+# 写侧 `_pitydef_to_toml` 是条件式逐字段书写——两者叠加的后果是：键名笔误
+# （如 `max_tirggers`）与「该类型根本不消费的键」（如 `soft_step` 写 `end`）
+# 都**零信号地**改变配置语义。故此处建表，`_build_pity` 按表硬拒、
+# `_pitydef_to_toml` 按表过滤产出。
+#
+# **白名单不得改取 `BEHAVIOR_REGISTRY[btype]['params']`**（2026-10-10 实测确认）：
+# 那是 GUI 控件声明面，比真键契约**窄**——`rotating_soft` 缺 `end`、
+# `rotating_cr` 缺 `cr_state_probs`、四个 init 键与 `reset` / `pools` /
+# `lifecycle` / `target_featured` 均不在其中，照抄会把合法键报成未知。
+#
+# **扩表编辑点只有两处**：S6a 的 `rotating_inverse`（已落地）、S9-3 的
+# `hard_exclude_owned_skip` / `hard_exclude_owned_any`（已落地）入 `_PITY_TYPE_KEYS`。
+# （原「三处」中的 S4-4 之 `max_triggers` 已于 2026-10-11 落地，见 `_PITY_COMMON_KEYS`。）
+#
+# **S9-3 订正（2026-10-14）**：本注释原写 S9-3 两条的「键集含 `on_all_owned`」，该句是
+# **pre-ruling 设计的残留**，与 §3.10.4 末段「双实现的形态选择」冲突（该段明写形态由
+# 两个 type 承载、**不在 `PityDef` 上加枚举字段**）。实测判定：`PityDef` 无
+# `on_all_owned` 字段、`_build_pity` 不读该键，形态由 type key 本身与 preset 工厂
+# 硬编码决定，故**它不是配置键**；若登记入表，`TestPityKeyContract` 的
+# `test_contract_subset_of_build_pity_read_face`（契约 ⊆ 读侧）会把它判为幽灵键。
+# 两条的键集因此与 `hard` 同形（`threshold`）。
+# 写侧产出按本表过滤，故扩表后写侧自动跟随，无需第二处编辑。
+
+# 跨类型的通用键（任何 btype 均合法）。
+_PITY_COMMON_KEYS = frozenset({
+    # 标识
+    'name', 'type',
+    # 语义与绑定
+    'scope', 'target_featured', 'reset', 'pools',
+    # 管道顺序（G5 / §3.6，S4b；非默认才写回）
+    'priority',
+    # 生命周期（嵌套键形态见 _PITY_TYPE_KEYS 的 lifecycle.* 项）
+    'lifecycle',
+    # 触发次数上限（ISSUE-032，S4-4；非默认才写回）。跨 type 通用：它是
+    # `build_lifecycle` 退役维的配置来源，与驱动类型无关（§3.1.3）。
+    'max_triggers',
+    # 四个初始状态键
+    'counter_init', 'guaranteed_init', 'fate_points_init', 'selected_card_init',
+})
+
+# 嵌套键（写侧形态为 `[pity.lifecycle]` 子表）。对**全部** btype 放行。
+# **P64 S6a（H3）订正**：原注写「`deactivate_on_early_hit=true` 配事件驱动型应由
+# `_build_pity` 的专条拒绝」，该专条已随 S6a 删除（Lifecycle 统一后事件驱动型
+# 同样可配），故「对全部 btype 放行」自此不再有例外分支，理由只剩「这两个键
+# 与驱动类型无关」（`build_lifecycle` 对全部类型同形消费）。
+_PITY_LIFECYCLE_KEYS = frozenset({
+    'lifecycle.deactivate_on_early_hit', 'lifecycle.depends_on',
+})
+
+# 每 btype 的类型专用键集（含嵌套键）——与写侧 `_pitydef_to_toml` 的各类型分支
+# **一一对应**：表里有的键写侧必能产出、写侧产出的键必在表内（一致性测试钉住）。
+# `soft_interval` / `soft_additive` 的差异是实质的：前者的 `increment` 与后者的
+# `end` 都不参与 `_expand_soft_to_deltas()` 的展开、也都不被写侧写回，写进 TOML
+# 只会静默丢失，故**不入表**（写它即报未知键）。
+_PITY_TYPE_KEYS = {
+    # ── counter 驱动型 ──
+    'soft_interval': frozenset({'start', 'end', 'deltas'}),
+    'soft_additive': frozenset({'start', 'increment', 'deltas'}),
+    'soft_step': frozenset({'deltas'}),
+    'hard': frozenset({'threshold'}),
+    # P64 S9-3（G3 双实现）：键集与 `hard` 同形。**`on_all_owned` 不入表**——它是
+    # 两个 type 的**形态差异**，写进 type key 本身（TOML 里自解释），由 preset
+    # 工厂各自硬编码；`PityDef` 无该字段、`_build_pity` 不读它（详见上方「扩表
+    # 编辑点」处的 S9-3 订正）。
+    'hard_exclude_owned_skip': frozenset({'threshold'}),
+    'hard_exclude_owned_any': frozenset({'threshold'}),
+    # ── 事件驱动型 ──
+    'rotating': frozenset(),
+    # P64 S6a（G1）：键集同 `rotating`。本类型无类型专用 PityDef 字段
+    # （`forced_loss` 是 preset 内部标志，无对应初值字段），故只余通用键。
+    'rotating_inverse': frozenset(),
+    'rotating_soft': frozenset({'start', 'end', 'increment', 'deltas'}),
+    'rotating_cr': frozenset({'cr_counter_threshold', 'cr_base_rate',
+                              'cr_state_probs'}),
+    'rotating_cr_soft': frozenset({'start', 'end', 'increment', 'deltas',
+                                   'cr_counter_threshold', 'cr_base_rate',
+                                   'cr_state_probs'}),
+    'targeted': frozenset({'fate_threshold', 'switch_allowed',
+                           'switch_resets_progress'}),
+    'targeted_soft': frozenset({'start', 'end', 'increment', 'deltas',
+                                'fate_threshold', 'switch_allowed',
+                                'switch_resets_progress'}),
+}
+_PITY_TYPE_KEYS = {_bt: _ks | _PITY_LIFECYCLE_KEYS
+                   for _bt, _ks in _PITY_TYPE_KEYS.items()}
+
+
+def _pity_declared_keys(btype: str) -> frozenset:
+    """某 btype 的合法 `[[pity]]` 键全集 = 通用键 ∪ 该类型键。
+
+    未注册的 btype（如 S6a 扩表前的 `rotating_inverse`）只剩通用键，
+    与「该类型暂无类型专用键」等价。btype 本身是否已注册**不在本表职责内**
+    （`create_behavior` 在装配期对未注册类型报错）。
+    """
+    return _PITY_COMMON_KEYS | _PITY_TYPE_KEYS.get(btype, frozenset())
+
+
+def pity_key_issues(pity_list: list) -> List[str]:
+    """`[[pity]]` 列表的**未声明键**清单（加载期与保存闸门共用，单一实现点）。
+
+    形态照 `stop_condition_shape_issues`：**不抛、只读**（不修改传入的 list 与
+    其中的 dict）、返回人类可读的消息列表。输入非法（非 list、条目非 dict）时
+    静默跳过——那是 `_build_pity` 既有校验的报错面，不由本函数代劳。
+
+    报三类「配置没按你写的生效」：
+
+    1. **条目含未声明键。** 读侧 `p.get(key)` 取不到就落默认值，键名笔误
+       （`max_tirggers`）与跨类型误写（`soft_step` 写 `threshold`）都零信号。
+    2. **`[pity.lifecycle]` 子表含未声明键。** 同理，写错了只会静默落
+       `False` / `None`。
+    3. **`type` 不是字符串。** 见函数体内注释（S4c 审查 minor）。
+
+    合法键集由 `_pity_declared_keys(btype)` 给出，错误信息里点名列全，
+    用户无需查文档即可改对。
+    """
+    if not isinstance(pity_list, list):
+        return []
+
+    issues: List[str] = []
+    for entry in pity_list:
+        if not isinstance(entry, dict):
+            continue
+        btype = entry.get('type', 'soft_interval')
+        name = entry.get('name', '?')
+        if not isinstance(btype, str):
+            # S4c 审查 minor：TOML 写成 `type = ["soft_interval"]` 这类非字符串取值时，
+            # `_PITY_TYPE_KEYS.get(btype)` 会抛 `TypeError: unhashable type`，破坏本函数
+            # 「不抛、只读、返回消息列表」的契约（对照 `stop_condition_shape_issues`）。
+            # 本函数是保存闸门的守卫，抛 TypeError 会让闸门以 Python 内部错误失败而不是
+            # 给出配置讯息。故改为报一条 issue（`_build_pity` 消费该列表并抛
+            # `ConfigError`），不代 `_build_pity` 判类型合法性。
+            issues.append(
+                f"[[pity]] 条目 name='{name}' 的 type 取值 {btype!r} 不是字符串"
+                f"（合法类型：{sorted(_PITY_TYPE_KEYS)}）")
+            continue
+        declared = _pity_declared_keys(btype)
+        flat = sorted(k for k in declared if not k.startswith('lifecycle.'))
+        nested = sorted(k.split('.', 1)[1] for k in declared
+                        if k.startswith('lifecycle.'))
+
+        unknown = sorted(k for k in entry if k not in declared)
+        if unknown:
+            issues.append(
+                f"[[pity]] 条目 name='{name}'（type='{btype}'）含未声明键 {unknown}。"
+                f"这些键在解析时被忽略、配置不会按写的生效"
+                f"（该 type 的合法键集：{flat}；"
+                f"另有 [pity.lifecycle] 的 {nested}）"
+            )
+
+        lifecycle = entry.get('lifecycle')
+        if isinstance(lifecycle, dict):
+            nested_unknown = sorted(k for k in lifecycle
+                                    if f'lifecycle.{k}' not in declared)
+            if nested_unknown:
+                issues.append(
+                    f"[[pity]] 条目 name='{name}'（type='{btype}'）的 "
+                    f"[pity.lifecycle] 含未声明键 {nested_unknown}。"
+                    f"这些键在解析时被忽略（合法：[pity.lifecycle] 的 {nested}）"
+                )
+
+    return issues
+
+
 def _build_pity(data: dict, store: ConfigStore) -> None:
     """[[pity]] → store.pity（P55 扁平化 PityDef 格式）。"""
     pity_list = data.get('pity', [])
     if not pity_list:
         store.pity = PityConfig(enabled=True)
+        # P81 §4.1-6：声明了 pity 段却零条定义时保底静默不生效，加载期报出
+        if 'pity' in data:
+            msg = ("配置含 pity 段但没有任何保底定义（[[pity]] 条目为空），"
+                   "保底将完全不生效。若本意即无保底，请删除该段以消除本告警。")
+            store.load_warnings.append(msg)
+            warnings.warn(msg)
         return
 
-    # P55 阶段十B：旧格式自动迁移
-    if _is_legacy_format(pity_list):
-        pity_list = _migrate_legacy_pity(pity_list)
-        store._migrated_from_legacy = True
+    # P81 B11：旧格式不再自动迁移，改为显式拒绝（口径同 P65 _check_card_format）
+    _check_pity_format(pity_list)
+
+    # P64 S4c：键契约硬拒（原先未声明键被静默忽略，见 `_PITY_COMMON_KEYS` 处说明）。
+    # 排在 `_check_pity_format` 之后：旧格式（含 func / 带 start 却缺 scope）的
+    # 提示语比「未声明键」更贴题，故旧格式优先报出。
+    _key_issues = pity_key_issues(pity_list)
+    if _key_issues:
+        raise ConfigError(
+            "[[pity]] 配置含未声明的键，加载已中止（整份配置未被采用）：\n"
+            + '\n'.join(_key_issues)
+        )
 
     # 稀有度 rank map（小写归一化——ISSUE-023/§0.2）
     rarity_rank_map = {k.lower(): v for k, v in store.rarity_rank.items()}
@@ -558,13 +908,57 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
 
         btype = p.get('type', 'soft_interval')
         scope = p.get('scope', 'ssr').lower()
-
-        # scope 注册校验（AUDIT-BREAK-1/2 修复）
+        # scope 白名单校验（与上方 name 校验同层，硬拒）。
+        # 原为 AUDIT-BREAK-1/2 修复引入的 warning 软校验，2026-09-16 升级为 ConfigError：
+        # scope 写错时会被 PityEngine 原样采用，而 behavior 的 _scope 永远匹配不到任何
+        # 槽位（scope_slots 只含 [rarities].ranks 定义的稀有度），该保底静默失效。
+        # 仅 warning 不足以阻断（用户不读日志），故与新增校验合并为一处硬拒。
         if rarity_rank_map and scope not in rarity_rank_map:
-            from .pity import logger as pity_logger
-            pity_logger.warning(
-                f"PityDef '{name}' scope='{scope}' 未在 [rarities] 中注册——"
-                f"保底行为将分配给未知稀有度层级。"
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 scope='{scope}' 未在 [rarities] 中注册"
+                f"（可用：{', '.join(sorted(rarity_rank_map))}），"
+                f"该保底匹配不到任何槽位，概率修正不会生效"
+            )
+
+        # reset 取值白名单（G16-1 / ISSUE-928，与上方 scope 校验同层同形态的硬拒）。
+        # 合法取值五类：空串（create_behavior 不外传 → 回退 scope 兜底分支，
+        # 即「出 scope 稀有度即重置」）、'featured'（抽到 featured 卡即重置，
+        # 不限定稀有度）、稀有度名（[rarities].ranks 的键）、'never'（永不重置，G16）、
+        # 'on_effective'（仅本抽真的改动了分布时重置，2026-10-15；类型面另有
+        # create_behavior 的硬拒，只有阈值触发型可用）。
+        # 未知值（含拼写错误如 'nevr'）经 _should_reset 的兜底分支
+        # `reward_rarity == reset` 恒 False，即静默等价于 'never'，两种语义
+        # 不可区分且不报错，故与 scope 同样升级为硬拒。
+        # 大小写归一（与上方 scope 的 `.lower()` 同形态）：`reward_rarity` 由
+        # `PityEngine._infer_rarity` 统一小写返回，`reset` 侧不做归一则同一份
+        # TOML 里 `scope='SSR'` 合法、`reset='SSR'` 被拒——两处白名单形态不一致。
+        reset_raw = p.get('reset', '')
+        reset = reset_raw.lower() if isinstance(reset_raw, str) else reset_raw
+        _legal_reset = legal_reset_values(rarity_rank_map)
+        if reset not in _legal_reset:
+            _avail = ', '.join(repr(v) for v in sorted(_legal_reset))
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 reset='{reset}' 不是合法取值"
+                f"（可用：{_avail}）。未知值会让该保底永不重置，"
+                f"与 reset='never' 行为不可区分"
+            )
+
+        # 触发次数上限（ISSUE-032 / §3.1.3 的退役维）：0 = 不限，负值抛 ConfigError。
+        # 负值若不拒，`build_lifecycle` 的 `_n > 0` 判据会把它静默当成 0：「触发
+        # 上限」变成「不限」，与配置者写的字面意思相反且无任何信号。
+        # 非整数一并拒：字符串取值会让 `_n > 0` 抛 `TypeError`，而该异常被
+        # `PityEngine.__init__` 的构造兜底吞成 `logger.warning`、整条保底静默消失；
+        # bool 是 `int` 的子类（`max_triggers = true` 会被静默当成 1），故显式排除。
+        max_triggers = p.get('max_triggers', 0)
+        if isinstance(max_triggers, bool) or not isinstance(max_triggers, int):
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 max_triggers="
+                f"{max_triggers!r} 不是整数（0 = 不限，须为非负整数）"
+            )
+        if max_triggers < 0:
+            raise ConfigError(
+                f"[[pity]] 条目 name='{name}' 的 max_triggers={max_triggers} 是负值"
+                f"（0 = 不限，须为非负整数）。负值会让「触发次数上限」静默变成「不限」"
             )
 
         # 解析 deltas / 语法糖参数
@@ -593,15 +987,15 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
         deactivate_on_early_hit = lifecycle_raw.get('deactivate_on_early_hit', False)
         depends_on = lifecycle_raw.get('depends_on')
 
-        # P56：deactivate_on_early_hit 仅 counter 驱动型支持
-        # 事件驱动型（rotating/targeted）没有「阈值前提前命中」的概念
-        _EVENT_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
-                                   'rotating_cr_soft', 'targeted', 'targeted_soft'})
-        if deactivate_on_early_hit and btype in _EVENT_TYPES:
-            raise ConfigError(
-                f"保底 '{name}'：deactivate_on_early_hit=true 不适用于"
-                f"事件驱动型保底（type='{btype}'）。"
-            )
+        # ── P64 S6a（H3）：事件驱动型的 deactivate_on_early_hit 拒绝分支已删除 ──
+        # P56 时该开关只对 counter 驱动型开放，理由是「事件驱动型没有阈值前提前
+        # 命中的概念」。P64 的 Lifecycle（§3.1.3）把退役判定统一为
+        # `should_deactivate(ctx, state, name, fired)`，`fired` 取
+        # `any(tr.did_reset(...))`（M4 统一语义，§3.1.1），对**全部类型同形**，
+        # 故事件驱动型自此同样可配。删除的是**配置面的拒绝**，不是引擎能力：
+        # 旧配置的接受面只增不减，M1 等价性口径不受影响。
+        # 本模块的 `_EVENT_DRIVEN_TYPES` 拷贝自此**无消费点**，按
+        # `TestDuplicatedConstants` 的「不得删」纪律保留为防漂移守卫。
 
         # 构造扁平化 PityDef
         pities.append(PityDef(
@@ -628,7 +1022,11 @@ def _build_pity(data: dict, store: ConfigStore) -> None:
             pools=tuple(p.get('pools', ('*',))) if isinstance(p.get('pools', '*'), list) else (p.get('pools', '*'),),
             deactivate_on_early_hit=deactivate_on_early_hit,
             depends_on=depends_on,
-            reset=p.get('reset', ''),
+            # ISSUE-032（§3.1.3 退役维）：与 `depends_on` 正交，0 = 不限。
+            max_triggers=max_triggers,
+            reset=reset,
+            # G5（§3.6）：管道排序键的显式覆盖入口。缺省 0 = 不覆盖 type 顺序。
+            priority=p.get('priority', 0),
         ))
 
     store.pity = PityConfig(enabled=True, pities=pities)
@@ -1254,8 +1652,6 @@ def _save_stop_condition(store: ConfigStore, data: dict) -> None:
         data['stop_condition'] = tree
 
 
-
-
 # P79 5.5 第 5 类：resource_threshold 的运算符白名单。
 # ResourceThresholdCondition.check 只对这三个值分支求值，其余值（含 => / =< /
 # 中文别名 / 空串）一律静默 return False——条件永不成立，用户看不到任何提示。
@@ -1493,26 +1889,40 @@ def _save_resource_lifecycle(store: ConfigStore, data: dict) -> None:
     data['resources']['lifecycle'] = {'enabled': True, 'rules': rules_out}
 
 
-
 def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linear') -> tuple:
     """将 soft_interval / soft_additive 语法糖展开为 deltas。
 
-    soft_interval: [[start, 0.0], [end-start, 100/(end-start)%]]
-      例：start=73, end=90 → ((73, 0.0), (17, 5.88235...))
-    soft_additive: [[start, 0.0], [1, increment], [1, increment], ...]
-      注：每抽递增 i% → 简化为 ((start, 0.0), (1, increment), (1, increment), ...)
-      但为了 RLE 效率，将连续相同 increment 合并为一段。
-      实际：((start, 0.0), (∞, increment)) 但 ∞ 不现实——
-      改为 ((start, 0.0), (remaining, increment))，remaining 取到 100% 为止。
+    deltas 为 RLE 格式 ((段长, 每抽增量), ...)，增量单位为「百分点」，由
+    SoftStepBehavior._cumulative_boost() 消费：第 n 抽的 boost = 前 n 段累计
+    （段内线性，逐抽递增）。
+
+    首段长度为 start-1 而非 start（§3.4.1 修正 ②：start 含首抽）：
+    counter == start-1 时 boost 仍为 0，counter == start 时已拿到第一档增量。
+
+    两种语法糖的端点语义不同（2026-10-06 用户裁决）：
+
+    soft_interval（指定头尾）：`start` 是开始提升的那一抽，`end` 是**到达
+      100% 的那一抽**，两端都含，故档数 n_steps = end - start + 1，
+      inc = 100/n_steps。100% 恰好落在 `end`。
+      例：start=73, end=90 → ((72, 0.0), (18, 5.555556))，第 73 抽起、
+      第 90 抽满。end < start 时兜底为 e = s（单档 100%）。
+      边界：start=0 与 start=1 的首段都被 max(0, ...) 夹为 0 长，二者的
+      差别只在档数，即 start=0 等价于「start=1 且 end 加 1」。
+
+    soft_additive（指定起始点与增量）：只按 increment 累加，**哪一抽累计到
+      100% 就是哪一抽**，不设终点。n_steps = int(100/increment) + 1，
+      即跨过 100% 所需的档数再多一档，使末档不被 _cumulative_boost() 的
+      min(boost, 100) 提前截断（多出的一档在封顶后无副作用）。
+      increment <= 0 时退化为单档 n_steps=1。
     """
     if btype == 'soft_interval':
         s = int(start) if start else 0
         e = int(end) if end else 90
-        if e <= s:
-            e = s + 1
-        n_steps = e - s
+        if e < s:
+            e = s                    # 非法区间兜底：退化为单档 100%
+        n_steps = e - s + 1          # 两端都含：首档落 start，100% 落 end
         inc = 100.0 / n_steps
-        return ((s, 0.0), (n_steps, round(inc, 6)))
+        return ((max(0, s - 1), 0.0), (n_steps, round(inc, 6)))
 
     if btype == 'soft_additive':
         s = int(start) if start is not None else 0
@@ -1522,7 +1932,7 @@ def _expand_soft_to_deltas(btype: str, start, end, increment, func: str = 'linea
             n_steps = int(100.0 / inc) + 1
         else:
             n_steps = 1
-        return ((s, 0.0), (n_steps, inc))
+        return ((max(0, s - 1), 0.0), (n_steps, inc))
 
     # func 参数在 P55 后不再支持——仅 linear
     return ()
@@ -1553,11 +1963,19 @@ def _parse_state_probs(value) -> Optional[tuple]:
 def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     """deltas → (soft_start, soft_end) 反向还原。
 
-    仅当 deltas 符合 soft_interval 模式时可用：
-    ((N, 0.0), (M, inc)) 其中 inc 为常数。
-    返回 ((start, end),) 或 None（若无法还原）。
+    仅当 deltas 符合 soft_interval 模式时可用：((N, 0.0), (M, inc))，
+    即恰两段、首段增量为 0（首段是「未起步」区间，其长度即 start-1）。
+    返回 (start, end) 或 None（若无法还原）。
 
-    例：((73, 0.0), (17, 5.882353)) → (73, 90)
+    例：((72, 0.0), (18, 5.555556)) → (73, 90)
+
+    边界：首段长为 0 时无从判断它来自 start=0 还是 start=1（两者都被
+    max(0, ...) 夹为 0），一律还原为 start=1，并把 end 同步加 1 以保住
+    档数 n_steps。还原结果与原始 start=0 展开出的 deltas 逐段相同，
+    故行为不变（例：(0, 10) → (1, 11)，两者 deltas 均为 ((0, 0.0), (11, 100/11))）。
+
+    调用方：当前仅测试（生产路径的 TOML 写回直接取 PityDef.soft_start/
+    soft_end，不经本函数）。
     """
     if not deltas or len(deltas) != 2:
         return None
@@ -1565,7 +1983,70 @@ def _deltas_to_soft_interval(deltas: tuple) -> tuple:
     n2, inc2 = deltas[1]
     if inc1 != 0.0:
         return None  # 首段增量非零——非 soft_interval 模式
-    return (n1, n1 + n2)
+    return (n1 + 1, n1 + n2)
+
+
+# ── 与 pity.py 重复的两组 btype 集合（各存一份，靠测试防漂移）──
+# 软保底后缀型：deltas 由 SoftPityMixin 独立展开，不经 PityDef.deltas。
+# 事件驱动型：S6a 之前 `deactivate_on_early_hit` 对其不适用（`_build_pity` 据此硬拒）；
+# H3 删除该拒绝分支后本拷贝**已无消费点**，按 `TestDuplicatedConstants` 的
+# 「不得删、也不得改内容」纪律保留（AUDIT-BREAK-10），作用退化为防漂移守卫。
+# 对应 pity.py 的 `CounterBasedBehavior._SOFT_SUFFIX_TYPES` / `._EVENT_DRIVEN_TYPES`，
+# 两者由 tests/core/test_pity_config_toml.py::TestDuplicatedConstants 钉住相等。
+# P64 S1a：pity 侧两个 `_*_TYPES` 已升为 `pity_primitives` 的模块级常量，
+# `_EVENT_DRIVEN_TYPES` 的内容按 ISSUE-105 追加了 `rotating_inverse`（G1 幻塔
+# 连中后必歪，事件驱动型），本拷贝**同批补齐**以维持等值断言——副作用只有一条：
+# S6a 之前「`rotating_inverse` + `deactivate_on_early_hit`」也走本文件的 H3 硬拒；
+# S6a 起两者都放行（语义一致，该类型本就是事件驱动型），本拷贝的消费分支已在 S6a 删除。
+_SOFT_SUFFIX_TYPES = frozenset({'rotating_soft', 'rotating_cr_soft', 'targeted_soft'})
+_EVENT_DRIVEN_TYPES = frozenset({'rotating', 'rotating_soft', 'rotating_cr',
+                                 'rotating_cr_soft', 'targeted', 'targeted_soft',
+                                 'rotating_inverse'})
+
+
+def _sugar_matches_deltas(p, btype: str) -> bool:
+    """语法糖参数展开后是否与 p.deltas 逐段相同（读写优先级一致性守卫）。
+
+    读取侧 `if 'deltas' in p:` 优先于语法糖展开；若写回侧无条件优先语法糖，
+    则「同时写了 deltas 与 start/end」的配置经一次往返就丢掉 deltas、改用
+    语法糖，引擎行为随之改变（实测 soft_interval + deltas=[[10,1.0],[5,2.0]]
+    + start=73/end=90：往返前 ((10,1.0),(5,2.0))，往返后 ((72,0.0),(18,5.555556))）。
+    故写回语法糖的前提是它展开后与 p.deltas 逐段相同；否则改走 deltas 分支。
+
+    `start` 缺失时返回 False（无语法糖可写）。`end` / `increment` 缺失时
+    按读取侧同样的默认值展开，从而保住「只写了 start」这类配置的形式。
+    """
+    if p.deltas is None or p.soft_start is None:
+        return False
+    if btype == 'soft_interval':
+        expanded = _expand_soft_to_deltas(btype, p.soft_start, p.soft_end, None)
+    else:
+        expanded = _expand_soft_to_deltas(btype, p.soft_start, None, p.soft_increment)
+    return expanded == p.deltas
+
+
+def _write_sugar_form(p, btype: str) -> bool:
+    """写回侧用语法糖（start / end / increment）表达 p 的爬升是否无损。
+
+    两种情形成立（其余情形写回 `deltas` 本体）：
+
+    ① **`p.deltas is None`**——此时语法糖是**唯一**可写的形态。读取侧的
+       `_build_pity` 只在 `deltas` 键缺席时才用语法糖展开，故写回语法糖后
+       重载得到同一份 deltas。GUI 内部构造的 `PityDef` 恒属此类（`deltas`
+       由 TOML 解析期的 `_expand_soft_to_deltas()` 产生，GUI 只填
+       `soft_start` / `soft_end` / `soft_increment`，见 `apply_to_store`）。
+       不写回则 start / end 双双丢失：重载后 `_build_pity` 展开不出 deltas，
+       `create_behavior()` 不给 `SoftStepBehavior` 传 deltas 实参 → TypeError
+       → `PityEngine` 静默丢弃该保底（2026-10-10 实测：GUI 新建的保底保存
+       一次再打开，`engine._behavior_list == []`）。
+    ② **`_sugar_matches_deltas(p, btype)`**——已有 deltas 且与语法糖展开逐段
+       相同，形式可无损换写。
+
+    `soft_start` 缺失时一律 False（无语法糖可写，且 `entry['start']` 会写 None）。
+    """
+    if p.soft_start is None:
+        return False
+    return p.deltas is None or _sugar_matches_deltas(p, btype)
 
 
 def _pitydef_to_toml(p) -> dict:
@@ -1583,14 +2064,46 @@ def _pitydef_to_toml(p) -> dict:
         # P61（ISSUE-328）：pools=()（空勾选 = 不绑定任何池）必须显式写出 pools = []
         # ——否则重载默认 ('*',) 语义反转（不绑定 → 绑定全部池）
         entry['pools'] = list(p.pools)
+    # ISSUE-923：条件式逐字段书写，**新字段不会自动带上**。不补这一行，凡不经本
+    # 函数之外的路径（CLI / 脚本 / 手工编辑的直读直写）都会在保存时丢掉手写的
+    # priority（默认值 0 与「缺键」在解析侧等价，丢失无任何报错）。非默认才写
+    # （round-trip 纪律）。
+    # **注意丢失点的位置**（S4-4 审查 minor 订正）：写成「GUI 加载 → 保存」是不准的。
+    # GUI 路径上该字段在**更早**的两处字段表就没了（`config_panel.py` 的
+    # `apply_to_store` 逐字段重建 `PityDef` 与 `_refresh_from_store_impl` 的字段表），
+    # 根本走不到本行。GUI 侧的同批改造归 S7a（ISSUE-911），本行的作用面只到
+    # 本函数的调用方。
+    if p.priority:
+        entry['priority'] = p.priority
+    # ISSUE-032（S4-4）：触发次数上限。与 `priority` 同为「非默认才写」的标量，
+    # 同属条件式逐字段书写的漏写面（缺键与 0 在解析侧等价，丢失无任何报错；
+    # ISSUE-923 先例，丢失点位置的说明同上）。
+    if p.max_triggers:
+        entry['max_triggers'] = p.max_triggers
 
-    # 语法糖参数（优先写出直观形式，否则写出 deltas）
-    if p.btype == 'soft_interval' and p.soft_start is not None and p.soft_end is not None:
+    # 语法糖参数（写出直观形式，前提是它能还原出同一份 deltas；否则写 deltas）
+    if p.btype in _SOFT_SUFFIX_TYPES and p.deltas is None and (
+            p.soft_start is not None or p.soft_end is not None
+            or p.soft_increment is not None):
+        # 后缀型的软保底不经 PityDef.deltas 展开——由 SoftPityMixin 在
+        # create_behavior() 时独立消费 soft_start / soft_end / soft_increment。
+        # 不写回则重载后这三项全为 None，mixin 落到注册表默认值（start=74 /
+        # end=90），用户配置被静默改写且无任何提示。
+        # 三键各自独立写出：只给 increment 或只给 end 也是合法配置。
+        if p.soft_start is not None:
+            entry['start'] = p.soft_start
+        if p.soft_end is not None:
+            entry['end'] = p.soft_end
+        if p.soft_increment is not None:
+            entry['increment'] = p.soft_increment
+    elif p.btype == 'soft_interval' and _write_sugar_form(p, 'soft_interval'):
         entry['start'] = p.soft_start
-        entry['end'] = p.soft_end
-    elif p.btype == 'soft_additive' and p.soft_start is not None and p.soft_increment is not None:
+        if p.soft_end is not None:
+            entry['end'] = p.soft_end
+    elif p.btype == 'soft_additive' and _write_sugar_form(p, 'soft_additive'):
         entry['start'] = p.soft_start
-        entry['increment'] = p.soft_increment
+        if p.soft_increment is not None:
+            entry['increment'] = p.soft_increment
     elif p.deltas is not None:
         entry['deltas'] = [list(seg) for seg in p.deltas]
 
@@ -1613,9 +2126,14 @@ def _pitydef_to_toml(p) -> dict:
         entry['cr_state_probs'] = list(p.cr_state_probs)
     if p.fate_threshold is not None:
         entry['fate_threshold'] = p.fate_threshold
-    if not p.switch_allowed:
+    # `is not None` 判据不可省（S4c 审查 minor）：两字段的读侧是 `p.get(k, True)`，而
+    # GUI 的缺键形态会给到 `None`（`pd.get('switch_allowed')`）。只写
+    # `if not p.switch_allowed` 会把 `None` 当成「非默认」写成 `false`，重载后读成
+    # `False`，即「允许中途切换」被往返成「禁止切换」（引擎侧 `None` 的语义是默认
+    # True）。与本块写侧过滤修的是同一类「写盘 → 重载自破」。
+    if p.switch_allowed is not None and not p.switch_allowed:
         entry['switch_allowed'] = False
-    if not p.switch_resets_progress:
+    if p.switch_resets_progress is not None and not p.switch_resets_progress:
         entry['switch_resets_progress'] = False
 
     # 生命周期
@@ -1627,113 +2145,24 @@ def _pitydef_to_toml(p) -> dict:
     if lifecycle:
         entry['lifecycle'] = lifecycle
 
+    # P64 S4c：产出按**键契约**过滤（唯一契约源见 `_PITY_COMMON_KEYS` 处说明）。
+    # 本函数对 cr_* / fate_* / switch_* / threshold 等类型专用字段是**逐字段无条件
+    # 书写**（只看字段是否非默认，不看 btype），而读侧自 S4c 起对未声明键硬拒——
+    # 不过滤则「写盘 → 重载」自破。可达路径不止手构 PityDef：GUI 兜底条目经
+    # `PityDef(switch_allowed=None)` 让 `not None` 为真，给 soft_interval 条目写出
+    # `switch_allowed = false`（2026-10-10 实测）。
+    # 被过滤掉的字段对该 btype 本就无消费者（引擎按 btype 取键），故行为不变。
+    declared = _pity_declared_keys(p.btype)
+    for _key in [k for k in entry if k not in declared]:
+        del entry[_key]
+    _lc = entry.get('lifecycle')
+    if isinstance(_lc, dict):
+        for _key in [k for k in _lc if f'lifecycle.{k}' not in declared]:
+            del _lc[_key]
+        if not _lc:
+            del entry['lifecycle']
+
     return entry
-
-
-# ══════════════════════════════════════════════════════════════════
-# P55 阶段十B：旧格式自动迁移
-# ══════════════════════════════════════════════════════════════════
-
-# 旧格式特征字段——这些字段在新格式中不存在（被扁平化替代）
-_LEGACY_PITY_KEYS = frozenset({'start', 'end', 'func', 'reset', 'target',
-                               'counter_init_top'})
-
-
-def _is_legacy_format(pity_list: list) -> bool:
-    """检测 [[pity]] 节是否使用旧格式。
-
-    旧格式特征：条目含 'start'/'end'/'func' 等语法糖字段（非新格式的 'scope'/'deltas'）。
-    """
-    if not pity_list:
-        return False
-    for p in pity_list:
-        keys = set(p.keys())
-        if 'start' in keys and 'scope' not in keys:
-            return True
-        if 'func' in keys:
-            return True
-    return False
-
-
-def _migrate_legacy_pity(pity_list: list) -> list:
-    """将旧格式 [[pity]] 条目迁移为新格式。
-
-    旧格式示例：
-      {name='p1', type='soft', start=74, end=90, func='linear', reset='any_ssr'}
-    新格式示例：
-      {name='p1', type='soft_interval', scope='ssr', start=74, end=90,
-       deltas=((74,0.0),(16,6.25))}
-
-    func='exp'/'step' 不支持——抛出 ConfigError。
-    """
-    if not pity_list:
-        return pity_list
-
-    new_pities = []
-    for p in pity_list:
-        btype = p.get('type', 'soft')
-        name = p.get('name', 'pity')
-
-        # 映射旧 type → 新 btype
-        if btype == 'soft':
-            btype = 'soft_interval'
-
-        entry = {'name': name, 'type': btype, 'scope': 'ssr'}
-
-        # func 检查——仅 linear 支持
-        func = p.get('func', 'linear')
-        if func not in ('linear', '', None):
-            raise ConfigError(
-                f"Pity '{name}': func='{func}' 在 P55 后不再支持——"
-                f"仅 linear 可用。如需自定义爬升曲线，请使用 soft_step + deltas。"
-            )
-
-        # start/end → soft_interval 参数
-        start = p.get('start')
-        end_val = p.get('end')
-        if start is not None:
-            entry['start'] = int(start)
-        if end_val is not None:
-            entry['end'] = int(end_val)
-
-        # increment → soft_additive 参数
-        increment = p.get('increment')
-        if increment is not None:
-            entry['increment'] = float(increment)
-
-        # threshold → hard 参数
-        threshold = p.get('threshold')
-        if threshold is not None:
-            entry['threshold'] = int(threshold)
-
-        # reset 条件
-        reset = p.get('reset')
-        if reset and reset != 'any_ssr':
-            entry['reset'] = reset
-
-        # target_distribution → target_featured
-        target = p.get('target', {})
-        if target:
-            entry['target_featured'] = True
-
-        # pools
-        pools = p.get('pools', '*')
-        if pools != '*':
-            entry['pools'] = [pools] if isinstance(pools, str) else list(pools)
-
-        # counter_init（旧格式中可能在顶层）
-        ci = p.get('counter_init', 0)
-        if ci:
-            entry['counter_init'] = int(ci)
-
-        # deltas（如果旧格式直接有 deltas）
-        deltas = p.get('deltas')
-        if deltas is not None:
-            entry['deltas'] = deltas
-
-        new_pities.append(entry)
-
-    return new_pities
 
 
 def _build_rarity_defaults(data: dict, store: ConfigStore) -> None:
@@ -1778,8 +2207,9 @@ def _build_targets(data: dict, store: ConfigStore) -> None:
 def _build_strategy(data: dict, store: ConfigStore) -> None:
     """[strategy] → store.strategy_key + store.strategy_params（P69：key + params 格式）。
 
-    旧 TOML type + name 格式自动检测并迁移到 key 格式。
-    key 不存在时回退 'smart'。
+    P81 §4.1-6：旧 name 格式的兼容分支已删除（save_toml 恒写 key，该分支只对手写旧 TOML
+    可达，且会造成「静默换策略」）。命中旧格式或缺 key 时**只告警、不改写**：strategy_key
+    保持原值（新建 store 时即为字段默认 'smart'），故加载行为与删除前逐字节等价。
     """
     strat = data.get('strategy', {})
     if not strat:
@@ -1791,11 +2221,14 @@ def _build_strategy(data: dict, store: ConfigStore) -> None:
         store.strategy_params = dict(strat.get('params', {}))
         return
 
-    # 旧格式兼容：type(显示名) + name(key) —— 自动迁移
+    # P81 §4.1-6：旧 name 格式不再兼容——只告警、不改写（保留原 fall-through 语义）
     if 'name' in strat:
-        store.strategy_key = str(strat['name'])
-        store.strategy_params = dict(strat.get('params', {}))
-        return
+        msg = (f"strategy 段使用旧 name 格式（name='{strat['name']}'），已不再支持；"
+               f"策略将回退默认值 'smart'。请改写为 key = \"...\"。")
+    else:
+        msg = "strategy 段缺少 key，策略将回退默认值 'smart'。"
+    store.load_warnings.append(msg)
+    warnings.warn(msg)
 
 
 def _build_plugins(data: dict, store: ConfigStore) -> None:

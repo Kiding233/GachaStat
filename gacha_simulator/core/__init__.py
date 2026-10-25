@@ -1,24 +1,24 @@
 from .result_types import CompactResult
-from .collector import SimulationCollector, InfoVectorCollector, CompactCollector
-from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string, aggregate_probs_by_rarity, infer_rarity_from_spec  # ← P61（Ph1）
+from .collector import SimulationCollector, CompactCollector
+from .pool import Pool, Reward, CostOption, PoolCost, parse_cost_string, cost_to_string  # ← P61（Ph1）；`infer_rarity_from_spec` 随 S8-2 删、`aggregate_probs_by_rarity` 随 S8-4 删（ISSUE-504）
 from .notifier import Notifier
 from .overflow import OverflowBand, match_overflow_bands, expand_sugar_to_bands
 from .banner import Banner, DrawOutcome, TransitionRule, TransitionPreview  # ← P61（Ph1c）
 from .action import Action, DrawAction, WaitAction, NonDrawAction, NON_DRAW_ACTION_REGISTRY, InvalidActionError
 from .state import GachaState
-from .info_vector import InfoVector
 from .pity import (
-    PityBehavior, SoftStepBehavior,
-    CounterBasedBehavior, HardPityBehavior,
-    PityDefParsed, PoolPitySpec,
+    PityBehavior,
+    PoolPitySpec,
     PityState, PityEngine,
     DrawInfo, PityContext, Counter, Flag, LifecycleConfig,
     BEHAVIOR_REGISTRY, create_behavior,
     compute_scope_mappings,
-    RotatingBehavior, RotatingSoftBehavior,
-    RotatingCRBehavior, RotatingCRSoftBehavior,
-    TargetedBehavior, TargetedSoftBehavior,
-    SoftPityMixin, _redistribute_scope,
+    # P64 S4-3（AUDIT-BREAK-8）：10 个旧行为类 + `SoftPityMixin` 的 re-export 已随
+    # preset 化在本包公共面上退役（本包内已无 registry 入口，留着只会诱惑新代码
+    # 继续用旧类）。**旧类本体保留到发布前**（GATE-5），故
+    # `from gacha_simulator.core.pity import HardPityBehavior` 不受影响；
+    # `_redistribute_scope` 的导出已随 S8-4 删（其替换对象是 S8 的卡级管道），
+    # **函数本体保留在 `pity.py`**（ISSUE-502）：4 处旧类调用点仍在用它。
 )
 from .milestone import MilestoneEngine, MilestoneDef, MilestoneConfig, register_milestone_engine  # P58
 from .config_store import SelectVoucherDef  # P78
@@ -27,7 +27,7 @@ from .strategy import (
     Strategy, StrategyContext, StrategyMeta, register_strategy,
     SmartStrategy, PoolQuotaStrategy, PityReserveStrategy, StopOnTargetStrategy,
     FixedCountStrategy, TargetHuntingStrategy, NoDrawStrategy, DrawTargetStrategy,
-    CompositeStrategy, DrawSegmentStrategy, PriorityChainStrategy, ConditionalStrategy,
+    DrawSegmentStrategy, PriorityChainStrategy, ConditionalStrategy,
     STRATEGY_REGISTRY, create_strategy, strategy_type_to_key, strategy_key_to_type,
     next_event_wait,
 )
@@ -49,30 +49,16 @@ from .stop_condition import (
     stop_condition_shape_issues,
 )
 from .resource_gain import ResourceGainFunction, CompositeResourceGain, ScheduleResourceGain, expand_gain_rules_to_schedule
-from .generalized_drop_rate import (
-    GeneralizedDropRate, RarityValueAtT, CumulativeResourceEfficiency, PityProgressAtT,
-    DropRateBetweenT1T2, TotalValueAtT, TargetCardCountAtT, TargetCardPercentageAtT, TargetCardEfficiencyAtT
-)
 from .schedule import PoolSchedule, PoolScheduleManager
 from .target_card import TargetCard, TargetCardSet
-from .gdr_analysis import (
-    SuccessProbabilityAnalyzer, LegacyGDRCalculator,
-    compute_gdr_count, compute_gdr_percentage, compute_gdr_efficiency
-)
 from .config_toml import load_toml, save_toml
-from .distribution import EmpiricalDistribution, DistributionSummary, JointSamples, WorstCaseAnalysis, BestCaseAnalysis
-from .risk_analysis import RiskAnalyzer
-from .gdr import GDRContext, GDR_REGISTRY, COMPACT_GDR_REGISTRY, UNIFIED_GDR_REGISTRY, register_gdr, GDRCalculator, make_gdr_calculator, GDRDefinition, populate_gdr_combo, get_default_threshold, compute_gdr_from_compact, compute_gdr_from_cumulative, compute_success_probability, parse_gdr_key, get_expanded_gdr_entries, resolve_gdr_definition, is_resource_gdr
+from .distribution import EmpiricalDistribution, JointSamples
+from .gdr import GDRContext, UNIFIED_GDR_REGISTRY, register_gdr, GDRCalculator, make_gdr_calculator, GDRDefinition, populate_gdr_combo, get_default_threshold, compute_gdr_from_compact, compute_gdr_from_cumulative, compute_success_probability, parse_gdr_key, get_expanded_gdr_entries, resolve_gdr_definition, is_resource_gdr
 from .per_pool_analysis import (
-    PoolSnapshot, CumulativeSnapshot,
-    compute_per_pool_snapshots, compute_cumulative_snapshots,
-    compute_per_pool_snapshots_batch, compute_cumulative_snapshots_batch,
-    per_pool_summary_stats, cumulative_gdr_at_pool_ends,
-    TransitionMatrix, compute_transition_matrices,
+    PoolSnapshot,
+    per_pool_summary_stats,
+    TransitionMatrix,
     compute_transition_matrices_from_flags, compute_transition_flags_from_gdr,
-)
-from .forward_backward import (
-    ForwardStep, BackwardStep, ForwardResult, BackwardResult,
 )
 from .vulnerability import (
     VulnerabilityInterval, PityStatSnapshot, PoolVulnerabilityResult, VulnerabilityAnalysisResult,
@@ -111,33 +97,34 @@ from .process_analysis import (
 
 __all__ = [
     'CompactResult',
-    'SimulationCollector', 'InfoVectorCollector', 'CompactCollector',
+    'SimulationCollector', 'CompactCollector',
     'Pool', 'Reward', 'CostOption', 'PoolCost', 'parse_cost_string', 'cost_to_string',
-    'aggregate_probs_by_rarity', 'infer_rarity_from_spec',
+    # `infer_rarity_from_spec` 的条目随 S8-2 删（ISSUE-504）、`aggregate_probs_by_rarity`
+    # 的条目随 S8-4 删（ISSUE-504 / §3.9.3）：两者的消费者链均已断（`banner.draw` 的
+    # `scale_factors` 还原段与聚合调用），import 与 `__all__` 必须同批改（只删一处即
+    # ImportError 或留下指向已删符号的 re-export）。
     'Notifier',
     'OverflowBand', 'match_overflow_bands', 'expand_sugar_to_bands',
     'Banner', 'DrawOutcome', 'TransitionRule', 'TransitionPreview',
     'Action', 'DrawAction', 'WaitAction', 'NonDrawAction', 'NON_DRAW_ACTION_REGISTRY', 'InvalidActionError',
     'GachaState',
-    'InfoVector',
-    'PityBehavior', 'SoftStepBehavior',
-    'CounterBasedBehavior', 'HardPityBehavior',
-    'PityDefParsed', 'PoolPitySpec',
+    'PityBehavior',
+    'PoolPitySpec',
     'PityState', 'PityEngine',
     'DrawInfo', 'PityContext', 'Counter', 'Flag', 'LifecycleConfig',
     'BEHAVIOR_REGISTRY', 'create_behavior',
     'compute_scope_mappings',
-    'RotatingBehavior', 'RotatingSoftBehavior',
-    'RotatingCRBehavior', 'RotatingCRSoftBehavior',
-    'TargetedBehavior', 'TargetedSoftBehavior',
-    'SoftPityMixin', '_redistribute_scope',
+    # 10 个旧行为类 + `SoftPityMixin` + `_redistribute_scope` 的条目随 import 同批删除
+    # （AUDIT-BREAK-8：只删 import 会留 `NameError`、只删 `__all__` 会留下指向已删符号的
+    # re-export）。**`_redistribute_scope` 只是从本包公共面退役**：函数本体仍在
+    # `pity.py`（ISSUE-502，随 GATE-5 末条「发布前一次性移除旧保底类」的 commit 才删）。
     'MilestoneEngine', 'MilestoneDef', 'MilestoneConfig', 'register_milestone_engine',
     'SelectVoucherDef',
     'ResourceLifecycle', 'ResourceLifecycleConfig', 'resolve_expire_time',
     'Strategy', 'StrategyContext', 'StrategyMeta', 'register_strategy',
     'SmartStrategy', 'PoolQuotaStrategy', 'PityReserveStrategy', 'StopOnTargetStrategy',
     'FixedCountStrategy', 'TargetHuntingStrategy', 'NoDrawStrategy', 'DrawTargetStrategy',
-    'CompositeStrategy', 'DrawSegmentStrategy', 'PriorityChainStrategy', 'ConditionalStrategy',
+    'DrawSegmentStrategy', 'PriorityChainStrategy', 'ConditionalStrategy',
     'STRATEGY_REGISTRY', 'create_strategy', 'strategy_type_to_key', 'strategy_key_to_type',
     'next_event_wait',
     'FloatParam', 'IntParam', 'BoolParam', 'StrParam', 'StringListParam', 'PoolIntMapParam',
@@ -151,23 +138,15 @@ __all__ = [
     'AllPoolsEndCondition', 'LastDrawCardCondition', 'NotCondition',
     'STOP_CONDITION_REGISTRY', 'create_stop_condition', 'MAX_SIM_TIME',
     'ResourceGainFunction', 'CompositeResourceGain', 'ScheduleResourceGain', 'expand_gain_rules_to_schedule',
-    'GeneralizedDropRate', 'RarityValueAtT', 'CumulativeResourceEfficiency', 'PityProgressAtT',
-    'DropRateBetweenT1T2', 'TotalValueAtT', 'TargetCardCountAtT', 'TargetCardPercentageAtT', 'TargetCardEfficiencyAtT',
     'PoolSchedule', 'PoolScheduleManager',
     'TargetCard', 'TargetCardSet',
-    'SuccessProbabilityAnalyzer', 'LegacyGDRCalculator',
-    'compute_gdr_count', 'compute_gdr_percentage', 'compute_gdr_efficiency',
     'load_toml', 'save_toml',
-    'EmpiricalDistribution', 'DistributionSummary', 'JointSamples', 'WorstCaseAnalysis', 'BestCaseAnalysis',
-    'RiskAnalyzer',
-    'GDRContext', 'GDR_REGISTRY', 'COMPACT_GDR_REGISTRY', 'UNIFIED_GDR_REGISTRY', 'register_gdr', 'GDRCalculator', 'make_gdr_calculator', 'GDRDefinition', 'populate_gdr_combo', 'get_default_threshold', 'compute_gdr_from_compact', 'compute_gdr_from_cumulative', 'compute_success_probability', 'parse_gdr_key', 'get_expanded_gdr_entries', 'resolve_gdr_definition', 'is_resource_gdr',
-    'PoolSnapshot', 'CumulativeSnapshot',
-    'compute_per_pool_snapshots', 'compute_cumulative_snapshots',
-    'compute_per_pool_snapshots_batch', 'compute_cumulative_snapshots_batch',
-    'per_pool_summary_stats', 'cumulative_gdr_at_pool_ends',
-    'TransitionMatrix', 'compute_transition_matrices',
+    'EmpiricalDistribution', 'JointSamples',
+    'GDRContext', 'UNIFIED_GDR_REGISTRY', 'register_gdr', 'GDRCalculator', 'make_gdr_calculator', 'GDRDefinition', 'populate_gdr_combo', 'get_default_threshold', 'compute_gdr_from_compact', 'compute_gdr_from_cumulative', 'compute_success_probability', 'parse_gdr_key', 'get_expanded_gdr_entries', 'resolve_gdr_definition', 'is_resource_gdr',
+    'PoolSnapshot',
+    'per_pool_summary_stats',
+    'TransitionMatrix',
     'compute_transition_matrices_from_flags', 'compute_transition_flags_from_gdr',
-    'ForwardStep', 'BackwardStep', 'ForwardResult', 'BackwardResult',
     'VulnerabilityInterval', 'PityStatSnapshot', 'PoolVulnerabilityResult', 'VulnerabilityAnalysisResult',
     'compute_vulnerability_analysis', 'plot_vulnerability', 'plot_vulnerability_ridge',
     'WorstImpactAnalyzer', 'WorstImpactResult', 'ConditionalResourceDistribution',

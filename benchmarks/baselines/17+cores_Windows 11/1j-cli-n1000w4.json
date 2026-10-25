@@ -1,0 +1,67 @@
+{
+  "name": "1j-cli-n1000w4",
+  "machine_class": "17+cores_Windows 11",
+  "record": {
+    "run_id": "b72dbc0c01e3",
+    "timestamp": "2026-09-22T11:07:21+00:00",
+    "path": "cli",
+    "is_user_path": true,
+    "fingerprint": {
+      "cpu": "Intel64 Family 6 Model 170 Stepping 4, GenuineIntel",
+      "cores": 22,
+      "os": "Windows 11",
+      "python": "3.12.5",
+      "code_version": "2.4.0",
+      "qt_qpa_platform": ""
+    },
+    "plan": {
+      "config_path": "D:\\Users\\DELL\\Desktop\\gacha_simulator\\抽卡模拟与分析程序\\gacha_simulator\\config\\config.toml",
+      "strategy_key": "smart",
+      "strategy_params": {},
+      "n": 1000,
+      "workers": 4,
+      "seed": 42,
+      "chunksize": null,
+      "subject": "simulation",
+      "path": "cli",
+      "grain": "stage",
+      "repeats": 3,
+      "collector": false,
+      "py_spy": false,
+      "profile_enabled": false,
+      "profile_dir": "",
+      "profile_skip": 2,
+      "profile_count": 50,
+      "note": "P83 1j 证伪实验基线（§3.13 定死参数）"
+    },
+    "repeats": 3,
+    "wall_median": 15.382503999979235,
+    "wall_samples": [
+      14.866106700035743,
+      15.540688800043426,
+      15.382503999979235
+    ],
+    "repeats_downgraded": false,
+    "stages": {
+      "config_load": 0.005056899972259998,
+      "env_build": 0.0005364000098779798,
+      "pool_start": 1.0798803999787197,
+      "simulate": 13.179420300060883,
+      "extract": 0.20457750000059605
+    },
+    "single": null,
+    "functions": null,
+    "resources": {
+      "bytes": 47636,
+      "rss_peak_mb": null
+    },
+    "return_compact": true,
+    "samples_meta": null,
+    "not_comparable": false,
+    "warnings": [
+      "本路径不产出该段：dispatch（分发）",
+      "本期不采集：subject=simulation 的 RSS 峰值（P83 §3.3）"
+    ]
+  },
+  "scope_note": "本基线在机器类别 17+cores_Windows 11 上采集（cpu=Intel64 Family 6 Model 170 Stepping 4, GenuineIntel / cores=22 / python=3.12.5 / 代码版本=2.4.0）。跨机器类别只比阶段占比，不比绝对比值。"
+}

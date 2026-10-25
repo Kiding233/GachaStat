@@ -25,9 +25,18 @@ Thumbs.db
 results.json
 
 # 临时脚本
-benchmark_chart.py
+scripts/benchmark_chart.py
 test_*.html
-profile_*.py
+# 2026-09-22：benchmark_chart.py 加目录限定（P83 §3.6 定死块）——裸模式会误伤任意层级
+# 的同名文件；加限定是「收窄」而非放宽，匹配面只会变小。
+# test_*.html 保持裸模式：全仓无该文件、也无代码写它，落点无法核实，按「若确在根级则
+# 保持原样」处置（P83 §3.6）。
+# profile_*.py 于 2026-09-22 删除（P83 §6.0 2a/2b/2f）：三份 profile 脚本是「待接管的
+# 资产」而非临时脚本，裸模式会让它们永远进不了库（正是 P83 §一 问题 2 的成因），
+# 也会让将来任何同名文件被静默忽略。已核实全仓仅 scripts/ 下 3 个文件命中。
+
+# 性能分析平台运行产物（P83 §3.6）
+benchmarks/runs/
 
 #垃圾箱
 .recycle_bin
@@ -45,3 +54,17 @@ tools/poc_webview/ui_compare/*.log
 tools/poc_webview/plotly.min.js
 tools/poc_webview/echarts.min.js
 tools/poc_webview/charts.json
+
+# 外部 harness（dsh）的一次性补丁脚本目录（2026-09-30 落地）
+# 依据 P81 代码清理专项的登记：「未跟踪且未被 .gitignore 覆盖，长期出现在 git status
+# 噪声里。建议补入 .gitignore（本类不是删除，是忽略）」。该登记 2026-09-22 写下后未执行。
+# 内容为已应用过的 P79/P64 计划补丁脚本 + .claude/workflows 的旧副本，无保留价值。
+.dsh/
+
+# superpowers 技能运行态（2026-09-30 落地，同 P81 登记）
+# 内含：brainstorm 的本地预览服务器状态（server.pid / server-stopped / .last-port
+# / .last-token）与设计比稿 HTML、plan-execute 的运行账本。属工具运行态而非项目产物。
+# 注意：该目录下已有 34 个文件在 2026-06 的三次文档重构提交（65ab06d / 3570776 /
+# 9cae590）中被误入库。.gitignore 对已跟踪文件无效，故本次同时取消跟踪（文件保留在
+# 磁盘上，非删除；可 git revert 恢复跟踪）。
+.superpowers/

@@ -7,7 +7,7 @@
 > - `P32 分布尾部估计改进计划.md`（2026-05-29，137 行）
 > 前置：P24 EVT 尾部拟合（已完成）
 > 关联：P18（Bootstrap 引擎——跨模块项 B2.8/B2.9/P32阶段二 已提取到综合计划）
-> 涉及文件：`distribution.py`、`evt_tail.py`、`risk_analysis.py`、`gui/about_dialog.py`、`gui/analysis_panel.py`
+> 涉及文件：`distribution.py`、`evt_tail.py`、`gui/about_dialog.py`、`gui/analysis_panel.py`（**2026-09-17 更正**：原列的 `risk_analysis.py` 已随 P81 §十 删除，`distribution.py` 中本计划要改的 `BestCaseAnalysis`/`WorstCaseAnalysis` 亦同批删除；本计划的 B1/B5/B6 与任务 1.2/1.3 据此作废，B2 须改指向活跃路径，见 §6.1 后的时点说明）
 
 ---
 
@@ -462,6 +462,17 @@ class EmpiricalDistribution:
 | B5 | RiskAnalyzer.full_report 同步阻塞 | 🟢 低等 | 不在主流 GUI 路径中使用，实际影响有限 |
 | B6 | BestCaseAnalysis 条件顶部无样本量下限 | 🟢 低等 | n<20 时 conditional_top 返回空分布 |
 
+> **2026-09-17 时点说明（由 P81 代码清理专项 §十 触发，见 P81 §0.4-4/§0.4-5 的裁决）**：本节四条缺陷的**对象状态已变**，须按下表改判后再据本条执行。
+>
+> | 缺陷 | 状态 | 说明 |
+> |---|---|---|
+> | B5 | **作废** | 对象 `RiskAnalyzer.full_report` 已随 P81 §十 删除（全库零调用方；其原文已自认「不在主流 GUI 路径中使用，实际影响有限」） |
+> | B1 | **作废** | 对象 `BestCaseAnalysis` 同批删除 |
+> | B6 | **作废** | 同上（`conditional_top` 随该类消失） |
+> | B2 | **实质成立，对象须改指向** | 原「现状」引用 `WorstCaseAnalysis.cvar` 与 `BestCaseAnalysis.upper_quantile`，二者同批删除；但「经验分位数在尾部不稳、无标准误与 CI」这一问题在**活跃路径**上同样存在（GUI `analysis_panel.py:406-670` 与 WebUI `analysis_service.py:470-509` 直接调 `EmpiricalDistribution.quantile/var/cvar` 与 `JointSamples.conditional_second`）。**B2 不得随对象一并删去**，须改判为针对活跃路径，否则等于把一条真实的统计缺陷顺手抹掉 |
+>
+> **连带作废**：阶段一任务 1.2（`BestCaseAnalysis` docstring 公理化说明）与 1.3（`full_report` 同步阻塞警告）；任务 1.4（`conditional_top`/`conditional_tail` 的 `low_sample` 标记）的对象同批删除，若仍要保留该能力，须改挂到活跃路径的等价函数上；§11.3 测试表中「BestCaseAnalysis docstring」「full_report docstring」两条目视确认项同理作废。
+
 ### 6.2 缺陷 B2：经验分位数在尾部的不稳定性未被量化（严重）
 
 **现状**：`WorstCaseAnalysis.cvar(alpha=0.05)` 和 `BestCaseAnalysis.upper_quantile(alpha=0.05)` 直接使用排序样本的经验分位数，无标准误、无 CI。
@@ -514,6 +525,8 @@ class EmpiricalDistribution:
 **推荐方案**：添加 docstring 警告「此方法同步阻塞，不建议在 GUI 线程调用」。不改变实现。
 
 ### 6.5 缺陷 B6：条件顶部无样本量下限（低等）
+
+> **2026-09-17（P81 §十 收尾）**：本条对象 `conditional_top_alpha` 已删除（零调用）。**缺陷实质仍成立**：活跃入口 `JointSamples.conditional_second(predicate)` 的条件子集同样没有样本量下限，本条的推荐方案（`low_sample` 标记）应改挂到该入口，不得随对象一并作废。
 
 `conditional_top_alpha(alpha=0.05)` 在 n<20 时返回空分布。n=1000 时仅 50 个样本，在长尾分布中极不稳定。
 

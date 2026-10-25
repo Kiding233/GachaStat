@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """配置面板"""
 
+import warnings
+from dataclasses import MISSING as _DC_MISSING, fields as _dc_fields
 from typing import List, Optional
 
 from PyQt6.QtWidgets import (
@@ -25,6 +27,185 @@ from ..core.config_store import (
 from ..core.overflow import OverflowBand
 from ..core.pity import BEHAVIOR_REGISTRY
 from ..core.resource_lifecycle import ResourceLifecycle, ResourceLifecycleConfig   # P77
+# P64 S7a：后缀型软保底的 btype 集合取自 config_toml 的同一份常量（不另抄一份，
+# 否则新增 `_soft` 类型时 GUI 的语法糖映射静默不生效）。
+from ..core.config_toml import _SOFT_SUFFIX_TYPES as _CFG_SOFT_SUFFIX_TYPES
+
+
+# ══════════════════════════════════════════════════════════════════
+# P64 S7a（ISSUE-911）：保底字段透传的单一键表
+# ══════════════════════════════════════════════════════════════════
+# 从 `ConfigStore` 到运行期引擎之间是**枚举式透传**（引擎/配置侧三处 + 本文件
+# 五处）。逐字段列举的写法在 `PityDef` 新增字段时静默断裂：该字段在某条路径上
+# 落回默认值，而配置层与测试都看不出异常。故本文件的五处键表一律由
+# `dataclasses.fields(PityDef)` 驱动，新增字段无需改任何表。
+#
+# **GUI 内部 dict 的键空间不等于 `PityDef` 的字段集**（2026-10-13 实测）：
+#   · `_pity_defs` 条目的键 = 26 个字段（**含** `max_triggers`）+ 该 btype 的
+#     registry 控件名。控件名由 `_flush_pity_current_detail` 的动态控件循环写入
+#     （registry 的 `params` 用的是 TOML 键名，其中 `start` / `end` / `increment`
+#     另经 `_PARAM_TO_FIELD` 映射为 `soft_start` / `soft_end` / `soft_increment`；
+#     `func` 无消费者），故**额外键随 btype 而变、不是定值**：`soft_interval` 为
+#     {start, end, func}，`soft_additive` 与 `_soft` 后缀族为 {start, increment}，
+#     `targeted` / `rotating` / `rotating_cr` / `hard` 无额外键。首次选中某条目
+#     之前（尚未跑过 flush）条目恰为 26 个字段。
+#   · `get_config` 输出的 config dict 键 = 字段名 − `deactivate_on_early_hit` /
+#     `depends_on`（**嵌套**在 `lifecycle` 子字典下，与 TOML 的
+#     `[pity.lifecycle]` 同形）+ `lifecycle`，共 25 键。
+# 故例外在下方显式成表，不能机械套 `{f.name: getattr(o, f.name)}`。
+_PITY_FIELD_LIST = _dc_fields(PityDef)
+_PITY_FIELD_NAMES = frozenset(f.name for f in _PITY_FIELD_LIST)
+
+# 例外 1：这两个字段在 config dict 里嵌套在 `lifecycle` 子字典下。
+_PITY_NESTED_FIELD_PATHS = {
+    'deactivate_on_early_hit': ('lifecycle', 'deactivate_on_early_hit'),
+    'depends_on': ('lifecycle', 'depends_on'),
+}
+
+# 例外 2：缺键默认值与 dataclass 默认值不同的字段。
+#   · `btype`：dataclass 默认 `'soft'` **不在** `BEHAVIOR_REGISTRY` 内，兜底须用
+#     `'soft_interval'`（否则 `create_behavior` 首行按键查表即 KeyError）。
+#   · `name`：dataclass 无默认值（`MISSING`），GUI 兜底用 `'pity'`。
+_PITY_FIELD_DEFAULT_OVERRIDES = {'btype': 'soft_interval', 'name': 'pity'}
+
+
+def _pity_field_default(f):
+    """字段的缺键默认值（`_PITY_FIELD_DEFAULT_OVERRIDES` 优先，否则取 dataclass 默认）。"""
+    if f.name in _PITY_FIELD_DEFAULT_OVERRIDES:
+        return _PITY_FIELD_DEFAULT_OVERRIDES[f.name]
+    return None if f.default is _DC_MISSING else f.default
+
+
+# 例外 3：`pools` 须按 str / list / tuple 三形态归一为 tuple（`PityDef.pools` 是
+# tuple，而 `_pity_defs` 允许保留原形供勾选表格逐 pattern fnmatch，见
+# `_refresh_from_store_impl` 的 ISSUE-328 注释）。空串 / 空表归一为 `()`，即
+# 「不绑定任何池」，与 `('*',)` 的「绑定全部」语义相反，写错即绑定面整体翻转。
+def _pity_pools_to_tuple(value) -> tuple:
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, (list, tuple)):
+        return tuple(value)
+    return ('*',)
+
+
+def _pity_field_from_config(pd: dict, f):
+    """`set_config` 读侧：GUI 的 config dict → 一个 `PityDef` 字段值。
+
+    例外只有上面两张表（嵌套键路径、`pools` 归一），其余字段一律
+    `pd.get(f.name, 缺键默认值)`。
+    """
+    path = _PITY_NESTED_FIELD_PATHS.get(f.name)
+    if path is not None:
+        cur = pd
+        for key in path:
+            cur = cur.get(key) if isinstance(cur, dict) else None
+        return cur if cur is not None else _pity_field_default(f)
+    if f.name == 'pools':
+        return _pity_pools_to_tuple(pd.get('pools'))
+    return pd.get(f.name, _pity_field_default(f))
+
+
+def _pity_field_from_defs(pd: dict, f):
+    """`apply_to_store` 读侧：`_pity_defs` 条目 → 一个 `PityDef` 字段值。
+
+    `_pity_defs` 的键就是字段名（无嵌套），例外只有两处：
+    · `pools` 需归一为 tuple（同例外 3）；
+    · `soft_deltas` 由 `deltas` 按 btype 派生（**既有口径，本步原样保留**：仅
+      `soft_step` 取 deltas 表格的值，其余类型恒 None）。注意它与
+      `config_toml._build_pity` 的「有 `deltas` 键即写 `soft_deltas`」不完全同形，
+      故 `soft_interval` 手写 `deltas` 的配置经 GUI 往返会丢 `soft_deltas`，属
+      既有差异、不在本步裁决范围内（登记在 S7a 实施报告）。
+    """
+    if f.name == 'pools':
+        return _pity_pools_to_tuple(pd.get('pools'))
+    if f.name == 'soft_deltas':
+        return pd.get('deltas') if pd.get('btype') == 'soft_step' else None
+    return pd.get(f.name, _pity_field_default(f))
+
+
+# 语法糖映射（registry 控件名 `start` / `end` / `increment` → 字段名
+# `soft_start` / `soft_end` / `soft_increment`）适用的 btype：后缀型软保底
+# （`config_toml._SOFT_SUFFIX_TYPES`，单一真相源）+ `soft_additive`
+# （同为 start + increment 形态，但不是后缀型）。
+_PITY_SOFT_SUGAR_TYPES = _CFG_SOFT_SUFFIX_TYPES | {'soft_additive'}
+
+
+# ── `_flush_pity_current_detail` / `_apply_pity_edit` 的字段面 ──
+# 控件读取表：`PityDef` 字段名 → `(panel, pd, row) -> 值`。调用点按
+# `fields(PityDef)` 遍历本表写回，故新增字段只需在此加一行（或登记进下方两个
+# 分类集合）。`pity_max_triggers_spin` 为 S7a 新建控件（ISSUE-032）。
+_PITY_FLUSH_FIELD_READERS = {
+    'name': lambda panel, pd, row: (
+        panel.pity_name_edit.text().strip() or f"pity_{row + 1}"),
+    'btype': lambda panel, pd, row: _pity_combo_btype(panel),
+    'scope': lambda panel, pd, row: panel.pity_scope_combo.currentText(),
+    'reset': lambda panel, pd, row: panel._pity_reset_value(),
+    'target_featured': lambda panel, pd, row: panel.pity_target_featured_cb.isChecked(),
+    'pools': lambda panel, pd, row: panel._read_pity_bind_patterns(),
+    'priority': lambda panel, pd, row: panel.pity_priority_spin.value(),
+    'counter_init': lambda panel, pd, row: panel.pity_init_spin.value(),
+    'max_triggers': lambda panel, pd, row: panel.pity_max_triggers_spin.value(),
+    'deactivate_on_early_hit': lambda panel, pd, row: panel.pity_deactivate_cb.isChecked(),
+    'depends_on': lambda panel, pd, row: panel.pity_depends_combo.currentData() or None,
+    'guaranteed_init': lambda panel, pd, row: panel.pity_guaranteed_init_cb.isChecked(),
+    'fate_points_init': lambda panel, pd, row: panel.pity_fate_points_spin.value(),
+    'selected_card_init': lambda panel, pd, row: (
+        panel.pity_selected_card_combo.currentData() or None),
+}
+
+# 表外字段分两类，与读取表的并集必须恰好等于 `fields(PityDef)`（导入期对账，
+# 见 `_validate_pity_field_tables`）。
+# ① 按 btype 条件或由 registry 动态控件写出：
+_PITY_FLUSH_BT_CONDITIONAL_FIELDS = frozenset({
+    'deltas',                  # 仅 soft_step：由 deltas 表格写出
+    'soft_start',              # 语法糖映射（registry 控件名 start）
+    'soft_end',                # 语法糖映射（end）
+    'soft_increment',          # 语法糖映射（increment）
+    'cr_state_probs',          # 仅 rotating_cr 家族：由 cr_state_probs 表格写出
+    'threshold',               # registry 动态控件 1:1 写出（控件名 == 字段名）
+    'cr_counter_threshold',    # 同上
+    'cr_base_rate',            # 同上
+    'fate_threshold',          # 同上
+    'switch_allowed',          # 同上
+    'switch_resets_progress',  # 同上
+})
+# ② 本方法不写出（无控件，只经 load / save 路径透传）：
+_PITY_FLUSH_UNBOUND_FIELDS = frozenset({
+    'soft_deltas',
+})
+
+
+def _pity_combo_btype(panel) -> str:
+    """保底类型下拉的当前取值（下标越界时回退 `'soft_interval'`）。"""
+    idx = panel.pity_type_combo.currentIndex()
+    types = panel._PITY_TYPES
+    return types[idx][0] if 0 <= idx < len(types) else 'soft_interval'
+
+
+def _validate_pity_field_tables() -> None:
+    """保底字段分类与 `fields(PityDef)` 对账（模块导入期执行，仿 `core/pity.py`
+    的 `_validate_registry`）。
+
+    新增 `PityDef` 字段而未登记进 `_PITY_FLUSH_FIELD_READERS` /
+    `_PITY_FLUSH_BT_CONDITIONAL_FIELDS` / `_PITY_FLUSH_UNBOUND_FIELDS` 时，
+    **导入即失败**，而不是该字段在编辑路径上静默不生效。
+    """
+    readers = set(_PITY_FLUSH_FIELD_READERS)
+    others = _PITY_FLUSH_BT_CONDITIONAL_FIELDS | _PITY_FLUSH_UNBOUND_FIELDS
+    overlap = readers & others
+    if overlap:
+        raise AssertionError(f"保底字段分类重叠：{sorted(overlap)}")
+    covered = readers | others
+    if covered != _PITY_FIELD_NAMES:
+        raise AssertionError(
+            "保底字段分类与 PityDef 字段集不一致："
+            f"未分类 {sorted(_PITY_FIELD_NAMES - covered)}；"
+            f"多余 {sorted(covered - _PITY_FIELD_NAMES)}。"
+            "新增字段须在 `_PITY_FLUSH_FIELD_READERS` 或两个分类集合中登记"
+        )
+
+
+_validate_pity_field_tables()
 
 
 # P79 4d2b1：表达式保留字——条件 id 不得与运算符同名，否则表达式无法解析
@@ -910,7 +1091,6 @@ class ConfigPanel(QWidget):
         self.lifecycle_table.verticalHeader().setVisible(False)
         self.lifecycle_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.lifecycle_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.lifecycle_table.itemChanged.connect(self._on_lifecycle_item_changed)
         lifecycle_layout.addWidget(self.lifecycle_table)
         lc_btn_layout = QHBoxLayout()
         add_lc_btn = QPushButton("添加")
@@ -1981,10 +2161,6 @@ class ConfigPanel(QWidget):
             return
         rules[row][key] = value
 
-    def _on_lifecycle_item_changed(self, item):
-        # 生命周期表为 cellWidget 驱动，无文本 item——此回调保留占位
-        pass
-
     def _add_lifecycle_row(self):
         bidx = self._current_banner_row
         if bidx < 0:
@@ -2019,19 +2195,43 @@ class ConfigPanel(QWidget):
     # P55 阶段十一：保底配置 UI——BEHAVIOR_REGISTRY 元数据驱动
     # ══════════════════════════════════════════════════════════════════
 
-    # 可选的保底类型（仅已实现的 counter 驱动型）
-    _PITY_TYPES = [
-        ('soft_interval', '区间软保底'),
-        ('soft_additive', '累加软保底'),
-        ('soft_step', '分段软保底'),
-        ('hard', '硬保底'),
-        # P56 新增
-        ('rotating', '轮换保底'),
-        ('rotating_soft', '轮换+软保底'),
-        ('rotating_cr', '轮换+捕获明光'),
-        ('rotating_cr_soft', '轮换+捕获明光+软保底'),
-        ('targeted', '定轨保底'),
-        ('targeted_soft', '定轨+软保底'),
+    # 可选的保底类型——**由 `BEHAVIOR_REGISTRY` 生成**（P64 S6a，ISSUE-929）。
+    #
+    # 改造前是硬编码的 10 项字面量列表，新增 type 必须手工追加（漏加即该类型在
+    # GUI 里不可选，而引擎侧已支持，属静默缺口）。改造后 `rotating_inverse`
+    # （S6a）与 S9-3 的两个 `hard_exclude_owned_*` 自动进入下拉。
+    #
+    # **顺序即 registry 的书写顺序，文案即 registry 的 `display_name`**：S6a 同批
+    # 把 registry 的 5 处文案与条目顺序对齐到改造前的 GUI 现值，故界面呈现零变化
+    # （`_PITY_TYPES` 的消费点有 5 处，均只按 (key, label) 取用，与顺序无关）。
+    # 先例：停止条件下的下拉同形（`STOP_CONDITION_REGISTRY` 的生成式）。
+    _PITY_TYPES = [(k, v['display_name']) for k, v in BEHAVIOR_REGISTRY.items()]
+
+    # reset 下拉基础取值（G16-1）：(取值, 显示名)。只保留能给出有意义中文名的
+    # 那几项，**不是**白名单本身；`_pity_reset_choices()` 会把它按
+    # `legal_reset_values()` 过滤后才交给下拉（故最终取值面是白名单的子集），
+    # 再补入 `[rarities].ranks` 里基础表未列出的稀有度名；未列出的取值另有
+    # 「原样保留」兜底（见 `_populate_reset_combo()`）——三者都不发生静默改写。
+    # 构造期的静态填充（下方 `pity_reset_combo` 初始化）在 store 就位前执行，
+    # 直接用本表；store 就位后每次选中条目都由 `_populate_reset_combo()` 重建。
+    #
+    # 显示名一律用「出 X」形态（2026-10-15 用户裁定）：旧文案写作「X 出金」，
+    # 而「出金」在抽卡语境里专指**最高稀有度**；`reset` 的取值却可以是任意稀有度
+    # （`sr` / `r` 均合法），故「SR 出金」这类说法语义错误。空串一项的含义是
+    # 「抽到该保底作用稀有度（即 `scope`）的卡就重置」——实现口径为
+    # `CounterTracker(reset_on=pdef.reset or _norm_scope(pdef))`（`core/pity.py`
+    # 的 preset 工厂），即空串落回 `scope`，故显示名直接点名「作用稀有度」。
+    # `'on_effective'`（2026-10-15 用户裁定，同族文案）：判据不是出卡事件而是
+    # 「本抽真的改动了分布」，故显示名用「仅生效时重置」；它的**类型面**另有
+    # `create_behavior` 的硬拒（只有阈值触发型可用），本表只承载取值面。
+    _PITY_RESET_CHOICES = [
+        ('', '出作用稀有度'),
+        ('featured', '仅出 Featured'),
+        ('ssr', '出 SSR'),
+        ('sr', '出 SR'),
+        ('r', '出 R'),
+        ('on_effective', '仅生效时重置'),
+        ('never', '永不重置'),
     ]
 
     # 动态控件工厂——参数类型 → (widget_class, widget_kwargs)
@@ -2046,6 +2246,10 @@ class ConfigPanel(QWidget):
     def _setup_pity_config(self, parent):
         self._pity_defs = []
         self._current_pity_row: int = -1  # 当前选中索引（用于切换前 flush）
+        # P64 S7a：条目切换的控件回填期标志。置位期间
+        # `_flush_pity_current_detail` 一律不回写（否则尚未回填的控件会把上一条的
+        # 残留值写进当前条，见 `_on_pity_selected` 的说明）。
+        self._pity_detail_backfilling = False
         self._pity_dynamic_widgets = {}  # pname → widget
         self._pity_dynamic_labels = {}   # pname → label
 
@@ -2093,6 +2297,16 @@ class ConfigPanel(QWidget):
         self.pity_scope_combo = QComboBox()
         self.pity_scope_combo.addItems(["ssr", "sr", "r"])
         detail_form.addRow("稀有度:", self.pity_scope_combo)
+
+        # reset（G16-1 新建：此前无该控件，reset 只能在 TOML 里手写）。
+        # 先按静态基础表填充（此时 store 未就位）；`store` 就位后每次选中条目
+        # 都经 `_populate_reset_combo()` 重建——基础表按白名单过滤 + 补入
+        # `store.rarity_rank` 的额外稀有度，故重建后的取值面不会超出 loader 的
+        # 合法集（旧实现未过滤，ranks 不含 sr/r 时下拉会给出被硬拒的取值）。
+        self.pity_reset_combo = QComboBox()
+        for _rval, _rlabel in self._PITY_RESET_CHOICES:
+            self.pity_reset_combo.addItem(_rlabel, _rval)
+        detail_form.addRow("重置:", self.pity_reset_combo)
 
         # target_featured
         self.pity_target_featured_cb = QCheckBox("仅限Featured卡")
@@ -2190,6 +2404,44 @@ class ConfigPanel(QWidget):
         self.pity_init_spin.setValue(0)
         detail_form.addRow("初始水位:", self.pity_init_spin)
 
+        # ── P64 S6b（G5）：池内多条保底同时作用时的执行顺序覆盖 ──
+        # 语义：0 = 不覆盖（按类型默认序，与未接线时逐位相同）；**数值越大越先执行**，
+        # 负值即排在默认序之后。量程含负值，否则 TOML 里手写的负 priority 经
+        # 「加载 → 保存」会被 setValue 夹到 0（静默改写用户配置）。
+        self.pity_priority_spin = QSpinBox()
+        self.pity_priority_spin.setRange(-999, 999)
+        self.pity_priority_spin.setValue(0)
+        self.pity_priority_spin.valueChanged.connect(self._flush_pity_current_detail)
+        self.pity_priority_spin.setToolTip(
+            """本保底在池内的执行优先级。
+0 = 中性档：与其它保底同为 0 时，按保底类型默认序（软保底 → 硬保底 →
+事件驱动）执行；
+数值越大越先执行（例：想让福利保底先于常规保底，把它设为 1）；
+负值排在同时作用、且同为中性档的保底之后。"""
+        )
+        detail_form.addRow("执行优先级(大者先):", self.pity_priority_spin)
+
+        # ── P64 S7a（ISSUE-032）：触发次数上限（§3.1.3 的退役维） ──
+        # 0 = 不限；与「依赖」（`depends_on`，激活维）**正交**，两者同时配置时
+        # `build_lifecycle` 产出 `DependentFiniteActive`，不存在覆盖关系。
+        # 量程不含负值：负值被 `config_toml._build_pity` 硬拒，控件若给出负值即
+        # 「保存能过、重载报错」，故量程本身收在合法面内。
+        self.pity_max_triggers_spin = QSpinBox()
+        # P64 S7a 审查收口 F3：上界取 Qt 的 INT_MAX。解析侧
+        # （`config_toml._build_pity`）只拒 bool / 非 int / 负值，**无上界**，控件
+        # 自设小上界（原为 9999）会让 TOML 里的大值经「加载 → 保存」被 `setValue`
+        # 静默夹取，与 priority 控件量程过窄属同一失效形态。
+        # 上界必须显式写出：`QSpinBox` 的默认上界是 99，只设下界等于把量程收成 0..99。
+        self.pity_max_triggers_spin.setRange(0, 2147483647)
+        self.pity_max_triggers_spin.setValue(0)
+        self.pity_max_triggers_spin.valueChanged.connect(self._flush_pity_current_detail)
+        self.pity_max_triggers_spin.setToolTip(
+            """本保底最多触发多少次后退役。
+0 = 不限（默认）；
+N > 0：触发 N 次后不再参与概率修正（与「依赖」正交，可同时配置）。"""
+        )
+        detail_form.addRow("触发次数上限(0=不限):", self.pity_max_triggers_spin)
+
         # ── P56：初始状态（rotating / targeted 家族） ──
         self.pity_guaranteed_init_cb = QCheckBox("初始处于大保底状态")
         self.pity_guaranteed_init_cb.setVisible(False)
@@ -2227,6 +2479,7 @@ class ConfigPanel(QWidget):
         self.pity_name_edit.textChanged.connect(self._flush_pity_current_detail)
         self.pity_type_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_scope_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
+        self.pity_reset_combo.currentIndexChanged.connect(self._flush_pity_current_detail)
         self.pity_target_featured_cb.stateChanged.connect(self._flush_pity_current_detail)
         self.pity_init_spin.valueChanged.connect(self._flush_pity_current_detail)
         self.pity_deactivate_cb.stateChanged.connect(self._flush_pity_current_detail)
@@ -2993,26 +3246,20 @@ class ConfigPanel(QWidget):
         while any(pd.get('name') == name for pd in self._pity_defs):
             idx += 1
             name = f"pity_{idx}"
-        # P55 新格式
-        new_def = {
+        # P55 新格式。P64 S7a（ISSUE-911）：键表同样由 `fields(PityDef)` 驱动
+        # （原先是第 6 份逐字段枚举，漏字段即新条目缺该键）。三处显式覆盖：
+        # `name` 取本次生成的唯一名；`soft_start` / `soft_end` 取界面默认阈值
+        # （dataclass 默认是 None，新条目落 None 会让 soft_interval 无阈值）；
+        # `pools` 取 `'*'`（dataclass 默认是 `('*',)`，此处保留字符串原形）。
+        new_def = {f.name: _pity_field_default(f) for f in _PITY_FIELD_LIST}
+        new_def.update({
             'name': name,
             'btype': 'soft_interval',
             'scope': 'ssr',
-            'target_featured': False,
-            'deltas': None,
-            'threshold': None,
-            'counter_init': 0,
-            'guaranteed_init': False,
-            'fate_points_init': 0,
-            'selected_card_init': None,
             'soft_start': 80,
             'soft_end': 90,
-            'soft_increment': None,
-            'reset': '',
             'pools': '*',
-            'deactivate_on_early_hit': False,
-            'depends_on': None,
-        }
+        })
         self._pity_defs.append(new_def)
         self.pity_list.addItem(name)
         self.pity_list.setCurrentRow(self.pity_list.count() - 1)
@@ -3049,10 +3296,58 @@ class ConfigPanel(QWidget):
             pools = (pools,) if pools else ()
         self._refresh_pity_bind_table(pools)
 
-        # 阻断信号避免级联触发
+        # ── P64 S7a（结构性修复）：回填期一律禁止写回 ──
+        # 原实现只做**位置性**规避（S6b 把 priority 控件提到所有赋值之前），而回填
+        # 途中任一控件的 setText / setValue / setChecked 都会触发
+        # `_flush_pity_current_detail`，该 flush 从**全部**控件读值写回**本条**，
+        # 而本条正是回填此刻正在读取的那个 dict。于是尚未回填的控件把**上一条的
+        # 残留值**写进当前条，当前条后续的回填再从**已被污染**的 dict 取值（取到的
+        # 值与控件现值相同，故不再发信号），污染就此固化并落盘，全程无任何报错。
+        # 实测（2026-10-13）被污染的字段是 counter_init / guaranteed_init /
+        # fate_points_init / deactivate_on_early_hit 四个初始状态字段。
+        # 修法：回填期置 `_pity_detail_backfilling`（`_flush_pity_current_detail`
+        # 首行据此早退），全部控件回填完毕后统一 flush 一次。
+        # **为何用标志位而不是逐个 blockSignals**：动态参数控件由
+        # `_build_param_widgets()` 在回填**途中**新建，新建的控件无法被提前
+        # blockSignals，其 `_populate_dynamic_values()` 的 setValue 照样发信号。
+        # 标志位对窗口期内出现的任何控件一律生效，但**窗口范围本身是正确性前提、
+        # 不是实现细节**（S7a 独立审查 F1 实测）：回填不止本方法一处，
+        # 紧随其后的 `_on_pity_type_changed` 还会再重建一次动态控件并回填，该段
+        # 原先落在窗口之外，registry 默认值即经同一条 flush 路径写进条目
+        # （`targeted` 的 switch_allowed / switch_resets_progress、`rotating_cr`
+        # 的 cr_base_rate 实测被改写）。故两条路径现均整段开窗：本方法的回填 +
+        # `_on_pity_type_changed` 的重建与回填（见该方法的注释）。
+        # `try / finally` 不可省：回填途中若抛异常，标志位残留会让此后所有编辑
+        # 静默不落盘（比异常本身更难排查）。
+        self._pity_detail_backfilling = True
+        try:
+            type_idx = self._backfill_pity_detail(pd)
+        finally:
+            self._pity_detail_backfilling = False
+
+        # 回填完毕，统一写回一次。`_on_pity_type_changed` 内含一次 flush（它要在
+        # 重建动态控件前先保存当前值），此处再补一次以覆盖它提前返回的路径
+        # （类型下标非法时它直接 return，不留 flush）。
+        self._on_pity_type_changed(type_idx)
+        self._flush_pity_current_detail()
+
+    def _backfill_pity_detail(self, pd: dict) -> int:
+        """把 `pd` 的字段值填进右侧控件，返回类型下拉的下标。
+
+        P64 S7a：本方法只在 `_pity_detail_backfilling` 置位期间被调用，故途中任何
+        控件发出的信号都不会写回 `pd`（见 `_on_pity_selected` 的说明）。
+        """
+        # 阻断信号减少冗余回调（正确性由调用方的标志位保证，此处只是不重复跑 flush）
         self.pity_name_edit.blockSignals(True)
         self.pity_type_combo.blockSignals(True)
         self.pity_scope_combo.blockSignals(True)
+        self.pity_reset_combo.blockSignals(True)
+
+        # P64 S6b（G5）：priority 控件回填。S7a 起该排布不再是正确性前提（标志位已
+        # 覆盖），保留原位置只为与 S6b 的实测记录一致。
+        self.pity_priority_spin.blockSignals(True)
+        self.pity_priority_spin.setValue(pd.get('priority', 0))
+        self.pity_priority_spin.blockSignals(False)
 
         self.pity_name_edit.setText(pd.get('name', ''))
 
@@ -3066,6 +3361,9 @@ class ConfigPanel(QWidget):
         scope_idx = self.pity_scope_combo.findText(scope)
         if scope_idx >= 0:
             self.pity_scope_combo.setCurrentIndex(scope_idx)
+
+        # reset（G16-1）：按本条目的取值重建下拉——未列出的取值原样保留（不退回下标 0）
+        self._populate_reset_combo(pd.get('reset', '') or '')
 
         # target_featured
         self.pity_target_featured_cb.setChecked(pd.get('target_featured', False))
@@ -3081,6 +3379,8 @@ class ConfigPanel(QWidget):
             self._populate_deltas_table(pd.get('deltas'))
 
         self.pity_init_spin.setValue(pd.get('counter_init', 0))
+        # P64 S7a（ISSUE-032）：触发次数上限
+        self.pity_max_triggers_spin.setValue(pd.get('max_triggers', 0))
 
         # 生命周期
         self.pity_deactivate_cb.setChecked(pd.get('deactivate_on_early_hit', False))
@@ -3094,6 +3394,12 @@ class ConfigPanel(QWidget):
         self.pity_guaranteed_init_cb.setChecked(pd.get('guaranteed_init', False))
         self.pity_fate_points_spin.setValue(pd.get('fate_points_init', 0))
         sc = pd.get('selected_card_init') or ''
+        # P64 S7a 审查收口 F2：combo 必须先填充再 findData。原实现把填充留在
+        # `_on_pity_type_changed` 末尾，首次选中某个 targeted 条目时 combo 还是空的，
+        # `findData` 返回 -1（不改选），随后统一 flush 把 `currentData() or None`
+        # （即空）写进条目，`selected_card_init` 静默丢成 None 并落盘。同类的
+        # `pity_depends_combo` / `pity_reset_combo` 都在 findData 前先填充，本处照齐。
+        self._populate_selected_card_combo()
         idx = self.pity_selected_card_combo.findData(sc)
         if idx >= 0:
             self.pity_selected_card_combo.setCurrentIndex(idx)
@@ -3101,8 +3407,9 @@ class ConfigPanel(QWidget):
         self.pity_name_edit.blockSignals(False)
         self.pity_type_combo.blockSignals(False)
         self.pity_scope_combo.blockSignals(False)
+        self.pity_reset_combo.blockSignals(False)
 
-        self._on_pity_type_changed(type_idx)
+        return type_idx
 
     # ── P61 Ph8b：绑定池勾选表格（§3.11.2，替代手写 fnmatch 文本框） ──
 
@@ -3245,26 +3552,102 @@ class ConfigPanel(QWidget):
             elif isinstance(w, QLineEdit):
                 w.setText(str(val) if val else '')
 
+    def _pity_reset_choices(self) -> list:
+        """reset 下拉的 (取值, 显示名) 表：基础表 ∩ 白名单 + `store.rarity_rank` 的额外稀有度。
+
+        基础表给出「出作用稀有度 / 仅出 Featured / 出 SSR / 永不重置」这类有意义的
+        中文显示名，故不从白名单集合直接生成；但**必须先按 `legal_reset_values()`
+        过滤**：`store.rarity_rank` 不含 sr / r 时（如只配 SSR / UR），基础表里
+        的 `sr` / `r` 是 loader 硬拒的取值，不过滤即「下拉可选、选中即写出、
+        重载抛 ConfigError」，与 AUDIT-BREAK-1 属同一失效形态（2026-10-10 审查
+        端到端复现：ranks 改为 {SSR, UR} 后选「出 SR」，保存出的配置重载即
+        `reset='sr' 不是合法取值`）。
+
+        `store.rarity_rank` 为空时回退默认三级 SSR/SR/R（与
+        `_populate_card_rarity_combos()` 同型；`set_config` 的 `clear()` 之后
+        可达）——该形态下 loader 的 `_parse_rarities()` 同样补默认三级，故回退
+        集仍是白名单的子集。`[rarities].ranks` 里未列出的稀有度名（如 ranks 含
+        `ur` 时白名单放行的 `reset='ur'`）以 `出 {名}` 补入；稀有度名取自
+        `rank_map`（键已小写归一，与白名单同源），显示时 `.upper()` 以与基础表
+        的大写形态一致——**只影响显示名，写回的取值仍是小写原名**。
+
+        取值面与 `config_toml.legal_reset_values()` 同源，本函数不自持第二份
+        白名单。
+        """
+        from ..core.config_toml import legal_reset_values
+
+        store = getattr(self, '_store', None)
+        rank_map = {
+            str(name).lower(): rank
+            for name, rank in (getattr(store, 'rarity_rank', None) or {}).items()
+        }
+        if not rank_map:
+            rank_map = {'ssr': 0, 'sr': 1, 'r': 2}
+        legal = legal_reset_values(rank_map)
+        choices = [(v, n) for v, n in self._PITY_RESET_CHOICES if v in legal]
+        known = {v for v, _ in choices}
+        for name in sorted(rank_map):
+            if name not in known:
+                choices.append((name, f'出 {name.upper()}'))
+                known.add(name)
+        return choices
+
+    def _populate_reset_combo(self, value: str) -> None:
+        """按当前条目的 reset 取值重建下拉并选中（G16-1）。
+
+        取值表外的取值（TOML 逐项合法、但 GUI 基础表与 `[rarities]` 都未列出）
+        补一项**原样保留**，不退回落回「出作用稀有度」（下标 0 那项）：原实现把
+        未知取值一律落成下标 0，此后该行任一次编辑触发的 flush
+        （`_flush_pity_current_detail` / `_apply_pity_edit`）都会把它静默改写成
+        空串——无提示的数据丢失。调用点已 `blockSignals(True)`，重建不触发 flush。
+        """
+        combo = self.pity_reset_combo
+        combo.clear()
+        for v, label in self._pity_reset_choices():
+            combo.addItem(label, v)
+        idx = combo.findData(value)
+        if idx < 0:
+            combo.addItem(f'{value}（未列出的取值，原样保留）', value)
+            idx = combo.count() - 1
+        combo.setCurrentIndex(idx)
+
+    def _pity_reset_value(self) -> str:
+        """下拉当前项 → reset 取值（G16-1）。"""
+        val = self.pity_reset_combo.currentData()
+        return val if isinstance(val, str) else ''
+
     def _flush_pity_current_detail(self):
         """从右侧控件读取当前值 → 实时写回 self._pity_defs[idx]"""
         row = self._current_pity_row
         if row < 0 or row >= len(self._pity_defs):
             return
+        if self._refreshing:
+            # store → GUI 回填期间右侧控件仍是「上一条」的旧值：此时回写会用旧值
+            # 覆盖刚刚重建的 _pity_defs[row]（AUDIT-BREAK-1 实测：set_config 后
+            # 第 0 条的阈值与 reset 被旧控件的值改写，兜底条目的 74/90 变成上一条
+            # 的 80/featured；当时的键名为别名 start/end，S7a 起为字段名
+            # soft_start/soft_end）。回填期一律不回写，控件值在
+            # _on_pity_selected / _populate_dynamic_values 中按新条目重建。
+            return
+        if self._pity_detail_backfilling:
+            # P64 S7a：条目切换的控件回填期同样一律不回写。与上面 `_refreshing`
+            # 分支同因（回填期控件值不属于本条），但那条只覆盖 store → GUI 的整表
+            # 刷新，本条覆盖 `_on_pity_selected` 的逐条回填。
+            return
         pd = self._pity_defs[row]
-        pd['name'] = self.pity_name_edit.text().strip() or f"pity_{row+1}"
 
-        # btype
-        bt_idx = self.pity_type_combo.currentIndex()
-        pd['btype'] = self._PITY_TYPES[bt_idx][0] if 0 <= bt_idx < len(self._PITY_TYPES) else 'soft_interval'
-
-        # scope
-        pd['scope'] = self.pity_scope_combo.currentText()
-
-        # target_featured
-        pd['target_featured'] = self.pity_target_featured_cb.isChecked()
+        # ── P64 S7a（ISSUE-911）：字段面由 `dataclasses.fields(PityDef)` 驱动 ──
+        # 逐字段从 `_PITY_FLUSH_FIELD_READERS` 取值写回。表外字段由下方按 btype
+        # 条件写出（`deltas` / 语法糖三键 / `cr_state_probs`）或由 registry 动态
+        # 控件 1:1 写出（`threshold` / `cr_*` / `fate_threshold` / `switch_*`）；
+        # 读取表与两个分类集合的并集在模块导入期与 `fields(PityDef)` 对账。
+        for f in _PITY_FIELD_LIST:
+            reader = _PITY_FLUSH_FIELD_READERS.get(f.name)
+            if reader is not None:
+                pd[f.name] = reader(self, pd, row)
+        btype = pd['btype']
 
         # 动态参数 → pd 字段
-        btype = pd['btype']
         entry = BEHAVIOR_REGISTRY.get(btype, {})
         params_meta = entry.get('params', {})
         for pname, w in self._pity_dynamic_widgets.items():
@@ -3294,29 +3677,15 @@ class ConfigPanel(QWidget):
             else:
                 pd['deltas'] = None
 
-        # 语法糖参数映射（registry 控件名 → PityDef 标准字段）
-        if btype in ('soft_interval',):
-            pd['soft_start'] = pd.get('start')
-            pd['soft_end'] = pd.get('end')
-        elif btype in ('soft_additive', 'rotating_soft',
-                        'rotating_cr_soft', 'targeted_soft'):
-            pd['soft_start'] = pd.get('start')
-            pd['soft_increment'] = pd.get('increment')
-
-        # 绑定池（P61 Ph8b：勾选表格 → patterns）
-        pd['pools'] = self._read_pity_bind_patterns()
-        pd['counter_init'] = self.pity_init_spin.value()
-
-        # 生命周期
-        pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
-        depends = self.pity_depends_combo.currentData()
-        pd['depends_on'] = depends if depends else None
-
-        # ── P56：初始状态 ──
-        pd['guaranteed_init'] = self.pity_guaranteed_init_cb.isChecked()
-        pd['fate_points_init'] = self.pity_fate_points_spin.value()
-        sc = self.pity_selected_card_combo.currentData()
-        pd['selected_card_init'] = sc if sc else None
+        # 语法糖参数映射（registry 控件名 → PityDef 标准字段名）。
+        # 适用 btype 取自 `_PITY_SOFT_SUGAR_TYPES`（= config_toml._SOFT_SUFFIX_TYPES
+        # + soft_additive），不在此另抄一份类型表。
+        if btype == 'soft_interval':
+            for _param in ('start', 'end'):
+                pd[self._PARAM_TO_FIELD[_param]] = pd.get(_param)
+        elif btype in _PITY_SOFT_SUGAR_TYPES:
+            for _param in ('start', 'increment'):
+                pd[self._PARAM_TO_FIELD[_param]] = pd.get(_param)
 
         # ── P56：cr_state_probs 表格（仅 rotating_cr 家族保存） ──
         if btype in ('rotating_cr', 'rotating_cr_soft'):
@@ -3327,93 +3696,25 @@ class ConfigPanel(QWidget):
         self._update_preview()
 
     def _apply_pity_edit(self):
+        """「应用修改」按钮：对当前选中条目做一次完整写回。
+
+        P64 S7a（ISSUE-911）：本方法与 `_flush_pity_current_detail` 的字段面原先
+        是**两份**逐字段键表（改一处漏一处即静默失效），故改为委托，字段表只剩
+        `_PITY_FLUSH_FIELD_READERS` 一份。`_current_pity_row` 本由 `pity_list` 的
+        currentRow 同步（`_on_pity_selected` 的赋值点），此处再对一次，使委托后
+        的写入行与按钮语义（「对当前选中条目应用」）严格一致。
+        """
         row = self.pity_list.currentRow()
         if row < 0 or row >= len(self._pity_defs):
             return
-        pd = self._pity_defs[row]
-        pd['name'] = self.pity_name_edit.text().strip() or f"pity_{row+1}"
-
-        # btype
-        bt_idx = self.pity_type_combo.currentIndex()
-        pd['btype'] = self._PITY_TYPES[bt_idx][0] if 0 <= bt_idx < len(self._PITY_TYPES) else 'soft_interval'
-
-        # scope
-        pd['scope'] = self.pity_scope_combo.currentText()
-
-        # target_featured
-        pd['target_featured'] = self.pity_target_featured_cb.isChecked()
-
-        # 动态参数 → pd 字段
-        btype = pd['btype']
-        entry = BEHAVIOR_REGISTRY.get(btype, {})
-        params_meta = entry.get('params', {})
-        for pname, w in self._pity_dynamic_widgets.items():
-            pmeta = params_meta.get(pname, {})
-            ptype = pmeta.get('type', 'str')
-            try:
-                if isinstance(w, QComboBox):
-                    pd[pname] = w.currentText()
-                elif ptype == 'int':
-                    raw = w.value() if hasattr(w, 'value') else w.text()
-                    pd[pname] = int(raw) if str(raw).strip() else 0
-                elif ptype == 'float':
-                    raw = w.value() if hasattr(w, 'value') else w.text()
-                    pd[pname] = float(raw) if str(raw).strip() else 0.0
-                elif ptype == 'bool':
-                    pd[pname] = w.isChecked() if hasattr(w, 'isChecked') else False
-                else:
-                    pd[pname] = w.text() if hasattr(w, 'text') else str(w.value())
-            except (ValueError, TypeError):
-                pd[pname] = pmeta.get('default', 0 if ptype in ('int', 'float') else '')
-
-        # deltas（仅 soft_step 类型保存）
-        if btype == 'soft_step':
-            deltas = self._read_deltas_table()
-            if deltas:
-                pd['deltas'] = deltas
-            else:
-                pd['deltas'] = None
-
-        # 语法糖参数映射（registry 控件名 → PityDef 标准字段）
-        # soft_interval               → start + end       (interval 模式)
-        # soft_additive + P56 _soft   → start + increment (additive 模式)
-        if btype in ('soft_interval',):
-            pd['soft_start'] = pd.get('start')
-            pd['soft_end'] = pd.get('end')
-        elif btype in ('soft_additive', 'rotating_soft',
-                        'rotating_cr_soft', 'targeted_soft'):
-            pd['soft_start'] = pd.get('start')
-            pd['soft_increment'] = pd.get('increment')
-
-        # 绑定池（P61 Ph8b：勾选表格 → patterns）
-        pd['pools'] = self._read_pity_bind_patterns()
-        pd['counter_init'] = self.pity_init_spin.value()
-
-        # 生命周期
-        pd['deactivate_on_early_hit'] = self.pity_deactivate_cb.isChecked()
-        depends = self.pity_depends_combo.currentData()
-        pd['depends_on'] = depends if depends else None
-
-        # ── P56：初始状态 ──
-        pd['guaranteed_init'] = self.pity_guaranteed_init_cb.isChecked()
-        pd['fate_points_init'] = self.pity_fate_points_spin.value()
-        sc = self.pity_selected_card_combo.currentData()
-        pd['selected_card_init'] = sc if sc else None
-
-        # ── P56：cr_state_probs 表格（仅 rotating_cr 家族保存） ──
-        if btype in ('rotating_cr', 'rotating_cr_soft'):
-            cr_probs = self._read_cr_probs_table()
-            pd['cr_state_probs'] = cr_probs if cr_probs else None
-
-        self.pity_list.item(row).setText(pd['name'])
-        self._update_preview()
+        self._current_pity_row = row
+        self._flush_pity_current_detail()
 
     def _on_pity_type_changed(self, idx):
         if idx < 0 or idx >= len(self._PITY_TYPES):
             return
         btype = self._PITY_TYPES[idx][0]
         is_soft_step = (btype == 'soft_step')
-        is_counter = btype in ('soft_interval', 'soft_additive', 'soft_step', 'hard')
         is_cr = btype in ('rotating_cr', 'rotating_cr_soft')
 
         # deltas 表格显隐
@@ -3422,24 +3723,57 @@ class ConfigPanel(QWidget):
         # P56：cr_state_probs 表格显隐
         self._pity_cr_probs_group.setVisible(is_cr)
 
-        # 动态参数重建——先 flush 保存当前值，再销毁旧控件
+        # 动态参数重建——先 flush 保存当前值，再销毁旧控件。
+        # **这一句不包进下方的标志位窗口**：窗口内它会因标志位早退（等于不跑），
+        # 而它的语义正是「销毁旧类型控件之前，先把控件现值落进条目」。放在窗外是
+        # 为了让这步**确定执行**（实测：动态控件各自的 valueChanged /
+        # currentIndexChanged 都已连到 flush，类型下拉本身也在本连接之后另连了一次
+        # flush，故这一步眼下是兜底而非唯一通路，但兜底不该被静默关掉）。
         self._flush_pity_current_detail()
-        self._build_param_widgets(btype)
-        # 重建后重新填充当前选中条目的值（否则只剩默认值）
-        row = self.pity_list.currentRow()
-        if 0 <= row < len(self._pity_defs):
-            self._populate_dynamic_values(self._pity_defs[row], btype)
-            # 填充 cr_state_probs 表格
-            if is_cr:
-                self._populate_cr_probs_table(self._pity_defs[row].get('cr_state_probs'))
+        # 重建 + 回填整段包进标志位窗口（P64 S7a 审查收口 F1）：`_build_param_widgets()`
+        # 新建的控件一律是 registry 默认值，回填途中任一 setValue / setChecked 发出的
+        # 信号都会触发 `_flush_pity_current_detail`，该 flush 从**全部**控件读值写回
+        # 当前条，尚未回填的控件即把默认值写进条目，后续回填再从被改写的条目取值
+        # （取到的值与控件现值相同，故不再发信号），默认值就此固化并落盘、全程无报错。
+        # 实测丢失面（2026-10-13 独立审查）：`targeted` 的 switch_allowed /
+        # switch_resets_progress 由 False 变 True；`rotating_cr` 的 cr_base_rate
+        # 由 12.0 变 5.0。
+        # 退出时**还原进入前的取值**（而非一律置 False）：本方法可能在
+        # `_on_pity_selected` 的窗口内被重入（该窗口内若某控件未 blockSignals 而改了
+        # 类型下拉，currentIndexChanged 即回到本方法），一律置 False 会把外层窗口
+        # 一并关掉、外层余下的回填随即恢复写回。
+        _prev_backfilling = self._pity_detail_backfilling
+        self._pity_detail_backfilling = True
+        try:
+            self._build_param_widgets(btype)
+            # 重建后重新填充当前选中条目的值（否则只剩默认值）
+            row = self.pity_list.currentRow()
+            if 0 <= row < len(self._pity_defs):
+                self._populate_dynamic_values(self._pity_defs[row], btype)
+                # 填充 cr_state_probs 表格
+                if is_cr:
+                    self._populate_cr_probs_table(self._pity_defs[row].get('cr_state_probs'))
+        finally:
+            self._pity_detail_backfilling = _prev_backfilling
 
-        # 联动校验：hard+非ssr 禁用 target_featured
+        # 联动校验：`target_featured` **只对 hard 族有效**（裁决 7B，2026-10-05）。
+        # 旧式 `not (is_hard and not is_ssr_scope)` 等于「对全部非 hard 类型启用」，
+        # 而 S4-2 落 7B 类型级硬拒后，soft 侧带该字段的配置在 `create_behavior` 即抛
+        # `ConfigError`（S4-5 起不再被构造兜底吞掉）。故 GUI 可就地造出「保存能过、
+        # 运行报错」的配置（S4-5 审查 important）：勾选它、或先在 hard 上勾选再把类型
+        # 切到 soft，都能触达。此处收为「仅 hard 且 ssr scope 启用」，非启用态一律清勾
+        # （`stateChanged` 已连 `_flush_pity_current_detail`，清勾即落盘，不留残留值）。
         is_hard = (btype == 'hard')
         is_ssr_scope = self.pity_scope_combo.currentText() == 'ssr'
-        self.pity_target_featured_cb.setEnabled(not (is_hard and not is_ssr_scope))
+        tf_enabled = is_hard and is_ssr_scope
+        self.pity_target_featured_cb.setEnabled(tf_enabled)
+        if not tf_enabled:
+            self.pity_target_featured_cb.setChecked(False)
 
-        # deactivate_on_early_hit 对 counter 驱动型均可用（soft/hard 均可）
-        self.pity_deactivate_cb.setEnabled(is_counter)
+        # `deactivate_on_early_hit` **对全部类型可用**（P64 S6a / H3）。
+        # P56 时此处为 `setEnabled(is_counter)`，因为 `_build_pity` 对事件驱动型
+        # 硬拒该开关；H3 删除拒绝分支后无类型限制，故不再有 enable 门控
+        # （复选框默认可用，缺省即全类型可勾选）。
 
         # ── P56：初始状态控件整行显隐（标签 + 控件） ──
         is_rotating = btype in ('rotating', 'rotating_soft', 'rotating_cr', 'rotating_cr_soft')
@@ -6047,7 +6381,10 @@ class ConfigPanel(QWidget):
         # P55：pity 预览——遍历 pities 列表
         pity_lines = []
         for pdef in config['pity'].get('pities', []):
-            btype = pdef.get('type', '?')
+            # P64 S7a（ISSUE-918）：`get_config` 输出自本步起用字段名 `btype`
+            # （原为别名 `type`）。漏改则预览里每条保底的类型都打印 `?`，而
+            # `preview_text` 全库无断言，属静默失真。
+            btype = pdef.get('btype', '?')
             scope = pdef.get('scope', '?')
             line = f"  {pdef['name']}: {btype}({scope})"
             if pdef.get('deltas'):
@@ -6241,6 +6578,27 @@ class ConfigPanel(QWidget):
         self._rebuild_resource_list()
         self._refresh_resource_combos()
 
+    def _pity_entry_to_config(self, pd: dict) -> dict:
+        """`_pity_defs` 条目 → config dict（`get_config` 的输出侧）。
+
+        P64 S7a（ISSUE-911）：字段表由 `dataclasses.fields(PityDef)` 驱动。两处
+        形态差异（见文件头键表注释）：
+        · `deactivate_on_early_hit` / `depends_on` 嵌套进 `lifecycle` 子字典
+          （与 TOML 的 `[pity.lifecycle]` 同形；两者皆假时输出空表）；
+        · 四个别名键 `type` / `start` / `end` / `increment` 已废弃，输出**字段名**
+          `btype` / `soft_start` / `soft_end` / `soft_increment`。改名与
+          `set_config` 的读侧**同批**（ISSUE-910/911/918），故 GUI 内部往返
+          自洽；唯一的外部消费面 `_do_update_preview` 同批改读 `btype`。
+        """
+        entry = {f.name: pd.get(f.name, _pity_field_default(f))
+                 for f in _PITY_FIELD_LIST}
+        deactivate = entry.pop('deactivate_on_early_hit')
+        depends_on = entry.pop('depends_on')
+        entry['lifecycle'] = ({'deactivate_on_early_hit': deactivate,
+                               'depends_on': depends_on}
+                              if (deactivate or depends_on) else {})
+        return entry
+
     def get_config(self):
         self.apply_to_store()
         store = self._store
@@ -6339,34 +6697,7 @@ class ConfigPanel(QWidget):
             } for b in store.banner.banners],
             'pity': {
                 'enabled': store.pity.enabled,
-                'pities': [{
-                    'name': pd.get('name', ''),
-                    'type': pd.get('btype', 'soft_interval'),
-                    'scope': pd.get('scope', 'ssr'),
-                    'target_featured': pd.get('target_featured', False),
-                    'deltas': pd.get('deltas'),
-                    'threshold': pd.get('threshold'),
-                    'counter_init': pd.get('counter_init', 0),
-                    'start': pd.get('soft_start'),
-                    'end': pd.get('soft_end'),
-                    'increment': pd.get('soft_increment'),
-                    'reset': pd.get('reset', ''),
-                    'pools': pd.get('pools', '*'),
-                    'guaranteed_init': pd.get('guaranteed_init', False),
-                    'fate_points_init': pd.get('fate_points_init', 0),
-                    'selected_card_init': pd.get('selected_card_init'),
-                    'soft_deltas': pd.get('soft_deltas'),
-                    'cr_counter_threshold': pd.get('cr_counter_threshold'),
-                    'cr_base_rate': pd.get('cr_base_rate'),
-                    'cr_state_probs': pd.get('cr_state_probs'),
-                    'fate_threshold': pd.get('fate_threshold'),
-                    'switch_allowed': pd.get('switch_allowed'),
-                    'switch_resets_progress': pd.get('switch_resets_progress'),
-                    'lifecycle': {
-                        'deactivate_on_early_hit': pd.get('deactivate_on_early_hit', False),
-                        'depends_on': pd.get('depends_on'),
-                    } if (pd.get('deactivate_on_early_hit') or pd.get('depends_on')) else {},
-                } for pd in self._pity_defs],
+                'pities': [self._pity_entry_to_config(pd) for pd in self._pity_defs],
             },
             'auto_wait': store.auto_wait,
             'strategy': {
@@ -6545,78 +6876,55 @@ class ConfigPanel(QWidget):
         pity = config.get('pity', {})
         pities_data = pity.get('pities', [])
         if not pities_data:
-            pities_data = [{'name': 'ssr_soft', 'type': 'soft',
-                            'params': {'start': str(pity.get('start', 74)),
-                                       'end': str(pity.get('end', 90))},
-                            'reset': 'any_ssr', 'pools': '*'}]
+            # AUDIT-BREAK-1（2026-10-10 用户裁决取方案 a）：兜底条目须全合法形态：
+            # ① type 换成 BEHAVIOR_REGISTRY 内的真实键（原 'soft' 不在其中，
+            #    create_behavior 首行 BEHAVIOR_REGISTRY[btype] 即 KeyError）；
+            # ② scope 显式写出（_build_pity 的 scope 白名单只放行 [rarities].ranks
+            #    内的小写名，缺省会按 'ssr' 处理但显式写出与写法一致）；
+            # ③ reset='' 落回 _should_reset 的 scope 兜底分支（原 'any_ssr' 既不在
+            #    reset 白名单内、又与任何稀有度名都不相等）；
+            # ④ `soft_start` / `soft_end` 走顶层键（原嵌套 params 会被 _build_pity /
+            #    set_config 的顶层读取读空，平台默认阈值 74/90 全丢）。键名自
+            #    S7a 起为**字段名**（原别名 start / end，ISSUE-910/911）。
+            pities_data = [{'name': 'ssr_soft',
+                            'btype': 'soft_interval',
+                            'scope': 'ssr',
+                            'soft_start': int(pity.get('start', 74)),
+                            'soft_end': int(pity.get('end', 90)),
+                            'reset': '',
+                            'pools': '*'}]
         pities = []
         self._pity_defs = []
         for pd in pities_data:
-            pities.append(PityDef(
-                name=pd.get('name', 'pity'),
-                btype=pd.get('type', 'soft_interval'),
-                scope=pd.get('scope', 'ssr'),
-                target_featured=pd.get('target_featured', False),
-                deltas=pd.get('deltas'),
-                threshold=pd.get('threshold'),
-                counter_init=pd.get('counter_init', 0),
-                guaranteed_init=pd.get('guaranteed_init', False),
-                fate_points_init=pd.get('fate_points_init', 0),
-                soft_start=pd.get('start'),
-                soft_end=pd.get('end'),
-                soft_increment=pd.get('increment'),
-                soft_deltas=pd.get('soft_deltas'),
-                cr_counter_threshold=pd.get('cr_counter_threshold'),
-                cr_base_rate=pd.get('cr_base_rate'),
-                cr_state_probs=pd.get('cr_state_probs'),
-                fate_threshold=pd.get('fate_threshold'),
-                switch_allowed=pd.get('switch_allowed'),
-                switch_resets_progress=pd.get('switch_resets_progress'),
-                reset=pd.get('reset', ''),
-                pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), (list, tuple)) else (pd.get('pools', '*'),),
-                deactivate_on_early_hit=(pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
-                depends_on=(pd.get('lifecycle') or {}).get('depends_on'),
-            ))
+            # P64 S7a（ISSUE-911）：字段表由 `dataclasses.fields(PityDef)` 驱动。
+            # 例外见文件头的 `_PITY_NESTED_FIELD_PATHS`（`lifecycle` 嵌套）与
+            # `_pity_pools_to_tuple`（`pools` 归一），其余字段一律按字段名读。
+            # 附带修掉两处漏键：`selected_card_init` 与 `max_triggers` 原先不在本
+            # 处的 `PityDef(...)` 构造里（`_pity_defs` 侧有、store 侧无），
+            # `set_config` 因此静默丢它们。
+            _pity_fields = {f.name: _pity_field_from_config(pd, f)
+                            for f in _PITY_FIELD_LIST}
+            pities.append(PityDef(**_pity_fields))
             # 同步到 _pity_defs UI 内部格式
-            self._pity_defs.append({
-                'name': pd.get('name', 'pity'),
-                'btype': pd.get('type', 'soft_interval'),
-                'scope': pd.get('scope', 'ssr'),
-                'target_featured': pd.get('target_featured', False),
-                'deltas': pd.get('deltas'),
-                'threshold': pd.get('threshold'),
-                'counter_init': pd.get('counter_init', 0),
-                'soft_start': pd.get('start'),
-                'soft_end': pd.get('end'),
-                'soft_increment': pd.get('increment'),
-                'reset': pd.get('reset', ''),
-                'pools': pd.get('pools', '*'),
-                'guaranteed_init': pd.get('guaranteed_init', False),
-                'fate_points_init': pd.get('fate_points_init', 0),
-                'selected_card_init': pd.get('selected_card_init'),
-                'soft_deltas': pd.get('soft_deltas'),
-                'cr_counter_threshold': pd.get('cr_counter_threshold'),
-                'cr_base_rate': pd.get('cr_base_rate'),
-                'cr_state_probs': pd.get('cr_state_probs'),
-                'fate_threshold': pd.get('fate_threshold'),
-                'switch_allowed': pd.get('switch_allowed'),
-                'switch_resets_progress': pd.get('switch_resets_progress'),
-                'deactivate_on_early_hit': (pd.get('lifecycle') or {}).get('deactivate_on_early_hit', False),
-                'depends_on': (pd.get('lifecycle') or {}).get('depends_on'),
-            })
+            self._pity_defs.append(dict(_pity_fields))
         store.pity = PityConfig(
             enabled=pity.get('enabled', True),
             pities=pities,
         )
 
         strategy = config.get('strategy', {})
-        # P69：新格式 {key, params}，兼容旧格式 {type, name, params}
+        # P69：新格式 {key, params}；P81 §4.1-6 起旧 name 格式不再兼容（改为告警 + 回退默认）
         if 'key' in strategy:
             store.strategy_key = str(strategy['key'])
-        elif 'name' in strategy:
-            store.strategy_key = str(strategy['name'])
         else:
             store.strategy_key = 'smart'
+            if 'name' in strategy:
+                _smsg = (f"strategy 段使用旧 name 格式（name='{strategy['name']}'），"
+                         f"已不再支持；策略回退默认值 'smart'。请改写为 key = \"...\"。")
+            else:
+                _smsg = "strategy 段缺少 key，策略回退默认值 'smart'。"
+            store.load_warnings.append(_smsg)
+            warnings.warn(_smsg)
         store.strategy_params = strategy.get('params', {})
         # auto_wait：优先从顶层读取（P69 新位置），回退到旧 strategy 子 dict
         store.auto_wait = config.get('auto_wait', strategy.get('auto_wait', True))
@@ -7163,34 +7471,14 @@ class ConfigPanel(QWidget):
         _normalize_permanent_banners(store.banner.banners)
 
         store.pity.enabled = self.pity_enabled.isChecked()
+        # P64 S7a（ISSUE-911）：字段表由 `dataclasses.fields(PityDef)` 驱动；
+        # 例外（`pools` 归一 / `soft_deltas` 由 `deltas` 派生）见
+        # `_pity_field_from_defs()`。附带修掉一处漏键：`max_triggers` 原先不在
+        # 本处（`_pity_defs` 侧有、store 侧无），GUI 保存即静默丢它。
         pities = []
         for pd in self._pity_defs:
-            pities.append(PityDef(
-                name=pd.get('name', ''),
-                btype=pd.get('btype', 'soft_interval'),
-                scope=pd.get('scope', 'ssr'),
-                target_featured=pd.get('target_featured', False),
-                deltas=pd.get('deltas'),
-                threshold=pd.get('threshold'),
-                counter_init=pd.get('counter_init', 0),
-                guaranteed_init=pd.get('guaranteed_init', False),
-                fate_points_init=pd.get('fate_points_init', 0),
-                selected_card_init=pd.get('selected_card_init'),
-                soft_start=pd.get('soft_start'),
-                soft_end=pd.get('soft_end'),
-                soft_increment=pd.get('soft_increment'),
-                soft_deltas=pd.get('deltas') if pd.get('btype') == 'soft_step' else None,
-                cr_counter_threshold=pd.get('cr_counter_threshold'),
-                cr_base_rate=pd.get('cr_base_rate'),
-                cr_state_probs=pd.get('cr_state_probs'),
-                fate_threshold=pd.get('fate_threshold'),
-                switch_allowed=pd.get('switch_allowed'),
-                switch_resets_progress=pd.get('switch_resets_progress'),
-                reset=pd.get('reset', ''),
-                pools=tuple(pd.get('pools', ('*',))) if isinstance(pd.get('pools'), list) else (pd.get('pools', '*'),) if isinstance(pd.get('pools'), str) else pd.get('pools', ('*',)),
-                deactivate_on_early_hit=pd.get('deactivate_on_early_hit', False),
-                depends_on=pd.get('depends_on'),
-            ))
+            pities.append(PityDef(**{f.name: _pity_field_from_defs(pd, f)
+                                     for f in _PITY_FIELD_LIST}))
         store.pity.pities = pities
 
         display_name = self.strategy_type.currentText()
@@ -7434,36 +7722,16 @@ class ConfigPanel(QWidget):
         self.pity_enabled.setChecked(store.pity.enabled)
         self._pity_defs = []
         for p in store.pity.pities:
-            # P55：扁平化字段
-            pools_val = getattr(p, 'pools', ('*',))
-            # P61 Ph8b（ISSUE-328）：保留 tuple 原形——多 pattern（如 ('b1.main','b2.main')）
-            # 逗号拼接成字符串后勾选表格对单 pattern fnmatch 恒失配、绑定静默清空。
-            # 绑定勾选表格直接消费 tuple（逐 pattern fnmatch）。
+            # P55：扁平化字段。P64 S7a（ISSUE-911）：键表由
+            # `dataclasses.fields(PityDef)` 驱动（原先是逐字段 `getattr` 枚举，
+            # 漏字段即该字段在本路径上落回默认值）。
+            # P61 Ph8b（ISSUE-328）：`pools` 保留 tuple 原形——多 pattern（如
+            # ('b1.main','b2.main')）逗号拼接成字符串后勾选表格对单 pattern
+            # fnmatch 恒失配、绑定静默清空。绑定勾选表格直接消费 tuple（逐
+            # pattern fnmatch），故此处不做归一。
             self._pity_defs.append({
-                'name': p.name,
-                'btype': p.btype,
-                'scope': getattr(p, 'scope', 'ssr'),
-                'target_featured': getattr(p, 'target_featured', False),
-                'deltas': getattr(p, 'deltas', None),
-                'threshold': getattr(p, 'threshold', None),
-                'counter_init': getattr(p, 'counter_init', 0),
-                'soft_start': getattr(p, 'soft_start', None),
-                'soft_end': getattr(p, 'soft_end', None),
-                'soft_increment': getattr(p, 'soft_increment', None),
-                'reset': getattr(p, 'reset', ''),
-                'pools': pools_val,
-                'guaranteed_init': getattr(p, 'guaranteed_init', False),
-                'fate_points_init': getattr(p, 'fate_points_init', 0),
-                'selected_card_init': getattr(p, 'selected_card_init', None),
-                'soft_deltas': getattr(p, 'soft_deltas', None),
-                'cr_counter_threshold': getattr(p, 'cr_counter_threshold', None),
-                'cr_base_rate': getattr(p, 'cr_base_rate', None),
-                'cr_state_probs': getattr(p, 'cr_state_probs', None),
-                'fate_threshold': getattr(p, 'fate_threshold', None),
-                'switch_allowed': getattr(p, 'switch_allowed', None),
-                'switch_resets_progress': getattr(p, 'switch_resets_progress', None),
-                'deactivate_on_early_hit': getattr(p, 'deactivate_on_early_hit', False),
-                'depends_on': getattr(p, 'depends_on', None),
+                f.name: getattr(p, f.name, _pity_field_default(f))
+                for f in _PITY_FIELD_LIST
             })
         self.pity_list.clear()
         for pd in self._pity_defs:
@@ -7654,18 +7922,6 @@ def _gain_rule_type_to_gui(rule_type: str, param: str = '') -> str:
     if rule_type == 'monthly_week':
         return '每月第几周几'
 
-    # 兼容旧格式（rule_type 中仍含冒号+参数，未归一化数据）
-    if rule_type.startswith('every_n_days:'):
-        n = rule_type.split(':')[1].strip()
-        return '每天' if n == '1' else '每N天'
-    if rule_type.startswith('monthly_day:'):
-        param_str = rule_type.split(':', 1)[1].strip()
-        return '指定日期' if ',' in param_str else '每月第几天'
-    if rule_type.startswith('weekly:'):
-        return '每周几'
-    if rule_type.startswith('monthly_week:'):
-        return '每月第几周几'
-
     return '每天'
 
 
@@ -7678,13 +7934,6 @@ def _gain_rule_param_to_gui(rule_type: str, param: str = '') -> str:
         return param if param not in ('1', '') else ''
     if rule_type in ('weekly', 'monthly_day', 'monthly_week'):
         return param
-
-    # 兼容旧格式（rule_type 中仍含冒号+参数）
-    if ':' in rule_type:
-        if rule_type.startswith('every_n_days:'):
-            n = rule_type.split(':')[1].strip()
-            return n if n != '1' else ''
-        return rule_type.split(':', 1)[1].strip()
 
     return param if param else ''
 
@@ -7712,44 +7961,6 @@ def _gain_rule_param_placeholder(gui_type: str) -> str:
         '指定日期': '月,日（1–12, 1–31），例：6,15',
     }
     return hints.get(gui_type, '请输入参数')
-
-
-def _pity_start(pity):
-    for p in pity.pities:
-        if 'start' in p.params:
-            try:
-                return int(p.params['start'])
-            except ValueError:
-                pass
-        if 'threshold' in p.params:
-            try:
-                return int(p.params['threshold'])
-            except ValueError:
-                pass
-    return 80
-
-
-def _pity_end(pity):
-    for p in pity.pities:
-        if 'end' in p.params:
-            try:
-                return int(p.params['end'])
-            except ValueError:
-                pass
-    return 90
-
-
-def _pity_counter_group(pity):
-    counter_names = set(p.name for p in pity.pities)
-    if len(counter_names) <= 1:
-        return 0
-    has_type_counters = any('_pity' in cn and cn != 'draw' for cn in counter_names)
-    has_pool_counters = any(cn.startswith('draw_') and cn != 'draw' for cn in counter_names)
-    if has_pool_counters:
-        return 2
-    if has_type_counters:
-        return 1
-    return 0
 
 
 def _daily_income(store):

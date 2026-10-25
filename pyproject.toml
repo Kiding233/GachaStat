@@ -30,6 +30,21 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-timeout>=2.0",
+    # 性能分析平台的资源读数设施（P83 §3.4「资源测量设施与依赖登记」）
+    # 用途：规则 5 的可用物理内存 / 规则 11 的 RSS 峰值 / §3.11 第 7 段的进程树 CPU
+    # 进 [dev] 而非运行期依赖：benchmarks/ 是开发侧测量资产，不进发布产物。
+    # 注意 webui/api.py:503 的软 import 不随之收紧为硬依赖（二者互不推导）。
+    "psutil>=5.9",
+    # 现场剖析（P83 §6.0 4a）。它是独立可执行文件、**不可 import**，只进开发依赖、
+    # 不进发布产物（同 psutil 的定位，附二决策 5）。缺失时 4a 的调用封装软降级——
+    # 现场勘查常发生在用户正在使用的机器上、对着一个跑着的进程，工具缺失不该把排查搞挂。
+    "py-spy>=0.4",
+    # 前端页面的渲染验证（tools/poc_webview/layout_demo/shot.py）。开发侧工具，
+    # 不进发布产物（同 psutil / py-spy 的定位）。
+    # 必须装的理由：探针页是纯静态 HTML + CDN 上的 Vue，改坏了不会报错，
+    # 只会静默空白（已发生过一次：15 个自闭合自定义标签吃掉整棵树）。
+    # 浏览器不额外下载：shot.py 用 channel="chrome" 走系统已装的 Chrome。
+    "playwright>=1.40",
 ]
 
 [tool.pytest.ini_options]

@@ -288,43 +288,6 @@ class TestAssembly:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 非紧凑（InfoVector）路径
-# ══════════════════════════════════════════════════════════════════
-
-class TestNonCompactPath:
-    def test_non_compact_triggers_without_accounting(self, monkeypatch):
-        """InfoVector 路径同样触发到期（ISSUE-203），且该路径不记账（total 为 None）。
-
-        非紧凑路径的余额变更落在内部 clone 的 state 上（外部不可观察），
-        故以 spy 捕获结算调用与传入的记账账本。
-        """
-        from gacha_simulator.core.collector import InfoVectorCollector
-
-        calls = []
-        original = GachaService._settle_resource_expiry
-
-        def _spy(self, rule, balance, state, total_consumed, total_gained):
-            calls.append((rule.resource_id, balance, total_consumed is None))
-            return original(self, rule, balance, state, total_consumed, total_gained)
-
-        monkeypatch.setattr(GachaService, '_settle_resource_expiry', _spy)
-
-        svc = GachaService([_make_banner()], _WaitStrategy(),
-                           AllPoolsEndCondition(10 * DAY), TargetCardSet([]),
-                           resource_lifecycle_rules=[_convert('a', 'b')])
-        history = svc.run_simulation(
-            GachaState(resources={**_BASE, 'a': 100.0}),
-            max_iterations=20, collector=InfoVectorCollector(),
-        )
-
-        assert isinstance(history, list)
-        assert len(calls) == 1, "非紧凑路径应触发一次到期结算"
-        assert calls[0][0] == 'a'
-        assert calls[0][1] == 100.0
-        assert calls[0][2] is True, "非紧凑路径无汇总账（total_consumed 为 None）"
-
-
-# ══════════════════════════════════════════════════════════════════
 # TOML 驱动的端到端（G6：幻塔等额转换）
 # ══════════════════════════════════════════════════════════════════
 

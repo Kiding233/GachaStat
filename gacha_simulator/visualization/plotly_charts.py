@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import base64
-import json
-import textwrap
 
 import numpy as np
 import plotly.graph_objects as go
@@ -23,136 +21,10 @@ from .chart_spec import (
     Waterfall3DData,
 )
 
-# ── HTML 模板 ───────────────────────────────────────────────────────────
-
-_HTML_TEMPLATE = textwrap.dedent("""\
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<script src="{plotly_js_url}"></script>
-<style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #f8f9fa; }}
-  .tab-bar {{
-    display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 10px 0 10px;
-    background: #f8f9fa; border-bottom: 1px solid #dee2e6; position: sticky; top: 0; z-index: 10;
-  }}
-  .tab-btn {{
-    padding: 8px 16px; border: none; border-radius: 6px 6px 0 0;
-    background: #ced4da; color: #495057; cursor: pointer; font-size: 13px; transition: background .15s;
-  }}
-  .tab-btn:hover {{ background: #adb5bd; }}
-  .tab-btn.active {{ background: #fff; color: #212529; font-weight: 600; }}
-  .chart-panel {{ display: none; padding: 10px; }}
-  .chart-panel.active {{ display: block; }}
-  .chart-container {{ width: 100%; }}
-  .collapsible {{
-    margin: 10px 10px 0 10px; border: 1px solid #dee2e6; border-radius: 6px; overflow: hidden;
-  }}
-  .collapsible-header {{
-    padding: 10px 16px; background: #e9ecef; cursor: pointer; font-size: 14px; font-weight: 600;
-    user-select: none; display: flex; justify-content: space-between; align-items: center;
-  }}
-  .collapsible-header:hover {{ background: #dee2e6; }}
-  .collapsible-body {{ display: none; padding: 10px; }}
-  .collapsible.open .collapsible-body {{ display: block; }}
-</style>
-</head>
-<body>
-<div class="tab-bar" id="tab-bar"></div>
-<div id="charts-root"></div>
-<script>
-  // 抑制 Plotly 的 Canvas2D getImageData 性能警告
-  (function() {{
-    var _getContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function(type, attrs) {{
-      if (type === '2d') {{
-        attrs = Object.assign({{}}, attrs, {{willReadFrequently: true}});
-      }}
-      return _getContext.call(this, type, attrs);
-    }};
-  }})();
-
-  function renderChart(key, figureJson) {{
-    var data = JSON.parse(figureJson);
-    var el = document.getElementById('chart-' + key);
-    if (el) {{
-      Plotly.newPlot(el, data.data, data.layout, {{
-        responsive: true,
-        displaylogo: false,
-        scrollZoom: false,
-        modeBarButtonsToRemove: ['sendDataToCloud', 'lasso2d', 'select2d'],
-        displayModeBar: true,
-      }});
-    }}
-  }}
-
-  function rebuildAll(config, charts, useTabs) {{
-    var keys = Object.keys(charts);
-    var tabBar = document.getElementById('tab-bar');
-    var root = document.getElementById('charts-root');
-
-    tabBar.innerHTML = '';
-    root.innerHTML = '';
-
-    if (useTabs && keys.length > 1) {{
-      tabBar.style.display = 'flex';
-      keys.forEach(function(key, i) {{
-        var btn = document.createElement('button');
-        btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
-        btn.textContent = config[key] || key;
-        btn.onclick = function() {{
-          document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-          document.querySelectorAll('.chart-panel').forEach(function(p) {{ p.classList.remove('active'); }});
-          btn.classList.add('active');
-          document.getElementById('panel-' + key).classList.add('active');
-        }};
-        tabBar.appendChild(btn);
-
-        var panel = document.createElement('div');
-        panel.className = 'chart-panel' + (i === 0 ? ' active' : '');
-        panel.id = 'panel-' + key;
-        var div = document.createElement('div');
-        div.className = 'chart-container';
-        div.id = 'chart-' + key;
-        panel.appendChild(div);
-        root.appendChild(panel);
-      }});
-    }} else {{
-      tabBar.style.display = 'none';
-      keys.forEach(function(key) {{
-        var section = document.createElement('div');
-        section.className = 'collapsible open';
-        var header = document.createElement('div');
-        header.className = 'collapsible-header';
-        header.textContent = config[key] || key;
-        header.onclick = function() {{ section.classList.toggle('open'); }};
-        var body = document.createElement('div');
-        body.className = 'collapsible-body';
-        var div = document.createElement('div');
-        div.className = 'chart-container';
-        div.id = 'chart-' + key;
-        body.appendChild(div);
-        section.appendChild(header);
-        section.appendChild(body);
-        root.appendChild(section);
-      }});
-    }}
-
-    keys.forEach(function(key) {{ renderChart(key, charts[key]); }});
-    window.scrollTo(0, 0);
-  }}
-
-  rebuildAll({config_json}, {charts_json}, {use_tabs});
-</script>
-</body>
-</html>
-""")
 
 
 # ── PlotlyRenderer ──────────────────────────────────────────────────────
+
 
 class PlotlyRenderer:
     """ChartSpec → go.Figure 的唯一转换点。"""
@@ -226,30 +98,6 @@ class PlotlyRenderer:
         """单个 ChartSpec → JSON 字符串（用于 runJavaScript 增量更新）。"""
         return self.to_figure(spec).to_json()
 
-    def to_html(
-        self,
-        charts: dict[str, ChartSpec],
-        plotly_js_url: str,
-        use_tabs: bool = True,
-    ) -> str:
-        """多个 ChartSpec → 完整 HTML 页面。
-
-        Args:
-            charts: {key: ChartSpec} 字典，key 用作标签名。
-            plotly_js_url: plotly.min.js 的 file:// URL。
-            use_tabs: 多图时使用标签切换模式，否则使用折叠面板。
-        """
-        figures_json = {}
-        config_json = {}
-        for key, spec in charts.items():
-            figures_json[key] = self.to_figure(spec).to_json()
-            config_json[key] = spec.title
-        return _HTML_TEMPLATE.format(
-            plotly_js_url=plotly_js_url,
-            charts_json=json.dumps(figures_json),
-            config_json=json.dumps(config_json, ensure_ascii=False),
-            use_tabs="true" if use_tabs else "false",
-        )
 
     # ── 各图表类型构建 ────────────────────────────────────────────
 
@@ -707,6 +555,7 @@ class PlotlyRenderer:
 
 
 # ── 热力图二进制编码工具 ───────────────────────────────────────────────
+
 
 def encode_heatmap_binary(matrix: np.ndarray) -> str:
     """将大矩阵编码为 base64 二进制字符串，减少 HTML 嵌入体积。

@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>敏感性扫描 · 方案甲（GUI / PyQt6）</title>
+
+<!-- 独立演示页：不接 Python、不并入任何既有界面。
+     仿 Qt6 Fusion 风格（main_window.py:673 的 app.setStyle('Fusion')）。
+     布局约定取自 gui/analysis_panel.py：QSplitter 左右分栏、右栏结果区 #f5f5f5、
+     label/控件成对行、底部运行按钮（:1975 run_btn / :1979 clear_btn）。
+
+     本轮改动（用户 2026-10-11 裁决）：
+       · 左栏上＝维度清单（六域×若干维度，静态，不随配置变）
+       · 左栏下＝规格区固定占地 ＋ 运行按钮（原先把规格塞进窄左栏是错的）
+       · 右栏上＝结果组条（无「＋」，新建只由「运行分析」产生）
+       · 大编辑器（表达式列表）去右栏就地切换，不用 QDialog
+       · 形态由字段类型决定，只读显示，不给用户选 -->
+
+<style>
+:root{
+  --win:#f0f0f0; --base:#ffffff; --result-bg:#f5f5f5;
+  --text:#202020; --text-dim:#787878; --text-dis:#b4b4b4;
+  --border:#adadad; --border-soft:#d0d0d0;
+  --hl:#0078d7; --hl-soft:#e5f1fb; --row-hover:#d6e8f5; --sel:#308cc6;
+  --ok:#2e7d32; --warn:#b26a00; --danger:#c62828; --purple:#6941c6;
+  --mono:"Consolas","Courier New",monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:12px "Segoe UI","Microsoft YaHei",sans-serif;color:var(--text);
+  background:var(--win);overflow:hidden}
+#app{height:100vh;display:flex;flex-direction:column}
+
+/* ---------- 菜单 / 工具栏 / 标签行 ---------- */
+.menubar{height:26px;display:flex;align-items:center;gap:1px;padding:0 6px;
+  background:var(--win);border-bottom:1px solid var(--border-soft)}
+.mbtn{padding:2px 9px;border-radius:3px;cursor:default}
+.mbtn:hover{background:var(--hl-soft)}
+.brand{font-weight:700;color:var(--hl);margin-right:12px;letter-spacing:.3px}
+.toolbar{height:34px;display:flex;align-items:center;gap:6px;padding:0 8px;
+  background:var(--win);border-bottom:1px solid var(--border-soft)}
+.spacer{flex:1}
+.btn{font:12px "Segoe UI","Microsoft YaHei",sans-serif;color:var(--text);
+  background:linear-gradient(#fcfcfc,#ececec);border:1px solid var(--border);
+  border-radius:3px;padding:3px 14px;min-height:18px;cursor:default}
+.btn:hover{background:linear-gradient(#f6fbff,#e5f1fb);border-color:#3c7fb1}
+.tabbar{display:flex;align-items:flex-end;padding:5px 8px 0;gap:2px;
+  background:var(--win);border-bottom:1px solid var(--border-soft)}
+.tab{font-size:12px;padding:4px 15px;border:1px solid transparent;border-bottom:0;
+  border-radius:3px 3px 0 0;cursor:default}
+.tab:hover{background:#e8f0f8}
+.tab.on{background:var(--win);border-color:var(--border-soft);
+  border-bottom:1px solid var(--win);margin-bottom:-1px;font-weight:600}
+
+/* ---------- 主体 ---------- */
+.split{flex:1;min-height:0;display:flex}
+.left{flex:0 0 322px;min-width:322px;background:var(--win);
+  border-right:1px solid var(--border-soft);display:flex;flex-direction:column}
+.right{flex:1;min-width:0;background:var(--result-bg);display:flex;
+  flex-direction:column}
+
+/* 维度清单（上，可滚动） */
+.dimhead{height:22px;display:flex;align-items:center;padding:0 8px;font-size:11px;
+  color:var(--text-dim);border-bottom:1px solid var(--border-soft);
+  background:linear-gradient(#fbfbfb,#f2f2f2)}
+.dimwrap{flex:1;min-height:0;overflow:auto;padding:3px 2px}
+.dom{font-size:11px;color:#777;padding:5px 6px 2px;display:flex;align-items:center;
+  gap:4px;cursor:default}
+.dom .tg{font-size:8px;width:10px;display:inline-block}
+.dim{font-size:12px;padding:3px 6px 3px 22px;border-radius:2px;cursor:default;
+  display:flex;align-items:center;gap:6px}
+.dim:hover{background:var(--row-hover)}
+.dim.on{background:var(--sel);color:#fff}
+.dim .side{margin-left:auto;flex:0 0 auto;white-space:nowrap;font-size:9px;opacity:.75}
+.dim>span:first-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.dim.on .side{opacity:.9}
+
+/* 规格区（下，固定占地） */
+.spec{flex:0 0 236px;border-top:2px solid var(--border-soft);
+  background:linear-gradient(#fbfbfb,#f4f4f4);display:flex;flex-direction:column;
+  padding:7px 8px 8px}
+.spec-h{font-size:11px;color:var(--text-dim);margin-bottom:6px}
+.spec-h b{color:var(--text);font-size:12px}
+.spec-b{flex:1;min-height:0;overflow:auto}
+.spec-empty{color:#999;font-size:11px;padding:14px 2px;text-align:center;
+  line-height:1.8}
+.crow{display:flex;align-items:center;gap:5px;margin-bottom:5px}
+.crow>label{font-size:11px;color:var(--text);white-space:nowrap;min-width:44px}
+.combo{display:inline-flex;align-items:center;justify-content:space-between;
+  background:var(--base);border:1px solid var(--border);border-radius:3px;
+  padding:2px 5px 2px 6px;min-height:20px;font-size:12px;flex:1;min-width:0;
+  cursor:default;gap:8px}
+.combo i{width:0;height:0;border-left:4px solid transparent;
+  border-right:4px solid transparent;border-top:5px solid #4a4a4a;flex:0 0 auto}
+.spin{display:inline-flex;align-items:center;background:var(--base);
+  border:1px solid var(--border);border-radius:3px;min-height:20px;overflow:hidden}
+.spin input{border:0;outline:0;width:56px;padding:2px 6px;font:12px inherit;
+  background:transparent;color:var(--text)}
+.spin .arr{display:flex;flex-direction:column;border-left:1px solid var(--border-soft);
+  width:14px;align-self:stretch}
+.spin .arr span{flex:1;display:flex;align-items:center;justify-content:center;
+  font-size:6px;color:#4a4a4a;background:linear-gradient(#fdfdfd,#efefef)}
+.cb{display:inline-flex;align-items:center;gap:5px;cursor:default;font-size:12px}
+.cb em{width:13px;height:13px;border:1px solid var(--border);border-radius:2px;
+  background:var(--base);display:inline-block;position:relative;flex:0 0 auto}
+.cb.on em{background:var(--hl);border-color:var(--hl)}
+.cb.on em::after{content:"";position:absolute;left:3px;top:0;width:3px;height:7px;
+  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.tagform{font-size:10px;color:var(--text-dim);border:1px solid var(--border-soft);
+  border-radius:8px;padding:0 6px;line-height:15px;background:#fff}
+.preview{font-size:10px;color:var(--text-dim);margin:2px 0 0 49px;line-height:1.6}
+.runrow{margin-top:7px;display:flex;gap:6px}
+.runbtn{flex:1;background:#4CAF50;color:#fff;font-weight:bold;border:1px solid #3d8b40;
+  border-radius:3px;padding:6px;font-size:12px;cursor:default;font-family:inherit}
+.runbtn:hover{background:#45a049}
+.runbtn[disabled]{background:#e0e0e0;color:#aaa;border-color:#d5d5d5}
+.clearbtn{background:#f44336;color:#fff;border:1px solid #d32f2f;border-radius:3px;
+  padding:6px 10px;font-size:12px;cursor:default;font-family:inherit}
+.repeat{font-size:10px;color:var(--warn);margin-top:5px;text-align:center}
+
+/* ---------- 右栏：组条 ---------- */
+.groupbar{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 8px;
+  background:linear-gradient(#fbfbfb,#f0f0f0);border-bottom:1px solid var(--border-soft)}
+.groupbar .gscroll{flex:1;min-width:0;display:flex;gap:5px;overflow-x:auto;
+  padding-bottom:2px}
+.gchip{flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:11px;
+  border:1px solid var(--border);border-radius:3px;background:var(--base);
+  padding:3px 9px;cursor:default;white-space:nowrap}
+.gchip:hover{border-color:#3c7fb1;background:#f6fbff}
+.gchip.on{background:var(--sel);border-color:var(--sel);color:#fff;font-weight:600}
+.gchip .st.run{color:var(--hl)}
+.gchip.on .st.run{color:#dff0ff}
+.navbtn{border:1px solid var(--border);background:var(--base);border-radius:3px;
+  width:22px;height:20px;font-size:9px;cursor:default;color:var(--text)}
+.navbtn:hover{background:var(--hl-soft)}
+.resultwrap{flex:1;min-height:0;overflow:auto;padding:8px}
+.rblock{border:1px solid var(--border-soft);border-radius:3px;background:var(--base)}
+.rblock-h{display:flex;align-items:center;gap:8px;padding:5px 9px;
+  border-bottom:1px solid #e8e8e8;background:linear-gradient(#fdfdfd,#f4f4f4)}
+.rblock-h b{font-size:12px}
+.rblock-b{padding:8px 9px}
+.chipside{font-size:10px;padding:0 6px;border-radius:8px;line-height:15px}
+.chipside.sync{color:var(--ok);background:#eef7ee;border:1px solid #cbe6cc}
+.chipside.disp{color:var(--purple);background:#f5f1fd;border:1px solid #d9cdf5}
+.hint{color:#999;font-size:12px;text-align:center;padding:56px 20px;line-height:2}
+.stats{display:flex;flex-wrap:wrap;gap:18px;padding:8px 2px 2px;font-size:11px}
+.stats .k{color:var(--text-dim)}
+.legend-line{display:flex;gap:14px;font-size:10px;color:var(--text-dim);
+  padding:5px 2px 0;flex-wrap:wrap}
+.legend-line i{display:inline-block;width:16px;height:8px;margin-right:4px;
+  vertical-align:-1px;border:1px solid #bbb}
+.mrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:12px;
+  padding-top:9px;border-top:1px dashed var(--border-soft)}
+.mnote{font-size:10px;color:var(--text-dim);margin-top:4px}
+.srcnote{font-size:10px;color:var(--text-dim);padding:7px 2px 0;
+  border-top:1px dashed #e0e0e0;margin-top:9px;line-height:1.7}
+
+/* 编辑态（表达式列表就地编辑，无弹窗） */
+.edithead{display:flex;align-items:center;gap:8px;padding:5px 9px;
+  border-bottom:1px solid #e8e8e8;background:linear-gradient(#fdfdfd,#f4f4f4)}
+.edithead b{font-size:12px}
+table.qt{width:100%;border-collapse:collapse;background:var(--base);font-size:11px;
+  border:1px solid var(--border-soft)}
+table.qt th{background:linear-gradient(#fbfbfb,#eef0f2);border:1px solid var(--border-soft);
+  padding:3px 7px;font-weight:600;text-align:left}
+table.qt td{border:1px solid #e8e8e8;padding:2px 6px}
+table.qt tr:hover td{background:#f4f9fd}
+table.qt td.act{text-align:center;color:var(--danger);width:26px}
+table.qt input{border:0;outline:0;background:transparent;font:11px inherit;
+  color:var(--text);width:100%}
+.ok-line{font-size:11px;color:var(--ok);margin-top:8px}
+.progress{height:14px;border:1px solid var(--border);border-radius:3px;
+  background:var(--base);overflow:hidden;position:relative;margin:8px 0 4px}
+.progress i{display:block;height:100%;background:linear-gradient(#9ed0f5,#5aa9e6)}
+.progress span{position:absolute;inset:0;text-align:center;font-size:10px;
+  line-height:12px}
+.statusbar{height:22px;display:flex;align-items:center;padding:0 9px;font-size:11px;
+  color:var(--text-dim);background:var(--win);border-top:1px solid var(--border-soft)}
+.hide{display:none !important}
+
+.demobar{position:fixed;right:12px;bottom:30px;z-index:60;background:#fffbe8;
+  border:1px dashed #d9b441;border-radius:5px;padding:6px 8px;display:flex;
+  gap:5px;align-items:center;box-shadow:0 3px 12px rgba(0,0,0,.12)}
+.demobar .dl{font-size:10px;color:#8a6d1f}
+.demobar button{font:11px inherit;cursor:pointer;border:1px solid #d9b441;
+  background:#fff;color:#6b5410;border-radius:3px;padding:2px 7px}
+.demobar button.on{background:#d9b441;color:#fff;font-weight:600}
+.demo-tag{font-size:10px;color:#8a6d1f;border:1px dashed #d9b441;border-radius:9px;
+  padding:0 7px;line-height:15px;margin-left:8px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="menubar">
+    <span class="brand">GachaStat</span>
+    <span class="mbtn">文件</span><span class="mbtn">编辑</span>
+    <span class="mbtn">视图</span><span class="mbtn">工具</span><span class="mbtn">帮助</span>
+    <span class="spacer"></span>
+    <span class="demo-tag">演示页 · 数据全假</span>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn">运行模拟</button>
+    <button class="btn">停止</button>
+    <span style="width:1px;height:20px;background:var(--border-soft);margin:0 4px"></span>
+    <button class="btn">重载配置</button>
+    <button class="btn">保存配置</button>
+    <span class="spacer"></span>
+    <span style="font-size:11px;color:var(--text-dim)">当前配置文件：config.toml</span>
+  </div>
+
+  <div class="tabbar">
+    <span class="tab">配置</span><span class="tab">卡池管理</span><span class="tab">保底</span>
+    <span class="tab">里程碑</span><span class="tab">资源</span><span class="tab">任务</span>
+    <span class="tab">数据集</span><span class="tab">模拟</span>
+    <span class="tab on">分析</span><span class="tab">对比</span><span class="tab">关于</span>
+  </div>
+
+  <div class="split">
+
+    <!-- 左栏：维度清单（上，滚动） ＋ 规格区（下，固定占地） -->
+    <div class="left">
+      <div class="dimhead"><span>敏感性分析 · 选一个维度</span></div>
+      <div class="dimwrap" id="dimtree"></div>
+
+      <div class="spec">
+        <div class="spec-h" id="spech">规格区</div>
+        <div class="spec-b" id="specb"></div>
+        <div class="runrow">
+          <button class="runbtn" id="runbtn" disabled>运行分析</button>
+          <button class="clearbtn">清除结果</button>
+        </div>
+        <div class="repeat hide" id="repeat"></div>
+      </div>
+    </div>
+
+    <!-- 右栏：组条 ＋ 结果 / 编辑态 -->
+    <div class="right">
+      <div class="groupbar">
+        <span style="font-size:11px;color:var(--text-dim)">结果组</span>
+        <div class="gscroll" id="groupbar"></div>
+        <button class="navbtn">◀</button>
+        <button class="navbtn">▶</button>
+      </div>
+      <div class="resultwrap" id="resultwrap"></div>
+    </div>
+
+  </div>
+
+  <div class="statusbar" id="status">就绪</div>
+</div>
+
+<div class="demobar">
+  <span class="dl">demo</span>
+  <button data-s="s1" class="on">① 未选维度</button>
+  <button data-s="s2">② 规格已填</button>
+  <button data-s="s3">③ 复算出图</button>
+  <button data-s="s4">④ 多组＋派发中</button>
+  <button data-s="s5">⑤ 列表编辑态</button>
+  <button data-s="s6">⑥ 派发完成</button>
+</div>
+
+<script src="chart3.js"></script>
+<script>
+/* ============================================================
+   维度清单：六域 × 若干维度。**静态**，不随配置内容变。
+   具体对象与字段在选择维度之后才出现（在规格区里，按对象类型动态过滤）。
+   形态（数值栅格 / 枚举 / 变换库 / 表达式列表）由维度决定，只读显示。
+   ============================================================ */
+const DOMAINS = [
+  { name: '分析口径', side: '复算', dims: [
+    { k: 'GDR 阈值', form: '数值栅格', sel: [], def: { from: 0.75, to: 0.95, step: 0.02 }, unit: '' },
+    { k: 'VaR α', form: '数值栅格', sel: [], def: { from: 0.01, to: 0.11, step: 0.01 }, unit: '' },
+    { k: '权重', form: '数值栅格',
+      sel: [{ label: '权重', opts: ['desire_weights', 'miss_cost_weights', 'card_value_weights'] },
+            { label: '卡范围', opts: ['逐卡', '全部卡'] }],
+      def: { from: 0.5, to: 1.5, step: 0.1 }, unit: '' },
+    { k: '成功判据', form: '数值栅格', sel: [], def: { from: 0.30, to: 0.70, step: 0.05 }, unit: '' },
+  ]},
+  { name: '策略', side: '派发', dims: [
+    { k: '策略类型', form: '枚举', sel: [],
+      def: { opts: ['smart（智能抽卡）', 'pity_reserve（保底预留）', 'fixed_count（固定抽数）', 'pool_quota（池配额）'] } },
+    { k: '策略参数', form: '数值栅格',
+      sel: [{ label: '策略', opts: ['smart（智能抽卡）', 'pity_reserve（保底预留）', 'fixed_count（固定抽数）'] },
+            { label: '参数', opts: ['count', 'pity_threshold_pct'] }],
+      def: { from: 100, to: 300, step: 50 }, unit: '' },
+  ]},
+  { name: '池子', side: '派发', dims: [
+    { k: '成本', form: '数值栅格',
+      sel: [{ label: '池子', opts: ['限定池 A', '常驻池'] },
+            { label: '叶子', opts: ['draw_resource'] }],
+      def: { from: 140, to: 200, step: 10 }, unit: '' },
+    { k: '概率', form: '变换库',
+      sel: [{ label: '池子', opts: ['限定池 A', '常驻池'] },
+            { label: '变换', opts: ['组缩放', '组间转移', '单卡定向', '组内形状'] },
+            { label: '扫哪个参数', opts: ['转移量', 'A 取法', 'A 侧形状'] }],
+      def: { from: 0.8, to: 1.2, step: 0.1 }, unit: '×' },
+    { k: '批量', form: '数值栅格',
+      sel: [{ label: '池子', opts: ['限定池 A'] }],
+      def: { from: 1, to: 10, step: 1 }, unit: '抽' },
+  ]},
+  { name: '保底', side: '派发', dims: [
+    { k: '保底类型', form: '枚举', sel: [],
+      def: { opts: ['hard', 'soft_interval', 'soft_additive', 'rotating', 'rotating_cr', 'targeted'] } },
+    { k: '阈值', form: '数值栅格',
+      sel: [{ label: '对象', opts: ['SSR 硬保底', 'SR 硬保底'] }],
+      def: { from: 70, to: 90, step: 5 }, unit: '抽' },
+    { k: '软保底参数', form: '数值栅格',
+      sel: [{ label: '对象', opts: ['SSR 软保底'] },
+            { label: '参数', opts: ['soft_start', 'soft_end', 'soft_increment'] }],
+      def: { from: 60, to: 80, step: 5 }, unit: '抽' },
+    { k: '初始状态', form: '数值栅格',
+      sel: [{ label: '对象', opts: ['SSR 硬保底', 'SSR 软保底', '定轨命定'] },
+            { label: '参数', opts: ['counter_init', 'fate_points_init'] }],
+      def: { from: 0, to: 40, step: 10 }, unit: '抽' },
+    { k: '触发上限', form: '数值栅格',
+      sel: [{ label: '对象', opts: ['SSR 硬保底'] }],
+      def: { from: 0, to: 5, step: 1 }, unit: '' },
+    { k: '表达式列表', form: '表达式列表', sel: [], def: {} },
+  ]},
+  { name: '里程碑', side: '派发', dims: [
+    { k: '阈值', form: '数值栅格', sel: [{ label: '对象', opts: ['每 40 抽奖励'] }],
+      def: { from: 30, to: 60, step: 5 }, unit: '抽' },
+    { k: '偏移', form: '数值栅格', sel: [{ label: '对象', opts: ['每 40 抽奖励'] }],
+      def: { from: 0, to: 10, step: 2 }, unit: '抽' },
+  ]},
+  { name: '资源', side: '派发', dims: [
+    { k: '初始资源', form: '数值栅格', sel: [{ label: '资源', opts: ['draw_resource', 'ticket'] }],
+      def: { from: 10000, to: 50000, step: 5000 }, unit: '' },
+  ]},
+];
+
+const GROUPS = [
+  { id: 1, dim: '分析口径 · GDR 阈值', st: 'done' },
+  { id: 2, dim: '分析口径 · VaR α', st: 'done' },
+  { id: 3, dim: '保底 · 阈值', st: 'run' },
+];
+
+const ROWS = [
+  { type: 'hard', threshold: '70', scope: 'ssr', pools: '*', max_triggers: '0' },
+  { type: 'hard', threshold: '80', scope: 'ssr', pools: '*', max_triggers: '0' },
+  { type: 'hard', threshold: '90', scope: 'ssr', pools: '*', max_triggers: '0' },
+  { type: 'soft_interval', threshold: '', scope: 'ssr', pools: '*', max_triggers: '0' },
+];
+
+const S = { state: 's1', dim: null, sel: {}, group: 1, edit: false };
+
+function pickDim(domName, k) {
+  const d = DOMAINS.find(x => x.name === domName);
+  const dim = d.dims.find(x => x.k === k);
+  S.dim = Object.assign({ _dom: domName, _side: d.side }, dim);
+  S.sel = {};
+  (dim.sel || []).forEach(s => { S.sel[s.label] = s.opts[0]; });
+}
+
+/* ---------------- 维度树 ---------------- */
+function renderTree() {
+  const host = document.getElementById('dimtree');
+  host.innerHTML = DOMAINS.map(d => `
+    <div class="dom"><span class="tg">▼</span>${d.name}</div>
+    ${d.dims.map(x => `
+      <div class="dim ${S.dim && S.dim._dom === d.name && S.dim.k === x.k ? 'on' : ''}"
+           data-dom="${d.name}" data-k="${x.k}">
+        <span>${x.k}</span><span class="side">${d.side}</span></div>`).join('')}
+  `).join('');
+  host.querySelectorAll('.dim').forEach(el => {
+    el.onclick = () => { pickDim(el.dataset.dom, el.dataset.k); S.edit = false; renderAll(); };
+  });
+}
+
+/* ---------------- 规格区 ---------------- */
+function renderSpec() {
+  const h = document.getElementById('spech');
+  const b = document.getElementById('specb');
+  const run = document.getElementById('runbtn');
+  const rep = document.getElementById('repeat');
+
+  if (!S.dim) {
+    h.textContent = '规格区';
+    b.innerHTML = `<div class="spec-empty">在上面的维度清单里选一项<br>
+      这里会长出它对应的扫描规格</div>`;
+    run.disabled = true; rep.classList.add('hide');
+    return;
+  }
+  const d = S.dim;
+  h.innerHTML = `规格区　<b>${d._dom} · ${d.k}</b>`;
+
+  let html = '';
+  (d.sel || []).forEach(s => {
+    html += `<div class="crow"><label>${s.label}</label>
+      <span class="combo">${S.sel[s.label]}<i></i></span></div>`;
+  });
+
+  if (d.form === '数值栅格') {
+    const n = Math.round((d.def.to - d.def.from) / d.def.step) + 1;
+    html += `<div class="crow"><label>区间</label>
+      <span class="spin"><input value="${d.def.from}"><span class="arr"><span>▲</span><span>▼</span></span></span>
+      <span style="font-size:11px">→</span>
+      <span class="spin"><input value="${d.def.to}"><span class="arr"><span>▲</span><span>▼</span></span></span></div>
+      <div class="crow"><label>步长</label>
+      <span class="spin" style="width:72px"><input value="${d.def.step}" style="width:42px"><span class="arr"><span>▲</span><span>▼</span></span></span>
+      <span class="tagform">形态：数值栅格</span></div>
+      <div class="preview">→ ${n} 个扫描点　${d.def.from} … ${d.def.to}${d.unit ? ' ' + d.unit : ''}</div>`;
+  } else if (d.form === '枚举') {
+    html += `<div class="crow" style="align-items:flex-start"><label>取值</label>
+      <span style="display:flex;flex-direction:column;gap:3px">
+        ${d.def.opts.map((o, i) => `<span class="cb ${i < 4 ? 'on' : ''}"><em></em>${o}</span>`).join('')}
+      </span></div>
+      <div class="crow"><label></label><span class="tagform">形态：枚举</span></div>
+      <div class="preview">→ 已勾选 4 项</div>`;
+  } else if (d.form === '变换库') {
+    html += `<div class="crow"><label>区间</label>
+      <span class="spin"><input value="${d.def.from}"><span class="arr"><span>▲</span><span>▼</span></span></span>
+      <span style="font-size:11px">→</span>
+      <span class="spin"><input value="${d.def.to}"><span class="arr"><span>▲</span><span>▼</span></span></span></div>
+      <div class="crow"><label></label>
+      <span class="tagform">形态：变换库（扫「${S.sel['扫哪个参数'] || '转移量'}」这一维）</span></div>
+      <div class="preview">→ 5 个扫描点　概率按变换改写后再跑</div>`;
+  } else {
+    html += `<div class="crow"><label>列表</label>
+      <span style="font-size:11px;color:var(--text-dim)">${ROWS.length} 行完整子配置</span></div>
+      <div class="crow"><label></label><span class="tagform">形态：表达式列表</span></div>
+      <div class="crow"><label></label>
+        <button class="btn" id="tobtn" style="padding:2px 12px">在右侧编辑列表 →</button></div>
+      <div class="preview">系统不解释语义，逐行校验后照跑</div>`;
+  }
+  b.innerHTML = html;
+
+  const tb = document.getElementById('tobtn');
+  if (tb) tb.onclick = () => { S.edit = true; renderRight(); };
+
+  run.disabled = false;
+  const showRep = (d._dom === '保底' && d.k === '阈值');
+  rep.classList.toggle('hide', !showRep);
+  rep.textContent = '同规格已跑过 2 次，本次会新建第 3 组';
+}
+
+/* ---------------- 右栏 ---------------- */
+function renderRight() {
+  const bar = document.getElementById('groupbar');
+  const wrap = document.getElementById('resultwrap');
+  const visible = (S.state === 's1' || S.state === 's2') ? [] : GROUPS;
+
+  bar.innerHTML = visible.map(g => `
+    <span class="gchip ${g.id === S.group ? 'on' : ''}">#${g.id} ${g.dim}
+      <span class="st ${g.st === 'run' ? 'run' : ''}">${g.st === 'run' ? '⟳ 60%' : '✓'}</span>
+    </span>`).join('');
+
+  /* ---- 编辑态：表达式列表就地编辑，无弹窗 ---- */
+  if (S.edit) {
+    const rowsHtml = ROWS.map(r => `<tr>
+      <td><input value="${r.type}"></td><td><input value="${r.threshold}"></td>
+      <td><input value="${r.scope}"></td><td><input value="${r.pools}"></td>
+      <td><input value="${r.max_triggers}"></td><td class="act">✕</td></tr>`).join('');
+    wrap.innerHTML = `<div class="rblock">
+      <div class="edithead">
+        <button class="btn" id="backbtn" style="padding:2px 10px">← 返回结果</button>
+        <b>编辑扫描列表</b>
+        <span style="font-size:11px;color:var(--text-dim);margin-left:auto">
+          每行是一条完整子配置</span>
+      </div>
+      <div class="rblock-b">
+        <table class="qt">
+          <thead><tr><th style="width:140px">type</th><th style="width:120px">threshold</th>
+            <th style="width:100px">scope</th><th style="width:110px">pools</th>
+            <th style="width:120px">max_triggers</th><th></th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div style="margin-top:8px">
+          <button class="btn" style="padding:2px 12px">＋ 添加一行</button></div>
+        <div class="ok-line">✓ 校验通过：${ROWS.length} 行，与
+          <span style="font-family:var(--mono)">_pity_declared_keys(btype)</span>
+          逐行比对无未知键</div>
+      </div></div>`;
+    document.getElementById('backbtn').onclick = () => { S.edit = false; renderRight(); };
+    document.getElementById('status').textContent = '编辑扫描列表（就地，非弹窗）';
+    return;
+  }
+
+  /* ---- 空态 ---- */
+  if (!visible.length) {
+    wrap.innerHTML = `<div class="hint">还没有结果组。<br>
+      在左栏选一个维度、填好规格，然后点「运行分析」。<br>
+      <span style="font-size:11px">每次运行都会新建一组，不会覆盖已有的；<br>
+      复算侧毫秒级，派发侧进任务队列</span></div>`;
+    document.getElementById('status').textContent =
+      S.state === 's2' ? '规格已填 · 等待运行' : '就绪 · 请在左栏选一个维度';
+    return;
+  }
+
+  /* ---- 结果态 ---- */
+  const running = S.state === 's4';
+  const dispatchDone = S.state === 's6';
+  const isDisp = running || dispatchDone;
+
+  const head = `<div class="rblock-h">
+      <b>#${S.group}　${isDisp ? '保底 · 阈值' : '分析口径 · GDR 阈值'}</b>
+      <span class="chipside ${isDisp ? 'disp' : 'sync'}">
+        ${isDisp ? '派发侧 · 切回读缓存' : '复算侧 · 切回即时重算'}</span>
+      <span class="spacer"></span>
+      <button class="btn" style="padding:1px 10px">看表格</button>
+    </div>`;
+
+  let body;
+  if (running) {
+    /* 派发侧运行中：进度 ＋ 产物落点说明 */
+    body = `<div class="progress"><i style="width:60%"></i><span>3 / 5</span></div>
+      <div style="display:flex;gap:14px;font-size:11px;color:var(--text-dim)">
+        <span>批次「保底阈值扫描 A」</span><span>已用 42s</span>
+        <span class="spacer"></span>
+        <button class="btn" style="padding:1px 10px">取消</button>
+      </div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:6px">
+        sub-070 ✓　sub-075 ✓　sub-080 ✓　sub-085 …　sub-090 …</div>
+      <div class="srcnote">本组为派发侧：产物已落工作区
+        （5 条子配置 ＋ 5 个数据集），切回直接读，不重跑</div>`;
+  } else {
+    /* 两侧落点不同，这是本轮要说清的一件事 */
+    const srcNote = dispatchDone
+      ? `<div class="srcnote">产物：5 条子配置 ＋ 5 个数据集
+           （批次「保底阈值扫描 A」），已落工作区的数据集节点</div>`
+      : `<div class="srcnote">本组为复算侧：工作区只存配方
+           （<span style="font-family:var(--mono)">analyses/*.json</span>），
+           切回时即时重算（毫秒级），不缓存图形数据</div>`;
+    body = `<div id="chart"></div>
+      <div class="stats">
+        <span><span class="k">翻转点</span>
+          <b>${isDisp ? '82.0　[80.5, 83.5]' : '0.885　[0.878, 0.893]'}</b></span>
+        <span><span class="k">μ*</span> <b>${isDisp ? '0.018 / 抽' : '0.421'}</b></span>
+        <span><span class="k">σ</span> <b>${isDisp ? '0.006' : '0.108'}</b></span>
+        <span><span class="k">μ</span> <b>${isDisp ? '0.017' : '−0.397'}</b></span>
+      </div>
+      <div class="legend-line">
+        <span><i style="background:rgba(31,119,180,.25)"></i>同时置信带（双侧 95%）</span>
+        <span><i style="background:rgba(200,50,50,.25)"></i>说不准地带</span>
+        <span><i style="background:#e8f5e9"></i>结论成立域</span>
+        <span><i style="background:#666"></i>τ 判据线</span>
+      </div>
+      <div class="mrow">
+        <span style="font-size:11px;color:var(--text-dim)">同时带档位</span>
+        <span class="combo" style="min-width:104px;flex:0 0 auto">双侧 95%<i></i></span>
+        <span class="cb"><em></em>强制单调（PAVA）</span>
+        <span class="cb on"><em></em>跳变点检测</span>
+      </div>
+      <div class="mnote">勾选「强制单调」时，本次结果不可用作单调性判据</div>
+      ${srcNote}`;
+  }
+
+  wrap.innerHTML = `<div class="rblock">${head}<div class="rblock-b">${body}</div></div>`;
+
+  const ch = document.getElementById('chart');
+  if (ch) drawChart3(ch, isDisp ? demoDataDispatch() : demoDataRecompute());
+  document.getElementById('status').textContent = running
+    ? '任务运行中 · 保底阈值扫描 A · 3/5'
+    : (dispatchDone ? '任务完成 · 产出 5 条子配置 ＋ 5 个数据集'
+                    : '分析完成 · 11 个扫描点 · 用时 0.28s');
+}
+
+function renderAll() { renderTree(); renderSpec(); renderRight(); }
+
+/* 运行分析：永远新建一组，不覆盖 */
+document.getElementById('runbtn').onclick = () => {
+  S.group = 3;
+  S.state = (S.dim && S.dim._side === '复算') ? 's3' : 's4';
+  renderRight();
+};
+
+/* demo 状态切换 */
+const TEXT = {
+  s1: '就绪 · 请在左栏选一个维度',
+  s2: '规格已填 · 等待运行',
+  s3: '分析完成 · 11 个扫描点 · 用时 0.31s',
+  s4: '任务运行中 · 保底阈值扫描 A · 3/5',
+  s5: '编辑扫描列表（就地，非弹窗）',
+  s6: '任务完成 · 产出 5 条子配置 ＋ 5 个数据集',
+};
+function setState(s) {
+  S.state = s; S.edit = false; S.group = 1;
+  if (s === 's1') { S.dim = null; }
+  else if (s === 's2' || s === 's3') { pickDim('分析口径', 'GDR 阈值'); }
+  else if (s === 's5') { pickDim('保底', '表达式列表'); S.edit = true; S.group = 3; }
+  else { pickDim('保底', '阈值'); S.group = 3; }
+  renderAll();
+  document.getElementById('status').textContent = TEXT[s];
+}
+document.querySelector('.demobar').addEventListener('click', e => {
+  const b = e.target.closest('button[data-s]');
+  if (!b) return;
+  [...document.querySelectorAll('.demobar button')].forEach(x =>
+    x.classList.toggle('on', x === b));
+  setState(b.dataset.s);
+});
+setState('s1');
+</script>
+</body>
+</html>

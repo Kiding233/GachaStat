@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .info_vector import InfoVector
     from .pool import Pool
     from .pity import PityState
     from .result_types import CompactResult
@@ -48,10 +47,9 @@ class SimulationCollector(ABC):
                  draw_index: int) -> None:
         """milestone 注入事件（P58）——记录归因元数据并源头合并卡/资源。
 
-        具体 no-op 默认实现（【不可】标 @abstractmethod——InfoVectorCollector 不重写则
-        无法实例化；M4 前置，REVIEW-R2-FIX: GATE-依赖顺序）。M5-serial 实现
-        CompactCollector.on_bonus 具体合并逻辑。InfoVectorCollector 继承空实现 →
-        历史路径静默丢弃 milestone 产出（已知限制）。
+        基类给出 no-op 默认实现（【不可】标 @abstractmethod）：它是可选钩子，具体
+        合并逻辑由 CompactCollector.on_bonus 实现。P81（2026-09-17）删除逐抽明细
+        收集器后，本默认实现暂无子类继承。
 
         pool_id 用于 per-pool GDR 分析归因。draw_index 为 0-based 本抽索引（归因钥匙）。
         方案 C（2026-08-03）：milestone 资源注入 state.resources（当抽末可用）、【不并入】
@@ -63,47 +61,6 @@ class SimulationCollector(ABC):
     @abstractmethod
     def get_result(self) -> Any:
         pass
-
-
-class InfoVectorCollector(SimulationCollector):
-    def __init__(self, session_id: str = '', lightweight: bool = False):
-        self._history: List['InfoVector'] = []
-        self._session_id = session_id
-        self._lightweight = lightweight
-        self._action_index = 0
-
-    def on_draw(self, card_id, pool, spent, resources_gained, pity_triggered,
-                triggered_pity_name, pity_counter_max, real_time, pity_state,
-                combined_gained, pool_key=None):
-        from .info_vector import InfoVector
-        self._history.append(InfoVector(
-            action_type='draw', card_id=card_id, pool_id=pool_key or pool.id,
-            resources_consumed=spent.copy(),
-            resources_gained=resources_gained,
-            real_time_before=real_time, real_time_after=real_time,
-            time_elapsed=1,
-            pity_state={} if self._lightweight else pity_state.to_dict(),
-            action_index=self._action_index, session_id=self._session_id,
-            pity_triggered=pity_triggered,
-        ))
-        self._action_index += 1
-
-    def on_wait(self, duration, resources_gained, real_time_before, real_time_after):
-        from .info_vector import InfoVector
-        self._history.append(InfoVector(
-            action_type='wait', card_id=None, pool_id=None,
-            resources_consumed={}, resources_gained=resources_gained,
-            real_time_before=real_time_before, real_time_after=real_time_after,
-            time_elapsed=duration, pity_state={},
-            action_index=self._action_index, session_id=self._session_id,
-        ))
-        self._action_index += 1
-
-    def on_banner_end(self, banner_id, resources, pity_state_dict):
-        pass
-
-    def get_result(self) -> List['InfoVector']:
-        return self._history
 
 
 class CompactCollector(SimulationCollector):

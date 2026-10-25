@@ -420,9 +420,9 @@ def test_retreat_config_transmits_new_fields():
 
 def test_config_hash_reflects_new_fields():
     """ISSUE-108：仅新字段不同 → hash 不同。"""
-    h1 = compute_config_hash([], None, [], MilestoneConfig(milestones=[MilestoneDef(name='m', threshold=80)]))
-    h2 = compute_config_hash([], None, [], MilestoneConfig(milestones=[MilestoneDef(name='m', threshold=80, offset=20)]))
-    h3 = compute_config_hash([], None, [], MilestoneConfig(milestones=[MilestoneDef(
+    h1 = compute_config_hash([], None, MilestoneConfig(milestones=[MilestoneDef(name='m', threshold=80)]))
+    h2 = compute_config_hash([], None, MilestoneConfig(milestones=[MilestoneDef(name='m', threshold=80, offset=20)]))
+    h3 = compute_config_hash([], None, MilestoneConfig(milestones=[MilestoneDef(
         name='m', threshold=80, offset=20, alternate_rewards=[{'cards': ['a']}])]))
     assert h1 != h2 and h2 != h3 and h1 != h3, 'hash 差异未反映新字段'
 

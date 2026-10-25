@@ -1,0 +1,521 @@
+{
+  "_format": {
+    "plan": "P64",
+    "block": "S7e 等价性装置 golden 固化",
+    "purpose": "三个测试文件里「新实现 vs 旧行为类逐位相等」的对照点，在旧类存活期把对照结果固化为本文件；旧类删除时只删「构造旧类并对照」的代码段，保留对 golden 的断言。 **S8-1（2026-10-14）退役 15 条 `modifier.*` 用例**：它们固化的是 M1 的**槽位级**形态（输入是槽位名、期望值是「目标集绝对赋值 + 更高稀有度豁免」的产物），S8 起生产侧改为**卡级增量**（A 加 p(Q)、Q 减 p(Q)，框架统一归一化），该形态在生产上不复存在，故其唯一消费者 `tests/core/test_pity_modifier.py` 随 S8-1 整体改写为「显式期望值」并停止读取本文件；留下的 5 条（tracker / registry）与 S8 无关，继续由 `test_pity_tracker.py` / `test_pity_registry_schema.py` 消费。",
+    "generated_by": "一次性生成器（P64 S7e 实施期：旧实现侧取值并当场核对生产侧相等）",
+    "case_schema": {
+      "description": "人类可读：这条 golden 是哪个用例、什么对照",
+      "input": "该对照的输入（分布 / 计数器 / 序列 / 种子 / 阈值），供人核对，不参与断言",
+      "expected": "期望输出。分布型载荷形如 {\"returns_none\": bool, \"effective\": {槽位: 概率}}；轨迹型载荷为整数数组或「键 -> 整数数组」映射",
+      "bits_sha256": "expected 数值载荷的位摘要（float 按 IEEE-754 双精度位模式参与），用例读取时校验，防「手改小数未同步摘要」的静默精度损失",
+      "note": "可选，记录该条的特殊约定或退化情形"
+    },
+    "exactness": "expected 里的数一律是 JSON 原生数。CPython 的 json 序列化用 float.__repr__（最短且可往返的十进制）、反序列化用正确舍入的 float()，故 float(repr(x)) == x 位级成立；用例一律用严格 == 断言，不得改用 approx。"
+  },
+  "cases": {
+    "tracker.random_consumption": {
+      "description": "旧 RotatingCRBehavior.before_draw 与 StreakTracker.prepare 在 9 组条件（含 4 条「不掷」路径）下的随机数消费次数逐条对照结果",
+      "input": {
+        "cases": [
+          [
+            false,
+            false,
+            0,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "state_prob=0 → 不掷"
+          ],
+          [
+            false,
+            false,
+            1,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "state_prob=0 → 不掷"
+          ],
+          [
+            false,
+            false,
+            3,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "idx 命中 1.0 → 确定性，不掷"
+          ],
+          [
+            false,
+            false,
+            9,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.75,
+              1.0
+            ],
+            "下标裁剪到 3 → 确定性，不掷"
+          ],
+          [
+            false,
+            false,
+            2,
+            0.0,
+            [
+              0.0,
+              0.0,
+              0.75,
+              1.0
+            ],
+            "state_prob=0.75 → 掷 1 次"
+          ],
+          [
+            false,
+            false,
+            0,
+            0.018,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "base_rate 掷 1 次（失败）"
+          ],
+          [
+            false,
+            false,
+            0,
+            0.018,
+            [],
+            "空表 → idx=-1，仅 base_rate 掷"
+          ],
+          [
+            true,
+            false,
+            0,
+            0.018,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "guaranteed → 不掷"
+          ],
+          [
+            false,
+            true,
+            0,
+            0.018,
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "readonly → 不掷"
+          ]
+        ],
+        "counter_threshold": 3,
+        "scope": "ssr",
+        "fake_random_returns": 0.5
+      },
+      "expected": [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0
+      ],
+      "bits_sha256": "ccb8020e71c2829177fe31d38810993e70f70df2b6e121953b4411be6366dc09"
+    },
+    "tracker.cr_counter_trajectory": {
+      "description": "15 抽序列下旧 RotatingCRBehavior 与 StreakTracker+FlagTracker 的 cr_counter 轨迹逐位对照结果（逐种子）",
+      "input": {
+        "seeds": [
+          1,
+          7,
+          42
+        ],
+        "seq": [
+          [
+            "ssr",
+            false
+          ],
+          [
+            "sr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "sr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ]
+        ],
+        "cr_counter_threshold": 3,
+        "cr_base_rate": 0.018,
+        "cr_state_probs": [
+          0.0,
+          0.0,
+          0.75,
+          1.0
+        ]
+      },
+      "expected": {
+        "1": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4
+        ],
+        "7": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4
+        ],
+        "42": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4
+        ]
+      },
+      "bits_sha256": "ae9348b4ed09c30141e52f36845e152eba18c51c18bb9e232c73fe52e6782dc9"
+    },
+    "tracker.fate_trajectory.selected": {
+      "description": "12 抽序列（已定轨 up_card）下旧 TargetedBehavior.after_draw 与 FateTracker.commit 的四键轨迹逐位对照结果",
+      "input": {
+        "seq": [
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "sr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "sr",
+            "other"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "other"
+          ],
+          [
+            "ssr",
+            "up_card"
+          ],
+          [
+            "ssr",
+            "other"
+          ]
+        ],
+        "selected_card": "up_card",
+        "keys": [
+          "fate_points",
+          "losses",
+          "guaranteed",
+          "lost_rotating"
+        ],
+        "fate_threshold": 2,
+        "tracker_kw": {
+          "scope": "ssr",
+          "judge": "selected",
+          "hit": "clear",
+          "miss": "accumulate"
+        }
+      },
+      "expected": [
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          0,
+          0,
+          false,
+          false
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          2,
+          2,
+          true,
+          true
+        ],
+        [
+          2,
+          2,
+          true,
+          true
+        ],
+        [
+          3,
+          3,
+          true,
+          true
+        ],
+        [
+          0,
+          0,
+          false,
+          false
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ],
+        [
+          2,
+          2,
+          true,
+          true
+        ],
+        [
+          0,
+          0,
+          false,
+          false
+        ],
+        [
+          1,
+          1,
+          true,
+          true
+        ]
+      ],
+      "bits_sha256": "8d582a100c1fd77813f8a507cbca6f09c4f85c0c38f39d05693fd279c15cc200"
+    },
+    "tracker.fate_trajectory.unselected": {
+      "description": "未定轨（selected_card=None）时单抽后旧 TargetedBehavior.after_draw 与 FateTracker.commit 的四键对照结果（两侧同为空状态）",
+      "input": {
+        "seq": [
+          [
+            "ssr",
+            "any"
+          ]
+        ],
+        "selected_card": null,
+        "keys": [
+          "fate_points",
+          "losses",
+          "guaranteed",
+          "lost_rotating"
+        ],
+        "fate_threshold": 2
+      },
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "bits_sha256": "1c10b03518fff8fc374a20bbf5107c66496656bec0662d6c6db123d4a898f121",
+      "note": "本组四键全为默认 0（「整段不动」），golden 输出是常量；判别力在「未被写入」而非数值差异"
+    },
+    "registry.order_contract.cr_counter_trajectory": {
+      "description": "「出 ssr 未命中 / 出 ssr 命中」交替四轮下，create_behavior 装配的 Pity 与旧 RotatingCRBehavior 的 cr_counter 轨迹逐位对照结果（StreakTracker 在前、FlagTracker 在后的顺序契约）",
+      "input": {
+        "seq": [
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ],
+          [
+            "ssr",
+            false
+          ],
+          [
+            "ssr",
+            true
+          ]
+        ],
+        "btype": "rotating_cr",
+        "cr_counter_threshold": 3,
+        "cr_state_probs": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "base_probabilities": {
+          "ssr_featured": 0.006,
+          "ssr": 0.004,
+          "sr": 0.05,
+          "r": 0.94
+        }
+      },
+      "expected": [
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+        4,
+        4
+      ],
+      "bits_sha256": "a9562b5a6d0157c57d66f5c2a5fccf963dc5720759e06ad88ce3d3d022e89795"
+    }
+  }
+}

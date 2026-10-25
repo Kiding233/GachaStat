@@ -118,54 +118,6 @@ def _register_failed(
     )
 
 
-def reload_plugin_strategy(name: str) -> bool:
-    """重新加载单个插件模块。
-
-    Args:
-        name: 插件 key（如 'plugin/my_adaptive'）或模块名（如 'my_adaptive'）。
-
-    Returns:
-        重新加载成功返回 True。
-    """
-    from ..paths import get_strategies_dir
-    from .strategy import STRATEGY_REGISTRY
-
-    plugin_dir = get_strategies_dir()
-    module_name = name.replace('plugin/', '') if name.startswith('plugin/') else name
-    filepath = os.path.join(plugin_dir, f"{module_name}.py")
-
-    if not os.path.isfile(filepath):
-        logger.error("插件文件不存在: %s", filepath)
-        return False
-
-    plugin_key = f"plugin/{module_name}"
-
-    try:
-        spec = importlib.util.spec_from_file_location(
-            f"gacha_simulator_strategy_plugin_{module_name}",
-            filepath,
-        )
-        if spec is None or spec.loader is None:
-            logger.error("无法创建模块规格: %s", filepath)
-            return False
-
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-
-        # 清除旧的 _invalid_state
-        meta = STRATEGY_REGISTRY.get(plugin_key)
-        if meta is not None:
-            meta._invalid_state = None
-
-        logger.info("插件重新加载成功: %s", plugin_key)
-        return True
-
-    except Exception as exc:
-        logger.error("插件重新加载失败: %s —— %s: %s", plugin_key, type(exc).__name__, exc)
-        return False
-
-
 def disable_plugin_strategy(name: str) -> bool:
     """禁用插件策略（设置 StrategyMeta.disabled = True）。
 

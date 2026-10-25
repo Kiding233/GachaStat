@@ -1,4 +1,9 @@
-"""按需追卡策略——优先兑换→按目标追卡→等待下一个池。"""
+"""按需追卡策略——优先兑换→按目标追卡→等待下一个池。
+
+P64 S9-5（ISSUE-730/944）：本文件的「是否已拥有」判据一律取
+`ctx.state.total_holding(card_id)`（含 `initial_count` 初始持有）；`ctx.acquired`
+是 P60 语义「本次模拟新获得」，不含初始持有，不得用于该判据。
+"""
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -36,14 +41,14 @@ class SmartStrategy(Strategy):
         # P61（ISSUE-303/315）：匹配口径为 banner.id（TargetCard.pool_ids 钉死为 banner 级键）
         self._ensure_pool_to_targets(ctx)
         for t in self._pool_to_targets.get(banner_id, []):
-            ac_val = ctx.acquired.get(t.card_id, 0)
+            ac_val = ctx.state.total_holding(t.card_id)
             if ac_val < t.quantity_needed:
                 return True
         return False
 
     def _get_needed_card_exchange(self, ctx: StrategyContext) -> Optional[str]:
         for t in ctx.target_cards.targets:
-            if ctx.acquired.get(t.card_id, 0) >= t.quantity_needed:
+            if ctx.state.total_holding(t.card_id) >= t.quantity_needed:
                 continue
             for banner in ctx.all_banners:
                 pool = banner.active_pool

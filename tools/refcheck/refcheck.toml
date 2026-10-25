@@ -1,0 +1,47 @@
+# refcheck 配置。工具本身不含任何本项目的专有知识，这份文件是唯一的项目相关部分。
+#
+# 位置说明：本仓库的提交门控（H7）只允许少数几个根级文件，所以配置放在工具目录下。
+# 但这也意味着**复制工具目录时这份配置会被一起带走**；换仓库时必须整份重写，
+# 否则会继承本仓库的排除范围与歧义裁决，而症状并不明显。工具每次输出都会打印
+# 实际使用的配置文件路径，核对那一行即可。
+
+[scope]
+include = ["*.md", "**/*.md", "*.py", "**/*.py"]
+# 归档是历史记录，其行号本就应冻结；回收站与工具自身都不在被审计的语料里。
+exclude = [
+    "docs/03-归档/**",
+    ".recycle_bin/**",
+    "tools/refcheck/**",
+]
+
+[resolve]
+# 声明为「仓库之外」的路径前缀，避免把它们误报成「文件被删」。
+external = [
+    "multiprocessing/",
+    "site-packages/",
+]
+
+# 歧义 basename 的裁决。只写 basename 的引用无法靠文件名消歧，需要人定。
+# 注意：填错的别名会把「可见的歧义」变成「不可见的已解析」，比不填更糟。
+# 因此只在逐条看过引用上下文之后再填，必要时用 [[resolve.scoped]] 按源文件分别裁决。
+[resolve.alias]
+# 三条都经实据核对后填入：候选里只有目标那个容得下被引行号。
+# batch_simulator.py: 候选中 gui/batch_simulator.py 是 0 行空文件（歧义噪声；
+#   2026-10-10 该空文件已移除，见 commit 8e0de08——本条理由成为历史，alias 裁决不变），
+#   service/batch_simulator.py 937 行，被引的 173-177 / 250-253 / 627 / 776-781 只有它容得下。
+"batch_simulator.py" = "gacha_simulator/service/batch_simulator.py"
+# analysis_service.py: 另一候选在 .recycle_bin 内且仅 78 行，被引的 470-509 只有 webui 版容得下。
+"analysis_service.py" = "gacha_simulator/webui/analysis_service.py"
+# main.py: 另一候选 tools/poc_webview/main.py 仅 76 行，被引的 :124 只有 gacha_simulator/main.py 容得下。
+"main.py" = "gacha_simulator/main.py"
+
+# [[resolve.scoped]]
+# src = "docs/某篇.md"
+# "batch_simulator.py" = "gacha_simulator/gui/batch_simulator.py"
+
+[checks]
+# 「这个符号已经删掉了」的措辞线索。文档以已删除的姿态提及被删符号时，
+# 「点名的私有符号全仓库都不存在」这条判据必然命中，而那条引用往往是对的：
+# 它说的是「某符号已随某次清理删除」。实测门控 3 条命中里 1 条属此类。
+# 词表放配置里而不是写进代码，是为了让核心不含语言知识。
+deleted_cue = ["已删", "已移除", "已作废", "已废弃", "删除", "作废", "不再存在"]
